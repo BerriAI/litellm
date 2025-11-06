@@ -105,23 +105,17 @@ class RedisCache(BaseCache):
 
         from .._redis import get_redis_client, get_redis_connection_pool
 
-        redis_kwargs = {}
-        if host is not None:
-            redis_kwargs["host"] = host
-        if port is not None:
-            redis_kwargs["port"] = port
-        if password is not None:
-            redis_kwargs["password"] = password
-        if startup_nodes is not None:
-            redis_kwargs["startup_nodes"] = startup_nodes
-        if socket_timeout is not None:
-            redis_kwargs["socket_timeout"] = socket_timeout
-        if ssl_certfile is not None:
-            redis_kwargs["ssl_certfile"] = ssl_certfile
-        if ssl_keyfile is not None:
-            redis_kwargs["ssl_keyfile"] = ssl_keyfile
-        if ssl_ca_certs is not None:
-            redis_kwargs["ssl_ca_certs"] = ssl_ca_certs
+        redis_kwargs = self._build_redis_kwargs(
+            host=host,
+            port=port,
+            password=password,
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+            ssl_ca_certs=ssl_ca_certs,
+            startup_nodes=startup_nodes,
+            socket_timeout=socket_timeout,
+            **kwargs,
+        )
 
         ### HEALTH MONITORING OBJECT ###
         if kwargs.get("service_logger_obj", None) is not None and isinstance(
@@ -131,7 +125,6 @@ class RedisCache(BaseCache):
         else:
             self.service_logger_obj = ServiceLogging()
 
-        redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_async_client: Optional[
             Union[async_redis_client, async_redis_cluster_client]
@@ -154,9 +147,51 @@ class RedisCache(BaseCache):
         except Exception:
             pass
 
-        ### ASYNC HEALTH PING ###
+        self._perform_health_checks()
+
+        if litellm.default_redis_ttl is not None:
+            super().__init__(default_ttl=int(litellm.default_redis_ttl))
+        else:
+            super().__init__()  # defaults to 60s
+
+    def _build_redis_kwargs(
+        self,
+        host=None,
+        port=None,
+        password=None,
+        ssl_certfile=None,
+        ssl_keyfile=None,
+        ssl_ca_certs=None,
+        startup_nodes=None,
+        socket_timeout=None,
+        **kwargs,
+    ):
+        """Build redis connection kwargs from provided parameters."""
+        redis_kwargs = {}
+        if host is not None:
+            redis_kwargs["host"] = host
+        if port is not None:
+            redis_kwargs["port"] = port
+        if password is not None:
+            redis_kwargs["password"] = password
+        if startup_nodes is not None:
+            redis_kwargs["startup_nodes"] = startup_nodes
+        if socket_timeout is not None:
+            redis_kwargs["socket_timeout"] = socket_timeout
+        if ssl_certfile is not None:
+            redis_kwargs["ssl_certfile"] = ssl_certfile
+        if ssl_keyfile is not None:
+            redis_kwargs["ssl_keyfile"] = ssl_keyfile
+        if ssl_ca_certs is not None:
+            redis_kwargs["ssl_ca_certs"] = ssl_ca_certs
+
+        redis_kwargs.update(kwargs)
+        return redis_kwargs
+
+    def _perform_health_checks(self):
+        """Perform async and sync health checks on redis clients."""
+        # Async health ping
         try:
-            # asyncio.get_running_loop().create_task(self.ping())
             _ = asyncio.get_running_loop().create_task(self.ping())
         except Exception as e:
             if "no running event loop" in str(e):
@@ -169,7 +204,7 @@ class RedisCache(BaseCache):
                     extra={"error": str(e)},
                 )
 
-        ### SYNC HEALTH PING ###
+        # Sync health ping
         try:
             if hasattr(self.redis_client, "ping"):
                 self.redis_client.ping()  # type: ignore
@@ -177,11 +212,6 @@ class RedisCache(BaseCache):
             verbose_logger.error(
                 "Error connecting to Sync Redis client", extra={"error": str(e)}
             )
-
-        if litellm.default_redis_ttl is not None:
-            super().__init__(default_ttl=int(litellm.default_redis_ttl))
-        else:
-            super().__init__()  # defaults to 60s
 
     def init_async_client(
         self,
