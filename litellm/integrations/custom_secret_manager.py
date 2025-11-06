@@ -227,7 +227,7 @@ class CustomSecretManager(BaseSecretManager):
             ValueError: If required configuration is missing
         """
         verbose_logger.debug(
-            f"No environment validation configured for {self.secret_manager_name}"
+            "No environment validation configured for custom secret manager"
         )
         return True
 
