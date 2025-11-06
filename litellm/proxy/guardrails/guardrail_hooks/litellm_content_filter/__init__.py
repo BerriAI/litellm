@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING
 
 import litellm
-from litellm.proxy.guardrails.guardrail_hooks.content_filter.content_filter import (
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
 from litellm.types.guardrails import SupportedGuardrailIntegrations
