@@ -1071,9 +1071,9 @@ class RedisCache(BaseCache):
             
             # Test the connection
             ping_result = await redis_client.ping()
-            
+
             # Close the connection
-            await redis_client.aclose()
+            await redis_client.aclose()  # type: ignore[attr-defined]
             
             if ping_result:
                 return {

@@ -83,10 +83,10 @@ class RedisClusterCache(RedisCache):
             )
             
             # Test the connection
-            ping_result = await redis_client.ping()
-            
+            ping_result = await redis_client.ping()  # type: ignore[attr-defined]
+
             # Close the connection
-            await redis_client.aclose()
+            await redis_client.aclose()  # type: ignore[attr-defined]
             
             if ping_result:
                 return {

@@ -361,17 +361,19 @@ class ResponseAPILoggingUtils:
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
-        usage: Optional[Union[dict, ResponseAPIUsage]],
+        usage_input: Optional[Union[dict, ResponseAPIUsage]],
     ) -> Usage:
         """Tranforms the ResponseAPIUsage object to a Usage object"""
-        if usage is None:
+        if usage_input is None:
             return Usage(
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
             )
         response_api_usage: ResponseAPIUsage = (
-            ResponseAPIUsage(**usage) if isinstance(usage, dict) else usage
+            ResponseAPIUsage(**usage_input)
+            if isinstance(usage_input, dict)
+            else usage_input
         )
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
@@ -381,7 +383,7 @@ class ResponseAPILoggingUtils:
                 cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
                 audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
             )
-        usage = Usage(
+        chat_usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
@@ -390,6 +392,6 @@ class ResponseAPILoggingUtils:
 
         # Preserve cost attribute if it exists on ResponseAPIUsage
         if hasattr(response_api_usage, "cost") and response_api_usage.cost is not None:
-            setattr(usage, "cost", response_api_usage.cost)
+            setattr(chat_usage, "cost", response_api_usage.cost)
 
-        return usage
+        return chat_usage
