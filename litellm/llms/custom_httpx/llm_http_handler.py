@@ -2009,6 +2009,9 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        if extra_body:
+            data.update(extra_body)
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2134,6 +2137,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        if extra_body:
+            data.update(extra_body)
 
         ## LOGGING
         logging_obj.pre_call(
