@@ -11,6 +11,7 @@ describe("audio_speech", () => {
   const mockCreate = vi.fn();
   const mockUpdateUI = vi.fn();
   const mockBlob = new Blob(["mock audio data"], { type: "audio/mpeg" });
+  let abortController: AbortController | null = null;
 
   beforeEach(() => {
     // Mock the response structure from OpenAI audio speech API
@@ -29,6 +30,11 @@ describe("audio_speech", () => {
   });
 
   afterEach(() => {
+    // Clean up abort controller if it exists
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
     vi.clearAllMocks();
   });
 
@@ -47,7 +53,8 @@ describe("audio_speech", () => {
   });
 
   it("should include optional parameters when provided", async () => {
-    const signal = new AbortController().signal;
+    abortController = new AbortController();
+    const signal = abortController.signal;
 
     await makeOpenAIAudioSpeechRequest(
       "Test input",
