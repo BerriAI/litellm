@@ -24232,7 +24232,6 @@
         "output_cost_per_token": 1.5e-05,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -24249,7 +24248,6 @@
         "cache_read_input_token_cost": 0.05e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -24281,7 +24279,6 @@
         "output_cost_per_token_above_128k_tokens": 30e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -24297,7 +24294,6 @@
         "output_cost_per_token_above_128k_tokens": 30e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
