@@ -227,6 +227,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
+from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -902,6 +903,20 @@ try:
     ui_path = os.path.join(current_dir, "_experimental", "out")
     litellm_asset_prefix = "/litellm-asset-prefix"
 
+    # For non-root Docker, use the pre-built UI from /tmp/litellm_ui
+    # Support both "true" and "True" for case-insensitive comparison
+    if os.getenv("LITELLM_NON_ROOT", "").lower() == "true":
+        non_root_ui_path = "/tmp/litellm_ui"
+        
+        # Check if the UI was built and exists at the expected location
+        if os.path.exists(non_root_ui_path) and os.listdir(non_root_ui_path):
+            verbose_proxy_logger.info(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
+            verbose_proxy_logger.info(f"UI files found: {len(os.listdir(non_root_ui_path))} items")
+            ui_path = non_root_ui_path
+        else:
+            verbose_proxy_logger.error(f"UI not found at {non_root_ui_path}. UI will not be available.")
+            verbose_proxy_logger.error(f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}")
+
     # Only modify files if a custom server root path is set
     if server_root_path and server_root_path != "/":
         # Iterate through files in the UI directory
@@ -961,17 +976,22 @@ try:
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
     # Handle HTML file restructuring
-    for filename in os.listdir(ui_path):
-        if filename.endswith(".html") and filename != "index.html":
-            # Create a folder with the same name as the HTML file
-            folder_name = os.path.splitext(filename)[0]
-            folder_path = os.path.join(ui_path, folder_name)
-            os.makedirs(folder_path, exist_ok=True)
+    # Skip this for non-root Docker since it's done at build time
+    # Support both "true" and "True" for case-insensitive comparison
+    if os.getenv("LITELLM_NON_ROOT", "").lower() != "true":
+        for filename in os.listdir(ui_path):
+            if filename.endswith(".html") and filename != "index.html":
+                # Create a folder with the same name as the HTML file
+                folder_name = os.path.splitext(filename)[0]
+                folder_path = os.path.join(ui_path, folder_name)
+                os.makedirs(folder_path, exist_ok=True)
 
-            # Move the HTML file into the folder and rename it to 'index.html'
-            src = os.path.join(ui_path, filename)
-            dst = os.path.join(folder_path, "index.html")
-            os.rename(src, dst)
+                # Move the HTML file into the folder and rename it to 'index.html'
+                src = os.path.join(ui_path, filename)
+                dst = os.path.join(folder_path, "index.html")
+                os.rename(src, dst)
+    else:
+        verbose_proxy_logger.info("Skipping runtime HTML restructuring for non-root Docker (already done at build time)")
 
 except Exception:
     pass
@@ -1928,29 +1948,31 @@ class ProxyConfig:
         """
         Parse and validate search tools from config.
         Loads environment variables and casts to SearchToolTypedDict.
-        
+
         Args:
             config: Config dictionary containing search_tools
-            
+
         Returns:
             List of validated SearchToolTypedDict or None if not configured
         """
         search_tools_raw = config.get("search_tools", None)
         if not search_tools_raw:
             return None
-        
+
         search_tools_parsed: List[SearchToolTypedDict] = []
-        
+
         print(  # noqa
             "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
         )  # noqa
-        
+
         for search_tool in search_tools_raw:
             # Display loaded search tool
             search_tool_name = search_tool.get("search_tool_name", "")
-            search_provider = search_tool.get("litellm_params", {}).get("search_provider", "")
+            search_provider = search_tool.get("litellm_params", {}).get(
+                "search_provider", ""
+            )
             print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
-            
+
             # Cast to SearchToolTypedDict for type safety
             try:
                 search_tool_typed: SearchToolTypedDict = SearchToolTypedDict(**search_tool)  # type: ignore
@@ -1960,7 +1982,7 @@ class ProxyConfig:
                     f"Error parsing search tool {search_tool_name}: {str(e)}"
                 )
                 continue
-        
+
         return search_tools_parsed if search_tools_parsed else None
 
     def _load_environment_variables(self, config: dict):
@@ -2278,9 +2300,7 @@ class ProxyConfig:
         if general_settings is None:
             general_settings = {}
         if general_settings:
-            ### LOAD SECRET MANAGER ###
-            key_management_system = general_settings.get("key_management_system", None)
-            self.initialize_secret_manager(key_management_system=key_management_system)
+            ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
                 "key_management_settings", None
             )
@@ -2288,6 +2308,13 @@ class ProxyConfig:
                 litellm._key_management_settings = KeyManagementSettings(
                     **key_management_settings
                 )
+            
+            ### LOAD SECRET MANAGER ###
+            key_management_system = general_settings.get("key_management_system", None)
+            self.initialize_secret_manager(
+                key_management_system=key_management_system,
+                config_file_path=config_file_path
+            )
             ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
             use_google_kms = general_settings.get("use_google_kms", False)
             load_google_kms(use_google_kms=use_google_kms)
@@ -2466,7 +2493,9 @@ class ProxyConfig:
             assistants_config = AssistantsTypedDict(**assistant_settings)  # type: ignore
 
         ## SEARCH TOOLS SETTINGS
-        search_tools: Optional[List[SearchToolTypedDict]] = self.parse_search_tools(config)
+        search_tools: Optional[List[SearchToolTypedDict]] = self.parse_search_tools(
+            config
+        )
 
         ## /fine_tuning/jobs endpoints config
         finetuning_config = config.get("finetune_settings", None)
@@ -2617,7 +2646,9 @@ class ProxyConfig:
                         litellm.logging_callback_manager.add_litellm_callback(_logger)
         pass
 
-    def initialize_secret_manager(self, key_management_system: Optional[str]):
+    def initialize_secret_manager(
+        self, key_management_system: Optional[str], config_file_path: Optional[str] = None
+    ):
         """
         Initialize the relevant secret manager if `key_management_system` is provided
         """
@@ -2653,6 +2684,19 @@ class ProxyConfig:
                 )
 
                 HashicorpSecretManager()
+            elif key_management_system == KeyManagementSystem.CYBERARK.value:
+                from litellm.secret_managers.cyberark_secret_manager import (
+                    CyberArkSecretManager,
+                )
+
+                CyberArkSecretManager()
+            elif key_management_system == KeyManagementSystem.CUSTOM.value:
+                ### LOAD CUSTOM SECRET MANAGER ###
+                from litellm.secret_managers.custom_secret_manager_loader import (
+                    load_custom_secret_manager,
+                )
+
+                load_custom_secret_manager(config_file_path=config_file_path)
             else:
                 raise ValueError("Invalid Key Management System selected")
 
@@ -3366,6 +3410,10 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="vector_stores"):
             await self._init_vector_stores_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="vector_store_indexes"):
+
+            await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="mcp"):
             await self._init_mcp_servers_in_db()
 
@@ -3394,21 +3442,26 @@ class ProxyConfig:
         """
         Initialize SSO settings from database into the router on startup.
         """
-        
+
         try:
             sso_settings = await prisma_client.db.litellm_ssoconfig.find_unique(
                 where={"id": "sso_config"}
             )
             if sso_settings is not None:
                 # Capitalize all keys in sso_settings dictionary
-                uppercase_sso_settings = {key.upper(): value for key, value in sso_settings.sso_settings.items()}
-                self._decrypt_and_set_db_env_variables(environment_variables=uppercase_sso_settings)
+                uppercase_sso_settings = {
+                    key.upper(): value
+                    for key, value in sso_settings.sso_settings.items()
+                }
+                self._decrypt_and_set_db_env_variables(
+                    environment_variables=uppercase_sso_settings
+                )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {}".format(
                     str(e)
                 )
-            )   
+            )
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
         """
@@ -3579,6 +3632,36 @@ class ProxyConfig:
                 )
             )
 
+    async def _init_vector_store_indexes_in_db(self, prisma_client: PrismaClient):
+        from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+        try:
+            # read vector stores from db table
+            vector_store_indexes = (
+                await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(
+                    prisma_client=prisma_client
+                )
+            )
+
+            if len(vector_store_indexes) <= 0:
+                return
+
+            if litellm.vector_store_index_registry is None:
+                litellm.vector_store_index_registry = VectorStoreIndexRegistry(
+                    vector_store_indexes=vector_store_indexes
+                )
+            else:
+                for vector_store_index in vector_store_indexes:
+                    litellm.vector_store_index_registry.upsert_vector_store_index(
+                        vector_store_index=vector_store_index
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - {}".format(
+                    str(e)
+                )
+            )
+
     async def _init_mcp_servers_in_db(self):
         from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
 
@@ -3600,7 +3683,7 @@ class ProxyConfig:
                     str(e)
                 )
             )
-    
+
     async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
         """
         Initialize search tools from database into the router on startup.
@@ -3611,19 +3694,20 @@ class ProxyConfig:
             SearchToolRegistry,
         )
         from litellm.router_utils.search_api_router import SearchAPIRouter
-        
+
         try:
-            search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
-            
+            search_tools = await SearchToolRegistry.get_all_search_tools_from_db(
+                prisma_client=prisma_client
+            )
+
             verbose_proxy_logger.info(
                 f"Loading {len(search_tools)} search tool(s) from database into router"
             )
-            
+
             if llm_router is not None:
                 # Add search tools to the router
                 await SearchAPIRouter.update_router_search_tools(
-                    router_instance=llm_router,
-                    search_tools=search_tools
+                    router_instance=llm_router, search_tools=search_tools
                 )
                 verbose_proxy_logger.info(
                     f"Successfully loaded {len(search_tools)} search tool(s) into router"
@@ -3632,14 +3716,14 @@ class ProxyConfig:
                 verbose_proxy_logger.debug(
                     "Router not initialized yet, search tools will be added when router is created"
                 )
-                
+
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_search_tools_in_db - {}".format(
                     str(e)
                 )
             )
-    
+
     async def _init_pass_through_endpoints_in_db(self):
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             initialize_pass_through_endpoints_in_db,
@@ -4138,24 +4222,27 @@ class ProxyStartupEvent:
                 # It must be passed individually when calling add_job()
             },
             # Limit job store size to prevent memory growth
-            jobstores={
-                'default': MemoryJobStore()    # explicitly use memory job store
-            },
+            jobstores={"default": MemoryJobStore()},  # explicitly use memory job store
             # Use simple executor to minimize overhead
             executors={
-                'default': AsyncIOExecutor(),
+                "default": AsyncIOExecutor(),
             },
             # Disable timezone awareness to reduce computation
-            timezone=None
+            timezone=None,
         )
 
         # Use fixed intervals with small random offset instead of jitter
         # This avoids the expensive jitter calculations in APScheduler
-        budget_interval = proxy_budget_rescheduler_min_time + random.randint(0,
-            min(30, proxy_budget_rescheduler_max_time - proxy_budget_rescheduler_min_time))
+        budget_interval = proxy_budget_rescheduler_min_time + random.randint(
+            0,
+            min(
+                30,
+                proxy_budget_rescheduler_max_time - proxy_budget_rescheduler_min_time,
+            ),
+        )
 
         # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
-        batch_writing_interval = max(30, proxy_batch_write_at) + random.randint(0, 5)
+        batch_writing_interval = proxy_batch_write_at + random.randint(0, 5)
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
@@ -4248,7 +4335,9 @@ class ProxyStartupEvent:
                 # REMOVED jitter parameter - major cause of memory leak
                 # Use random start time instead for distribution
                 next_run_time=datetime.now()
-                + timedelta(seconds=10 + random.randint(0, 300)),  # Random 0-5 min offset
+                + timedelta(
+                    seconds=10 + random.randint(0, 300)
+                ),  # Random 0-5 min offset
                 args=[spend_report_frequency],
                 id="weekly_spend_report_job",
                 replace_existing=True,
@@ -4292,7 +4381,8 @@ class ProxyStartupEvent:
                 scheduler.add_job(
                     spend_log_cleanup.cleanup_old_spend_logs,
                     "interval",
-                    seconds=interval_seconds + random.randint(0, 60),  # Add small random offset
+                    seconds=interval_seconds
+                    + random.randint(0, 60),  # Add small random offset
                     # REMOVED jitter parameter - major cause of memory leak
                     args=[prisma_client],
                     id="spend_log_cleanup_job",
@@ -4318,7 +4408,8 @@ class ProxyStartupEvent:
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
                     "interval",
-                    seconds=proxy_batch_polling_interval + random.randint(0, 30),  # Add small random offset
+                    seconds=proxy_batch_polling_interval
+                    + random.randint(0, 30),  # Add small random offset
                     # REMOVED jitter parameter - major cause of memory leak
                     id="check_batch_cost_job",
                     replace_existing=True,
@@ -4327,9 +4418,7 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.info("Batch cost check job scheduled successfully")
 
             except Exception as e:
-                verbose_proxy_logger.error(
-                    f"Failed to setup batch cost checking: {e}"
-                )
+                verbose_proxy_logger.error(f"Failed to setup batch cost checking: {e}")
                 verbose_proxy_logger.debug(
                     "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
@@ -10059,6 +10148,7 @@ app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
 app.include_router(video_router)
+app.include_router(container_router)
 app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)

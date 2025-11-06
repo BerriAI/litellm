@@ -24,8 +24,13 @@ class HashicorpSecretManager(BaseSecretManager):
         # Vault-specific config
         self.vault_addr = os.getenv("HCP_VAULT_ADDR", "http://127.0.0.1:8200")
         self.vault_token = os.getenv("HCP_VAULT_TOKEN", "")
-        # If your KV engine is mounted somewhere other than "secret", adjust here:
+        # Vault namespace (for X-Vault-Namespace header)
         self.vault_namespace = os.getenv("HCP_VAULT_NAMESPACE", None)
+        # KV engine mount name (default: "secret")
+        # If your KV engine is mounted somewhere other than "secret", set HCP_VAULT_MOUNT_NAME
+        self.vault_mount_name = os.getenv("HCP_VAULT_MOUNT_NAME", "secret")
+        # Optional path prefix for secrets (e.g., "myapp" -> secret/data/myapp/{secret_name})
+        self.vault_path_prefix = os.getenv("HCP_VAULT_PATH_PREFIX", None)
 
         # Optional config for TLS cert auth
         self.tls_cert_path = os.getenv("HCP_VAULT_CLIENT_CERT", "")
@@ -118,10 +123,24 @@ class HashicorpSecretManager(BaseSecretManager):
         return {"name": self.vault_cert_role}
 
     def get_url(self, secret_name: str) -> str:
+        """
+        Constructs the Vault URL for KV v2 secrets.
+        
+        Format: {VAULT_ADDR}/v1/{NAMESPACE}/{MOUNT_NAME}/data/{PATH_PREFIX}/{SECRET_NAME}
+        
+        Examples:
+        - Default: http://127.0.0.1:8200/v1/secret/data/mykey
+        - With namespace: http://127.0.0.1:8200/v1/mynamespace/secret/data/mykey
+        - With custom mount: http://127.0.0.1:8200/v1/kv/data/mykey
+        - With path prefix: http://127.0.0.1:8200/v1/secret/data/myapp/mykey
+        """
         _url = f"{self.vault_addr}/v1/"
         if self.vault_namespace:
             _url += f"{self.vault_namespace}/"
-        _url += f"secret/data/{secret_name}"
+        _url += f"{self.vault_mount_name}/data/"
+        if self.vault_path_prefix:
+            _url += f"{self.vault_path_prefix}/"
+        _url += secret_name
         return _url
 
     def _get_request_headers(self) -> dict:
@@ -202,6 +221,7 @@ class HashicorpSecretManager(BaseSecretManager):
         description: Optional[str] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        tags: Optional[Union[dict, list]] = None
     ) -> Dict[str, Any]:
         """
         Writes a secret to Vault KV v2 using an async HTTPX client.

@@ -17,7 +17,8 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
-from litellm.cost_calculator import completion_cost, cost_per_token
+from litellm import ModelResponse
+from litellm.cost_calculator import completion_cost, cost_per_token, response_cost_calculator
 from litellm.llms.perplexity.cost_calculator import cost_per_token as perplexity_cost_per_token
 from litellm.types.utils import Usage, PromptTokensDetailsWrapper
 from litellm.utils import get_model_info
@@ -370,4 +371,116 @@ class TestPerplexityCostCalculator:
         
         # Ensure costs are non-negative
         assert prompt_cost >= 0
-        assert completion_cost >= 0 
+        assert completion_cost >= 0
+
+    def test_cost_extraction_priority_over_calculation(self):
+        """Test that extracted cost from API response takes priority over calculated cost."""
+        from litellm.cost_calculator import response_cost_calculator
+        from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
+        
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse with extracted cost
+        model_response = ModelResponse()
+        model_response.usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+        model_response.model = "perplexity/sonar-pro"
+        
+        # Mock raw response with cost
+        raw_response_json = {
+            "choices": [{"message": {"content": "Test response"}}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "total_cost": 0.00015  # This should be used instead of calculated cost
+            }
+        }
+        
+        # Extract cost from API response
+        config.add_cost_to_usage(model_response, raw_response_json)
+        
+        # Test response cost calculator - should use extracted cost
+        cost = response_cost_calculator(
+            response_object=model_response,
+            model="perplexity/sonar-pro",
+            custom_llm_provider="perplexity",
+            call_type="completion",
+            optional_params={}
+        )
+        
+        # Should return the extracted cost, not calculated cost
+        assert cost == 0.00015
+
+    def test_cost_extraction_from_nested_structure(self):
+        """Test cost extraction from nested usage structure."""
+        from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
+        
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse
+        model_response = ModelResponse()
+        model_response.usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+        
+        # Mock raw response with nested cost structure
+        raw_response_json = {
+            "choices": [{"message": {"content": "Test response"}}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "cost": {
+                    "total_cost": 0.00025
+                }
+            }
+        }
+        
+        # Test cost extraction
+        config.add_cost_to_usage(model_response, raw_response_json)
+        
+        # Check that cost was stored in hidden params
+        assert hasattr(model_response, "_hidden_params")
+        assert "additional_headers" in model_response._hidden_params
+        assert "llm_provider-x-litellm-response-cost" in model_response._hidden_params["additional_headers"]
+        
+        cost = model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"]
+        assert cost == 0.00025
+
+    def test_cost_extraction_error_handling(self):
+        """Test error handling during cost extraction."""
+        from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
+        
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse
+        model_response = ModelResponse()
+        model_response.usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+        
+        # Mock raw response with invalid cost data
+        raw_response_json = {
+            "choices": [{"message": {"content": "Test response"}}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "cost": "invalid_cost"  # Invalid cost type
+            }
+        }
+        
+        # Test cost extraction - should not raise error
+        config.add_cost_to_usage(model_response, raw_response_json)
+        
+        # Should not have cost in hidden params due to error
+        if hasattr(model_response, "_hidden_params"):
+            assert "llm_provider-x-litellm-response-cost" not in model_response._hidden_params.get("additional_headers", {}) 

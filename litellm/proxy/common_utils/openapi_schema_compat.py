@@ -62,7 +62,7 @@ def get_openapi_schema_with_compat(
                 return core_schema.str_schema()
         
         # Apply patch
-        GenerateSchema._unknown_type_schema = patched_unknown_type_schema
+        setattr(GenerateSchema, '_unknown_type_schema', patched_unknown_type_schema)
         
         try:
             openapi_schema = get_openapi_func(
@@ -73,7 +73,7 @@ def get_openapi_schema_with_compat(
             )
         finally:
             # Restore original method
-            GenerateSchema._unknown_type_schema = original_unknown_type_schema
+            setattr(GenerateSchema, '_unknown_type_schema', original_unknown_type_schema)
             
         return openapi_schema
             
