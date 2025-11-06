@@ -238,7 +238,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 tags_list = tags
             else:
                 raise ValueError("Tags must be a dict or list of {Key, Value} pairs")
-            data["Tags"] = tags_list
+            data["Tags"] = tags_list  # type: ignore[assignment]
 
         endpoint_url, headers, body = self._prepare_request(
             action="CreateSecret",
