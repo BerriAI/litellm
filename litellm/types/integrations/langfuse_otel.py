@@ -23,6 +23,8 @@ class LangfuseSpanAttributes(str, Enum):
     GENERATION_VERSION = "langfuse.generation.version"
     MASK_INPUT = "langfuse.generation.mask_input"
     MASK_OUTPUT = "langfuse.generation.mask_output"
+    PROMPT_NAME = "langfuse.prompt.name"
+    PROMPT_VERSION = "langfuse.prompt.version"
 
     # ---- Observation input/output ----
     OBSERVATION_INPUT = "langfuse.observation.input"
