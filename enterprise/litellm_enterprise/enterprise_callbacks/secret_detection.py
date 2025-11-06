@@ -21,7 +21,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 
 from fastapi import HTTPException
 
-DETECTED_SECRETS_RAISE_ENABLED = os.getenv('DETECTED_SECRETS_RAISE_ENABLED', 'true')
+DETECTED_SECRETS_RAISE_ENABLED = os.getenv('DETECTED_SECRETS_RAISE_ENABLED', 'false')
 
 def mask_middle_chars(input_string):
     str_len = len(input_string)
