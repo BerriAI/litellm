@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 | Property | Details |
 |----------|---------|
 | Description | On-device guardrail for detecting and filtering sensitive information using regex patterns and keyword matching. Built into LiteLLM with no external dependencies. |
-| Guardrail Type | `litellm_content_filter` |
+| Guardrail Name | `litellm_content_filter` |
 | Detection Methods | Prebuilt regex patterns, custom regex, keyword matching |
 | Actions | `BLOCK` (reject request), `MASK` (redact content) |
 | Supported Modes | `pre_call`, `post_call`, `during_call` (streaming) |
@@ -398,26 +398,6 @@ import re
 pattern = r'\b[A-Z]{3}-\d{4}\b'
 test_text = "Employee ID: ABC-1234"
 print(re.search(pattern, test_text))  # Should match
-```
-
-### Keyword Case Sensitivity
-
-**Issue:** Keywords not matching due to case differences
-
-**Solution:** Keywords are automatically case-insensitive:
-```yaml
-blocked_words:
-  - keyword: "confidential"  # Matches: confidential, CONFIDENTIAL, Confidential
-    action: "BLOCK"
-```
-
-### Performance with Large Keyword Lists
-
-**Issue:** Slow performance with many blocked words
-
-**Solution:** Use `blocked_words_file` and consider consolidating keywords:
-```yaml
-blocked_words_file: "/path/to/keywords.yaml"  # More efficient than inline
 ```
 
 ### Multiple Pattern Matches
