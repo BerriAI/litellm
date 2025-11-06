@@ -365,4 +365,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug(
             "ContentFilterGuardrail: Streaming check completed"
         )
+    
+    @staticmethod
+    def get_config_model():
+        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+            LitellmContentFilterGuardrailConfigModel,
+        )
+
+        return LitellmContentFilterGuardrailConfigModel
 
