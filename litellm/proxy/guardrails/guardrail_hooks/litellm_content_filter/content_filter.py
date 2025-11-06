@@ -6,13 +6,14 @@ to detect and block/mask sensitive content.
 """
 
 import re
-from typing import Dict, List, Optional, Pattern, Tuple, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Pattern, Tuple, Union
 
 import yaml
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     BlockedWord,
     ContentFilterAction,
@@ -21,6 +22,7 @@ from litellm.types.guardrails import (
     Mode,
     PiiEntityType,
 )
+from litellm.types.utils import ModelResponseStream
 
 from .patterns import get_compiled_pattern
 
@@ -306,4 +308,61 @@ class ContentFilterGuardrail(CustomGuardrail):
         
         verbose_proxy_logger.debug("ContentFilterGuardrail: Guardrail applied successfully")
         return text
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Streaming hook to check each chunk as it's yielded.
+        
+        This implementation checks each chunk individually and yields it immediately,
+        allowing for low-latency streaming with content filtering.
+        
+        Args:
+            user_api_key_dict: User API key authentication
+            response: Async generator of response chunks
+            request_data: Original request data
+            
+        Yields:
+            Checked and potentially masked chunks
+            
+        Raises:
+            HTTPException: If chunk content should be blocked
+        """
+        verbose_proxy_logger.debug(
+            "ContentFilterGuardrail: Running streaming check (per-chunk mode)"
+        )
+                
+        # Process each chunk individually
+        async for chunk in response:
+            if isinstance(chunk, ModelResponseStream):
+                for choice in chunk.choices:
+                    if hasattr(choice, "delta") and choice.delta.content:
+                        if isinstance(choice.delta.content, str):
+                            # Check the chunk content using apply_guardrail
+                            try:
+                                processed_content = await self.apply_guardrail(
+                                    text=choice.delta.content,
+                                    request_data=request_data,
+                                )
+                                if processed_content != choice.delta.content:
+                                    choice.delta.content = processed_content
+                                    verbose_proxy_logger.debug(
+                                        "ContentFilterGuardrail: Modified streaming chunk"
+                                    )
+                            except HTTPException as e:
+                                # If content should be blocked, raise immediately
+                                verbose_proxy_logger.warning(
+                                    f"ContentFilterGuardrail: Blocked streaming chunk: {e.detail}"
+                                )
+                                raise
+            
+            yield chunk
+        
+        verbose_proxy_logger.debug(
+            "ContentFilterGuardrail: Streaming check completed"
+        )
 
