@@ -193,7 +193,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             if match:
                 matched_text = match.group(0)
                 verbose_proxy_logger.debug(
-                    f"Pattern '{pattern_name}' matched: {matched_text[:20]}..."
+                    f"Pattern '{pattern_name}' matched."
                 )
                 return (matched_text, pattern_name, action)
         return None
