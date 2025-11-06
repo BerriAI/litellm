@@ -545,7 +545,20 @@ def test_embedding(mock_aembedding, client_no_auth):
             "input": ["good morning from litellm"],
         }
 
-        response = client_no_auth.post("/v1/embeddings", json=test_data)
+        with patch.object(
+            litellm.proxy.proxy_server.proxy_logging_obj,
+            "pre_call_hook",
+            new=AsyncMock(return_value=test_data.copy()),
+        ) as mock_pre_call_hook, patch.object(
+            litellm.proxy.proxy_server.proxy_logging_obj,
+            "during_call_hook",
+            new=AsyncMock(return_value=None),
+        ) as mock_during_hook, patch.object(
+            litellm.proxy.proxy_server.proxy_logging_obj,
+            "post_call_success_hook",
+            new=AsyncMock(return_value=None),
+        ):
+            response = client_no_auth.post("/v1/embeddings", json=test_data)
 
         mock_aembedding.assert_called_once_with(
             model="azure/text-embedding-ada-002",
@@ -559,6 +572,16 @@ def test_embedding(mock_aembedding, client_no_auth):
         result = response.json()
         print(len(result["data"][0]["embedding"]))
         assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
+
+        pre_call_kwargs = mock_pre_call_hook.await_args_list[0].kwargs
+        assert (
+            pre_call_kwargs.get("call_type") == "aembedding"
+        ), f"expected pre_call_hook to receive call_type='aembedding', got {pre_call_kwargs.get('call_type')}"
+
+        during_call_kwargs = mock_during_hook.await_args_list[0].kwargs
+        assert (
+            during_call_kwargs.get("call_type") == "aembedding"
+        ), f"expected during_call_hook to receive call_type='aembedding', got {during_call_kwargs.get('call_type')}"
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
