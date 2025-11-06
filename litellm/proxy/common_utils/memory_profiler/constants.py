@@ -37,8 +37,9 @@ DEFAULT_BATCH_SIZE = 30
 
 # Number of batches to run during the measurement phase
 # More batches = longer test runtime but more confidence in leak detection
-# Optimized to 5 for CI performance while maintaining statistical significance
-DEFAULT_NUM_BATCHES = 5
+# Must be >= 6 to satisfy sample_window * 2 requirement for rolling average
+# Optimized to 6 for CI performance while maintaining statistical significance
+DEFAULT_NUM_BATCHES = 6
 
 # Number of warmup batches to run before measurement begins
 # Warmup allows caches and memory allocations to stabilize before measurement
@@ -55,7 +56,7 @@ MAX_NUM_BATCHES = 15
 
 # Window size for calculating rolling average of memory measurements
 # Smooths out noise in memory measurements for more accurate trend detection
-# Set to 3 to match optimized batch count (5 batches) while maintaining smoothing
+# NOTE: NUM_BATCHES must be >= ROLLING_AVERAGE_WINDOW * 2 to avoid test skips
 DEFAULT_ROLLING_AVERAGE_WINDOW = 3
 
 # Maximum allowed memory growth percentage for basic test pass/fail
