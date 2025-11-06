@@ -13,7 +13,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 
 
-def load_custom_secret_manager(config_file_path: str) -> None:
+def load_custom_secret_manager(config_file_path: Optional[str] = None) -> None:
     """
     Load and initialize a custom secret manager from a python file.
     
