@@ -2,32 +2,25 @@
 Content Filter Guardrail for LiteLLM.
 
 This guardrail provides regex pattern matching and keyword filtering
-to detect and block/mask sensitive content before it reaches the LLM.
+to detect and block/mask sensitive content.
 """
 
 import re
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Pattern, Tuple, Union
+from typing import Dict, List, Optional, Pattern, Tuple, Union
 
 import yaml
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.caching import DualCache
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
-)
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.guardrails import (
     BlockedWord,
     ContentFilterAction,
     ContentFilterPattern,
     GuardrailEventHooks,
     Mode,
+    PiiEntityType,
 )
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import CallTypes, GuardrailStatus
 
 from .patterns import get_compiled_pattern
 
@@ -75,7 +68,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=[GuardrailEventHooks.pre_call],
+            supported_event_hooks=[
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.post_call,
+                GuardrailEventHooks.during_call,
+            ],
             event_hook=event_hook or GuardrailEventHooks.pre_call,
             default_on=default_on,
             **kwargs,
@@ -234,26 +231,35 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         return redaction_tag
 
-    def _process_message_content(
+    async def apply_guardrail(
         self,
-        content: str,
-        request_data: dict,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+        request_data: Optional[dict] = None,
     ) -> str:
         """
-        Process a single message content string.
+        Apply content filtering guardrail to the given text.
+        
+        This method checks for sensitive patterns and blocked keywords,
+        either blocking the request or masking the sensitive content.
         
         Args:
-            content: Message content to check
-            request_data: Original request data for logging
+            text: The text to apply the guardrail to
+            language: Optional language parameter (not used)
+            entities: Optional entities parameter (not used)
+            request_data: Optional request data dictionary for logging metadata
             
         Returns:
-            Processed content (masked if needed)
+            Text with sensitive content masked (if action is MASK)
             
         Raises:
-            HTTPException: If content should be blocked
+            HTTPException: If sensitive content is detected and action is BLOCK
         """
+        verbose_proxy_logger.debug("ContentFilterGuardrail: Applying guardrail to text")
+        
         # Check regex patterns
-        pattern_match = self._check_patterns(content)
+        pattern_match = self._check_patterns(text)
         if pattern_match:
             matched_text, pattern_name, action = pattern_match
             
@@ -267,11 +273,11 @@ class ContentFilterGuardrail(CustomGuardrail):
             elif action == ContentFilterAction.MASK:
                 # Replace the matched text with redaction tag
                 redaction_tag = self._mask_content(matched_text, pattern_name)
-                content = content.replace(matched_text, redaction_tag)
+                text = text.replace(matched_text, redaction_tag)
                 verbose_proxy_logger.info(f"Masked {pattern_name} in content")
         
         # Check blocked words
-        word_match = self._check_blocked_words(content)
+        word_match = self._check_blocked_words(text)
         if word_match:
             keyword, action, description = word_match
             
@@ -290,96 +296,14 @@ class ContentFilterGuardrail(CustomGuardrail):
                 )
             elif action == ContentFilterAction.MASK:
                 # Replace keyword with redaction tag (case-insensitive)
-                # Use regex for case-insensitive replacement
-                content = re.sub(
+                text = re.sub(
                     re.escape(keyword),
                     self.keyword_redaction_tag,
-                    content,
+                    text,
                     flags=re.IGNORECASE,
                 )
                 verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
         
-        return content
-
-    def _filter_messages(
-        self,
-        messages: List[AllMessageValues],
-        request_data: dict,
-    ) -> None:
-        """
-        Helper method to process all messages and apply content filtering.
-        
-        Modifies messages in-place, replacing sensitive content with redacted tags
-        or raising exceptions if content should be blocked.
-        
-        Args:
-            messages: List of message objects to process
-            request_data: Original request data for logging
-            
-        Raises:
-            HTTPException: If content should be blocked
-        """
-        for message in messages:
-            content = message.get("content")
-            if not content:
-                continue
-            
-            if isinstance(content, str):
-                # Process string content
-                processed_content = self._process_message_content(content, request_data)
-                if processed_content != content:
-                    message["content"] = processed_content
-            elif isinstance(content, list):
-                # Process list of content items (multimodal)
-                for i, item in enumerate(content):
-                    if isinstance(item, dict) and "text" in item:
-                        text_content = item["text"]
-                        if isinstance(text_content, str):
-                            processed_text = self._process_message_content(text_content, request_data)
-                            if processed_text != text_content:
-                                item["text"] = processed_text  # type: ignore
-
-    @log_guardrail_information
-    async def async_pre_call_hook(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        cache: DualCache,
-        data: dict,
-        call_type: str,
-    ) -> Optional[dict]:
-        """
-        Pre-call hook to check content before it reaches the LLM.
-        
-        Args:
-            user_api_key_dict: User API key authentication
-            cache: Dual cache instance
-            data: Request data containing messages
-            call_type: Type of call (completion, embeddings, etc.)
-            
-        Returns:
-            Modified data dict with masked content, or None
-            
-        Raises:
-            HTTPException: If content should be blocked
-        """
-        verbose_proxy_logger.debug("ContentFilterGuardrail: Running pre-call check")
-        
-        # Get messages from the request
-        messages: Optional[List[AllMessageValues]] = self.get_guardrails_messages_for_call_type(
-            call_type=CallTypes(call_type),
-            data=data,
-        )
-        
-        if not messages:
-            verbose_proxy_logger.debug("ContentFilterGuardrail: No messages to check")
-            return data
-        
-        # Process all messages
-        self._filter_messages(
-            messages=messages,
-            request_data=data,
-        )
-        
-        verbose_proxy_logger.debug("ContentFilterGuardrail: Pre-call check completed")
-        return data
+        verbose_proxy_logger.debug("ContentFilterGuardrail: Guardrail applied successfully")
+        return text
 
