@@ -54,6 +54,10 @@ const mockCallbacksData = {
 
 describe("Settings", () => {
   it("should render the settings page", () => {
+    vi.spyOn(networking, "alertingSettingsCall").mockResolvedValue([]);
+    vi.spyOn(networking, "getEmailEventSettings").mockResolvedValue({ settings: [] });
+    vi.spyOn(networking, "getCallbacksCall").mockResolvedValue(mockCallbacksData);
+
     render(<Settings accessToken="test-token" userRole="admin" userID="test-user" premiumUser={false} />);
   });
 });
@@ -61,6 +65,8 @@ describe("Settings", () => {
 describe("Logging Callbacks Section", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(networking, "alertingSettingsCall").mockResolvedValue([]);
+    vi.spyOn(networking, "getEmailEventSettings").mockResolvedValue({ settings: [] });
   });
 
   it("should display the list of active callbacks", async () => {
