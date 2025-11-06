@@ -15,7 +15,7 @@ Requires:
 
 import json
 import os
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import httpx
 
@@ -198,12 +198,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         return primary_secret_kv_pairs.get(secret_name)
 
     async def async_write_secret(
-        self,
-        secret_name: str,
-        secret_value: str,
-        description: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+            self,
+            secret_name: str,
+            secret_value: str,
+            description: Optional[str] = None,
+            optional_params: Optional[dict] = None,
+            timeout: Optional[Union[float, httpx.Timeout]] = None,
+            tags: Optional[Union[dict, list]] = None
     ) -> dict:
         """
         Async function to write a secret to AWS Secrets Manager
@@ -214,22 +215,37 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             description: Optional description for the secret
             optional_params: Additional AWS parameters
             timeout: Request timeout
+            tags: Optional dict or list of tags to apply, e.g.
+                  {"Environment": "Prod", "Owner": "AI-Platform"} or
+                  [{"Key": "Environment", "Value": "Prod"}]
         """
         from litellm._uuid import uuid
 
-        # Prepare the request data
-        data = {"Name": secret_name, "SecretString": secret_value}
+        data: Dict[str, Any] = {
+            "Name": secret_name,
+            "SecretString": secret_value,
+            "ClientRequestToken": str(uuid.uuid4()),
+        }
+
         if description:
             data["Description"] = description
 
-        data["ClientRequestToken"] = str(uuid.uuid4())
+        # ✅ Normalize tags to AWS format
+        if tags:
+            if isinstance(tags, dict):
+                tags_list = [{"Key": k, "Value": str(v)} for k, v in tags.items()]
+            elif isinstance(tags, list):
+                tags_list = tags
+            else:
+                raise ValueError("Tags must be a dict or list of {Key, Value} pairs")
+            data["Tags"] = tags_list  # type: ignore[assignment]
 
         endpoint_url, headers, body = self._prepare_request(
             action="CreateSecret",
             secret_name=secret_name,
             secret_value=secret_value,
             optional_params=optional_params,
-            request_data=data,  # Pass the complete request data
+            request_data=data,
         )
 
         async_client = get_async_httpx_client(
@@ -354,7 +370,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
 # if __name__ == "__main__":
 #     print("loading aws secret manager v2")
 #     aws_secret_manager_v2 = AWSSecretsManagerV2()
-
+#     import asyncio
 #     print("writing secret to aws secret manager v2")
 #     asyncio.run(aws_secret_manager_v2.async_write_secret(secret_name="test_secret_3", secret_value="test_value_2"))
 #     print("reading secret from aws secret manager v2")

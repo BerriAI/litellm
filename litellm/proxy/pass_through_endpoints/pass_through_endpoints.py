@@ -996,6 +996,7 @@ def create_pass_through_route(
     cost_per_request: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
     is_streaming_request: Optional[bool] = False,
+    query_params: Optional[dict] = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -1098,10 +1099,10 @@ def create_pass_through_route(
 
             # Ensure query_params and custom_body are dicts or None
             final_query_params = (
-                query_params_data
-                if isinstance(query_params_data, dict) or query_params_data is None
-                else None
+                query_params_data if isinstance(query_params_data, dict) else {}
             )
+            if query_params:
+                final_query_params.update(query_params)
             final_custom_body = (
                 custom_body_data
                 if isinstance(custom_body_data, dict) or custom_body_data is None

@@ -2,11 +2,9 @@ import os
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
-from unittest.mock import patch
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
@@ -211,7 +209,7 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(
             role="user",
-            content=[{"type": "text", "text": "What's the weather in Boston?"}]
+            content=[{"type": "text", "text": "What's the weather in Boston?"}],
         ),
         AnthopicMessagesAssistantMessageParam(
             role="assistant",
@@ -219,7 +217,7 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
                 {
                     "type": "thinking",
                     "thinking": "I will call the get_weather tool.",
-                    "signature": "sigsig"
+                    "signature": "sigsig",
                 },
                 {
                     "type": "redacted_thinking",
@@ -229,9 +227,9 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
                     "type": "tool_use",
                     "id": "toolu_01234",
                     "name": "get_weather",
-                    "input": {"location": "Boston"} 
-                }
-            ]
+                    "input": {"location": "Boston"},
+                },
+            ],
         ),
     ]
 
@@ -243,7 +241,10 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert "thinking_blocks" in result[1]
     assert len(result[1]["thinking_blocks"]) == 2
     assert result[1]["thinking_blocks"][0]["type"] == "thinking"
-    assert result[1]["thinking_blocks"][0]["thinking"] == "I will call the get_weather tool."
+    assert (
+        result[1]["thinking_blocks"][0]["thinking"]
+        == "I will call the get_weather tool."
+    )
     assert result[1]["thinking_blocks"][0]["signature"] == "sigsig"
     assert result[1]["thinking_blocks"][1]["type"] == "redacted_thinking"
     assert result[1]["thinking_blocks"][1]["data"] == "REDACTED"
@@ -258,7 +259,7 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(
             role="user",
-            content=[{"type": "text", "text": "What's the weather in Boston?"}]
+            content=[{"type": "text", "text": "What's the weather in Boston?"}],
         ),
         AnthopicMessagesAssistantMessageParam(
             role="assistant",
@@ -267,9 +268,9 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
                     "type": "tool_use",
                     "id": "toolu_01234",
                     "name": "get_weather",
-                    "input": {"location": "Boston"}
+                    "input": {"location": "Boston"},
                 }
-            ]
+            ],
         ),
         AnthropicMessagesUserMessageParam(
             role="user",
@@ -277,11 +278,11 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
                 {
                     "type": "tool_result",
                     "tool_use_id": "toolu_01234",
-                    "content": "Sunny, 75°F"
+                    "content": "Sunny, 75°F",
                 },
-                {"type": "text", "text": "What about tomorrow?"}
-            ]
-        )
+                {"type": "text", "text": "What about tomorrow?"},
+            ],
+        ),
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
@@ -294,13 +295,19 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     for i, msg in enumerate(result):
         if isinstance(msg, dict) and msg.get("role") == "tool":
             tool_message_idx = i
-        elif isinstance(msg, dict) and msg.get("role") == "user" and "What about tomorrow?" in str(msg.get("content", "")):
+        elif (
+            isinstance(msg, dict)
+            and msg.get("role") == "user"
+            and "What about tomorrow?" in str(msg.get("content", ""))
+        ):
             user_message_idx = i
             break
 
     assert tool_message_idx is not None, "Tool message not found"
     assert user_message_idx is not None, "User message not found"
-    assert tool_message_idx < user_message_idx, "Tool message should be placed before user message"
+    assert (
+        tool_message_idx < user_message_idx
+    ), "Tool message should be placed before user message"
 
 
 def test_translate_openai_content_to_anthropic_empty_function_arguments():
@@ -316,11 +323,10 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
                         id="call_empty_args",
                         type="function",
                         function=Function(
-                            name="test_function",
-                            arguments=""  # empty arguments string
-                        )
+                            name="test_function", arguments=""  # empty arguments string
+                        ),
                     )
-                ]
+                ],
             )
         )
     ]
@@ -335,7 +341,6 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert result[0].input == {}, "Empty function arguments should result in empty dict"
 
 
-
 def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
     """Test that partial tool arguments are correctly handled as input_json_delta."""
     choices = [
@@ -344,15 +349,15 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
             index=1,
             delta=Delta(
                 provider_specific_fields=None,
-                content='',
-                role='assistant',
+                content="",
+                role="assistant",
                 function_call=None,
                 tool_calls=[
                     ChatCompletionDeltaToolCall(
                         id=None,
                         function=Function(arguments=': "San ', name=None),
-                        type='function',
-                        index=0
+                        type="function",
+                        index=0,
                     )
                 ],
                 audio=None,
@@ -372,9 +377,8 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
     print("Content block delta:", content_block_delta)
 
     assert type_of_content == "input_json_delta"
-    assert content_block_delta["type"] == "input_json_delta" 
+    assert content_block_delta["type"] == "input_json_delta"
     assert content_block_delta["partial_json"] == ': "San '
-
 
 
 def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
@@ -389,11 +393,8 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
                         "thinking": "I need to summar",
                         "signature": "sigsig",
                     },
-                    {
-                        "type": "redacted_thinking",
-                        "data": "REDACTED"
-                    }
-                ]
+                    {"type": "redacted_thinking", "data": "REDACTED"},
+                ],
             )
         )
     ]
@@ -450,7 +451,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
     )
 
     assert type_of_content == "thinking_delta"
-    assert content_block_delta["type"] == "thinking_delta" 
+    assert content_block_delta["type"] == "thinking_delta"
     assert content_block_delta["thinking"] == "I need to summar"
 
 
@@ -495,7 +496,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
     )
 
     assert type_of_content == "signature_delta"
-    assert content_block_delta["type"] == "signature_delta" 
+    assert content_block_delta["type"] == "signature_delta"
     assert content_block_delta["signature"] == "sigsig"
 
 
@@ -536,3 +537,256 @@ def test_translate_streaming_openai_chunk_to_anthropic_raises_when_thinking_and_
         LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
             choices=choices
         )
+
+
+def test_translate_anthropic_messages_to_openai_user_message_with_base64_image():
+    """Test that base64 images in user messages are correctly translated to OpenAI format."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                    },
+                },
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert len(result[0]["content"]) == 2
+
+    # Check text content
+    assert result[0]["content"][0]["type"] == "text"
+    assert result[0]["content"][0]["text"] == "What's in this image?"
+
+    # Check image content
+    assert result[0]["content"][1]["type"] == "image_url"
+    assert "image_url" in result[0]["content"][1]
+    assert result[0]["content"][1]["image_url"]["url"].startswith(
+        "data:image/png;base64,"
+    )
+    assert (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        in result[0]["content"][1]["image_url"]["url"]
+    )
+
+
+def test_translate_anthropic_messages_to_openai_user_message_with_url_image():
+    """Test that URL-based images in user messages are correctly translated to OpenAI format."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {"type": "text", "text": "Describe this forest path"},
+                {
+                    "type": "image",
+                    "source": {"type": "url", "url": "https://example.com/forest.jpg"},
+                },
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert len(result[0]["content"]) == 2
+
+    # Check text content
+    assert result[0]["content"][0]["type"] == "text"
+    assert result[0]["content"][0]["text"] == "Describe this forest path"
+
+    # Check image content
+    assert result[0]["content"][1]["type"] == "image_url"
+    assert "image_url" in result[0]["content"][1]
+    assert (
+        result[0]["content"][1]["image_url"]["url"] == "https://example.com/forest.jpg"
+    )
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_with_base64_image():
+    """Test that base64 images in tool results are correctly translated to OpenAI format."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user", content=[{"type": "text", "text": "Take a screenshot"}]
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01A09q90qw90lq917835lq9",
+                    "name": "get_screenshot",
+                    "input": {"area": "desktop"},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A09q90qw90lq917835lq9",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/2wBDAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/wA/==",
+                            },
+                        }
+                    ],
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    # Find the tool message in the result
+    tool_message = None
+    for msg in result:
+        if isinstance(msg, dict) and msg.get("role") == "tool":
+            tool_message = msg
+            break
+
+    assert tool_message is not None, "Tool message not found in result"
+    # Tool messages in OpenAI format have string content (data URL), not list
+    assert isinstance(tool_message["content"], str)
+    assert tool_message["content"].startswith("data:image/jpeg;base64,")
+    assert "/9j/4AAQSkZJRgABAQAAAQABAAD" in tool_message["content"]
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_with_url_image():
+    """Test that URL-based images in tool results are correctly translated to OpenAI format."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Take a screenshot of the forest"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01A09q90qw90lq917835lq9",
+                    "name": "get_screenshot",
+                    "input": {"area": "forest_path"},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A09q90qw90lq917835lq9",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "url",
+                                "url": "https://i0.wp.com/picjumbo.com/wp-content/uploads/amazing-stone-path-in-forest-free-image.jpg",
+                            },
+                        }
+                    ],
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    # Find the tool message in the result
+    tool_message = None
+    for msg in result:
+        if isinstance(msg, dict) and msg.get("role") == "tool":
+            tool_message = msg
+            break
+
+    assert tool_message is not None, "Tool message not found in result"
+    # Tool messages in OpenAI format have string content (URL), not list
+    assert isinstance(tool_message["content"], str)
+    assert (
+        tool_message["content"]
+        == "https://i0.wp.com/picjumbo.com/wp-content/uploads/amazing-stone-path-in-forest-free-image.jpg"
+    )
+
+
+def test_translate_anthropic_messages_to_openai_mixed_content_with_image():
+    """Test that messages with mixed text and image content are correctly translated."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {"type": "text", "text": "Here are two images:"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                    },
+                },
+                {"type": "text", "text": "and this one:"},
+                {
+                    "type": "image",
+                    "source": {"type": "url", "url": "https://example.com/image2.jpg"},
+                },
+                {"type": "text", "text": "What's the difference?"},
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert len(result[0]["content"]) == 5
+
+    # Check text content
+    assert result[0]["content"][0]["type"] == "text"
+    assert result[0]["content"][0]["text"] == "Here are two images:"
+
+    # Check first image (base64)
+    assert result[0]["content"][1]["type"] == "image_url"
+    assert result[0]["content"][1]["image_url"]["url"].startswith(
+        "data:image/png;base64,"
+    )
+
+    # Check middle text
+    assert result[0]["content"][2]["type"] == "text"
+    assert result[0]["content"][2]["text"] == "and this one:"
+
+    # Check second image (URL)
+    assert result[0]["content"][3]["type"] == "image_url"
+    assert (
+        result[0]["content"][3]["image_url"]["url"] == "https://example.com/image2.jpg"
+    )
+
+    # Check final text
+    assert result[0]["content"][4]["type"] == "text"
+    assert result[0]["content"][4]["text"] == "What's the difference?"

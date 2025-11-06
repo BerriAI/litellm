@@ -199,9 +199,6 @@ def video_generation(  # noqa: PLR0915
             model=model or DEFAULT_VIDEO_ENDPOINT_MODEL,
             custom_llm_provider=custom_llm_provider,
         )
-        print("custom_llm_provider", custom_llm_provider)
-        print("model", model)
-        print("DEFAULT_VIDEO_ENDPOINT_MODEL", DEFAULT_VIDEO_ENDPOINT_MODEL)
 
         # get provider config
         video_generation_provider_config: Optional[BaseVideoConfig] = (

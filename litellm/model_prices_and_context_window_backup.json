@@ -1105,6 +1105,11 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "azure/container": {
+        "code_interpreter_cost_per_session": 0.03,
+        "litellm_provider": "azure",
+        "mode": "chat"
+    },
     "azure/eu/gpt-4o-2024-08-06": {
         "deprecation_date": "2026-02-27",
         "cache_read_input_token_cost": 1.375e-06,
@@ -2364,6 +2369,35 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "azure/gpt-5-pro": {
+        "input_cost_per_token": 1.5e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 400000,
+        "mode": "responses",
+        "output_cost_per_token": 0.00012,
+        "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/concepts/models-sold-directly-by-azure?pivots=azure-openai&tabs=global-standard-aoai%2Cstandard-chat-completions%2Cglobal-standard#gpt-5",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "azure/gpt-image-1": {
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
@@ -2465,6 +2499,96 @@
     },
     "azure/medium/1536-x-1024/gpt-image-1": {
         "input_cost_per_pixel": 4.0054321e-08,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "azure/gpt-image-1-mini": {
+        "input_cost_per_pixel": 8.0566406e-09,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "azure/low/1024-x-1024/gpt-image-1-mini": {
+        "input_cost_per_pixel": 2.0751953125e-09,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "azure/low/1024-x-1536/gpt-image-1-mini": {
+        "input_cost_per_pixel": 2.0751953125e-09,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "azure/low/1536-x-1024/gpt-image-1-mini": {
+        "input_cost_per_pixel": 2.0345052083e-09,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "azure/medium/1024-x-1024/gpt-image-1-mini": {
+        "input_cost_per_pixel": 8.056640625e-09,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "azure/medium/1024-x-1536/gpt-image-1-mini": {
+        "input_cost_per_pixel": 8.056640625e-09,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "azure/medium/1536-x-1024/gpt-image-1-mini": {
+        "input_cost_per_pixel": 7.9752604167e-09,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "azure/high/1024-x-1024/gpt-image-1-mini": {
+        "input_cost_per_pixel": 3.173828125e-08,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "azure/high/1024-x-1536/gpt-image-1-mini": {
+        "input_cost_per_pixel": 3.173828125e-08,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "azure/high/1536-x-1024/gpt-image-1-mini": {
+        "input_cost_per_pixel": 3.1575520833e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
@@ -3386,6 +3510,33 @@
             "/v1/ocr"
         ],
         "source": "https://devblogs.microsoft.com/foundry/whats-new-in-azure-ai-foundry-august-2025/#mistral-document-ai-(ocr)-%E2%80%94-serverless-in-foundry"
+    },
+    "azure_ai/doc-intelligence/prebuilt-read": {
+        "litellm_provider": "azure_ai",
+        "ocr_cost_per_page": 1.5e-3,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-document-intelligence/"
+    },
+    "azure_ai/doc-intelligence/prebuilt-layout": {
+        "litellm_provider": "azure_ai",
+        "ocr_cost_per_page": 1e-2,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-document-intelligence/"
+    },
+    "azure_ai/doc-intelligence/prebuilt-document": {
+        "litellm_provider": "azure_ai",
+        "ocr_cost_per_page": 1e-2,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-document-intelligence/"
     },
     "azure_ai/MAI-DS-R1": {
         "input_cost_per_token": 1.35e-06,
@@ -7860,10 +8011,97 @@
             }
         ]
     },
+    "firecrawl/search": {
+        "litellm_provider": "firecrawl",
+        "mode": "search",
+        "tiered_pricing": [
+            {
+                "input_cost_per_query": 1.66e-03,
+                "max_results_range": [
+                    1,
+                    10
+                ]
+            },
+            {
+                "input_cost_per_query": 3.32e-03,
+                "max_results_range": [
+                    11,
+                    20
+                ]
+            },
+            {
+                "input_cost_per_query": 4.98e-03,
+                "max_results_range": [
+                    21,
+                    30
+                ]
+            },
+            {
+                "input_cost_per_query": 6.64e-03,
+                "max_results_range": [
+                    31,
+                    40
+                ]
+            },
+            {
+                "input_cost_per_query": 8.3e-03,
+                "max_results_range": [
+                    41,
+                    50
+                ]
+            },
+            {
+                "input_cost_per_query": 9.96e-03,
+                "max_results_range": [
+                    51,
+                    60
+                ]
+            },
+            {
+                "input_cost_per_query": 11.62e-03,
+                "max_results_range": [
+                    61,
+                    70
+                ]
+            },
+            {
+                "input_cost_per_query": 13.28e-03,
+                "max_results_range": [
+                    71,
+                    80
+                ]
+            },
+            {
+                "input_cost_per_query": 14.94e-03,
+                "max_results_range": [
+                    81,
+                    90
+                ]
+            },
+            {
+                "input_cost_per_query": 16.6e-03,
+                "max_results_range": [
+                    91,
+                    100
+                ]
+            }
+        ],
+        "metadata": {
+            "notes": "Firecrawl search pricing: $83 for 100,000 credits, 2 credits per 10 results. Cost = ceiling(limit/10) * 2 * $0.00083"
+        }
+    },
     "perplexity/search": {
         "input_cost_per_query": 5e-03,
         "litellm_provider": "perplexity",
         "mode": "search"
+    },
+    "searxng/search": {
+        "litellm_provider": "searxng",
+        "mode": "search",
+        "input_cost_per_query": 0.0,
+        "metadata": {
+            "notes": "SearXNG is an open-source metasearch engine. Free to use when self-hosted or using public instances."
+        }
     },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
@@ -10035,6 +10273,96 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "gemini-live-2.5-flash-preview-native-audio-09-2025": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-language-models",
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_pdf_size_mb": 30,
+        "max_tokens": 65535,
+        "max_video_length": 1,
+        "max_videos_per_prompt": 10,
+        "mode": "chat",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "gemini",
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_pdf_size_mb": 30,
+        "max_tokens": 65535,
+        "max_video_length": 1,
+        "max_videos_per_prompt": 10,
+        "mode": "chat",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -18211,15 +18539,6 @@
         "output_cost_per_token": 2e-07,
         "supports_tool_choice": true
     },
-    "openrouter/nvidia/nemotron-nano-9b-v2:free": {
-        "input_cost_per_token": 0,
-        "litellm_provider": "openrouter",
-        "max_tokens": 128000,
-        "mode": "chat",
-        "output_cost_per_token": 0,
-        "source": "https://openrouter.ai/nvidia/nemotron-nano-9b-v2:free",
-        "supports_tool_choice": true
-    },
     "openrouter/openai/gpt-3.5-turbo": {
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "openrouter",
@@ -22910,6 +23229,15 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "vertex_ai/mistral-ocr-2505": {
+        "litellm_provider": "vertex_ai",
+        "mode": "ocr",
+        "ocr_cost_per_page": 5e-4,
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
+    },
     "vertex_ai/openai/gpt-oss-120b-maas": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-openai_models",
@@ -23904,7 +24232,6 @@
         "output_cost_per_token": 1.5e-05,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -23921,7 +24248,6 @@
         "cache_read_input_token_cost": 0.05e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -23953,7 +24279,6 @@
         "output_cost_per_token_above_128k_tokens": 30e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -23969,7 +24294,6 @@
         "output_cost_per_token_above_128k_tokens": 30e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -24047,6 +24371,11 @@
         "litellm_provider": "vertex_ai",
         "mode": "vector_store"
     },
+    "openai/container": {
+        "code_interpreter_cost_per_session": 0.03,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
     "openai/sora-2": {
         "litellm_provider": "openai",
         "mode": "video_generation",
@@ -24080,16 +24409,6 @@
             "720x1280",
             "1280x720"
         ]
-    },
-    "openai/container": {
-        "code_interpreter_cost_per_session": 0.03,
-        "litellm_provider": "openai",
-        "mode": "container"
-    },
-    "azure/container": {
-        "code_interpreter_cost_per_session": 0.03,
-        "litellm_provider": "azure",
-        "mode": "container"
     },
     "azure/sora-2": {
         "litellm_provider": "azure",

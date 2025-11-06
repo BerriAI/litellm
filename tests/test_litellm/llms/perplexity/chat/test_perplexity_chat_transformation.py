@@ -7,7 +7,7 @@ from Perplexity API responses.
 
 import os
 import sys
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -708,3 +708,151 @@ class TestPerplexityChatTransformation:
         assert choice.message.content is None
         # No annotations should be created since content is None
         assert not hasattr(choice.message, 'annotations') or choice.message.annotations is None
+
+    # Tests for cost extraction functionality
+    def test_add_cost_to_usage_flat_structure(self):
+        """Test cost extraction from flat usage structure."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse
+        model_response = ModelResponse()
+        model_response.usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+        
+        # Mock raw response with flat cost structure
+        raw_response_json = {
+            "choices": [{"message": {"content": "Test response"}}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "total_cost": 0.00015
+            }
+        }
+        
+        # Test cost extraction
+        config.add_cost_to_usage(model_response, raw_response_json)
+        
+        # Check that cost was stored in hidden params
+        assert hasattr(model_response, "_hidden_params")
+        assert "additional_headers" in model_response._hidden_params
+        assert "llm_provider-x-litellm-response-cost" in model_response._hidden_params["additional_headers"]
+        
+        cost = model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"]
+        assert cost == 0.00015
+
+    def test_add_cost_to_usage_nested_structure(self):
+        """Test cost extraction from nested usage structure."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse
+        model_response = ModelResponse()
+        model_response.usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+        
+        # Mock raw response with nested cost structure
+        raw_response_json = {
+            "choices": [{"message": {"content": "Test response"}}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "cost": {
+                    "total_cost": 0.00025
+                }
+            }
+        }
+        
+        # Test cost extraction
+        config.add_cost_to_usage(model_response, raw_response_json)
+        
+        # Check that cost was stored in hidden params
+        assert hasattr(model_response, "_hidden_params")
+        assert "additional_headers" in model_response._hidden_params
+        assert "llm_provider-x-litellm-response-cost" in model_response._hidden_params["additional_headers"]
+        
+        cost = model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"]
+        assert cost == 0.00025
+
+    def test_add_cost_to_usage_no_cost_data(self):
+        """Test handling when no cost data is present."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse
+        model_response = ModelResponse()
+        model_response.usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+        
+        # Mock raw response without cost
+        raw_response_json = {
+            "choices": [{"message": {"content": "Test response"}}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150
+            }
+        }
+        
+        # Test cost extraction - should not raise error
+        config.add_cost_to_usage(model_response, raw_response_json)
+        
+        # Should not have cost in hidden params
+        if hasattr(model_response, "_hidden_params"):
+            assert "llm_provider-x-litellm-response-cost" not in model_response._hidden_params.get("additional_headers", {})
+
+    def test_transform_response_includes_cost_extraction(self):
+        """Test that transform_response includes cost extraction."""
+        config = PerplexityChatConfig()
+        
+        # Mock raw response
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "Test response"}}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "total_cost": 0.00015
+            }
+        }
+        mock_response.headers = {}
+        
+        # Create a ModelResponse
+        model_response = ModelResponse()
+        model_response.usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+        model_response.model = "perplexity/sonar-pro"
+        
+        # Mock the parent transform_response to return our model_response
+        with patch.object(config.__class__.__bases__[0], 'transform_response', return_value=model_response):
+            result = config.transform_response(
+                model="perplexity/sonar-pro",
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=Mock(),
+                request_data={},
+                messages=[{"role": "user", "content": "Test"}],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+        
+        # Check that cost was extracted and stored
+        assert hasattr(result, "_hidden_params")
+        assert "additional_headers" in result._hidden_params
+        assert "llm_provider-x-litellm-response-cost" in result._hidden_params["additional_headers"]
+        
+        cost = result._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"]
+        assert cost == 0.00015
