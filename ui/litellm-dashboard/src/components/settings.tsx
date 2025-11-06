@@ -19,11 +19,12 @@ import {
   Tab,
   SelectItem,
   Icon,
+  Badge,
 } from "@tremor/react";
 
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 
-import { Modal, Typography, Form, Input, Select, Button as Button2 } from "antd";
+import { Modal, Typography, Form, Input, Select, Button as Button2, Tooltip } from "antd";
 import NotificationsManager from "./molecules/notifications_manager";
 import EmailSettings from "./email_settings";
 
@@ -32,10 +33,7 @@ const { Title, Paragraph } = Typography;
 import { getCallbacksCall, setCallbacksCall, serviceHealthCheck, deleteCallback } from "./networking";
 import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
-import {
-  CALLBACK_CONFIGS,
-  getCallbackById,
-} from "./callback_info_helpers";
+import { CALLBACK_CONFIGS, getCallbackById } from "./callback_info_helpers";
 import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
   accessToken: string | null;
@@ -60,6 +58,7 @@ interface AlertingVariables {
 
 interface AlertingObject {
   name: string;
+  type?: "success" | "failure" | "generic";
   variables: AlertingVariables;
 }
 
@@ -216,10 +215,10 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
   const handleSelectedCallbackChange = (callbackName: string) => {
     setSelectedCallback(callbackName);
-    
+
     // Get the callback configuration using the new clean structure
     const callbackConfig = getCallbackById(callbackName);
-    
+
     // Get the parameters from the callback configuration
     if (callbackConfig?.dynamic_params) {
       const params = Object.keys(callbackConfig.dynamic_params);
@@ -228,7 +227,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setSelectedCallbackParams([]);
     }
   };
-  
+
   const handleSaveAlerts = async () => {
     if (!accessToken) {
       return;
@@ -416,54 +415,94 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               <Title level={4}>Active Logging Callbacks</Title>
 
               <Grid numItems={2}>
-                <Card className="max-h-[50vh]">
+                <Card className="h-[calc(100vh-300px)] overflow-auto">
                   <Table>
                     <TableHead>
                       <TableRow>
                         <TableHeaderCell>Callback Name</TableHeaderCell>
-                        {/* <TableHeaderCell>Callback Env Vars</TableHeaderCell> */}
+                        <TableHeaderCell>Callback Type</TableHeaderCell>
+                        <TableHeaderCell>Actions</TableHeaderCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {callbacks.map((callback, index) => (
-                        <TableRow key={index} className="flex justify-between">
-                          <TableCell>
-                            <Text>{callback.name}</Text>
-                          </TableCell>
-                          <TableCell>
-                            <Grid numItems={2} className="flex justify-between">
-                              <Icon
-                                icon={PencilAltIcon}
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedEditCallback(callback);
-                                  setShowEditCallback(true);
-                                }}
-                              />
-                              <Icon
-                                icon={TrashIcon}
-                                size="sm"
-                                onClick={() => handleDeleteCallback(callback.name)}
-                                className="text-red-500 hover:text-red-700 cursor-pointer"
-                              />
-                              <Button
-                                onClick={async () => {
-                                  try {
-                                    await serviceHealthCheck(accessToken, callback.name);
-                                    NotificationsManager.success("Health check triggered");
-                                  } catch (error) {
-                                    NotificationsManager.fromBackend(parseErrorMessage(error));
-                                  }
-                                }}
-                                className="ml-2"
-                                variant="secondary"
-                              >
-                                Test Callback
-                              </Button>
-                            </Grid>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {callbacks.map((callback, index) => {
+                        const canEdit = !callback.type || callback.type === "success";
+                        const tooltipMessage =
+                          callback.type === "failure"
+                            ? "Modifications and deletion of failure type callbacks are not yet supported in the UI"
+                            : callback.type === "generic"
+                              ? "Modifications and deletion of generic type callbacks are not yet supported in the UI"
+                              : "";
+
+                        const getBadgeColor = (type?: string) => {
+                          if (type === "success") return "green";
+                          if (type === "failure") return "red";
+                          if (type === "generic") return "blue";
+                          return "gray";
+                        };
+
+                        return (
+                          <TableRow key={index}>
+                            <TableCell>
+                              <Text>{callback.name}</Text>
+                            </TableCell>
+                            <TableCell>
+                              {callback.type ? (
+                                <Badge color={getBadgeColor(callback.type)}>{callback.type}</Badge>
+                              ) : (
+                                <Badge color="gray">success</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Tooltip title={tooltipMessage}>
+                                  <Icon
+                                    icon={PencilAltIcon}
+                                    size="sm"
+                                    onClick={() => {
+                                      if (canEdit) {
+                                        setSelectedEditCallback(callback);
+                                        setShowEditCallback(true);
+                                      }
+                                    }}
+                                    className={canEdit ? "cursor-pointer" : "opacity-40 cursor-not-allowed"}
+                                  />
+                                </Tooltip>
+                                <Tooltip title={tooltipMessage}>
+                                  <Icon
+                                    icon={TrashIcon}
+                                    size="sm"
+                                    onClick={() => {
+                                      if (canEdit) {
+                                        handleDeleteCallback(callback.name);
+                                      }
+                                    }}
+                                    className={
+                                      canEdit
+                                        ? "text-red-500 hover:text-red-700 cursor-pointer"
+                                        : "text-red-300 opacity-40 cursor-not-allowed"
+                                    }
+                                  />
+                                </Tooltip>
+                                <Button
+                                  onClick={async () => {
+                                    try {
+                                      await serviceHealthCheck(accessToken, callback.name);
+                                      NotificationsManager.success("Health check triggered");
+                                    } catch (error) {
+                                      NotificationsManager.fromBackend(parseErrorMessage(error));
+                                    }
+                                  }}
+                                  variant="secondary"
+                                  size="xs"
+                                >
+                                  Test Callback
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </Card>
@@ -594,124 +633,109 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-            <FormItem
-              label="Callback"
-              name="callback"
-              rules={[{ required: true, message: "Please select a callback" }]}
+          <FormItem label="Callback" name="callback" rules={[{ required: true, message: "Please select a callback" }]}>
+            <Select
+              placeholder="Choose a logging callback..."
+              size="large"
+              className="w-full"
+              showSearch
+              filterOption={(input, option) =>
+                (option?.children?.toString() ?? "").toLowerCase().includes(input.toLowerCase())
+              }
+              onChange={(value) => {
+                handleSelectedCallbackChange(value);
+              }}
             >
-              <Select
-                placeholder="Choose a logging callback..."
-                size="large"
-                className="w-full"
-                showSearch
-                filterOption={(input, option) =>
-                  (option?.children?.toString() ?? "")
-                    .toLowerCase()
-                    .includes(input.toLowerCase())
-                }
-                onChange={(value) => {
-                  handleSelectedCallbackChange(value);
-                }}
-              >
-                                {CALLBACK_CONFIGS.map((callbackConfig) => (
-                  <SelectItem
-                    key={callbackConfig.id}
-                    value={callbackConfig.id}
-                  >
-                    <div className="flex items-center space-x-3 py-1">
-                      <div className="w-6 h-6 flex items-center justify-center">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={callbackConfig.logo}
-                          alt={`${callbackConfig.displayName} logo`}
-                          className="w-6 h-6 rounded object-contain"
-                          onError={(e) => {
-                            e.currentTarget.style.display = 'none';
-                          }}
-                        />
-                      </div>
-                      <span className="font-medium text-gray-900">
-                        {callbackConfig.displayName}
-                      </span>
+              {CALLBACK_CONFIGS.map((callbackConfig) => (
+                <SelectItem key={callbackConfig.id} value={callbackConfig.id}>
+                  <div className="flex items-center space-x-3 py-1">
+                    <div className="w-6 h-6 flex items-center justify-center">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={callbackConfig.logo}
+                        alt={`${callbackConfig.displayName} logo`}
+                        className="w-6 h-6 rounded object-contain"
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none";
+                        }}
+                      />
                     </div>
-                  </SelectItem>
-                ))}
-              </Select>
-            </FormItem>
+                    <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>
+                  </div>
+                </SelectItem>
+              ))}
+            </Select>
+          </FormItem>
 
-            {selectedCallbackParams && selectedCallbackParams.length > 0 && (
-              <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
-                {selectedCallbackParams.map((param) => {
-                  // Get the callback configuration to look up parameter types
-                  const callbackConfig = getCallbackById(selectedCallback || '');
-                  const paramType = callbackConfig?.dynamic_params[param] || "text";
-                  
-                  const fieldLabel = param.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
-                  
-                  return (
-                    <FormItem
-                      label={
-                        <span className="text-sm font-medium text-gray-700">
-                          {fieldLabel}
-                          <span className="text-red-500 ml-1">*</span>
-                        </span>
-                      }
-                      name={param}
-                      key={param}
-                      className="mb-4"
-                      rules={[
-                        {
-                          required: true,
-                          message: `Please enter the ${fieldLabel.toLowerCase()}`,
-                        },
-                      ]}
-                    >
-                      {paramType === "password" ? (
-                        <Input.Password 
-                          size="large"
-                          placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                          className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                        />
-                      ) : paramType === "number" ? (
-                        <Input 
-                          type="number" 
-                          size="large"
-                          placeholder={`Enter ${fieldLabel.toLowerCase()}`}
-                          className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                          min={0}
-                          max={1}
-                          step={0.1}
-                        />
-                      ) : (
-                        <Input 
-                          size="large"
-                          placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                          className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                        />
-                      )}
-                    </FormItem>
-                  );
-                })}
-              </div>
-            )}
+          {selectedCallbackParams && selectedCallbackParams.length > 0 && (
+            <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
+              {selectedCallbackParams.map((param) => {
+                // Get the callback configuration to look up parameter types
+                const callbackConfig = getCallbackById(selectedCallback || "");
+                const paramType = callbackConfig?.dynamic_params[param] || "text";
 
-            <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
-              <Button
-                onClick={() => {
-                  setShowAddCallbacksModal(false);
-                  setSelectedCallback(null);
-                  setSelectedCallbackParams([]);
-                  addForm.resetFields();
-                }}
-              >
-                Cancel
-              </Button>
-              <Button2
-                htmlType="submit"
-              >
-                Add Callback
-              </Button2>
+                const fieldLabel = param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+
+                return (
+                  <FormItem
+                    label={
+                      <span className="text-sm font-medium text-gray-700">
+                        {fieldLabel}
+                        <span className="text-red-500 ml-1">*</span>
+                      </span>
+                    }
+                    name={param}
+                    key={param}
+                    className="mb-4"
+                    rules={[
+                      {
+                        required: true,
+                        message: `Please enter the ${fieldLabel.toLowerCase()}`,
+                      },
+                    ]}
+                  >
+                    {paramType === "password" ? (
+                      <Input.Password
+                        size="large"
+                        placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                        className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    ) : paramType === "number" ? (
+                      <Input
+                        type="number"
+                        size="large"
+                        placeholder={`Enter ${fieldLabel.toLowerCase()}`}
+                        className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                        min={0}
+                        max={1}
+                        step={0.1}
+                      />
+                    ) : (
+                      <Input
+                        size="large"
+                        placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                        className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    )}
+                  </FormItem>
+                );
+              })}
             </div>
+          )}
+
+          <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+            <Button
+              onClick={() => {
+                setShowAddCallbacksModal(false);
+                setSelectedCallback(null);
+                setSelectedCallbackParams([]);
+                addForm.resetFields();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button2 htmlType="submit">Add Callback</Button2>
+          </div>
         </Form>
       </Modal>
 
