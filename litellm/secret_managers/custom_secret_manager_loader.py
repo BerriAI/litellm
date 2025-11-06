@@ -11,6 +11,7 @@ from typing import Optional
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_secret_manager import CustomSecretManager
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 
 def load_custom_secret_manager(config_file_path: Optional[str] = None) -> None:
@@ -27,6 +28,7 @@ def load_custom_secret_manager(config_file_path: Optional[str] = None) -> None:
         ValueError: If required configuration is missing
         ImportError: If the custom secret manager module cannot be loaded
     """
+    
     if not config_file_path:
         raise ValueError(
             "CustomSecretManagerException - config_file_path is required to load custom secret manager"
@@ -81,6 +83,9 @@ def load_custom_secret_manager(config_file_path: Optional[str] = None) -> None:
     
     # Set it as the secret manager client
     litellm.secret_manager_client = _secret_manager_instance
+    
+    # Set the key management system to CUSTOM so get_secret knows to use it
+    litellm._key_management_system = KeyManagementSystem.CUSTOM
     
     verbose_proxy_logger.info(
         "Successfully initialized custom secret manager: %s",
