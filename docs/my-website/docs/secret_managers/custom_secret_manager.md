@@ -242,12 +242,11 @@ async def async_delete_secret(
 ✅ Secret versioning and rotation  
 ✅ Compliance requirements (HIPAA, SOC2)  
 
-## Examples
+## Example
 
-See [cookbook/secret_managers/custom_secret_manager_example.py](https://github.com/BerriAI/litellm/blob/main/cookbook/secret_managers/custom_secret_manager_example.py) for a complete working example with:
+See [cookbook/litellm_proxy_server/secret_manager/my_secret_manager.py](https://github.com/BerriAI/litellm/blob/main/cookbook/litellm_proxy_server/secret_manager/my_secret_manager.py) for a complete working example with:
 
-- File-based secret manager implementation
-- Integration with LiteLLM proxy
-- Async operations
+- In-memory secret manager implementation  
+- Integration with LiteLLM Proxy  
 - Read, write, and delete operations
 
