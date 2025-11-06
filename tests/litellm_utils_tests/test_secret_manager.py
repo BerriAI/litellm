@@ -24,6 +24,7 @@ from litellm.secret_managers.main import (
     get_secret,
     _should_read_secret_from_secret_manager,
 )
+from unittest.mock import AsyncMock
 
 
 def load_vertex_ai_credentials():
@@ -358,3 +359,110 @@ def test_get_secret_with_access_mode():
     litellm.secret_manager_client = None
     litellm._key_management_settings = KeyManagementSettings()
     del os.environ[test_secret_name]
+
+def test_key_management_settings_defaults():
+    """
+    Test that KeyManagementSettings initializes with correct default values.
+    """
+    from litellm.types.secret_managers.main import KeyManagementSettings
+
+    settings = KeyManagementSettings()
+
+    assert settings.store_virtual_keys is False
+    assert settings.prefix_for_stored_virtual_keys == "litellm/"
+    assert settings.access_mode == "read_only"
+    assert settings.description is None
+    assert settings.tags is None
+    assert settings.primary_secret_name is None
+
+
+def test_key_management_settings_custom_values():
+    """
+    Test that KeyManagementSettings correctly stores custom description and tags.
+    """
+    from litellm.types.secret_managers.main import KeyManagementSettings
+
+    custom_tags = {"Environment": "Dev", "Team": "Intelligence"}
+    custom_description = "LiteLLM-managed API key for development"
+
+    settings = KeyManagementSettings(
+        store_virtual_keys=True,
+        prefix_for_stored_virtual_keys="litellm/custom/",
+        access_mode="read_and_write",
+        primary_secret_name="primary/litellm/keys",
+        description=custom_description,
+        tags=custom_tags,
+    )
+
+    assert settings.store_virtual_keys is True
+    assert settings.prefix_for_stored_virtual_keys == "litellm/custom/"
+    assert settings.access_mode == "read_and_write"
+    assert settings.primary_secret_name == "primary/litellm/keys"
+    assert settings.description == custom_description
+    assert settings.tags == custom_tags
+
+
+@pytest.mark.asyncio
+async def test_async_write_secret_receives_description_and_tags(monkeypatch):
+    """
+    Test that AWSSecretsManagerV2.async_write_secret receives description and tags when KeyManagementSettings is set.
+    """
+    from litellm import litellm
+    from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
+    from litellm.types.secret_managers.main import KeyManagementSettings
+
+    # Mock out AWS network calls
+    mock_async_write = AsyncMock(return_value={"Name": "litellm/test_secret"})
+    monkeypatch.setattr(AWSSecretsManagerV2, "async_write_secret", mock_async_write)
+
+    # Setup settings
+    litellm._key_management_settings = KeyManagementSettings(
+        store_virtual_keys=True,
+        description="LiteLLM Unit Test Secret",
+        tags={"Owner": "UnitTest", "Purpose": "Validation"},
+    )
+
+    # Instantiate fake client
+    litellm.secret_manager_client = AWSSecretsManagerV2()
+
+    # Call the helper method that stores a virtual key
+    from litellm.proxy.hooks.key_management_event_hooks import (
+        KeyManagementEventHooks,
+    )
+
+    await KeyManagementEventHooks._store_virtual_key_in_secret_manager(
+        secret_name="test_secret", secret_token="test_value"
+    )
+
+    # Verify async_write_secret was called with correct metadata
+    mock_async_write.assert_called_once()
+    args, kwargs = mock_async_write.call_args
+
+    assert kwargs["secret_name"].endswith("test_secret")
+    assert kwargs["secret_value"] == "test_value"
+    assert kwargs["description"] == "LiteLLM Unit Test Secret"
+    assert kwargs["tags"] == {"Owner": "UnitTest", "Purpose": "Validation"}
+
+
+def test_key_management_settings_serialization_roundtrip():
+    """
+    Test that KeyManagementSettings serializes and deserializes consistently (Pydantic behavior).
+    """
+    from litellm.types.secret_managers.main import KeyManagementSettings
+
+    original = KeyManagementSettings(
+        store_virtual_keys=True,
+        prefix_for_stored_virtual_keys="litellm/dev/",
+        access_mode="read_and_write",
+        description="Roundtrip test",
+        tags={"Env": "QA"},
+    )
+
+    as_dict = original.model_dump()
+    reloaded = KeyManagementSettings(**as_dict)
+
+    assert reloaded.store_virtual_keys is True
+    assert reloaded.prefix_for_stored_virtual_keys == "litellm/dev/"
+    assert reloaded.access_mode == "read_and_write"
+    assert reloaded.description == "Roundtrip test"
+    assert reloaded.tags == {"Env": "QA"}

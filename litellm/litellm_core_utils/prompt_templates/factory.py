@@ -1490,7 +1490,7 @@ def convert_to_anthropic_tool_invoke(
 
         _content_element = add_cache_control_to_content(
             anthropic_content_element=_anthropic_tool_use_param,
-            orignal_content_element=dict(tool),
+            original_content_element=dict(tool),
         )
 
         if "cache_control" in _content_element:
@@ -1512,9 +1512,9 @@ def add_cache_control_to_content(
         AnthropicMessagesToolUseParam,
         ChatCompletionThinkingBlock,
     ],
-    orignal_content_element: Union[dict, AllMessageValues],
+    original_content_element: Union[dict, AllMessageValues],
 ):
-    cache_control_param = orignal_content_element.get("cache_control")
+    cache_control_param = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
         transformed_param = ChatCompletionCachedContent(**cache_control_param)  # type: ignore
 
@@ -1727,7 +1727,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
-                                orignal_content_element=dict(m),
+                                original_content_element=dict(m),
                             )
 
                             if "cache_control" in _content_element:
@@ -1745,7 +1745,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_text_content_element,
-                                orignal_content_element=dict(m),
+                                original_content_element=dict(m),
                             )
                             _content_element = cast(
                                 AnthropicMessagesTextParam, _content_element
@@ -1767,7 +1767,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     }
                     _content_element = add_cache_control_to_content(
                         anthropic_content_element=_anthropic_content_text_element,
-                        orignal_content_element=dict(user_message_types_block),
+                        original_content_element=dict(user_message_types_block),
                     )
 
                     if "cache_control" in _content_element:
@@ -1825,7 +1825,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         )
                         _cached_message = add_cache_control_to_content(
                             anthropic_content_element=anthropic_message,
-                            orignal_content_element=dict(m),
+                            original_content_element=dict(m),
                         )
 
                         assistant_content.append(
@@ -1845,7 +1845,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
 
                 _content_element = add_cache_control_to_content(
                     anthropic_content_element=_anthropic_text_content_element,
-                    orignal_content_element=dict(assistant_content_block),
+                    original_content_element=dict(assistant_content_block),
                 )
 
                 if "cache_control" in _content_element:
@@ -3811,7 +3811,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 assistant_parts=assistants_parts,
                             )
                         elif element["type"] == "text":
-                            assistants_part = BedrockContentBlock(text=element["text"])
+                            # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
+                            text_content = element["text"] if element["text"].strip() else "."
+                            assistants_part = BedrockContentBlock(text=text_content)
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
@@ -3835,7 +3837,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
-                assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
+                text_content = _assistant_content if _assistant_content.strip() else "."
+                assistant_content.append(BedrockContentBlock(text=text_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(

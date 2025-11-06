@@ -35,6 +35,10 @@ def _prepare_mcp_server_data(
     if "alias" not in data_dict:
         data_dict["alias"] = getattr(data, "alias", None)
 
+    # Handle static_headers serialization
+    if data.static_headers is not None:
+        data_dict["static_headers"] = safe_dumps(data.static_headers)
+
     # Handle mcp_info serialization
     if data.mcp_info is not None:
         data_dict["mcp_info"] = safe_dumps(data.mcp_info)
@@ -76,12 +80,12 @@ async def get_mcp_server(
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server: Optional[LiteLLM_MCPServerTable] = (
-        await prisma_client.db.litellm_mcpservertable.find_unique(
-            where={
-                "server_id": server_id,
-            }
-        )
+    mcp_server: Optional[
+        LiteLLM_MCPServerTable
+    ] = await prisma_client.db.litellm_mcpservertable.find_unique(
+        where={
+            "server_id": server_id,
+        }
     )
     return mcp_server
 
@@ -92,12 +96,12 @@ async def get_mcp_servers(
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    _mcp_servers: List[LiteLLM_MCPServerTable] = (
-        await prisma_client.db.litellm_mcpservertable.find_many(
-            where={
-                "server_id": {"in": server_ids},
-            }
-        )
+    _mcp_servers: List[
+        LiteLLM_MCPServerTable
+    ] = await prisma_client.db.litellm_mcpservertable.find_many(
+        where={
+            "server_id": {"in": server_ids},
+        }
     )
     final_mcp_servers: List[LiteLLM_MCPServerTable] = []
     for _mcp_server in _mcp_servers:

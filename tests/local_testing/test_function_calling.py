@@ -700,7 +700,7 @@ def test_passing_tool_result_as_list(model):
         resp = completion(model=model, messages=messages, tools=tools)
         print(resp)
 
-    if model == "claude-3-5-sonnet-20241022":
+    if model == "claude-sonnet-4-5-20250929":
         assert resp.usage.prompt_tokens_details.cached_tokens > 0
 
 
