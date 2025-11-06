@@ -28,7 +28,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "[Beta] Guardrails",
+      label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
         ...[
