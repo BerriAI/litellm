@@ -102,17 +102,19 @@ class LiteLLMCompletionResponsesConfig:
         params: dict,
         model: str,
         custom_llm_provider: Optional[str] = None,
-    ) -> None:
-        """Remove params not supported by the provider."""
+    ) -> dict:
+        """Return params with only those supported by the provider."""
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
         if supported_params:
-            keys_to_remove = [
-                key for key in params.keys() if key not in supported_params
-            ]
-            for key in keys_to_remove:
-                params.pop(key, None)
+            # Only add params if they're in supported_params
+            final_params = {}
+            for p in params:
+                if p in supported_params:
+                    final_params[p] = params[p]
+            return final_params
+        return params
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -138,7 +140,7 @@ class LiteLLMCompletionResponsesConfig:
                 text_param
             )
 
-        LiteLLMCompletionResponsesConfig.filter_unsupported_params(
+        responses_api_request = LiteLLMCompletionResponsesConfig.filter_unsupported_params(
             params=responses_api_request,
             model=model,
             custom_llm_provider=custom_llm_provider,
