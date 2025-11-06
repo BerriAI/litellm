@@ -281,11 +281,13 @@ def validate_redacted_message_span_attributes(span):
         _all_attributes
     ), f"Missing required attributes: {required_set - _all_attributes}"
 
-    # Check that any additional attributes are metadata fields (start with "metadata.")
+    # Check that any additional attributes are metadata fields (start with "metadata.") or cost fields
     non_required_attrs = _all_attributes - required_set
     for attr in non_required_attrs:
-        assert attr.startswith("metadata.") or attr.startswith(
-            "hidden_params"
+        assert (
+            attr.startswith("metadata.")
+            or attr.startswith("hidden_params")
+            or attr.startswith("gen_ai.cost.")
         ), f"Non-metadata attribute found: {attr}"
 
     pass

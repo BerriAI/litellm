@@ -85,7 +85,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     # XAI supports code_interpreter but doesn't use the container field
                     # Keep only the type field
                     verbose_logger.debug(
-                        f"XAI: Transforming code_interpreter tool, removing container field"
+                        "XAI: Transforming code_interpreter tool, removing container field"
                     )
                     transformed_tools.append({"type": "code_interpreter"})
                 else:
