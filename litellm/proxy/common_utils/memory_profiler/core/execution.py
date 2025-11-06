@@ -467,6 +467,31 @@ def analyze_and_detect_leaks(
         tail_samples=tail_samples
     )
     
+    # Prepare cleanup function to ensure it runs regardless of test outcome
+    def cleanup_snapshot_file():
+        """Cleanup snapshot file if configured to do so."""
+        cleanup_snapshots = config.get('cleanup_snapshots_after_test', False)
+        if output_dir:
+            import os
+            from ..snapshot.storage import sanitize_filename
+            
+            snapshot_filename = sanitize_filename(test_name) + ".json"
+            snapshot_filepath = os.path.join(output_dir, snapshot_filename)
+            
+            if cleanup_snapshots:
+                if os.path.exists(snapshot_filepath):
+                    try:
+                        os.remove(snapshot_filepath)
+                        logger.info(f"✓ Cleaned up snapshot file after analysis: {snapshot_filepath}")
+                        print(f"\n[CLEANUP] Snapshot file removed: {snapshot_filepath}", flush=True)
+                    except Exception as e:
+                        logger.warning(f"Failed to delete snapshot file {snapshot_filepath}: {e}")
+                        print(f"\n[WARNING] Could not remove snapshot file: {snapshot_filepath}", flush=True)
+                else:
+                    logger.debug(f"No snapshot file to cleanup: {snapshot_filepath}")
+            else:
+                print(f"\n[INFO] Snapshot file retained for inspection: {snapshot_filepath}", flush=True)
+    
     if leak_detected:
         # Analyze specific leaking sources from snapshot data
         from ..constants import (
@@ -486,6 +511,9 @@ def analyze_and_detect_leaks(
             min_batches=DEFAULT_LEAK_SOURCE_MIN_BATCHES,
             max_results=DEFAULT_LEAK_SOURCE_MAX_RESULTS
         )
+        
+        # Cleanup before failing the test
+        cleanup_snapshot_file()
         pytest.fail(message)
     
     logger.info(message)
@@ -496,26 +524,6 @@ def analyze_and_detect_leaks(
         verify_module_id_consistency(module_to_verify, module_id, "at test end")
         logger.info(f"{module_name} ID remained consistent throughout: {module_id}")
     
-    # Cleanup snapshot files if configured
-    cleanup_snapshots = config.get('cleanup_snapshots_after_test', False)
-    if output_dir:
-        import os
-        from ..snapshot.storage import sanitize_filename
-        
-        snapshot_filename = sanitize_filename(test_name) + ".json"
-        snapshot_filepath = os.path.join(output_dir, snapshot_filename)
-        
-        if cleanup_snapshots:
-            if os.path.exists(snapshot_filepath):
-                try:
-                    os.remove(snapshot_filepath)
-                    logger.info(f"✓ Cleaned up snapshot file after analysis: {snapshot_filepath}")
-                    print(f"\n[CLEANUP] Snapshot file removed: {snapshot_filepath}", flush=True)
-                except Exception as e:
-                    logger.warning(f"Failed to delete snapshot file {snapshot_filepath}: {e}")
-                    print(f"\n[WARNING] Could not remove snapshot file: {snapshot_filepath}", flush=True)
-            else:
-                logger.debug(f"No snapshot file to cleanup: {snapshot_filepath}")
-        else:
-            print(f"\n[INFO] Snapshot file retained for inspection: {snapshot_filepath}", flush=True)
+    # Cleanup snapshot files on successful test completion
+    cleanup_snapshot_file()
 
