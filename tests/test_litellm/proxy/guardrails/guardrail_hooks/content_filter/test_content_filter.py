@@ -360,3 +360,110 @@ class TestContentFilterGuardrail:
         assert result is not None
         assert result[1] == "aws_access_key"
 
+    @pytest.mark.asyncio
+    async def test_streaming_hook_mask(self):
+        """
+        Test streaming hook with MASK action
+        """
+        from unittest.mock import AsyncMock
+
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+        
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-mask",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.during_call,
+        )
+        
+        # Create mock streaming chunks
+        async def mock_stream():
+            # Chunk 1: contains email
+            chunk1 = ModelResponseStream(
+                id="chunk1",
+                choices=[StreamingChoices(delta=Delta(content="Contact me at test@example.com"), index=0)],
+                model="gpt-4",
+            )
+            yield chunk1
+            
+            # Chunk 2: normal content
+            chunk2 = ModelResponseStream(
+                id="chunk2",
+                choices=[StreamingChoices(delta=Delta(content=" for more info"), index=0)],
+                model="gpt-4",
+            )
+            yield chunk2
+        
+        user_api_key_dict = MagicMock()
+        request_data = {}
+        
+        # Process streaming response
+        result_chunks = []
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            result_chunks.append(chunk)
+        
+        assert len(result_chunks) == 2
+        # First chunk should have email masked
+        assert "[EMAIL_REDACTED]" in result_chunks[0].choices[0].delta.content
+        assert "test@example.com" not in result_chunks[0].choices[0].delta.content
+        # Second chunk should be unchanged
+        assert result_chunks[1].choices[0].delta.content == " for more info"
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_block(self):
+        """
+        Test streaming hook with BLOCK action
+        """
+        from unittest.mock import AsyncMock
+
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="us_ssn",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+        
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-block",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.during_call,
+        )
+        
+        # Create mock streaming chunks with SSN
+        async def mock_stream():
+            chunk = ModelResponseStream(
+                id="chunk1",
+                choices=[StreamingChoices(delta=Delta(content="SSN: 123-45-6789"), index=0)],
+                model="gpt-4",
+            )
+            yield chunk
+        
+        user_api_key_dict = MagicMock()
+        request_data = {}
+        
+        # Should raise HTTPException when SSN is detected
+        with pytest.raises(HTTPException) as exc_info:
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                pass
+        
+        assert exc_info.value.status_code == 400
+        assert "us_ssn" in str(exc_info.value.detail)
+
