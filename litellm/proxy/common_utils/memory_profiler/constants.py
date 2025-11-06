@@ -107,9 +107,10 @@ DEFAULT_OUTPUT_DIR = "memory_snapshots"
 DEFAULT_MAX_SNAPSHOTS_PER_TEST = 1000
 
 # Whether to delete snapshot JSON files after test completes and analysis is done
-# Set to True to save disk space (files deleted after leak detection and source analysis)
-# Set to False to keep files for manual inspection and debugging
-DEFAULT_CLEANUP_SNAPSHOTS_AFTER_TEST = False
+# When True: Files are automatically removed after leak detection and source analysis (saves disk space)
+# When False: Files are retained in memory_snapshots/ directory for manual inspection and debugging
+# Default is True to prevent accumulation of snapshot files in CI/CD environments
+DEFAULT_CLEANUP_SNAPSHOTS_AFTER_TEST = True
 
 # Default value for lightweight snapshot mode
 # When True, skips expensive snapshot operations (top consumers data)

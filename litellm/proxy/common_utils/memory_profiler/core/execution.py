@@ -498,17 +498,24 @@ def analyze_and_detect_leaks(
     
     # Cleanup snapshot files if configured
     cleanup_snapshots = config.get('cleanup_snapshots_after_test', False)
-    if cleanup_snapshots and output_dir:
+    if output_dir:
         import os
         from ..snapshot.storage import sanitize_filename
         
         snapshot_filename = sanitize_filename(test_name) + ".json"
         snapshot_filepath = os.path.join(output_dir, snapshot_filename)
         
-        if os.path.exists(snapshot_filepath):
-            try:
-                os.remove(snapshot_filepath)
-                logger.info(f"Snapshot file deleted: {snapshot_filepath}")
-            except Exception as e:
-                logger.warning(f"Failed to delete snapshot file {snapshot_filepath}: {e}")
+        if cleanup_snapshots:
+            if os.path.exists(snapshot_filepath):
+                try:
+                    os.remove(snapshot_filepath)
+                    logger.info(f"✓ Cleaned up snapshot file after analysis: {snapshot_filepath}")
+                    print(f"\n[CLEANUP] Snapshot file removed: {snapshot_filepath}", flush=True)
+                except Exception as e:
+                    logger.warning(f"Failed to delete snapshot file {snapshot_filepath}: {e}")
+                    print(f"\n[WARNING] Could not remove snapshot file: {snapshot_filepath}", flush=True)
+            else:
+                logger.debug(f"No snapshot file to cleanup: {snapshot_filepath}")
+        else:
+            print(f"\n[INFO] Snapshot file retained for inspection: {snapshot_filepath}", flush=True)
 

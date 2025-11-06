@@ -2,13 +2,7 @@
 Memory leak tests for LiteLLM SDK completion (sync/async, streaming/non-streaming).
 """
 
-import sys
-import os
-
 import pytest
-
-# Add parent directory to path
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 

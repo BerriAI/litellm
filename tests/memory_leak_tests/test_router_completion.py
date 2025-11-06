@@ -4,13 +4,7 @@ Memory leak tests for LiteLLM Router completion (sync/async, streaming/non-strea
 This module tests the Router API to detect memory leaks using a fake LLM endpoint.
 """
 
-import sys
-import os
-
 import pytest
-
-# Add parent directory to path
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm import Router
 
