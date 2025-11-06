@@ -38,11 +38,15 @@ class ContentFilterGuardrail(CustomGuardrail):
     - Prebuilt regex patterns (SSN, credit cards, API keys, etc.)
     - Custom user-defined regex patterns
     - Dictionary-based keyword matching
-    
+
     Actions:
     - BLOCK: Reject the request with an error
     - MASK: Replace the sensitive content with a redacted placeholder
     """
+
+    # Redaction format constants
+    PATTERN_REDACTION_FORMAT = "[{pattern_name}_REDACTED]"
+    KEYWORD_REDACTION_STR = "[KEYWORD_REDACTED]"
 
     def __init__(
         self,
@@ -52,8 +56,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         blocked_words_file: Optional[str] = None,
         event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
         default_on: bool = False,
-        pattern_redaction_format: str = "[{pattern_name}_REDACTED]",
-        keyword_redaction_tag: str = "[KEYWORD_REDACTED]",
+        pattern_redaction_format: Optional[str] = None,
+        keyword_redaction_tag: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -78,8 +82,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         
         self.guardrail_provider = "litellm_content_filter"
-        self.pattern_redaction_format = pattern_redaction_format
-        self.keyword_redaction_tag = keyword_redaction_tag
+        self.pattern_redaction_format = pattern_redaction_format or self.PATTERN_REDACTION_FORMAT
+        self.keyword_redaction_tag = keyword_redaction_tag or self.KEYWORD_REDACTION_STR
         
         # Compile regex patterns
         self.compiled_patterns: List[Tuple[Pattern, str, ContentFilterAction]] = []
