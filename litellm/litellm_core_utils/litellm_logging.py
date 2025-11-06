@@ -4369,7 +4369,7 @@ class StandardLoggingPayloadSetup:
 
             s3_object_key = get_s3_object_key(
                 s3_path=s3_path,  # Use actual s3_path from logger configuration
-                team_alias_prefix="",  # Don't split by team alias for cold storage
+                prefix="",  # Don't split by team alias for cold storage
                 start_time=start_time,
                 s3_file_name=s3_file_name,
             )
