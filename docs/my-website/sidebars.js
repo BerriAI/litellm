@@ -259,6 +259,7 @@ const sidebars = {
             "secret_managers/google_secret_manager",
             "secret_managers/google_kms",
             "secret_managers/hashicorp_vault",
+            "secret_managers/custom_secret_manager",
             "oidc"
           ]
         },
