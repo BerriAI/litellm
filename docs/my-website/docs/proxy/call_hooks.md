@@ -34,14 +34,7 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
 
     #### CALL HOOKS - proxy only #### 
 
-    async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-        ]): 
+    async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: str): 
         data["model"] = "my-new-model"
         return data 
 
