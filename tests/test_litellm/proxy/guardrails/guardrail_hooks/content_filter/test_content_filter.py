@@ -172,9 +172,9 @@ class TestContentFilterGuardrail:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_block(self):
+    async def test_apply_guardrail_block(self):
         """
-        Test async_pre_call_hook with BLOCK action
+        Test apply_guardrail with BLOCK action
         """
         patterns = [
             ContentFilterPattern(
@@ -189,30 +189,16 @@ class TestContentFilterGuardrail:
             patterns=patterns,
         )
         
-        data = {
-            "messages": [
-                {"role": "user", "content": "My SSN is 123-45-6789"}
-            ]
-        }
-        
-        user_api_key_dict = MagicMock()
-        cache = MagicMock()
-        
         with pytest.raises(HTTPException) as exc_info:
-            await guardrail.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=cache,
-                data=data,
-                call_type="completion",
-            )
+            await guardrail.apply_guardrail(text="My SSN is 123-45-6789")
         
         assert exc_info.value.status_code == 400
         assert "us_ssn" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_mask(self):
+    async def test_apply_guardrail_mask(self):
         """
-        Test async_pre_call_hook with MASK action
+        Test apply_guardrail with MASK action
         """
         patterns = [
             ContentFilterPattern(
@@ -227,30 +213,16 @@ class TestContentFilterGuardrail:
             patterns=patterns,
         )
         
-        data = {
-            "messages": [
-                {"role": "user", "content": "Contact me at test@example.com"}
-            ]
-        }
-        
-        user_api_key_dict = MagicMock()
-        cache = MagicMock()
-        
-        result = await guardrail.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=cache,
-            data=data,
-            call_type="completion",
-        )
+        result = await guardrail.apply_guardrail(text="Contact me at test@example.com")
         
         assert result is not None
-        assert "[EMAIL_REDACTED]" in result["messages"][0]["content"]
-        assert "test@example.com" not in result["messages"][0]["content"]
+        assert "[EMAIL_REDACTED]" in result
+        assert "test@example.com" not in result
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_blocked_word_mask(self):
+    async def test_apply_guardrail_blocked_word_mask(self):
         """
-        Test async_pre_call_hook with blocked word MASK action
+        Test apply_guardrail with blocked word MASK action
         """
         blocked_words = [
             BlockedWord(
@@ -264,30 +236,16 @@ class TestContentFilterGuardrail:
             blocked_words=blocked_words,
         )
         
-        data = {
-            "messages": [
-                {"role": "user", "content": "This is PROPRIETARY information"}
-            ]
-        }
-        
-        user_api_key_dict = MagicMock()
-        cache = MagicMock()
-        
-        result = await guardrail.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=cache,
-            data=data,
-            call_type="completion",
-        )
+        result = await guardrail.apply_guardrail(text="This is PROPRIETARY information")
         
         assert result is not None
-        assert "[KEYWORD_REDACTED]" in result["messages"][0]["content"]
-        assert "PROPRIETARY" not in result["messages"][0]["content"]
+        assert "[KEYWORD_REDACTED]" in result
+        assert "PROPRIETARY" not in result
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_multimodal(self):
+    async def test_apply_guardrail_multiple_patterns(self):
         """
-        Test async_pre_call_hook with multimodal content
+        Test apply_guardrail with multiple patterns in the same text
         """
         patterns = [
             ContentFilterPattern(
@@ -295,38 +253,25 @@ class TestContentFilterGuardrail:
                 pattern_name="email",
                 action=ContentFilterAction.MASK,
             ),
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="us_ssn",
+                action=ContentFilterAction.MASK,
+            ),
         ]
         
         guardrail = ContentFilterGuardrail(
-            guardrail_name="test-multimodal",
+            guardrail_name="test-multiple",
             patterns=patterns,
         )
         
-        data = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Email: user@test.com"},
-                        {"type": "image_url", "image_url": {"url": "http://example.com/image.jpg"}},
-                    ]
-                }
-            ]
-        }
-        
-        user_api_key_dict = MagicMock()
-        cache = MagicMock()
-        
-        result = await guardrail.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=cache,
-            data=data,
-            call_type="completion",
+        result = await guardrail.apply_guardrail(
+            text="Contact user@test.com or SSN: 123-45-6789"
         )
         
         assert result is not None
-        assert "[EMAIL_REDACTED]" in result["messages"][0]["content"][0]["text"]
-        assert "user@test.com" not in result["messages"][0]["content"][0]["text"]
+        # At least one pattern should be redacted (first match wins)
+        assert "[EMAIL_REDACTED]" in result or "[US_SSN_REDACTED]" in result
 
     def test_mask_content(self):
         """
