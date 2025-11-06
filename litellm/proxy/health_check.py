@@ -95,11 +95,19 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
         )
         timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
 
+        # Use configurable health_check_prompt
+        health_check_prompt = model_info.get("health_check_prompt", None)
+        if health_check_prompt is None:
+            if mode == "image_generation":
+                health_check_prompt = "a simple white circle"
+            else:
+                health_check_prompt = "test from litellm"
+        
         task = run_with_timeout(
             litellm.ahealth_check(
                 model["litellm_params"],
                 mode=mode,
-                prompt="test from litellm",
+                prompt=health_check_prompt,
                 input=["test from litellm"],
             ),
             timeout,
@@ -138,6 +146,7 @@ def _update_litellm_params_for_health_check(
     - gets a short `messages` param for health check
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
+    - updates the `prompt` param with the `health_check_prompt` for `image_generation` mode if it exists (handled in _perform_health_check)
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
     """
     litellm_params["messages"] = _get_random_llm_message()

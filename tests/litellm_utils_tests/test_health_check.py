@@ -519,3 +519,81 @@ async def test_ahealth_check_ocr():
     )
     print(response)
     return response
+
+@pytest.mark.asyncio
+async def test_image_generation_health_check_prompt():
+    """
+    Test that image generation health checks use the correct prompts:
+    1. Default prompt is "a simple white circle" to avoid triggering content filters
+    2. Custom health_check_prompt can be configured via model_info
+    """
+    from litellm.proxy.health_check import _perform_health_check
+
+    # Track which prompts are actually used in the health checks
+    health_check_calls = []
+
+    async def mock_health_check(litellm_params, mode=None, prompt=None, input=None):
+        health_check_calls.append({
+            "mode": mode,
+            "prompt": prompt,
+            "model": litellm_params.get("model"),
+        })
+        return {"status": "healthy"}
+
+    # Test 1: Default prompt for image_generation mode
+    model_list = [
+        {
+            "litellm_params": {"model": "dall-e-3", "api_key": "fake-key"},
+            "model_info": {
+                "mode": "image_generation",
+            },
+        }
+    ]
+
+    with patch("litellm.ahealth_check", side_effect=mock_health_check):
+        health_check_calls.clear()
+        await _perform_health_check(model_list)
+        
+        assert len(health_check_calls) == 1
+        assert health_check_calls[0]["mode"] == "image_generation"
+        assert health_check_calls[0]["prompt"] == "a simple white circle", \
+            f"Expected default prompt 'a simple white circle', got '{health_check_calls[0]['prompt']}'"
+
+    # Test 2: Custom health_check_prompt for image_generation mode
+    model_list = [
+        {
+            "litellm_params": {"model": "azure/dall-e-3", "api_key": "fake-key"},
+            "model_info": {
+                "mode": "image_generation",
+                "health_check_prompt": "a blue square",
+            },
+        }
+    ]
+
+    with patch("litellm.ahealth_check", side_effect=mock_health_check):
+        health_check_calls.clear()
+        await _perform_health_check(model_list)
+        
+        assert len(health_check_calls) == 1
+        assert health_check_calls[0]["mode"] == "image_generation"
+        assert health_check_calls[0]["prompt"] == "a blue square", \
+            f"Expected custom prompt 'a blue square', got '{health_check_calls[0]['prompt']}'"
+
+    # Test 3: Non-image_generation mode should use "test from litellm"
+    model_list = [
+        {
+            "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            "model_info": {
+                "mode": "chat",
+            },
+        }
+    ]
+
+    with patch("litellm.ahealth_check", side_effect=mock_health_check):
+        health_check_calls.clear()
+        await _perform_health_check(model_list)
+        
+        assert len(health_check_calls) == 1
+        assert health_check_calls[0]["mode"] == "chat"
+        assert health_check_calls[0]["prompt"] == "test from litellm", \
+            f"Expected default prompt 'test from litellm' for chat mode, got '{health_check_calls[0]['prompt']}'"
