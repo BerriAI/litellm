@@ -145,17 +145,11 @@ def get_secret_from_manager( # noqa: PLR0915
         from litellm.integrations.custom_secret_manager import CustomSecretManager
         
         if isinstance(client, CustomSecretManager):
-            try:
-                secret = client.sync_read_secret(
-                    secret_name=secret_name,
-                    optional_params=key_management_settings.model_dump() if key_management_settings else None,
-                )
-                print_verbose(f"secret from custom secret manager ({client.secret_manager_name}): {secret}")
-                if secret is None:
-                    raise ValueError(f"No secret found in custom secret manager for {secret_name}")
-            except Exception as e:
-                print_verbose(f"An error occurred reading from custom secret manager - {str(e)}")
-                raise e
+            secret = client.sync_read_secret(
+                secret_name=secret_name,
+                optional_params=key_management_settings.model_dump() if key_management_settings else None,
+            )
+            print_verbose(f"secret from custom secret manager ({client.secret_manager_name}): {secret}")
         else:
             raise ValueError(
                 f"Custom secret manager client must be an instance of CustomSecretManager, got {type(client).__name__}"

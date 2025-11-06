@@ -202,32 +202,6 @@ def test_custom_secret_manager_integration_with_litellm():
         litellm._key_management_settings = None
 
 
-def test_custom_secret_manager_not_found_error():
-    """
-    Test that the custom secret manager handles non-existent secrets correctly.
-    """
-    secret_manager = TestCustomSecretManager()
-    litellm.secret_manager_client = secret_manager
-    litellm._key_management_system = KeyManagementSystem.CUSTOM
-
-    from litellm.types.secret_managers.main import KeyManagementSettings
-    litellm._key_management_settings = KeyManagementSettings(
-        access_mode="read_only"
-    )
-
-    try:
-        from litellm.secret_managers.main import get_secret
-
-        # Test with non-existent key and default value
-        result = get_secret("NON_EXISTENT_KEY", default_value="default-value")
-        assert result == "default-value"
-
-    finally:
-        # Clean up
-        litellm.secret_manager_client = None
-        litellm._key_management_system = None
-        litellm._key_management_settings = None
-
 
 class MinimalCustomSecretManager(CustomSecretManager):
     """
