@@ -149,7 +149,8 @@ def get_secret_from_manager( # noqa: PLR0915
                 secret_name=secret_name,
                 optional_params=key_management_settings.model_dump() if key_management_settings else None,
             )
-            print_verbose(f"secret from custom secret manager ({client.secret_manager_name}): {secret}")
+            if secret is None:
+                raise ValueError(f"No secret found in Custom Secret Manager for {secret_name}")
         else:
             raise ValueError(
                 f"Custom secret manager client must be an instance of CustomSecretManager, got {type(client).__name__}"
