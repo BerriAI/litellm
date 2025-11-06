@@ -146,8 +146,8 @@ async def run_warmup_phase(
         force_gc()
     
     if error_count > 0:
-        logger.info(f"Warmup completed with {error_count} errors (non-fatal, continuing with test)")
-    logger.info("Warm-up complete. Starting measured phase...")
+        print(f"[Warmup] Completed with {error_count} errors (non-fatal, continuing with test)", flush=True)
+    print("[Warmup] Complete. Starting measured phase...", flush=True)
 
 
 async def run_measurement_phase(
@@ -292,11 +292,11 @@ async def run_measurement_phase(
         error_counts.append(batch_errors)
         
         error_suffix = f" | Errors: {batch_errors}" if batch_errors > 0 else ""
-        logger.info(f"Batch {batch + 1}/{num_batches}: "
-                   f"Current={current_mb:.2f} MB | Peak={peak_mb:.2f} MB{error_suffix}")
+        print(f"[Progress] Batch {batch + 1}/{num_batches}: "
+              f"Current={current_mb:.2f} MB | Peak={peak_mb:.2f} MB{error_suffix}", flush=True)
     
     if total_errors > 0:
-        logger.info(f"Measurement completed with {total_errors} total errors (non-fatal, memory data collected)")
+        print(f"[Measurement] Completed with {total_errors} total errors (non-fatal, memory data collected)", flush=True)
     
     # Print final summary of captured snapshots
     if capture_top_consumers and output_dir:

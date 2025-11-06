@@ -452,6 +452,6 @@ def print_profile_summary(endpoint: str, buffer: ProfileBuffer) -> None:
     print(f"Min Latency: {stats['min_latency']:.6f}s")  # noqa: T201
     print(f"Average Memory: {stats['avg_memory']:.3f} MB")  # noqa: T201
     print(f"Error Rate: {stats['error_rate']:.2f}%")  # noqa: T201
-    print(f"File Size: {stats.get('file_size_mb', 0)  # noqa: T201:.3f} MB")
+    print(f"File Size: {stats.get('file_size_mb', 0):.3f} MB")  # noqa: T201
     print(f"{'='*80}\n")  # noqa: T201
 

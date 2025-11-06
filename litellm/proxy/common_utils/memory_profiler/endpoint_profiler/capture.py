@@ -18,7 +18,11 @@ from .constants import (
     MEMORY_DECIMAL_PLACES,
     TIMING_DECIMAL_PLACES,
 )
-from .utils import bytes_to_mb, force_gc, get_response_status_category, is_error_response
+from .utils import get_response_status_category, is_error_response
+
+# Import bytes_to_mb and force_gc from parent memory_profiler module
+from ..utils.conversions import bytes_to_mb
+from ..core.cleanup import force_gc
 
 # Import smart capture logic and constants from parent memory_profiler module
 from ..snapshot.capture import should_capture_detailed_snapshot as _should_capture_detailed_snapshot

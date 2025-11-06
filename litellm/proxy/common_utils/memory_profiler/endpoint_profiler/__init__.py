@@ -113,12 +113,14 @@ from .capture import (
 
 # Utility functions (for advanced usage)
 from .utils import (
-    bytes_to_mb,
-    force_gc,
     format_latency,
     format_memory,
     sanitize_endpoint_name,
 )
+
+# Import bytes_to_mb and force_gc from parent memory_profiler module
+from ..utils.conversions import bytes_to_mb
+from ..core.cleanup import force_gc
 
 # Constants (for configuration)
 # Import shared constants from parent module
