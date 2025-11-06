@@ -23,7 +23,7 @@ else:
     Span = Any
 
 
-ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://app.phoenix.arize.com/v1/traces"
+ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://otlp.arize.com/v1/traces"
 
 
 class ArizePhoenixLogger:
@@ -56,14 +56,24 @@ class ArizePhoenixLogger:
         protocol: Protocol = "otlp_http"
 
         if collector_endpoint:
+            # Handle legacy Phoenix UI endpoints and redirect to OTLP endpoint
+            if collector_endpoint.startswith("https://app.phoenix.arize.com"):
+                # Convert old UI endpoints to new OTLP endpoint
+                endpoint = "https://otlp.arize.com/v1/traces"
+                protocol = "otlp_http"
+                verbose_logger.debug(
+                    f"Detected legacy Phoenix UI endpoint {collector_endpoint}, redirecting to OTLP endpoint: {endpoint}"
+                )
             # Parse the endpoint to determine protocol
-            if collector_endpoint.startswith("grpc://") or (":4317" in collector_endpoint and not "/v1/traces" in collector_endpoint):
+            elif collector_endpoint.startswith("grpc://") or (":4317" in collector_endpoint and "/v1/traces" not in collector_endpoint):
                 endpoint = collector_endpoint
                 protocol = "otlp_grpc"
             else:
                 # Ensure HTTP endpoints have the correct path
-                if not collector_endpoint.endswith("/v1/traces"):
-                    if collector_endpoint.endswith("/"):
+                if "/v1/traces" not in collector_endpoint:
+                    if collector_endpoint.endswith("/v1"):
+                        endpoint = collector_endpoint + "/traces"
+                    elif collector_endpoint.endswith("/"):
                         endpoint = f"{collector_endpoint}v1/traces"
                     else:
                         endpoint = f"{collector_endpoint}/v1/traces"
@@ -81,8 +91,11 @@ class ArizePhoenixLogger:
         # Phoenix now uses standard Authorization: Bearer <token> format for both hosted and self-hosted
         if api_key is not None:
             # Use standard Authorization header format that matches Phoenix's current API
-            otlp_auth_headers = f"Authorization=Bearer {api_key}"
-        elif endpoint == ARIZE_HOSTED_PHOENIX_ENDPOINT:
+            # Header values must be URL encoded per OpenTelemetry specification
+            header_value = f"Bearer {api_key}"
+            encoded_header_value = urllib.parse.quote(header_value)
+            otlp_auth_headers = f"Authorization={encoded_header_value}"
+        elif endpoint.startswith("https://otlp.arize.com") or endpoint == ARIZE_HOSTED_PHOENIX_ENDPOINT:
             # Arize hosted Phoenix requires API key
             raise ValueError(
                 "PHOENIX_API_KEY must be set when using the Arize hosted Phoenix endpoint."
