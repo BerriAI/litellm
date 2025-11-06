@@ -288,3 +288,58 @@ class GeminiVideoGenerationRequest(BaseModel):
     """Complete request body for Gemini video generation"""
     instances: List[GeminiVideoGenerationInstance]
     parameters: Optional[GeminiVideoGenerationParameters] = None
+
+
+# Video Generation Operation Response Types
+class GeminiVideoUri(BaseModel):
+    """Video URI in the generated sample"""
+    uri: str
+    """File URI of the generated video (e.g., 'files/abc123...')"""
+
+
+class GeminiGeneratedVideoSample(BaseModel):
+    """Individual generated video sample"""
+    video: GeminiVideoUri
+    """Video object containing the URI"""
+
+
+class GeminiGenerateVideoResponse(BaseModel):
+    """Generate video response containing the samples"""
+    generatedSamples: List[GeminiGeneratedVideoSample]
+    """List of generated video samples"""
+
+
+class GeminiOperationResponse(BaseModel):
+    """Response object in the operation when done"""
+    generateVideoResponse: GeminiGenerateVideoResponse
+    """Video generation response"""
+
+
+class GeminiOperationMetadata(BaseModel):
+    """Metadata for the operation"""
+    createTime: Optional[str] = None
+    """Creation timestamp"""
+    model: Optional[str] = None
+    """Model used for generation"""
+
+
+class GeminiLongRunningOperationResponse(BaseModel):
+    """
+    Complete response for a long-running operation.
+    
+    Used when polling operation status and extracting results.
+    """
+    name: str
+    """Operation name (e.g., 'operations/generate_1234567890')"""
+    
+    done: bool = False
+    """Whether the operation is complete"""
+    
+    metadata: Optional[GeminiOperationMetadata] = None
+    """Operation metadata"""
+    
+    response: Optional[GeminiOperationResponse] = None
+    """Response object when operation is complete"""
+    
+    error: Optional[Dict[str, Any]] = None
+    """Error details if operation failed"""

@@ -25,31 +25,21 @@ class VideoGenerationRequestUtils:
         Returns:
             A dictionary of supported parameters for the video generation API
         """
-        # Get supported parameters for the model
-        supported_params = video_generation_provider_config.get_supported_openai_params(model)
-
-        # Check for unsupported parameters
-        unsupported_params = [
-            param
-            for param in video_generation_optional_params
-            if param not in supported_params
-        ]
-
-        if unsupported_params:
-            raise litellm.UnsupportedParamsError(
-                model=model,
-                message=(
-                    f"The following parameters are not supported for model {model}: "
-                    f"{', '.join(unsupported_params)}"
-                ),
-            )
-
         # Map parameters to provider-specific format
         mapped_params = video_generation_provider_config.map_openai_params(
             video_create_optional_params=video_generation_optional_params,
             model=model,
             drop_params=litellm.drop_params,
         )
+
+        # Merge extra_body params if present (for provider-specific parameters)
+        if "extra_body" in video_generation_optional_params:
+            extra_body = video_generation_optional_params["extra_body"]
+            if extra_body and isinstance(extra_body, dict):
+                # extra_body params override mapped params
+                mapped_params.update(extra_body)
+            # Remove extra_body from mapped_params since it's not sent to the API
+            mapped_params.pop("extra_body", None)
 
         return mapped_params
 
@@ -66,9 +56,8 @@ class VideoGenerationRequestUtils:
         Returns:
             VideoCreateOptionalRequestParams instance with only the valid parameters
         """
-        valid_keys = get_type_hints(VideoCreateOptionalRequestParams).keys()
         filtered_params = {
-            k: v for k, v in params.items() if k in valid_keys and v is not None
+            k: v for k, v in params.items() if v is not None
         }
 
         return cast(VideoCreateOptionalRequestParams, filtered_params)

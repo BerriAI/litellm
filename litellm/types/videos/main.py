@@ -10,7 +10,7 @@ class VideoObject(BaseModel):
     id: str
     object: Literal["video"]
     status: str
-    created_at: int
+    created_at: Optional[int] = None
     completed_at: Optional[int] = None
     expires_at: Optional[int] = None
     error: Optional[Dict[str, Any]] = None

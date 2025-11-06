@@ -92,10 +92,11 @@ class BaseVideoConfig(ABC):
         self,
         model: str,
         prompt: str,
+        api_base: str,
         video_create_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
+    ) -> Tuple[Dict, RequestFiles, str]:
         pass
 
     @abstractmethod
@@ -105,6 +106,7 @@ class BaseVideoConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
     ) -> VideoObject:
         pass
 
