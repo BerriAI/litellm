@@ -75,3 +75,23 @@ def test_azure_gpt5_variants_support_temperature():
         supported_params = config.get_supported_openai_params(model)
         assert "temperature" in supported_params, \
             f"Model '{model}' should support temperature parameter"
+
+
+def test_azure_gpt_models_support_temperature():
+    """Test that all GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature."""
+    gpt_models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-5"]
+    
+    for model in gpt_models:
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            provider=LlmProviders.AZURE,
+            model=model
+        )
+        
+        # All GPT models should use the base config, not O-series config
+        assert type(config).__name__ == "AzureOpenAIResponsesAPIConfig", \
+            f"Model '{model}' should not use O-series config"
+        
+        # All should support temperature
+        supported_params = config.get_supported_openai_params(model)
+        assert "temperature" in supported_params, \
+            f"Model '{model}' should support temperature parameter"
