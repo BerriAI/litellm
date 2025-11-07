@@ -3,6 +3,7 @@ import { Modal, Form, Input, Button as Button2, Select } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
+import { parseErrorMessage } from "./shared/errorUtils";
 
 interface SSOModalsProps {
   isAddSSOModalVisible: boolean;
@@ -182,9 +183,8 @@ const SSOModals: React.FC<SSOModalsProps> = ({
 
       // Continue with the original flow (show instructions)
       handleShowInstructions(formValues);
-    } catch (error) {
-      console.error("Failed to save SSO settings:", error);
-      NotificationsManager.fromBackend("Failed to save SSO settings");
+    } catch (error: unknown) {
+      NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
     }
   };
 

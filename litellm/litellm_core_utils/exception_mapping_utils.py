@@ -1288,6 +1288,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 elif (
                     "429 Quota exceeded" in error_str
                     or "Quota exceeded for" in error_str
+                    or "Resource exhausted" in error_str
                     or "IndexError: list index out of range" in error_str
                     or "429 Unable to submit request because the service is temporarily out of capacity."
                     in error_str
