@@ -34,9 +34,72 @@ async def test_standard_logging_payload_includes_guardrail_information():
     presidio_guard = _OPTIONAL_PresidioPIIMasking(
         guardrail_name="presidio_guard",
         event_hook=GuardrailEventHooks.pre_call,
-        presidio_analyzer_api_base=os.getenv("PRESIDIO_ANALYZER_API_BASE"),
-        presidio_anonymizer_api_base=os.getenv("PRESIDIO_ANONYMIZER_API_BASE"),
+        presidio_analyzer_api_base="https://mock-presidio-analyzer.com/",
+        presidio_anonymizer_api_base="https://mock-presidio-anonymizer.com/",
     )
+    
+    # Mock the Presidio API responses
+    mock_analyze_response = [
+        {
+            "analysis_explanation": {"recognizer": "PhoneRecognizer", "pattern": "phone"},
+            "start": 26,
+            "end": 40,
+            "score": 0.75,
+            "entity_type": "PHONE_NUMBER"
+        }
+    ]
+    
+    mock_anonymize_response = {
+        "text": "Hello, my phone number is <PHONE_NUMBER>",
+        "items": [
+            {
+                "start": 26,
+                "end": 40,
+                "entity_type": "PHONE_NUMBER",
+                "text": "<PHONE_NUMBER>",
+                "operator": "replace"
+            }
+        ]
+    }
+    
+    # Create mock response objects
+    mock_analyze_resp = MagicMock()
+    mock_analyze_resp.json = AsyncMock(return_value=mock_analyze_response)
+    
+    mock_anonymize_resp = MagicMock()
+    mock_anonymize_resp.json = AsyncMock(return_value=mock_anonymize_response)
+    
+    # Mock the aiohttp ClientSession with global call tracking
+    call_counter = {"count": 0}
+    
+    class MockClientSession:
+        def __init__(self):
+            pass
+            
+        async def __aenter__(self):
+            return self
+            
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+            
+        def post(self, url, json=None):
+            class MockResponse:
+                def __init__(self, response_obj):
+                    self.response_obj = response_obj
+                    
+                async def __aenter__(self):
+                    return self.response_obj
+                    
+                async def __aexit__(self, exc_type, exc_val, exc_tb):
+                    pass
+            
+            # Return analyze response first, then anonymize response
+            call_counter["count"] += 1
+            if "analyze" in url:
+                return MockResponse(mock_analyze_resp)
+            else:
+                return MockResponse(mock_anonymize_resp)
+    
     # 1. call the pre call hook with guardrail
     request_data = {
         "model": "gpt-4o",
@@ -47,12 +110,14 @@ async def test_standard_logging_payload_includes_guardrail_information():
         "guardrails": ["presidio_guard"],
         "metadata": {},
     }
-    await presidio_guard.async_pre_call_hook(
-        user_api_key_dict={},
-        cache=None,
-        data=request_data,
-        call_type="acompletion"
-    )
+    
+    with patch("aiohttp.ClientSession", MockClientSession):
+        await presidio_guard.async_pre_call_hook(
+            user_api_key_dict={},
+            cache=None,
+            data=request_data,
+            call_type="acompletion"
+        )
 
     # 2. call litellm.acompletion
     response = await litellm.acompletion(**request_data)
@@ -62,11 +127,17 @@ async def test_standard_logging_payload_includes_guardrail_information():
     print("got standard logging payload=", json.dumps(test_custom_logger.standard_logging_payload, indent=4, default=str))
     assert test_custom_logger.standard_logging_payload is not None
     assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_name"] == "presidio_guard"
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_mode"] == GuardrailEventHooks.pre_call
+    
+    # guardrail_information is now a list
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
+    assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
+    
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
+    assert guardrail_info["guardrail_name"] == "presidio_guard"
+    assert guardrail_info["guardrail_mode"] == GuardrailEventHooks.pre_call
 
     # assert that the guardrail_response is a response from presidio analyze
-    presidio_response = test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_response"]
+    presidio_response = guardrail_info["guardrail_response"]
     assert isinstance(presidio_response, list)
     for response_item in presidio_response:
         assert "analysis_explanation" in response_item
@@ -76,12 +147,12 @@ async def test_standard_logging_payload_includes_guardrail_information():
         assert "entity_type" in response_item
 
     # assert that the duration is not None
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["duration"] is not None
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["duration"] > 0
+    assert guardrail_info["duration"] is not None
+    assert guardrail_info["duration"] > 0
 
     # assert that we get the count of masked entities
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["masked_entity_count"] is not None
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["masked_entity_count"]["PHONE_NUMBER"] == 1
+    assert guardrail_info["masked_entity_count"] is not None
+    assert guardrail_info["masked_entity_count"]["PHONE_NUMBER"] == 1
 
 
 
