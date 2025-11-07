@@ -5,6 +5,7 @@ import os
 import sys
 
 import pytest
+import responses as responses_mock
 from click.testing import CliRunner
 
 sys.path.insert(
