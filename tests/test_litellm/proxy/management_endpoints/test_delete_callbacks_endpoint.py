@@ -9,7 +9,12 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )
 
-from litellm.proxy._types import CallbackDelete, ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CallbackDelete,
+    ConfigYAML,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
@@ -101,11 +106,11 @@ def mock_prisma():
     return MockPrismaClient()
 
 
-def mock_encrypt_value_helper(value):
+def mock_encrypt_value_helper(value, key=None, new_encryption_key=None):
     """Mock encryption - just return the value as-is for testing"""
     return value
 
-def mock_decrypt_value_helper(value):
+def mock_decrypt_value_helper(value, key=None, return_original_value=False):
     """Mock decryption - just return the value as-is for testing"""
     return value
 
@@ -113,7 +118,22 @@ def mock_decrypt_value_helper(value):
 @pytest.mark.asyncio
 async def test_delete_callbacks_in_db(mock_prisma, mock_auth):
     
+    # Create mock proxy_config
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.get_config = AsyncMock(return_value={
+        "litellm_settings": {"success_callback": ["langfuse"]},
+        "environment_variables": {
+            "LANGFUSE_PUBLIC_KEY": "any-public-key",
+            "LANGFUSE_SECRET_KEY": "any-secret-key",
+            "LANGFUSE_HOST": "https://exampleopenaiendpoint-production-c715.up.railway.app",
+        },
+    })
+    mock_proxy_config.save_config = AsyncMock()
+    mock_proxy_config.add_deployment = AsyncMock()
+    
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), \
+         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()), \
          patch("litellm.proxy.proxy_server.store_model_in_db", True), \
          patch("litellm.proxy.proxy_server.encrypt_value_helper", side_effect=mock_encrypt_value_helper), \
          patch("litellm.proxy.proxy_server.decrypt_value_helper", side_effect=mock_decrypt_value_helper):

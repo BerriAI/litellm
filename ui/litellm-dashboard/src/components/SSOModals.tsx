@@ -316,9 +316,18 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                   pattern: /^https?:\/\/.+/,
                   message: "URL must start with http:// or https://",
                 },
+                {
+                  validator: (_, value) => {
+                    // Only check for trailing slash if the URL starts with http:// or https://
+                    if (value && /^https?:\/\/.+/.test(value) && value.endsWith("/")) {
+                      return Promise.reject("URL must not end with a trailing slash");
+                    }
+                    return Promise.resolve();
+                  },
+                },
               ]}
             >
-              <TextInput />
+              <TextInput placeholder="https://example.com" />
             </Form.Item>
           </>
           <div

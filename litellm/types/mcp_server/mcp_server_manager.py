@@ -27,6 +27,9 @@ class MCPServer(BaseModel):
     allowed_params: Optional[
         Dict[str, List[str]]
     ] = None  # map of tool names to allowed parameter lists
+    static_headers: Optional[
+        Dict[str, str]
+    ] = None  # static headers to forward to the MCP server
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
@@ -39,7 +42,4 @@ class MCPServer(BaseModel):
     args: Optional[List[str]] = None
     env: Optional[Dict[str, str]] = None
     access_groups: Optional[List[str]] = None
-    static_headers: Optional[
-        Dict[str, str]
-    ] = None  # static headers to forward to the MCP server
     model_config = ConfigDict(arbitrary_types_allowed=True)

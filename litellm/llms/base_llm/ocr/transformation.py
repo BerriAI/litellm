@@ -106,6 +106,7 @@ class BaseOCRConfig:
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
         **kwargs,
     ) -> Dict:
         """
@@ -119,6 +120,7 @@ class BaseOCRConfig:
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: Optional[dict] = None,
         **kwargs,
     ) -> str:
         """
@@ -195,6 +197,36 @@ class BaseOCRConfig:
         Override in provider-specific implementations.
         """
         raise NotImplementedError("transform_ocr_response must be implemented by provider")
+
+    async def async_transform_ocr_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        **kwargs,
+    ) -> OCRResponse:
+        """
+        Async transform provider-specific OCR response to standard format.
+        Optional method - providers can override if they need async transformations
+        (e.g., Azure Document Intelligence for async operation polling).
+        
+        Default implementation falls back to sync transform_ocr_response.
+        
+        Args:
+            model: Model name
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+            
+        Returns:
+            OCRResponse in standard format
+        """
+        # Default implementation: call sync version
+        return self.transform_ocr_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+            **kwargs,
+        )
 
     def get_error_class(
         self,
