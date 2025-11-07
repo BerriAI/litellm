@@ -521,79 +521,64 @@ async def test_ahealth_check_ocr():
     return response
 
 @pytest.mark.asyncio
-async def test_image_generation_health_check_prompt():
-    """
-    Test that image generation health checks use the correct prompts:
-    1. Default prompt is "a simple white circle" to avoid triggering content filters
-    2. Custom health_check_prompt can be configured via model_info
-    """
-    from litellm.proxy.health_check import _perform_health_check
+async def test_image_generation_health_check_prompt(monkeypatch):
+    """Health checks should respect default and environment-configured prompts."""
 
-    # Track which prompts are actually used in the health checks
-    health_check_calls = []
+    import importlib
+    import litellm.constants as litellm_constants
+    import litellm.proxy.health_check as health_check
 
-    async def mock_health_check(litellm_params, mode=None, prompt=None, input=None):
-        health_check_calls.append({
-            "mode": mode,
-            "prompt": prompt,
-            "model": litellm_params.get("model"),
-        })
-        return {"status": "healthy"}
+    def reload_modules():
+        reloaded_constants = importlib.reload(litellm_constants)
+        reloaded_health_check = importlib.reload(health_check)
+        return reloaded_constants, reloaded_health_check
 
-    # Test 1: Default prompt for image_generation mode
-    model_list = [
-        {
-            "litellm_params": {"model": "dall-e-3", "api_key": "fake-key"},
-            "model_info": {
-                "mode": "image_generation",
-            },
-        }
-    ]
+    async def run_health_check(health_check_module):
+        health_check_calls = []
 
-    with patch("litellm.ahealth_check", side_effect=mock_health_check):
-        health_check_calls.clear()
-        await _perform_health_check(model_list)
-        
-        assert len(health_check_calls) == 1
-        assert health_check_calls[0]["mode"] == "image_generation"
-        assert health_check_calls[0]["prompt"] == "a simple white circle", \
-            f"Expected default prompt 'a simple white circle', got '{health_check_calls[0]['prompt']}'"
+        async def mock_health_check(litellm_params, mode=None, prompt=None, input=None):
+            health_check_calls.append(
+                {
+                    "mode": mode,
+                    "prompt": prompt,
+                    "model": litellm_params.get("model"),
+                }
+            )
+            return {"status": "healthy"}
 
-    # Test 2: Custom health_check_prompt for image_generation mode
-    model_list = [
-        {
-            "litellm_params": {"model": "azure/dall-e-3", "api_key": "fake-key"},
-            "model_info": {
-                "mode": "image_generation",
-                "health_check_prompt": "a blue square",
-            },
-        }
-    ]
+        model_list = [
+            {
+                "litellm_params": {"model": "dall-e-3", "api_key": "fake-key"},
+                "model_info": {
+                    "mode": "image_generation",
+                },
+            }
+        ]
 
-    with patch("litellm.ahealth_check", side_effect=mock_health_check):
-        health_check_calls.clear()
-        await _perform_health_check(model_list)
-        
-        assert len(health_check_calls) == 1
-        assert health_check_calls[0]["mode"] == "image_generation"
-        assert health_check_calls[0]["prompt"] == "a blue square", \
-            f"Expected custom prompt 'a blue square', got '{health_check_calls[0]['prompt']}'"
+        with patch(
+            "litellm.proxy.health_check.litellm.ahealth_check",
+            side_effect=mock_health_check,
+        ):
+            await health_check_module._perform_health_check(model_list)
 
-    # Test 3: Non-image_generation mode should use "test from litellm"
-    model_list = [
-        {
-            "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
-            "model_info": {
-                "mode": "chat",
-            },
-        }
-    ]
+        return health_check_calls
 
-    with patch("litellm.ahealth_check", side_effect=mock_health_check):
-        health_check_calls.clear()
-        await _perform_health_check(model_list)
-        
-        assert len(health_check_calls) == 1
-        assert health_check_calls[0]["mode"] == "chat"
-        assert health_check_calls[0]["prompt"] == "test from litellm", \
-            f"Expected default prompt 'test from litellm' for chat mode, got '{health_check_calls[0]['prompt']}'"
+    # Default prompt is used when env var is unset
+    monkeypatch.delenv("DEFAULT_HEALTH_CHECK_PROMPT", raising=False)
+    litellm_constants, health_check = reload_modules()
+    health_check_calls = await run_health_check(health_check)
+
+    assert len(health_check_calls) == 1
+    assert (
+        health_check_calls[0]["prompt"]
+        == litellm_constants.DEFAULT_HEALTH_CHECK_PROMPT
+    )
+
+    # Environment override should change the prompt without code changes
+    override_prompt = "environment override prompt"
+    monkeypatch.setenv("DEFAULT_HEALTH_CHECK_PROMPT", override_prompt)
+    litellm_constants, health_check = reload_modules()
+    health_check_calls = await run_health_check(health_check)
+
+    assert len(health_check_calls) == 1
+    assert health_check_calls[0]["prompt"] == override_prompt

@@ -108,21 +108,11 @@ model_list:
 
 #### Custom Health Check Prompt
 
-By default, health checks for image generation models use the prompt `"a simple white circle"` to avoid triggering content safety filters (e.g., Azure's content policy). You can customize this prompt if needed:
+By default, health checks use the prompt `"test from litellm"`. You can customize this prompt globally by setting an environment variable, or per-model via config:
 
-```yaml
-model_list:
-  - model_name: dall-e-3
-    litellm_params:
-      model: azure/dall-e-3
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2023-07-01-preview"
-    model_info:
-      mode: image_generation
-      health_check_prompt: "a blue square" # 👈 CUSTOM PROMPT (optional)
+```bash
+DEFAULT_HEALTH_CHECK_PROMPT="this is a test prompt"
 ```
-
 
 ### Text Completion Models 
 

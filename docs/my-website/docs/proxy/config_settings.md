@@ -470,6 +470,7 @@ router_settings:
 | DEFAULT_FAILURE_THRESHOLD_PERCENT | Threshold percentage of failures to cool down a deployment. Default is 0.5 (50%)
 | DEFAULT_FLUSH_INTERVAL_SECONDS | Default interval in seconds for flushing operations. Default is 5
 | DEFAULT_HEALTH_CHECK_INTERVAL | Default interval in seconds for health checks. Default is 300 (5 minutes)
+| DEFAULT_HEALTH_CHECK_PROMPT | Default prompt used during health checks for non-image models. Default is "test from litellm"
 | DEFAULT_IMAGE_HEIGHT | Default height for images. Default is 300
 | DEFAULT_IMAGE_TOKEN_COUNT | Default token count for images. Default is 250
 | DEFAULT_IMAGE_WIDTH | Default width for images. Default is 300

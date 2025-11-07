@@ -8,7 +8,7 @@ from typing import List, Optional
 import litellm
 
 logger = logging.getLogger(__name__)
-from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS, DEFAULT_HEALTH_CHECK_PROMPT
 
 ILLEGAL_DISPLAY_PARAMS = [
     "messages",
@@ -95,19 +95,11 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
         )
         timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
 
-        # Use configurable health_check_prompt
-        health_check_prompt = model_info.get("health_check_prompt", None)
-        if health_check_prompt is None:
-            if mode == "image_generation":
-                health_check_prompt = "a simple white circle"
-            else:
-                health_check_prompt = "test from litellm"
-        
         task = run_with_timeout(
             litellm.ahealth_check(
                 model["litellm_params"],
                 mode=mode,
-                prompt=health_check_prompt,
+                prompt=DEFAULT_HEALTH_CHECK_PROMPT,
                 input=["test from litellm"],
             ),
             timeout,
