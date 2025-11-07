@@ -2975,12 +2975,12 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if isinstance(cb, str):
             return cb
-        if hasattr(cb, "__class__"):
-            return cb.__class__.__name__
         if hasattr(cb, "__name__"):
             return cb.__name__
         if hasattr(cb, "__func__"):
             return cb.__func__.__name__
+        if hasattr(cb, "__class__"):
+            return cb.__class__.__name__
         return str(cb)
 
     def _is_internal_litellm_proxy_callback(self, cb) -> bool:
