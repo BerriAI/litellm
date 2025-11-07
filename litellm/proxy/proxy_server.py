@@ -5081,7 +5081,7 @@ async def embeddings(  # noqa: PLR0915
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="aembedding"
+            user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
         )
 
         tasks = []
@@ -5089,7 +5089,7 @@ async def embeddings(  # noqa: PLR0915
             proxy_logging_obj.during_call_hook(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
-                call_type="aembedding",
+                call_type="embeddings",
             )
         )
 
