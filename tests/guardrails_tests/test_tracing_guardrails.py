@@ -605,7 +605,8 @@ def test_guardrail_status_fields_computation():
     from litellm.litellm_core_utils.litellm_logging import _get_status_fields
     
     # Test guardrail_intervened status (content was blocked by guardrail)
-    intervened_info = {"guardrail_status": "guardrail_intervened"}
+    # guardrail_information is now a list
+    intervened_info = [{"guardrail_status": "guardrail_intervened"}]
     status_fields_intervened = _get_status_fields(
         status="success",
         guardrail_information=intervened_info,
@@ -615,7 +616,7 @@ def test_guardrail_status_fields_computation():
     assert status_fields_intervened["guardrail_status"] == "guardrail_intervened"
     
     # Test legacy blocked status (for backward compatibility)
-    blocked_info = {"guardrail_status": "blocked"}
+    blocked_info = [{"guardrail_status": "blocked"}]
     status_fields_blocked = _get_status_fields(
         status="success",
         guardrail_information=blocked_info,
@@ -625,7 +626,7 @@ def test_guardrail_status_fields_computation():
     assert status_fields_blocked["guardrail_status"] == "guardrail_intervened"
     
     # Test success status
-    success_info = {"guardrail_status": "success"}
+    success_info = [{"guardrail_status": "success"}]
     status_fields_success = _get_status_fields(
         status="success",
         guardrail_information=success_info,
@@ -635,7 +636,7 @@ def test_guardrail_status_fields_computation():
     assert status_fields_success["guardrail_status"] == "success"
     
     # Test guardrail_failed_to_respond status
-    failed_info = {"guardrail_status": "guardrail_failed_to_respond"}
+    failed_info = [{"guardrail_status": "guardrail_failed_to_respond"}]
     status_fields_failed = _get_status_fields(
         status="failure",
         guardrail_information=failed_info,
@@ -645,7 +646,7 @@ def test_guardrail_status_fields_computation():
     assert status_fields_failed["guardrail_status"] == "guardrail_failed_to_respond"
     
     # Test legacy failure status (for backward compatibility)
-    failure_info = {"guardrail_status": "failure"}
+    failure_info = [{"guardrail_status": "failure"}]
     status_fields_failure = _get_status_fields(
         status="failure",
         guardrail_information=failure_info,
