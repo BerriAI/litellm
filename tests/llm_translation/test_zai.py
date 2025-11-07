@@ -77,7 +77,7 @@ class TestZaiChatConfig:
             litellm_params={}
         )
         
-        assert result == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+        assert result == "https://api.z.ai/api/paas/v4/chat/completions"
 
     def test_get_complete_url_custom_base(self):
         """Test get_complete_url method with custom API base"""
@@ -506,7 +506,7 @@ class TestZaiChatCompletion:
             handler.completion(
                 model="zai/glm-4.6",
                 messages=[{"role": "user", "content": "Hello"}],
-                api_base="https://open.bigmodel.cn/api/paas/v4",
+                api_base="https://api.z.ai/api/paas/v4",
                 custom_llm_provider="zai",
                 custom_prompt_dict={},
                 model_response=ModelResponse(),
@@ -598,7 +598,7 @@ class TestZaiChatCompletion:
             
             # Verify default API base was used
             call_args = mock_super_completion.call_args
-            assert call_args.kwargs["api_base"] == "https://open.bigmodel.cn/api/paas/v4"
+            assert call_args.kwargs["api_base"] == "https://api.z.ai/api/paas/v4/"
 
 
 class TestZaiIntegration:

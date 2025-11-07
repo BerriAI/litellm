@@ -280,7 +280,7 @@ class ZaiChatConfig(BaseConfig):
         """
         if api_base:
             return f"{api_base}/chat/completions"
-        return "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+        return "https://api.z.ai/api/paas/v4/chat/completions"
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

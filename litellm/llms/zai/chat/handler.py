@@ -53,7 +53,7 @@ class ZaiChatCompletion(OpenAILikeChatHandler):
 
         # Use default ZAI API base if not provided (without /chat/completions)
         if not api_base:
-            api_base = "https://open.bigmodel.cn/api/paas/v4"
+            api_base = "https://api.z.ai/api/paas/v4"
 
         # Delegate to OpenAI-like handler for tool calling and HTTP
         return super().completion(
