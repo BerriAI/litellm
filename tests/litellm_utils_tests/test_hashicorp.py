@@ -217,6 +217,49 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
         assert test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
 
 
+def test_hashicorp_secret_manager_approle_auth(monkeypatch):
+    """
+    Test AppRole authentication makes the expected POST request to the correct URL.
+    """
+    monkeypatch.setenv("HCP_VAULT_TOKEN", "test-token-12345")
+    
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "auth": {
+                "client_token": "hvs.approle-token-67890",
+                "lease_duration": 2764800,
+                "renewable": True,
+            }
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+
+        test_manager = HashicorpSecretManager()
+        test_manager.approle_role_id = "test-role-id-123"
+        test_manager.approle_secret_id = "test-secret-id-456"
+        test_manager.approle_mount_path = "approle"
+        
+        token = test_manager._auth_via_approle()
+
+        assert token == "hvs.approle-token-67890"
+        
+        expected_headers = {}
+        if test_manager.vault_namespace:
+            expected_headers["X-Vault-Namespace"] = test_manager.vault_namespace
+        
+        mock_post.assert_called_once_with(
+            url=f"{test_manager.vault_addr}/v1/auth/approle/login",
+            headers=expected_headers,
+            json={
+                "role_id": "test-role-id-123",
+                "secret_id": "test-secret-id-456",
+            },
+        )
+
+        assert test_manager.cache.get_cache("hcp_vault_approle_token") == "hvs.approle-token-67890"
+
+
 def test_hashicorp_custom_mount_and_prefix():
     """Test URL construction with custom mount name and path prefix using get_url method."""
     # Save original values
