@@ -749,6 +749,8 @@ async def proxy_startup_event(app: FastAPI):
             verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
         except Exception as e:
             verbose_proxy_logger.error(f"Error closing shared aiohttp session: {e}")
+    if prisma_client is not None:
+        await prisma_client.disconnect()
 
     await proxy_shutdown_event()
 
