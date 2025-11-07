@@ -409,6 +409,7 @@ response = video_generation(
 
 - [OpenAI Video Generation](../openai/videos.md)
 - [Azure Video Generation](../azure/videos.md)
+- [Vertex AI Video Generation](../vertex_ai/videos.md)
 - [Video Generation API Reference](/docs/videos)
 - [Veo Pass-through Endpoints](/docs/pass_through/google_ai_studio#example-4-video-generation-with-veo)
 
