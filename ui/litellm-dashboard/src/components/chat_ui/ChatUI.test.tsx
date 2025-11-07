@@ -259,7 +259,7 @@ describe("ChatUI", () => {
     });
 
     // Find the endpoint selector by looking for the "Endpoint Type:" text and its associated Select
-    const endpointTypeText = getByText("Endpoint Type:");
+    const endpointTypeText = getByText("Endpoint Type");
     const selectContainer = endpointTypeText.parentElement;
     const selectElement = selectContainer?.querySelector(".ant-select-selector");
 

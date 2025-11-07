@@ -12,7 +12,6 @@ interface EndpointSelectorProps {
 const EndpointSelector: React.FC<EndpointSelectorProps> = ({ endpointType, onEndpointChange, className }) => {
   return (
     <div className={className}>
-      <Text>Endpoint Type:</Text>
       <Select
         showSearch
         value={endpointType}
