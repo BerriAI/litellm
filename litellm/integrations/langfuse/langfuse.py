@@ -755,8 +755,14 @@ class LangFuseLogger:
                         or cache_creation_input_tokens
                         or cache_read_input_tokens
                     ):
+                        # Langfuse expects cache hits to be deducted from the input token count
+                        input_tokens = (
+                            (prompt_tokens - cache_read_input_tokens)
+                            if (prompt_tokens is not None and cache_read_input_tokens)
+                            else prompt_tokens
+                        )
                         usage_details = LangfuseUsageDetails(
-                            input=prompt_tokens,
+                            input=input_tokens,
                             output=completion_tokens,
                             total=total_tokens,
                             cache_creation_input_tokens=cache_creation_input_tokens,

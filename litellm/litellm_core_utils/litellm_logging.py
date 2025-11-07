@@ -1,7 +1,6 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
-import asyncio
 import copy
 import datetime
 import json
@@ -120,7 +119,6 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.types.containers.main import ContainerObject
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
@@ -2837,9 +2835,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                 )
                 # Track callback logging failures in Prometheus
-                asyncio.create_task(
-                    self._handle_callback_failure(callback=callback)
-                )
+                self._handle_callback_failure(callback=callback)
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
         """
@@ -2979,12 +2975,12 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if isinstance(cb, str):
             return cb
-        if hasattr(cb, "__class__"):
-            return cb.__class__.__name__
         if hasattr(cb, "__name__"):
             return cb.__name__
         if hasattr(cb, "__func__"):
             return cb.__func__.__name__
+        if hasattr(cb, "__class__"):
+            return cb.__class__.__name__
         return str(cb)
 
     def _is_internal_litellm_proxy_callback(self, cb) -> bool:
@@ -4373,7 +4369,7 @@ class StandardLoggingPayloadSetup:
 
             s3_object_key = get_s3_object_key(
                 s3_path=s3_path,  # Use actual s3_path from logger configuration
-                team_alias_prefix="",  # Don't split by team alias for cold storage
+                prefix="",  # Don't split by team alias for cold storage
                 start_time=start_time,
                 s3_file_name=s3_file_name,
             )
@@ -4536,7 +4532,7 @@ class StandardLoggingPayloadSetup:
 
 def _get_status_fields(
     status: StandardLoggingPayloadStatus,
-    guardrail_information: Optional[list[dict]],
+    guardrail_information: Optional[List[dict]],
     error_str: Optional[str],
 ) -> "StandardLoggingPayloadStatusFields":
     """

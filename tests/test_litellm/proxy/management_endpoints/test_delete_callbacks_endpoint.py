@@ -9,7 +9,12 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )
 
-from litellm.proxy._types import CallbackDelete, ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CallbackDelete,
+    ConfigYAML,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
@@ -101,11 +106,11 @@ def mock_prisma():
     return MockPrismaClient()
 
 
-def mock_encrypt_value_helper(value):
+def mock_encrypt_value_helper(value, key=None, new_encryption_key=None):
     """Mock encryption - just return the value as-is for testing"""
     return value
 
-def mock_decrypt_value_helper(value):
+def mock_decrypt_value_helper(value, key=None, return_original_value=False):
     """Mock decryption - just return the value as-is for testing"""
     return value
 

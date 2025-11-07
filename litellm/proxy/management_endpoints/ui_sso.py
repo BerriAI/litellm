@@ -569,6 +569,10 @@ def apply_user_info_values_to_sso_user_defined_values(
     else:
         user_defined_values["user_role"] = user_info.user_role
 
+    # Preserve the user's existing models from the database
+    if user_info is not None and hasattr(user_info, "models") and user_info.models:
+        user_defined_values["models"] = user_info.models
+
     return user_defined_values
 
 
