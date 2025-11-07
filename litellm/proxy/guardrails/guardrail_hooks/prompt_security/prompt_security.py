@@ -2,7 +2,7 @@ import os
 import re
 import asyncio
 import base64
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Type, Union
 from fastapi import HTTPException
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
@@ -50,18 +50,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: str,
     ) -> Union[Exception, str, dict, None]:
         return await self.call_prompt_security_guardrail(data)
 
@@ -69,16 +58,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: str,
     ) -> Union[Exception, str, dict, None]:
         await self.call_prompt_security_guardrail(data)
         return data
