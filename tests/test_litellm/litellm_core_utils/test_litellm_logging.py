@@ -635,7 +635,7 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
         # Verify the S3 function was called with the custom logger's s3_path
         mock_get_s3_key.assert_called_once_with(
             s3_path="storage",  # Should use custom logger's s3_path
-            team_alias_prefix="",
+            prefix="",
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
         )
