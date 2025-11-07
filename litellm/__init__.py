@@ -480,6 +480,7 @@ vertex_deepseek_models: Set = set()
 vertex_ai_ai21_models: Set = set()
 vertex_mistral_models: Set = set()
 vertex_openai_models: Set = set()
+vertex_minimax_models: Set = set()
 ai21_models: Set = set()
 ai21_chat_models: Set = set()
 nlp_cloud_models: Set = set()
@@ -640,6 +641,9 @@ def add_known_models():
         elif value.get("litellm_provider") == "vertex_ai-openai_models":
             key = key.replace("vertex_ai/", "")
             vertex_openai_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-minimax_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_minimax_models.add(key)
         elif value.get("litellm_provider") == "ai21":
             if value.get("mode") == "chat":
                 ai21_chat_models.add(key)
@@ -895,7 +899,8 @@ models_by_provider: dict = {
     | vertex_anthropic_models
     | vertex_vision_models
     | vertex_language_models
-    | vertex_deepseek_models,
+    | vertex_deepseek_models
+    | vertex_minimax_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
