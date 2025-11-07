@@ -594,9 +594,12 @@ def _count_content_list(
                         f"Invalid image_url type: {type(c['image_url'])}. Expected str or dict."
                     )
             else:
-                raise ValueError(
-                    f"Invalid content type: {type(c)}. Expected str or dict."
+                # Skip unsupported content types (e.g., tool_use, tool_result, input_audio, video_url, document, file, etc.)
+                # These are provider-specific content types that don't contribute to token count
+                verbose_logger.debug(
+                    f"Skipping unsupported content type for token counting: {c.get('type', 'unknown')}"
                 )
+                continue
         return num_tokens
     except Exception as e:
         if default_token_count is not None:

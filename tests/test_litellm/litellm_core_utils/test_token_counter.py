@@ -631,3 +631,175 @@ def test_bad_input_token_counter(model, messages):
         messages=messages,
         default_token_count=1000,
     )
+
+
+def test_token_counter_with_tool_use_content():
+    """
+    Test that token counter handles Anthropic tool_use content blocks gracefully.
+    This tests the fix for: "Invalid content type: <class 'dict'>. Expected str or dict."
+    when Claude sends tool_use content blocks.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather in Boston?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Let me check the weather for you."
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"}
+                }
+            ]
+        }
+    ]
+    # Should not raise an error
+    tokens = token_counter(model="claude-3-5-sonnet-20241022", messages=messages)
+    assert tokens > 0, "Expected positive token count"
+
+
+def test_token_counter_with_tool_result_content():
+    """
+    Test that token counter handles Anthropic tool_result content blocks gracefully.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather in Boston?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"}
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234",
+                    "content": "Sunny, 75°F",
+                },
+                {
+                    "type": "text",
+                    "text": "What about tomorrow?"
+                }
+            ]
+        }
+    ]
+    # Should not raise an error
+    tokens = token_counter(model="claude-3-5-sonnet-20241022", messages=messages)
+    assert tokens > 0, "Expected positive token count"
+
+
+def test_token_counter_with_mixed_tool_content():
+    """
+    Test token counter with a realistic conversation involving tool_use and tool_result.
+    This mimics what Claude Code sends to LiteLLM.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "which model are you?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I am Claude 3.5 Sonnet."
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Run a bash command to check the date"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll run the date command for you."
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_bdrk_01Gb8VMiQBJyjwy1gsjDT1Y1",
+                    "name": "Bash",
+                    "input": {"command": "date"}
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "content": "Thu Nov  7 12:34:56 UTC 2025",
+                    "is_error": False,
+                    "tool_use_id": "toolu_bdrk_01Gb8VMiQBJyjwy1gsjDT1Y1"
+                }
+            ]
+        }
+    ]
+    # Should not raise an error
+    tokens = token_counter(model="claude-3-5-sonnet-20241022", messages=messages)
+    assert tokens > 0, "Expected positive token count"
+    # Verify that we're counting the text content properly
+    # The tool_use and tool_result blocks should be skipped, but text should be counted
+    assert tokens >= 20, "Expected at least 20 tokens from text content"
+
+
+def test_token_counter_with_other_unsupported_content_types():
+    """
+    Test that token counter gracefully handles other unsupported content types
+    like input_audio, video_url, document, file, etc.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Analyze this content"
+                },
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": "base64_audio_data", "format": "wav"}
+                },
+                {
+                    "type": "video_url",
+                    "video_url": {"url": "https://example.com/video.mp4"}
+                },
+                {
+                    "type": "document",
+                    "source": {"type": "text", "media_type": "application/pdf", "data": "base64_data"}
+                },
+                {
+                    "type": "file",
+                    "file": {"file_id": "file-abc123", "filename": "data.csv"}
+                }
+            ]
+        }
+    ]
+    # Should not raise an error - unsupported types should be skipped
+    tokens = token_counter(model="gpt-4o", messages=messages)
+    assert tokens > 0, "Expected positive token count from text content"
