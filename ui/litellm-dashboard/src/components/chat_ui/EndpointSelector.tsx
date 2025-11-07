@@ -1,6 +1,5 @@
-import React from "react";
 import { Select } from "antd";
-import { Text } from "@tremor/react";
+import React from "react";
 import { ENDPOINT_OPTIONS } from "./chatConstants";
 
 interface EndpointSelectorProps {
