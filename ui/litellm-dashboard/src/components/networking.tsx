@@ -6618,6 +6618,36 @@ export const applyGuardrail = async (
   }
 };
 
+export const validateBlockedWordsFile = async (accessToken: string, fileContent: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/validate_blocked_words_file`
+      : `/guardrails/validate_blocked_words_file`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ file_content: fileContent }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to validate blocked words file");
+    }
+
+    const data = await response.json();
+    console.log("Validate blocked words file response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to validate blocked words file:", error);
+    throw error;
+  }
+};
+
 export const getSSOSettings = async (accessToken: string) => {
   try {
     // Construct base URL
