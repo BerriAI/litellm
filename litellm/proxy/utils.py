@@ -800,6 +800,7 @@ class ProxyLogging:
             "completion",
             "text_completion",
             "embeddings",
+            "aembedding",
             "image_generation",
             "moderation",
             "audio_transcription",
@@ -869,6 +870,7 @@ class ProxyLogging:
             "completion",
             "text_completion",
             "embeddings",
+            "aembedding",
             "image_generation",
             "moderation",
             "audio_transcription",
@@ -889,6 +891,7 @@ class ProxyLogging:
             "completion",
             "text_completion",
             "embeddings",
+            "aembedding",
             "image_generation",
             "moderation",
             "audio_transcription",
@@ -908,6 +911,7 @@ class ProxyLogging:
             "completion",
             "text_completion",
             "embeddings",
+            "aembedding",
             "image_generation",
             "moderation",
             "audio_transcription",
@@ -1014,7 +1018,7 @@ class ProxyLogging:
                         user_api_key_dict=user_api_key_dict,
                         cache=self.call_details["user_api_key_cache"],
                         data=data,  # type: ignore
-                        call_type=call_type,
+                        call_type=call_type,  # type: ignore
                     )
                     if response is not None:
                         data = await self.process_pre_call_hook_response(
@@ -1046,6 +1050,7 @@ class ProxyLogging:
             "completion",
             "responses",
             "embeddings",
+            "aembedding",
             "image_generation",
             "moderation",
             "audio_transcription",
@@ -1098,7 +1103,7 @@ class ProxyLogging:
                     callback.async_moderation_hook(
                         data=data,
                         user_api_key_dict=user_api_key_auth_dict,  # type: ignore
-                        call_type=call_type,
+                        call_type=call_type,  # type: ignore
                     )
                 )
 
