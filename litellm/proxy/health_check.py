@@ -138,7 +138,6 @@ def _update_litellm_params_for_health_check(
     - gets a short `messages` param for health check
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
-    - updates the `prompt` param with the `health_check_prompt` for `image_generation` mode if it exists (handled in _perform_health_check)
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
     """
     litellm_params["messages"] = _get_random_llm_message()
