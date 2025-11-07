@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, getByText, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "./llm_calls/fetch_models";
@@ -100,5 +100,36 @@ describe("ChatUI", () => {
     const voiceSelectContainer = voiceText.parentElement;
     const voiceSelectElement = voiceSelectContainer?.querySelector(".ant-select");
     expect(voiceSelectElement).toBeInTheDocument();
+  });
+
+  it("should allow the user to select a model", async () => {
+    const { getByText, container } = render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    // Wait for the component to render
+    await waitFor(() => {
+      expect(getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(getByText("Model 1")).toBeInTheDocument();
+    });
+
+    const selectComponent = container.querySelectorAll(".ant-select-selector")[1];
+    expect(selectComponent).toBeTruthy();
+
+    fireEvent.mouseDown(selectComponent!);
+
+    await waitFor(() => {
+      const model1Label = screen.getAllByText("Model 1");
+      expect(model1Label.length).toBeGreaterThan(0);
+    });
   });
 });
