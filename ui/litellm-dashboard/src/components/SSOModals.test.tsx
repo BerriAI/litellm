@@ -91,9 +91,13 @@ describe("SSOModals", () => {
     fireEvent.click(saveButton);
 
     // Check for validation error
-    await waitFor(() => {
-      expect(getByText("URL must start with http:// or https://")).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(getByText("URL must start with http:// or https://")).toBeInTheDocument();
+      },
+      // The validation is based on a Promise, so we need to wait for it to resolve
+      { timeout: 5000 },
+    );
   });
 
   it("should show validation error if the proxy base url ends with a trailing slash", async () => {
