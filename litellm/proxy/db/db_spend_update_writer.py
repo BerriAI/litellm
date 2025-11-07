@@ -528,7 +528,14 @@ class DBSpendUpdateWriter:
 
         This is the regular flow of committing to db without using a redis buffer
 
-        Note: This flow causes Deadlocks in production (1K RPS+). Use self._commit_spend_updates_to_db_with_redis() instead if you expect 1K+ RPS.
+        Multi-rows writes to the database should ideally always be consistently sorted to minimize the likelihood of deadlocks:
+        ideally the sorting order should be chosen so that writes to ALL indexes on a table happen in the same order across all
+        concurrent transactions, as any out-of-order concurrent write to the table or ANY index increases the chances of deadlocks.
+        Finding a single consistent order across multiple indexes is generally impossible, so we pick one to minimize the chance
+        of transient deadlocks, and retry later if we are unlucky.
+
+        Note: This flow can cause deadlocks under high load. Use self._commit_spend_updates_to_db_with_redis() instead
+        if you experience a high rate of deadlocks that the retry logic fails to handle.
         """
 
         # Aggregate all in memory spend updates (key, user, end_user, team, team_member, org) and commit to db
