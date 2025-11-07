@@ -601,6 +601,7 @@ class DBSpendUpdateWriter:
         from litellm.proxy.utils import (
             ProxyUpdateSpend,
             _raise_failed_update_spend_exception,
+            _handle_db_exception_retriable,
         )
 
         ### UPDATE USER TABLE ###
@@ -622,26 +623,15 @@ class DBSpendUpdateWriter:
                             for (
                                 user_id,
                                 response_cost,
-                            ) in user_list_transactions.items():
+                            ) in sorted(user_list_transactions.items()):
                                 batcher.litellm_usertable.update_many(
                                     where={"user_id": user_id},
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if (
-                        i >= n_retry_times
-                    ):  # If we've reached the maximum number of retries
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await _handle_db_exception_retriable(
+                        e=e, i=i, n_retry_times=n_retry_times, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
         ### UPDATE END-USER TABLE ###
@@ -677,26 +667,15 @@ class DBSpendUpdateWriter:
                             for (
                                 token,
                                 response_cost,
-                            ) in key_list_transactions.items():
+                            ) in sorted(key_list_transactions.items()):
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if (
-                        i >= n_retry_times
-                    ):  # If we've reached the maximum number of retries
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await _handle_db_exception_retriable(
+                        e=e, i=i, n_retry_times=n_retry_times, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
         ### UPDATE TEAM TABLE ###
@@ -718,7 +697,7 @@ class DBSpendUpdateWriter:
                             for (
                                 team_id,
                                 response_cost,
-                            ) in team_list_transactions.items():
+                            ) in sorted(team_list_transactions.items()):
                                 verbose_proxy_logger.debug(
                                     "Updating spend for team id={} by {}".format(
                                         team_id, response_cost
@@ -729,20 +708,9 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if (
-                        i >= n_retry_times
-                    ):  # If we've reached the maximum number of retries
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await _handle_db_exception_retriable(
+                        e=e, i=i, n_retry_times=n_retry_times, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
         ### UPDATE TEAM Membership TABLE with spend ###
@@ -768,7 +736,7 @@ class DBSpendUpdateWriter:
                             for (
                                 key,
                                 response_cost,
-                            ) in team_member_list_transactions.items():
+                            ) in sorted(team_member_list_transactions.items()):
                                 # key is "team_id::<value>::user_id::<value>"
                                 team_id = key.split("::")[1]
                                 user_id = key.split("::")[3]
@@ -778,20 +746,9 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if (
-                        i >= n_retry_times
-                    ):  # If we've reached the maximum number of retries
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await _handle_db_exception_retriable(
+                        e=e, i=i, n_retry_times=n_retry_times, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
         ### UPDATE ORG TABLE ###
@@ -810,33 +767,15 @@ class DBSpendUpdateWriter:
                             for (
                                 org_id,
                                 response_cost,
-                            ) in org_list_transactions.items():
+                            ) in sorted(org_list_transactions.items()):
                                 batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"organization_id": org_id},
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if (
-                        i >= n_retry_times
-                    ):  # If we've reached the maximum number of retries
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(
-                        # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
-                        # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
-                        # and thus they are more likely to deadlock again.
-                        # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
-                        # repeated deadlocks, and therefore of exceeding the retry limit.
-                        random.uniform(2**i, 2 ** (i + 1))
-                    )
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await _handle_db_exception_retriable(
+                        e=e, i=i, n_retry_times=n_retry_times, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
         ### UPDATE TAG TABLE ###
@@ -873,7 +812,7 @@ class DBSpendUpdateWriter:
             prisma_client: Prisma client instance
             proxy_logging_obj: Proxy logging object
         """
-        from litellm.proxy.utils import _raise_failed_update_spend_exception
+        from litellm.proxy.utils import _raise_failed_update_spend_exception, _handle_db_exception_retriable
 
         verbose_proxy_logger.debug(
             f"{entity_name} Spend transactions: {transactions}"
@@ -886,7 +825,7 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for entity_id, response_cost in transactions.items():
+                            for entity_id, response_cost in sorted(transactions.items()):
                                 verbose_proxy_logger.debug(
                                     f"Updating spend for {entity_name} {where_field}={entity_id} by {response_cost}"
                                 )
@@ -895,17 +834,9 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if i >= n_retry_times:
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    await _handle_db_exception_retriable(
+                        e=e, i=i, n_retry_times=n_retry_times, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
     # fmt: off
@@ -971,7 +902,7 @@ class DBSpendUpdateWriter:
         """
         Generic function to update daily spend for any entity type (user, team, tag)
         """
-        from litellm.proxy.utils import _raise_failed_update_spend_exception
+        from litellm.proxy.utils import _raise_failed_update_spend_exception, _handle_db_exception_retriable
 
         verbose_proxy_logger.debug(
             f"Daily {entity_type.capitalize()} Spend transactions: {len(daily_spend_transactions)}"
@@ -984,26 +915,12 @@ class DBSpendUpdateWriter:
                 try:
                     # Sort the transactions to minimize the probability of deadlocks by reducing the chance of concurrent
                     # trasactions locking the same rows/ranges in different orders.
-                    transactions_to_process = dict(
-                        sorted(
-                            daily_spend_transactions.items(),
-                            # Normally to avoid deadlocks we would sort by the index, but since we have sprinkled indexes
-                            # on our schema like we're discount Salt Bae, we just sort by all fields that have an index,
-                            # in an ad-hoc (but hopefully sensible) order of indexes. The actual ordering matters less than
-                            # ensuring that all concurrent transactions sort in the same order.
-                            # We could in theory use the dict key, as it contains basically the same fields, but this is more
-                            # robust to future changes in the key format.
-                            # If _update_daily_spend ever gets the ability to write to multiple tables at once, the sorting
-                            # should sort by the table first.
-                            key=lambda x: (
-                                x[1]["date"],
-                                x[1].get(entity_id_field) or "",
-                                x[1]["api_key"],
-                                x[1]["model"],
-                                x[1]["custom_llm_provider"],
-                            ),
-                        )[:BATCH_SIZE]
-                    )
+                    # Normally to avoid deadlocks we would sort by the index, but since we have sprinkled indexes
+                    # on our schema like we're discount Salt Bae, we just sort by the dict key. The actual ordering
+                    # matters less than ensuring that all concurrent transactions sort in the same order.
+                    # If _update_daily_spend ever gets the ability to write to multiple tables at once, the sorting
+                    # should sort by the table first.
+                    transactions_to_process = dict(sorted(daily_spend_transactions.items())[:BATCH_SIZE])
 
                     if len(transactions_to_process) == 0:
                         verbose_proxy_logger.debug(
@@ -1122,20 +1039,9 @@ class DBSpendUpdateWriter:
 
                     break
 
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if i >= n_retry_times:
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    await asyncio.sleep(
-                        # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
-                        # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
-                        # and thus they are more likely to deadlock again.
-                        # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
-                        # repeated deadlocks, and therefore of exceeding the retry limit.
-                        random.uniform(2**i, 2 ** (i + 1))
+                except Exception as e:
+                    await _handle_db_exception_retriable(
+                        e=e, i=i, n_retry_times=n_retry_times, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
         except Exception as e:

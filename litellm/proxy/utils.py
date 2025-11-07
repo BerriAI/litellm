@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import os
+import random
 import smtplib
 import threading
 import time
@@ -3266,7 +3267,7 @@ class ProxyUpdateSpend:
                         for (
                             end_user_id,
                             response_cost,
-                        ) in end_user_list_transactions.items():
+                        ) in sorted(end_user_list_transactions.items()):
                             if litellm.max_end_user_budget is not None:
                                 pass
                             batcher.litellm_endusertable.upsert(
@@ -3282,16 +3283,9 @@ class ProxyUpdateSpend:
                             )
 
                 break
-            except DB_CONNECTION_ERROR_TYPES as e:
-                if i >= n_retry_times:  # If we've reached the maximum number of retries
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
-                    )
-                # Optionally, sleep for a bit before retrying
-                await asyncio.sleep(2**i)  # Exponential backoff
             except Exception as e:
-                _raise_failed_update_spend_exception(
-                    e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                await _handle_db_exception_retriable(
+                    e=e, i=i, n_retry_times=n_retry_times, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                 )
 
     @staticmethod
@@ -3352,12 +3346,10 @@ class ProxyUpdateSpend:
                             f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
                         )
                     break
-                except DB_CONNECTION_ERROR_TYPES:
-                    if i is None:
-                        i = 0
-                    if i >= n_retry_times:
-                        raise
-                    await asyncio.sleep(2**i)
+                except Exception as e:
+                    await _handle_db_exception_retriable(
+                        e=e, i=i, n_retry_times=n_retry_times, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    )
         except Exception as e:
             prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
                 len(logs_to_process) :
@@ -3442,6 +3434,21 @@ def _raise_failed_update_spend_exception(
         )
     )
     raise e
+
+
+async def _handle_db_exception_retriable(e: Exception, i: int, n_retry_times: int, start_time: float, proxy_logging_obj: ProxyLogging):
+    from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+    
+    if PrismaDBExceptionHandler.is_database_retriable_exception(e):
+        if i < n_retry_times:
+            await asyncio.sleep(random.uniform(2**i, 2 ** (i + 1)))  # Exponential backoff with jitter
+            return None  # continue with the next retry
+    
+    _raise_failed_update_spend_exception(
+        e=e,
+        start_time=start_time,
+        proxy_logging_obj=proxy_logging_obj,
+    )  
 
 
 def _is_projected_spend_over_limit(
