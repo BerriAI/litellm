@@ -1244,9 +1244,6 @@ def test_completion_fireworks_ai_dynamic_params(api_key, api_base):
 # @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
-        import httpx
-        import json
-        
         response_object = {
             "id": "a8f37485-026e-45da-81a9-cf0184896840",
             "model": "llama-3-sonar-small-32k-online",
@@ -1273,17 +1270,25 @@ def test_completion_perplexity_api():
             ],
         }
 
-        def mock_post(*args, **kwargs):
-            # Create a mock response
-            mock_response = MagicMock(spec=httpx.Response)
-            mock_response.status_code = 200
-            mock_response.headers = {"content-type": "application/json"}
-            mock_response.json.return_value = response_object
-            mock_response.text = json.dumps(response_object)
-            return mock_response
+        from openai import OpenAI
+        from openai.types.chat.chat_completion import ChatCompletion
 
-        # Mock at the HTTP handler level
-        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", side_effect=mock_post):
+        pydantic_obj = ChatCompletion(**response_object)
+
+        def _return_pydantic_obj(*args, **kwargs):
+            new_response = MagicMock()
+            new_response.headers = {"hello": "world"}
+
+            new_response.parse.return_value = pydantic_obj
+            return new_response
+
+        openai_client = OpenAI()
+
+        with patch.object(
+            openai_client.chat.completions.with_raw_response,
+            "create",
+            side_effect=_return_pydantic_obj,
+        ) as mock_client:
             # litellm.set_verbose= True
             messages = [
                 {"role": "system", "content": "You're a good bot"},
@@ -1297,9 +1302,10 @@ def test_completion_perplexity_api():
                 },
             ]
             response = completion(
-                model="perplexity/llama-3-sonar-small-32k-online",
+                model="mistral-7b-instruct",
                 messages=messages,
-                api_key="fake-api-key",
+                api_base="https://api.perplexity.ai",
+                client=openai_client,
             )
             print(response)
             assert hasattr(response, "citations")
