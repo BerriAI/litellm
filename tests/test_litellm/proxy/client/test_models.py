@@ -3,6 +3,7 @@ import sys
 
 import pytest
 import requests
+import responses as responses_mock
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -10,7 +11,6 @@ sys.path.insert(
 
 
 
-import responses as responses_mock
 
 from litellm.proxy.client import Client, ModelsManagementClient
 from litellm.proxy.client.exceptions import NotFoundError, UnauthorizedError

@@ -6,13 +6,13 @@ import sys
 
 import pytest
 import requests
+import responses as responses_mock
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
 
-import responses as responses_mock
 
 from litellm.proxy.client.http_client import HTTPClient
 

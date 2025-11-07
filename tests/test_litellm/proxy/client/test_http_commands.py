@@ -12,7 +12,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-import responses as responses_mock
 
 from litellm.proxy.client.cli.commands.http import http
 
