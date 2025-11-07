@@ -334,7 +334,6 @@ class PromptSecurityGuardrail(CustomGuardrail):
         )
         response.raise_for_status()
         res = response.json()
-        print("RET!!!:", res)
         result = res.get("result", {}).get("response", {})
         if result is None: # prompt can exist but be with value None!
             return {}
