@@ -1,6 +1,5 @@
-import React from "react";
 import { Select } from "antd";
-import { Text } from "@tremor/react";
+import React from "react";
 import { ENDPOINT_OPTIONS } from "./chatConstants";
 
 interface EndpointSelectorProps {
@@ -12,7 +11,6 @@ interface EndpointSelectorProps {
 const EndpointSelector: React.FC<EndpointSelectorProps> = ({ endpointType, onEndpointChange, className }) => {
   return (
     <div className={className}>
-      <Text>Endpoint Type:</Text>
       <Select
         showSearch
         value={endpointType}
