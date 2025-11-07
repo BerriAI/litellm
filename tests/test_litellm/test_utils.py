@@ -852,7 +852,7 @@ def test_get_provider_rerank_config():
     from litellm import HostedVLLMRerankConfig
     from litellm.utils import LlmProviders, ProviderConfigManager
 
-    # Test for openai provider
+    # Test for hosted_vllm provider
     config = ProviderConfigManager.get_provider_rerank_config("my_model", LlmProviders.HOSTED_VLLM, 'http://localhost', [])
     assert isinstance(config, HostedVLLMRerankConfig)
 
