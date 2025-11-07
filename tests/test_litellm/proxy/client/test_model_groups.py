@@ -9,7 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-import responses
+import responses as responses_mock
 
 from litellm.proxy.client import Client, ModelGroupsManagementClient
 from litellm.proxy.client.exceptions import UnauthorizedError
@@ -77,7 +77,7 @@ def test_info_url_variants(base_url, expected):
     assert request.url == expected
 
 
-@responses.activate
+@responses_mock.activate
 def test_info_with_mock_response(client):
     """Test the full info execution with a mocked response"""
     mock_data = {
@@ -97,8 +97,8 @@ def test_info_with_mock_response(client):
             },
         ]
     }
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         f"{client._base_url}/model_group/info",
         json=mock_data,
         status=200,
@@ -111,11 +111,11 @@ def test_info_with_mock_response(client):
     assert response[1]["model_group_name"] == "azure-group"
 
 
-@responses.activate
+@responses_mock.activate
 def test_info_unauthorized_error(client):
     """Test that info raises UnauthorizedError for 401 responses"""
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         f"{client._base_url}/model_group/info",
         status=401,
         json={"error": "Invalid API key"},
@@ -126,11 +126,11 @@ def test_info_unauthorized_error(client):
     assert exc_info.value.orig_exception.response.status_code == 401
 
 
-@responses.activate
+@responses_mock.activate
 def test_info_other_errors(client):
     """Test that info raises normal HTTPError for non-401 errors"""
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         f"{client._base_url}/model_group/info",
         status=500,
         json={"error": "Internal Server Error"},

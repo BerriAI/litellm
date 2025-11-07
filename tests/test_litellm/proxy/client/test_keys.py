@@ -9,7 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-import responses
+import responses as responses_mock
 
 from litellm.proxy.client.exceptions import UnauthorizedError
 from litellm.proxy.client.keys import KeysManagementClient
@@ -131,7 +131,7 @@ def test_list_request_all_parameters(client):
     }
 
 
-@responses.activate
+@responses_mock.activate
 def test_list_mock_response_pagination(client):
     """Test list with a mocked paginated response"""
     mock_response = {
@@ -158,8 +158,8 @@ def test_list_mock_response_pagination(client):
         }
     }
 
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         f"{client._base_url}/key/list?page=1&size=2",
         json=mock_response,
         status=200,
@@ -169,7 +169,7 @@ def test_list_mock_response_pagination(client):
     assert response == mock_response
 
 
-@responses.activate
+@responses_mock.activate
 def test_list_mock_response_filtered(client):
     """Test list with a mocked filtered response"""
     mock_response = {
@@ -186,8 +186,8 @@ def test_list_mock_response_filtered(client):
         ]
     }
 
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         f"{client._base_url}/key/list?user_id=user123&team_id=team456",
         json=mock_response,
         status=200,
@@ -197,11 +197,11 @@ def test_list_mock_response_filtered(client):
     assert response == mock_response
 
 
-@responses.activate
+@responses_mock.activate
 def test_list_unauthorized_error(client):
     """Test that list raises UnauthorizedError for 401 responses"""
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         f"{client._base_url}/key/list",
         status=401,
         json={"error": "Unauthorized"},
@@ -249,7 +249,7 @@ def test_generate_request_full(client):
     }
 
 
-@responses.activate
+@responses_mock.activate
 def test_generate_mock_response(client):
     """Test generate with a mocked successful response"""
     mock_response = {
@@ -265,8 +265,8 @@ def test_generate_mock_response(client):
         "config": {"max_parallel_requests": 5},
     }
 
-    responses.add(
-        responses.POST,
+    responses_mock.add(
+        responses_mock.POST,
         f"{client._base_url}/key/generate",
         json=mock_response,
         status=200,
@@ -282,11 +282,11 @@ def test_generate_mock_response(client):
     assert response == mock_response
 
 
-@responses.activate
+@responses_mock.activate
 def test_generate_unauthorized_error(client):
     """Test that generate raises UnauthorizedError for 401 responses"""
-    responses.add(
-        responses.POST,
+    responses_mock.add(
+        responses_mock.POST,
         f"{client._base_url}/key/generate",
         status=401,
         json={"error": "Unauthorized"},
@@ -334,7 +334,7 @@ def test_delete_request_with_keys_and_aliases(client):
     assert request.json == {"keys": keys_to_delete, "key_aliases": aliases_to_delete}
 
 
-@responses.activate
+@responses_mock.activate
 def test_delete_mock_response(client):
     """Test delete with a mocked successful response"""
     mock_response = {
@@ -342,8 +342,8 @@ def test_delete_mock_response(client):
         "deleted_keys": ["key1", "key2"],
         "deleted_aliases": ["alias1"],
     }
-    responses.add(
-        responses.POST,
+    responses_mock.add(
+        responses_mock.POST,
         f"{client._base_url}/key/delete",
         json=mock_response,
         status=200,
@@ -353,11 +353,11 @@ def test_delete_mock_response(client):
     assert response == mock_response
 
 
-@responses.activate
+@responses_mock.activate
 def test_delete_unauthorized_error(client):
     """Test that delete raises UnauthorizedError for 401 responses"""
-    responses.add(
-        responses.POST,
+    responses_mock.add(
+        responses_mock.POST,
         f"{client._base_url}/key/delete",
         status=401,
         json={"error": "Unauthorized"},
@@ -376,7 +376,7 @@ def test_info_request_minimal(client, base_url, api_key):
     assert request.headers["Authorization"] == f"Bearer {api_key}"
 
 
-@responses.activate
+@responses_mock.activate
 def test_info_mock_response(client):
     """Test info with a mocked successful response"""
     mock_response = {
@@ -386,8 +386,8 @@ def test_info_mock_response(client):
         "models": ["gpt-4"],
         "spend": 100.0,
     }
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         f"{client._base_url}/key/info?key=test-key",
         json=mock_response,
         status=200,
@@ -396,11 +396,11 @@ def test_info_mock_response(client):
     assert response == mock_response
 
 
-@responses.activate
+@responses_mock.activate
 def test_info_unauthorized_error(client):
     """Test that info raises UnauthorizedError for 401 responses"""
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         f"{client._base_url}/key/info?key=test-key",
         status=401,
         json={"error": "Unauthorized"},
@@ -409,11 +409,11 @@ def test_info_unauthorized_error(client):
         client.info(key="test-key")
 
 
-@responses.activate
+@responses_mock.activate
 def test_info_server_error(client):
     """Test that info raises HTTPError for server errors"""
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         f"{client._base_url}/key/info?key=test-key",
         status=500,
         json={"error": "Internal Server Error"},

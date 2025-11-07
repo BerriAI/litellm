@@ -9,7 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-import responses
+import responses as responses_mock
 
 from litellm.proxy.client.chat import ChatClient
 from litellm.proxy.client.exceptions import UnauthorizedError
@@ -127,7 +127,7 @@ def test_completions_all_parameters(client, sample_messages):
     }
 
 
-@responses.activate
+@responses_mock.activate
 def test_completions_mock_response(client, sample_messages):
     """Test completions with a mocked successful response"""
     mock_response = {
@@ -149,8 +149,8 @@ def test_completions_mock_response(client, sample_messages):
     }
 
     # Mock the POST request
-    responses.add(
-        responses.POST,
+    responses_mock.add(
+        responses_mock.POST,
         f"{client._base_url}/chat/completions",
         json=mock_response,
         status=200,
@@ -165,12 +165,12 @@ def test_completions_mock_response(client, sample_messages):
     )
 
 
-@responses.activate
+@responses_mock.activate
 def test_completions_unauthorized_error(client, sample_messages):
     """Test that completions raises UnauthorizedError for 401 responses"""
     # Mock a 401 response
-    responses.add(
-        responses.POST,
+    responses_mock.add(
+        responses_mock.POST,
         f"{client._base_url}/chat/completions",
         status=401,
         json={"error": "Unauthorized"},
@@ -180,12 +180,12 @@ def test_completions_unauthorized_error(client, sample_messages):
         client.completions(model="gpt-4", messages=sample_messages)
 
 
-@responses.activate
+@responses_mock.activate
 def test_completions_other_errors(client, sample_messages):
     """Test that completions raises HTTPError for other error responses"""
     # Mock a 500 response
-    responses.add(
-        responses.POST,
+    responses_mock.add(
+        responses_mock.POST,
         f"{client._base_url}/chat/completions",
         status=500,
         json={"error": "Internal Server Error"},

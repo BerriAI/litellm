@@ -12,7 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-import responses
+import responses as responses_mock
 
 from litellm.proxy.client.http_client import HTTPClient
 
@@ -26,12 +26,12 @@ def client():
     )
 
 
-@responses.activate
+@responses_mock.activate
 def test_request_get(client):
     """Test making a GET request."""
     # Mock response
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         "http://localhost:4000/models",
         json={"models": []},
         status=200,
@@ -44,17 +44,17 @@ def test_request_get(client):
     assert response == {"models": []}
 
     # Check request
-    assert len(responses.calls) == 1
-    assert responses.calls[0].request.url == "http://localhost:4000/models"
-    assert responses.calls[0].request.headers["Authorization"] == "Bearer test-key"
+    assert len(responses_mock.calls) == 1
+    assert responses_mock.calls[0].request.url == "http://localhost:4000/models"
+    assert responses_mock.calls[0].request.headers["Authorization"] == "Bearer test-key"
 
 
-@responses.activate
+@responses_mock.activate
 def test_request_post_with_json(client):
     """Test making a POST request with JSON data."""
     # Mock response
-    responses.add(
-        responses.POST,
+    responses_mock.add(
+        responses_mock.POST,
         "http://localhost:4000/models",
         json={"id": "model-123"},
         status=200,
@@ -74,17 +74,17 @@ def test_request_post_with_json(client):
     assert response == {"id": "model-123"}
 
     # Check request
-    assert len(responses.calls) == 1
-    assert responses.calls[0].request.url == "http://localhost:4000/models"
-    assert json.loads(responses.calls[0].request.body) == json_data
+    assert len(responses_mock.calls) == 1
+    assert responses_mock.calls[0].request.url == "http://localhost:4000/models"
+    assert json.loads(responses_mock.calls[0].request.body) == json_data
 
 
-@responses.activate
+@responses_mock.activate
 def test_request_with_custom_headers(client):
     """Test making a request with custom headers."""
     # Mock response
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         "http://localhost:4000/models",
         json={"models": []},
         status=200,
@@ -102,19 +102,19 @@ def test_request_with_custom_headers(client):
     )
 
     # Check request headers
-    assert len(responses.calls) == 1
-    request_headers = responses.calls[0].request.headers
+    assert len(responses_mock.calls) == 1
+    request_headers = responses_mock.calls[0].request.headers
     assert request_headers["X-Custom-Header"] == "test-value"
     assert request_headers["Accept"] == "application/json"
     assert request_headers["Authorization"] == "Bearer test-key"
 
 
-@responses.activate
+@responses_mock.activate
 def test_request_http_error(client):
     """Test handling of HTTP errors."""
     # Mock error response
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         "http://localhost:4000/models",
         json={"error": "Not authorized"},
         status=401,
@@ -127,12 +127,12 @@ def test_request_http_error(client):
     assert exc_info.value.response.status_code == 401
 
 
-@responses.activate
+@responses_mock.activate
 def test_request_invalid_json(client):
-    """Test handling of invalid JSON responses."""
+    """Test handling of invalid JSON responses_mock."""
     # Mock invalid JSON response
-    responses.add(
-        responses.GET,
+    responses_mock.add(
+        responses_mock.GET,
         "http://localhost:4000/models",
         body="not json",
         status=200,
@@ -156,10 +156,10 @@ def test_uri_leading_slash():
     """Test that URIs with and without leading slashes work."""
     client = HTTPClient(base_url="http://localhost:4000")
 
-    with responses.RequestsMock() as rsps:
+    with responses_mock.RequestsMock() as rsps:
         # Mock endpoint
         rsps.add(
-            responses.GET,
+            responses_mock.GET,
             "http://localhost:4000/models",
             json={"models": []},
         )
