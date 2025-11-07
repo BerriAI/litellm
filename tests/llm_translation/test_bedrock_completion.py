@@ -2341,7 +2341,7 @@ def test_bedrock_custom_continue_message():
 
 def test_bedrock_no_default_message():
     """
-    Test that empty content is handled correctly when modify_params=False
+    Test that empty content is preserved when modify_params=False
     """
     messages = [
         {"role": "user", "content": "Hello!"},
