@@ -5027,12 +5027,12 @@ async def embeddings(  # noqa: PLR0915
             and isinstance(data["input"], list)
             and len(data["input"]) > 0
             and isinstance(data["input"][0], list)
-            and isinstance(data["input"][0][0], int)
+            and all(isinstance(token, int) for token in data["input"][0])
         ):  # check if array of tokens passed in
             # check if provider accept list of tokens as input - e.g. for langchain integration
             if llm_router is not None and data.get("model") in router_model_names:
                 # Use router's O(1) lookup instead of O(N) iteration through llm_model_list
-                deployment = llm_router.get_deployment(model_name=data["model"])
+                deployment = llm_router.get_deployment(model_id=data["model"])
                 if deployment is not None:
                     litellm_model = deployment.get("litellm_params", {}).get("model", "")
                     # Check if this provider supports token arrays

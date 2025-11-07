@@ -379,8 +379,12 @@ class ProxyBaseLLMRequestProcessing:
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
+        if route_type == "aembedding":
+            _original_function = "embedding"
+        else:
+            _original_function = route_type
         logging_obj, self.data = litellm.utils.function_setup(
-            original_function=route_type,
+            original_function=_original_function,
             rules_obj=litellm.utils.Rules(),
             start_time=start_time,
             **self.data,
