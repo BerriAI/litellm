@@ -193,7 +193,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             if match:
                 matched_text = match.group(0)
                 verbose_proxy_logger.debug(
-                    f"Pattern '{pattern_name}' matched."
+                    f"Pattern '{pattern_name}' matched: {matched_text[:20]}..."
                 )
                 return (matched_text, pattern_name, action)
         return None
@@ -365,4 +365,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug(
             "ContentFilterGuardrail: Streaming check completed"
         )
+    
+    @staticmethod
+    def get_config_model():
+        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+            LitellmContentFilterGuardrailConfigModel,
+        )
+
+        return LitellmContentFilterGuardrailConfigModel
 

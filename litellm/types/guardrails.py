@@ -676,6 +676,7 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_actions: List[str]
     supported_modes: List[str]
     pii_entity_categories: List[PiiEntityCategoryMap]
+    content_filter_settings: Optional[Dict[str, Any]] = None
 
 
 class PresidioPerRequestConfig(BaseModel):

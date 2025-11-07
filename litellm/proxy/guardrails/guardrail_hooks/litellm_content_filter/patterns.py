@@ -6,7 +6,8 @@ like SSNs, credit cards, API keys, etc.
 """
 
 import re
-from typing import Dict, Pattern
+from enum import Enum
+from typing import Dict, List, Pattern
 
 # US Social Security Number patterns
 US_SSN_PATTERN = r"\b\d{3}-\d{2}-\d{4}\b"  # Format: 123-45-6789
@@ -39,33 +40,63 @@ IPV6_PATTERN = r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b"
 URL_PATTERN = r"\b(?:https?://|www\.)[^\s/$.?#].[^\s]*\b"
 
 
-PREBUILT_PATTERNS: Dict[str, str] = {
+class PrebuiltPatternName(str, Enum):
+    """Enum for prebuilt pattern names"""
     # SSN patterns
-    "us_ssn": US_SSN_PATTERN,
-    "us_ssn_no_dash": US_SSN_NO_DASH_PATTERN,
+    US_SSN = "us_ssn"
+    US_SSN_NO_DASH = "us_ssn_no_dash"
     
     # Credit card patterns
-    "visa": VISA_PATTERN,
-    "mastercard": MASTERCARD_PATTERN,
-    "amex": AMEX_PATTERN,
-    "discover": DISCOVER_PATTERN,
-    "credit_card": rf"(?:{VISA_PATTERN}|{MASTERCARD_PATTERN}|{AMEX_PATTERN}|{DISCOVER_PATTERN})",
+    VISA = "visa"
+    MASTERCARD = "mastercard"
+    AMEX = "amex"
+    DISCOVER = "discover"
+    CREDIT_CARD = "credit_card"
     
     # Contact information
-    "email": EMAIL_PATTERN,
-    "us_phone": US_PHONE_PATTERN,
+    EMAIL = "email"
+    US_PHONE = "us_phone"
     
     # API keys and secrets
-    "aws_access_key": AWS_ACCESS_KEY_PATTERN,
-    "aws_secret_key": AWS_SECRET_KEY_PATTERN,
-    "github_token": GITHUB_TOKEN_PATTERN,
-    "slack_token": SLACK_TOKEN_PATTERN,
-    "generic_api_key": GENERIC_API_KEY_PATTERN,
+    AWS_ACCESS_KEY = "aws_access_key"
+    AWS_SECRET_KEY = "aws_secret_key"
+    GITHUB_TOKEN = "github_token"
+    SLACK_TOKEN = "slack_token"
+    GENERIC_API_KEY = "generic_api_key"
     
     # Network identifiers
-    "ipv4": IPV4_PATTERN,
-    "ipv6": IPV6_PATTERN,
-    "url": URL_PATTERN,
+    IPV4 = "ipv4"
+    IPV6 = "ipv6"
+    URL = "url"
+
+
+PREBUILT_PATTERNS: Dict[str, str] = {
+    # SSN patterns
+    PrebuiltPatternName.US_SSN.value: US_SSN_PATTERN,
+    PrebuiltPatternName.US_SSN_NO_DASH.value: US_SSN_NO_DASH_PATTERN,
+    
+    # Credit card patterns
+    PrebuiltPatternName.VISA.value: VISA_PATTERN,
+    PrebuiltPatternName.MASTERCARD.value: MASTERCARD_PATTERN,
+    PrebuiltPatternName.AMEX.value: AMEX_PATTERN,
+    PrebuiltPatternName.DISCOVER.value: DISCOVER_PATTERN,
+    PrebuiltPatternName.CREDIT_CARD.value: rf"(?:{VISA_PATTERN}|{MASTERCARD_PATTERN}|{AMEX_PATTERN}|{DISCOVER_PATTERN})",
+    
+    # Contact information
+    PrebuiltPatternName.EMAIL.value: EMAIL_PATTERN,
+    PrebuiltPatternName.US_PHONE.value: US_PHONE_PATTERN,
+    
+    # API keys and secrets
+    PrebuiltPatternName.AWS_ACCESS_KEY.value: AWS_ACCESS_KEY_PATTERN,
+    PrebuiltPatternName.AWS_SECRET_KEY.value: AWS_SECRET_KEY_PATTERN,
+    PrebuiltPatternName.GITHUB_TOKEN.value: GITHUB_TOKEN_PATTERN,
+    PrebuiltPatternName.SLACK_TOKEN.value: SLACK_TOKEN_PATTERN,
+    PrebuiltPatternName.GENERIC_API_KEY.value: GENERIC_API_KEY_PATTERN,
+    
+    # Network identifiers
+    PrebuiltPatternName.IPV4.value: IPV4_PATTERN,
+    PrebuiltPatternName.IPV6.value: IPV6_PATTERN,
+    PrebuiltPatternName.URL.value: URL_PATTERN,
 }
 
 
@@ -100,4 +131,77 @@ def get_all_pattern_names():
         List of pattern names
     """
     return list(PREBUILT_PATTERNS.keys())
+
+
+# Pattern categories for UI organization
+PATTERN_CATEGORIES: Dict[str, List[str]] = {
+    "PII Patterns": [
+        PrebuiltPatternName.US_SSN.value,
+        PrebuiltPatternName.EMAIL.value,
+        PrebuiltPatternName.US_PHONE.value,
+    ],
+    "Payment Card Patterns": [
+        PrebuiltPatternName.VISA.value,
+        PrebuiltPatternName.MASTERCARD.value,
+        PrebuiltPatternName.AMEX.value,
+        PrebuiltPatternName.DISCOVER.value,
+        PrebuiltPatternName.CREDIT_CARD.value,
+    ],
+    "Credential Patterns": [
+        PrebuiltPatternName.AWS_ACCESS_KEY.value,
+        PrebuiltPatternName.AWS_SECRET_KEY.value,
+        PrebuiltPatternName.GITHUB_TOKEN.value,
+        PrebuiltPatternName.SLACK_TOKEN.value,
+        PrebuiltPatternName.GENERIC_API_KEY.value,
+    ],
+    "Network Patterns": [
+        PrebuiltPatternName.IPV4.value,
+        PrebuiltPatternName.IPV6.value,
+        PrebuiltPatternName.URL.value,
+    ],
+}
+
+
+# Pattern descriptions for UI display
+PATTERN_DESCRIPTIONS: Dict[str, str] = {
+    PrebuiltPatternName.US_SSN.value: "Detects US Social Security Numbers (XXX-XX-XXXX format)",
+    PrebuiltPatternName.US_SSN_NO_DASH.value: "Detects US SSN without dashes (XXXXXXXXX format)",
+    PrebuiltPatternName.EMAIL.value: "Detects email addresses",
+    PrebuiltPatternName.US_PHONE.value: "Detects US phone numbers in various formats",
+    PrebuiltPatternName.VISA.value: "Detects Visa credit card numbers",
+    PrebuiltPatternName.MASTERCARD.value: "Detects Mastercard credit card numbers",
+    PrebuiltPatternName.AMEX.value: "Detects American Express credit card numbers",
+    PrebuiltPatternName.DISCOVER.value: "Detects Discover credit card numbers",
+    PrebuiltPatternName.CREDIT_CARD.value: "Detects any major credit card number",
+    PrebuiltPatternName.AWS_ACCESS_KEY.value: "Detects AWS access keys (AKIA...)",
+    PrebuiltPatternName.AWS_SECRET_KEY.value: "Detects AWS secret keys (40 characters)",
+    PrebuiltPatternName.GITHUB_TOKEN.value: "Detects GitHub personal access tokens",
+    PrebuiltPatternName.SLACK_TOKEN.value: "Detects Slack API tokens",
+    PrebuiltPatternName.GENERIC_API_KEY.value: "Detects generic API key patterns",
+    PrebuiltPatternName.IPV4.value: "Detects IPv4 addresses",
+    PrebuiltPatternName.IPV6.value: "Detects IPv6 addresses",
+    PrebuiltPatternName.URL.value: "Detects URLs (http/https)",
+}
+
+
+def get_pattern_metadata() -> List[Dict[str, str]]:
+    """
+    Return pattern metadata for UI display.
+    
+    Returns:
+        List of dictionaries containing pattern name, category, and description
+    """
+    prebuilt_patterns = []
+    for category, pattern_names in PATTERN_CATEGORIES.items():
+        for pattern_name in pattern_names:
+            if pattern_name in PREBUILT_PATTERNS:
+                prebuilt_patterns.append({
+                    "name": pattern_name,
+                    "category": category,
+                    "description": PATTERN_DESCRIPTIONS.get(
+                        pattern_name,
+                        f"Detects {pattern_name.replace('_', ' ').title()}"
+                    ),
+                })
+    return prebuilt_patterns
 
