@@ -585,7 +585,7 @@ async def test_e2e_generate_cold_storage_object_key_successful():
         # Verify the S3 function was called with correct parameters
         mock_get_s3_key.assert_called_once_with(
             s3_path="",  # Empty path as default
-            team_alias_prefix="",  # No team alias prefix for cold storage
+            prefix="",  # No prefix for cold storage
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
         )
