@@ -58,7 +58,7 @@ interface AlertingVariables {
 
 interface AlertingObject {
   name: string;
-  type?: "success" | "failure" | "generic";
+  type?: "success" | "failure" | "success_and_failure";
   variables: AlertingVariables;
 }
 
@@ -430,15 +430,22 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                         const tooltipMessage =
                           callback.type === "failure"
                             ? "Modifications and deletion of failure type callbacks are not yet supported in the UI"
-                            : callback.type === "generic"
-                              ? "Modifications and deletion of generic type callbacks are not yet supported in the UI"
+                            : callback.type === "success_and_failure"
+                              ? "Modifications and deletion of success and failure type callbacks are not yet supported in the UI"
                               : "";
 
                         const getBadgeColor = (type?: string) => {
                           if (type === "success") return "green";
                           if (type === "failure") return "red";
-                          if (type === "generic") return "blue";
+                          if (type === "success_and_failure") return "blue";
                           return "gray";
+                        };
+
+                        const getBadgeLabel = (type?: string) => {
+                          if (type === "success") return "Success Only";
+                          if (type === "failure") return "Failure Only";
+                          if (type === "success_and_failure") return "Success & Failure";
+                          return "Unknown";
                         };
 
                         return (
@@ -448,9 +455,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                             </TableCell>
                             <TableCell>
                               {callback.type ? (
-                                <Badge color={getBadgeColor(callback.type)}>{callback.type}</Badge>
+                                <Badge color={getBadgeColor(callback.type)}>{getBadgeLabel(callback.type)}</Badge>
                               ) : (
-                                <Badge color="gray">success</Badge>
+                                <Badge color="gray">Unknown</Badge>
                               )}
                             </TableCell>
                             <TableCell>
