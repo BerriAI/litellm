@@ -796,19 +796,16 @@ def test_gpt_5_reasoning_streaming():
         stream=True,
     )
 
-    has_reasoning_content = False
+    has_content = False
     for chunk in response:
         print("chunk: ", chunk)
-        if (
-            hasattr(chunk.choices[0].delta, "reasoning_content")
-            and chunk.choices[0].delta.reasoning_content is not None
-        ):
-            print("reasoning_content: ", chunk.choices[0].delta.reasoning_content)
-            has_reasoning_content = True
+        if chunk.choices[0].delta.content:
+            has_content = True
+            print("content: ", chunk.choices[0].delta.content)
 
-    assert has_reasoning_content
+    assert has_content
 
-    print("✓ gpt_5_reasoning_streaming correctly handled reasoning content")
+    print("✓ gpt_5_reasoning_streaming correctly handled streaming")
 
 
 def test_gpt_5_pro_reasoning():
@@ -824,7 +821,8 @@ def test_gpt_5_pro_reasoning():
         reasoning_effort="high",
     )
     print("response: ", response)
-    assert response.choices[0].message.reasoning_content is not None
+    # reasoning_effort string param does not request summaries (opt-in since #16210)
+    assert response.choices[0].message.content is not None  # But we should get content
 
 
 def test_openai_gpt_5_codex_reasoning():
