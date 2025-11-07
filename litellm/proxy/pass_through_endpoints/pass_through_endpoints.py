@@ -942,10 +942,14 @@ async def _parse_request_data_by_content_type(
 
     if "application/json" in content_type:
         # ✅ Handle JSON
-        body = await request.json()
-        query_params_data = body.get("query_params")
-        custom_body_data = body.get("custom_body")
-        stream = body.get("stream")
+        try:
+            body = await request.json()
+            query_params_data = body.get("query_params")
+            custom_body_data = body.get("custom_body")
+            stream = body.get("stream")
+        except json.JSONDecodeError:
+            # Handle requests with no body (e.g., DELETE requests)
+            pass
     elif "multipart/form-data" in content_type:
         # ✅ Handle multipart form-data
         form = await request.form()
