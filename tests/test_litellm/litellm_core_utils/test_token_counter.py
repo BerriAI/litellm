@@ -631,3 +631,171 @@ def test_bad_input_token_counter(model, messages):
         messages=messages,
         default_token_count=1000,
     )
+
+
+def test_token_counter_with_anthropic_tool_use():
+    """
+    Test token counting with Anthropic tool_use content blocks.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather in San Francisco?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll check the weather for you."
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234567890",
+                    "name": "get_weather",
+                    "input": {
+                        "location": "San Francisco, CA",
+                        "unit": "fahrenheit"
+                    }
+                }
+            ]
+        }
+    ]
+    
+    # Should not raise an error
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    assert tokens > 10, f"Expected reasonable token count for message with tool_use, got {tokens}"
+
+
+def test_token_counter_with_anthropic_tool_result():
+    """
+    Test token counting with Anthropic tool_result content blocks.
+    
+    This tests the fix for the issue where Claude Code sends requests with
+    tool_result content blocks that were causing "Invalid content type" errors.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather in San Francisco?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234567890",
+                    "name": "get_weather",
+                    "input": {
+                        "location": "San Francisco, CA"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234567890",
+                    "content": "The weather in San Francisco is 65°F and sunny."
+                }
+            ]
+        }
+    ]
+    
+    # Should not raise an error
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    assert tokens > 20, f"Expected reasonable token count for conversation with tool_result, got {tokens}"
+
+
+def test_token_counter_with_nested_tool_result():
+    """
+    Test token counting with Anthropic tool_result containing nested content list.
+    
+    tool_result can have content as either a string or a list of content blocks.
+    This tests the nested list case.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234567890",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "The weather in San Francisco is 65°F and sunny."
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+    
+    # Should not raise an error and should recursively count tokens
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    assert tokens > 10, f"Expected reasonable token count for nested tool_result, got {tokens}"
+
+
+def test_token_counter_tool_use_and_result_combined():
+    """
+    Test a realistic conversation flow with both tool_use and tool_result.
+    
+    This simulates what Claude Code would send when using tools.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather in San Francisco and New York?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll check the weather in both cities for you."
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01A",
+                    "name": "get_weather",
+                    "input": {"location": "San Francisco, CA"}
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01B",
+                    "name": "get_weather",
+                    "input": {"location": "New York, NY"}
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": "San Francisco: 65°F, sunny"
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01B",
+                    "content": "New York: 45°F, cloudy"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": "The weather in San Francisco is 65°F and sunny, while New York is cooler at 45°F and cloudy."
+        }
+    ]
+    
+    # Should handle the full conversation with multiple tool uses and results
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    assert tokens > 50, f"Expected substantial token count for full tool conversation, got {tokens}"

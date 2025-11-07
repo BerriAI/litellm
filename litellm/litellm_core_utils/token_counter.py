@@ -593,6 +593,27 @@ def _count_content_list(
                     raise ValueError(
                         f"Invalid image_url type: {type(c['image_url'])}. Expected str or dict."
                     )
+            elif c["type"] == "tool_use":
+                # Handle Anthropic tool_use content blocks
+                # Count tokens for tool name and input (serialized as JSON)
+                tool_name = c.get("name", "")
+                tool_input = c.get("input", {})
+                num_tokens += count_function(tool_name)
+                num_tokens += count_function(str(tool_input))
+            elif c["type"] == "tool_result":
+                # Handle Anthropic tool_result content blocks
+                # tool_result can have content as a string or list of content blocks
+                content = c.get("content", "")
+                if isinstance(content, str):
+                    num_tokens += count_function(content)
+                elif isinstance(content, list):
+                    # Recursively count tokens in nested content list
+                    num_tokens += _count_content_list(
+                        count_function,
+                        content,
+                        use_default_image_token_count,
+                        default_token_count,
+                    )
             else:
                 raise ValueError(
                     f"Invalid content type: {type(c)}. Expected str or dict."
