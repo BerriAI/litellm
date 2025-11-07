@@ -4952,9 +4952,13 @@ def _get_model_info_helper(  # noqa: PLR0915
                 cache_creation_input_token_cost=_model_info.get(
                     "cache_creation_input_token_cost", None
                 ),
+                cache_creation_input_token_cost_above_200k_tokens=_model_info.get(
+                    "cache_creation_input_token_cost_above_200k_tokens", None
+                ),
                 cache_read_input_token_cost=_model_info.get(
                     "cache_read_input_token_cost", None
                 ),
+<<<<<<< HEAD
                 cache_read_input_token_cost_flex=_model_info.get(
                     "cache_read_input_token_cost_flex", None
                 ),
@@ -4963,6 +4967,11 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
+||||||| parent of b6c8bd386f (Fix)
+=======
+                cache_read_input_token_cost_above_200k_tokens=_model_info.get(
+                    "cache_read_input_token_cost_above_200k_tokens", None
+>>>>>>> b6c8bd386f (Fix)
                 ),
                 input_cost_per_character=_model_info.get(
                     "input_cost_per_character", None
