@@ -120,5 +120,6 @@ def get_litellm_params(
         "vertex_project": kwargs.get("vertex_project"),
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
+        "aws_region_name": kwargs.get("aws_region_name"),
     }
     return litellm_params
