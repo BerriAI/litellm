@@ -237,6 +237,7 @@ def init_bedrock_client(
             "sts",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            verify=ssl_verify
         )
 
         sts_response = sts_client.assume_role(
