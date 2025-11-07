@@ -2,11 +2,11 @@
 Handles the chat completion request for ZAI
 """
 
-from typing import Callable, List, Optional, Union, cast, Any
+from typing import Callable, Optional, Union, Any
 from httpx._config import Timeout
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.openai import AllMessageValues
+
 from litellm.types.utils import CustomStreamingDecoder
 from litellm.utils import ModelResponse
 

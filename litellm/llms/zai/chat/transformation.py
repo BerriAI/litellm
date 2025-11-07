@@ -1,32 +1,50 @@
 # File: litellm/llms/zai/chat/transformation.py
 
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Union
 import os
-import json
+import httpx
+
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
 from litellm.types.utils import ModelResponse, Usage, Choices, Message
 from litellm.utils import token_counter
 
 
 class ZaiError(BaseLLMException):
     """Base error class for Zai API exceptions."""
-    pass
+
+    def __init__(
+        self, status_code: int, message: str, headers: Union[dict, httpx.Headers]
+    ):
+        super().__init__(status_code=status_code, message=message, headers=headers)
+        self.llm_provider = "zai"
 
 
 class ZaiAuthenticationError(ZaiError):
     """Authentication error for Zai API."""
-    pass
+
+    def __init__(
+        self, status_code: int, message: str, headers: Union[dict, httpx.Headers]
+    ):
+        super().__init__(status_code, message, headers)
 
 
 class ZaiBadRequestError(ZaiError):
     """Bad request error for Zai API."""
-    pass
+
+    def __init__(
+        self, status_code: int, message: str, headers: Union[dict, httpx.Headers]
+    ):
+        super().__init__(status_code, message, headers)
 
 
 class ZaiRateLimitError(ZaiError):
     """Rate limit error for Zai API."""
-    pass
+
+    def __init__(
+        self, status_code: int, message: str, headers: Union[dict, httpx.Headers]
+    ):
+        super().__init__(status_code, message, headers)
 
 
 class ZaiChatConfig(BaseConfig):
@@ -42,7 +60,7 @@ class ZaiChatConfig(BaseConfig):
         """
         return [
             "logit_bias",
-            "logprobs", 
+            "logprobs",
             "max_tokens",
             "n",
             "presence_penalty",
@@ -94,7 +112,7 @@ class ZaiChatConfig(BaseConfig):
         zai_model = model.replace("zai/", "")
         if zai_model.startswith("zai-org/"):
             zai_model = zai_model.replace("zai-org/", "")
-        
+
         payload = {
             "model": zai_model,
             "messages": messages,
@@ -108,9 +126,17 @@ class ZaiChatConfig(BaseConfig):
             litellm_params.pop("reasoning_tokens", None)
 
         # ✅ PRESERVE TOOLS - Pass through directly without popping
-        TOOL_PARAMS = ["tools", "tool_choice", "temperature", "max_tokens", 
-                       "top_p", "stream", "stop", "parallel_tool_calls"]
-        
+        TOOL_PARAMS = [
+            "tools",
+            "tool_choice",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stream",
+            "stop",
+            "parallel_tool_calls",
+        ]
+
         for param in TOOL_PARAMS:
             if param in optional_params:
                 payload[param] = optional_params[param]
@@ -142,11 +168,11 @@ class ZaiChatConfig(BaseConfig):
         """
         try:
             # Handle different raw_response formats
-            if hasattr(raw_response, 'json'):
+            if hasattr(raw_response, "json"):
                 completion_response = raw_response.json()
             else:
                 completion_response = raw_response
-            
+
             # Extract message info
             choice = completion_response.get("choices", [{}])[0]
             message = choice.get("message", {})
@@ -154,7 +180,7 @@ class ZaiChatConfig(BaseConfig):
 
             # ✅ PRIORITY 1: Extract tool calls first
             tool_calls = message.get("tool_calls")
-            
+
             if tool_calls:
                 # Tool calling response - prioritize tool_calls over content
                 message_obj = Message(
@@ -166,7 +192,7 @@ class ZaiChatConfig(BaseConfig):
                 # Regular or reasoning response
                 content = message.get("content", "")
                 reasoning_content = message.get("reasoning_content", "")
-                
+
                 message_obj = Message(
                     role=message.get("role", "assistant"),
                     content=content,
@@ -178,18 +204,17 @@ class ZaiChatConfig(BaseConfig):
             prompt_tokens = usage_data.get("prompt_tokens", 0)
             completion_tokens = usage_data.get("completion_tokens", 0)
             total_tokens = usage_data.get("total_tokens", 0)
-            
+
             # Calculate reasoning tokens if present
             reasoning_tokens = 0
             reasoning_content = message.get("reasoning_content", "")
-            
+
             if reasoning_content:
                 try:
                     reasoning_tokens = token_counter(
-                        text=reasoning_content,
-                        model="zai/glm-4.6"
+                        text=reasoning_content, model="zai/glm-4.6"
                     )
-                except:
+                except Exception:
                     reasoning_tokens = max(1, len(reasoning_content) // 4)
 
             # Create usage object with reasoning tokens
@@ -257,31 +282,25 @@ class ZaiChatConfig(BaseConfig):
             return f"{api_base}/chat/completions"
         return "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
         """
         Returns a specific exception class based on the error message and status code.
         """
         if status_code == 401:
             return ZaiAuthenticationError(
-                status_code=status_code,
-                message=error_message,
-                headers=headers
+                status_code=status_code, message=error_message, headers=headers
             )
         elif status_code == 400:
             return ZaiBadRequestError(
-                status_code=status_code,
-                message=error_message,
-                headers=headers
+                status_code=status_code, message=error_message, headers=headers
             )
         elif status_code == 429:
             return ZaiRateLimitError(
-                status_code=status_code,
-                message=error_message,
-                headers=headers
+                status_code=status_code, message=error_message, headers=headers
             )
         else:
             return ZaiError(
-                status_code=status_code,
-                message=error_message,
-                headers=headers
+                status_code=status_code, message=error_message, headers=headers
             )
