@@ -3,6 +3,7 @@ from typing import Any, Dict, cast, get_type_hints
 import litellm
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
+from litellm.utils import filter_out_litellm_params
 
 
 class VideoGenerationRequestUtils:
@@ -56,8 +57,44 @@ class VideoGenerationRequestUtils:
         Returns:
             VideoCreateOptionalRequestParams instance with only the valid parameters
         """
-        filtered_params = {
-            k: v for k, v in params.items() if v is not None
+        params = dict(params or {})
+
+        raw_kwargs = params.get("kwargs", {})
+        if not isinstance(raw_kwargs, dict):
+            raw_kwargs = {}
+
+        kwargs_extra_body = raw_kwargs.pop("extra_body", None)
+        top_level_extra_body = params.get("extra_body")
+
+        base_params_raw = {
+            key: value
+            for key, value in params.items()
+            if key not in {"kwargs", "extra_body", "prompt", "model"} and value is not None
+        }
+        base_params = filter_out_litellm_params(kwargs=base_params_raw)
+
+        cleaned_kwargs = filter_out_litellm_params(
+            kwargs={k: v for k, v in raw_kwargs.items() if v is not None}
+        )
+
+        optional_params: Dict[str, Any] = {
+            **base_params,
+            **cleaned_kwargs,
         }
 
-        return cast(VideoCreateOptionalRequestParams, filtered_params)
+        merged_extra_body: Dict[str, Any] = {}
+        for extra_body_candidate in (top_level_extra_body, kwargs_extra_body):
+            if isinstance(extra_body_candidate, dict):
+                for key, value in extra_body_candidate.items():
+                    if value is not None:
+                        merged_extra_body[key] = value
+
+        if merged_extra_body:
+            merged_extra_body = filter_out_litellm_params(kwargs=merged_extra_body)
+            if merged_extra_body:
+                optional_params["extra_body"] = merged_extra_body
+                optional_params.update(merged_extra_body)
+
+        optional_params.pop("timeout", None)
+
+        return cast(VideoCreateOptionalRequestParams, optional_params)

@@ -106,7 +106,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         # Remove model and extra_headers from optional params as they're handled separately
         video_create_optional_request_params = {
             k: v for k, v in video_create_optional_request_params.items()
-            if k not in ["model", "extra_headers"]
+            if k not in ["model", "extra_headers", "prompt"]
         }
         
         # Create the request data

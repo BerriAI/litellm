@@ -25,7 +25,6 @@ LiteLLM supports Azure OpenAI's video generation models including Sora with full
 import os 
 os.environ["AZURE_OPENAI_API_KEY"] = "your-azure-api-key"
 os.environ["AZURE_OPENAI_API_BASE"] = "https://your-resource.openai.azure.com/"
-os.environ["AZURE_OPENAI_API_VERSION"] = "2024-02-15-preview"
 ```
 
 ### Basic Usage
@@ -37,7 +36,6 @@ import time
 
 os.environ["AZURE_OPENAI_API_KEY"] = "your-azure-api-key"
 os.environ["AZURE_OPENAI_API_BASE"] = "https://your-resource.openai.azure.com/"
-os.environ["AZURE_OPENAI_API_VERSION"] = "2024-02-15-preview"
 
 # Generate video
 response = video_generation(
@@ -85,7 +83,6 @@ Here's how to call Azure video generation models with the LiteLLM Proxy Server
 ```bash
 export AZURE_OPENAI_API_KEY="your-azure-api-key"
 export AZURE_OPENAI_API_BASE="https://your-resource.openai.azure.com/"
-export AZURE_OPENAI_API_VERSION="2024-02-15-preview"
 ```
 
 ### 2. Start the proxy 
@@ -100,7 +97,6 @@ model_list:
       model: azure/sora-2
       api_key: os.environ/AZURE_OPENAI_API_KEY
       api_base: os.environ/AZURE_OPENAI_API_BASE
-      api_version: "2024-02-15-preview"
 ```
 
 </TabItem>
