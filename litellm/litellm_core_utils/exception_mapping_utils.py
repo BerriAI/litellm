@@ -69,6 +69,7 @@ class ExceptionCheckers:
             "model's maximum context limit",
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
+            "input length and `max_tokens` exceed context limit",
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
