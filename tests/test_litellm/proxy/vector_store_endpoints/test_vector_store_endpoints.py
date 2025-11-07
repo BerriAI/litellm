@@ -351,6 +351,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
 
         # Mock user API key with permissions
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {
             "allowed_vector_store_indexes": [
                 {"index_name": "my-index", "index_permissions": ["read"]}
@@ -387,6 +388,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
 
         # Mock user API key with permissions
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {
             "allowed_vector_store_indexes": [
                 {"index_name": "my-index", "index_permissions": ["write"]}
@@ -423,6 +425,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
 
         # Mock user API key with only read permissions
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {
             "allowed_vector_store_indexes": [
                 {"index_name": "my-index", "index_permissions": ["read"]}
@@ -458,6 +461,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         mock_request.url.path = "/v1/vector_stores/my-index/search"
 
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {}
         mock_user_api_key.team_metadata = None
 
@@ -482,6 +486,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         mock_request.url.path = "/v1/vector_stores/my-index/unknown"
 
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {
             "allowed_vector_store_indexes": [
                 {"index_name": "my-index", "index_permissions": ["read", "write"]}
@@ -518,6 +523,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
 
         # Mock user API key with no key metadata but team metadata
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = None
         mock_user_api_key.team_metadata = {
             "allowed_vector_store_indexes": [
@@ -553,6 +559,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         mock_request.url.path = "/v1/vector_stores/my-index/search"
 
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {}
         mock_user_api_key.team_metadata = {}
 
