@@ -153,6 +153,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -9575,35 +9576,7 @@ async def get_config():  # noqa: PLR0915
         # Helper function to process callbacks and get environment variables
         def process_callback(_callback: str, callback_type: str) -> dict:
             """Process a single callback and return its data with environment variables"""
-            if _callback == "langfuse" or _callback == "langfuse_otel":
-                env_vars = [
-                    "LANGFUSE_PUBLIC_KEY",
-                    "LANGFUSE_SECRET_KEY",
-                    "LANGFUSE_HOST",
-                ]
-            elif _callback == "openmeter":
-                env_vars = [
-                    "OPENMETER_API_KEY",
-                ]
-            elif _callback == "braintrust":
-                env_vars = [
-                    "BRAINTRUST_API_KEY",
-                    "BRAINTRUST_API_BASE",
-                ]
-            elif _callback == "traceloop":
-                env_vars = ["TRACELOOP_API_KEY"]
-            elif _callback == "custom_callback_api":
-                env_vars = ["GENERIC_LOGGER_ENDPOINT"]
-            elif _callback == "otel":
-                env_vars = ["OTEL_EXPORTER", "OTEL_ENDPOINT", "OTEL_HEADERS"]
-            elif _callback == "langsmith":
-                env_vars = [
-                    "LANGSMITH_API_KEY",
-                    "LANGSMITH_PROJECT",
-                    "LANGSMITH_DEFAULT_RUN_NAME",
-                ]
-            else:
-                env_vars = []
+            env_vars = CustomLogger.get_callback_env_vars(_callback)
 
             env_vars_dict = {}
             for _var in env_vars:
@@ -9625,7 +9598,7 @@ async def get_config():  # noqa: PLR0915
 
         _success_callbacks = _litellm_settings.get("success_callback", [])
         _failure_callbacks = _litellm_settings.get("failure_callback", [])
-        _generic_callbacks = _litellm_settings.get("callbacks", [])
+        _success_and_failure_callbacks = _litellm_settings.get("callbacks", [])
         
         _data_to_return = []
         """
@@ -9649,8 +9622,8 @@ async def get_config():  # noqa: PLR0915
         for _callback in _failure_callbacks:
             _data_to_return.append(process_callback(_callback, "failure"))
         
-        for _callback in _generic_callbacks:
-            _data_to_return.append(process_callback(_callback, "generic"))
+        for _callback in _success_and_failure_callbacks:
+            _data_to_return.append(process_callback(_callback, "success_and_failure"))
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
