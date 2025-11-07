@@ -255,10 +255,13 @@ async def test_bedrock_guardrail_status_blocked():
     # Verify the standard logging payload was captured
     assert test_custom_logger.standard_logging_payload is not None
     assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
+    assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
     
-    # Verify guardrail information fields
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "guardrail_intervened"
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "bedrock"
+    # Verify guardrail information fields (guardrail_information is now a list)
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
+    assert guardrail_info["guardrail_status"] == "guardrail_intervened"
+    assert guardrail_info["guardrail_provider"] == "bedrock"
     
     # Verify the new typed status fields
     # guardrail_status should be "guardrail_intervened" when content is blocked
@@ -334,8 +337,12 @@ async def test_bedrock_guardrail_status_success():
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
     assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "success"
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "bedrock"
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
+    assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
+    
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
+    assert guardrail_info["guardrail_status"] == "success"
+    assert guardrail_info["guardrail_provider"] == "bedrock"
     
     # Check status fields
     status_fields = test_custom_logger.standard_logging_payload.get("status_fields", {})
@@ -410,8 +417,12 @@ async def test_bedrock_guardrail_status_failure():
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
     assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "guardrail_failed_to_respond"
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "bedrock"
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
+    assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
+    
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
+    assert guardrail_info["guardrail_status"] == "guardrail_failed_to_respond"
+    assert guardrail_info["guardrail_provider"] == "bedrock"
     
     # Check status fields
     status_fields = test_custom_logger.standard_logging_payload.get("status_fields", {})
@@ -490,8 +501,12 @@ async def test_noma_guardrail_status_blocked():
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
     assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "guardrail_intervened"
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "noma"
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
+    assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
+    
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
+    assert guardrail_info["guardrail_status"] == "guardrail_intervened"
+    assert guardrail_info["guardrail_provider"] == "noma"
     
     # Check status fields
     status_fields = test_custom_logger.standard_logging_payload.get("status_fields", {})
@@ -562,8 +577,12 @@ async def test_noma_guardrail_status_success():
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
     assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "success"
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "noma"
+    assert isinstance(test_custom_logger.standard_logging_payload["guardrail_information"], list)
+    assert len(test_custom_logger.standard_logging_payload["guardrail_information"]) > 0
+    
+    guardrail_info = test_custom_logger.standard_logging_payload["guardrail_information"][0]
+    assert guardrail_info["guardrail_status"] == "success"
+    assert guardrail_info["guardrail_provider"] == "noma"
     
     # Check status fields
     status_fields = test_custom_logger.standard_logging_payload.get("status_fields", {})
