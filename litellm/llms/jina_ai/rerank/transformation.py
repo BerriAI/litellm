@@ -55,7 +55,12 @@ class JinaAIRerankConfig(BaseRerankConfig):
             **optional_params,
         ))
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         base_path = "/v1/rerank"
 
         if api_base is None:
@@ -122,7 +127,11 @@ class JinaAIRerankConfig(BaseRerankConfig):
         )  # Return response
 
     def validate_environment(
-        self, headers: Dict, model: str, api_key: Optional[str] = None
+        self, 
+        headers: Dict, 
+        model: str, 
+        api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> Dict:
         if api_key is None:
             raise ValueError(
