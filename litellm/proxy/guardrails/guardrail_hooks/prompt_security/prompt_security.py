@@ -136,153 +136,143 @@ class PromptSecurityGuardrail(CustomGuardrail):
         
         raise HTTPException(status_code=408, detail="File sanitization timeout")
 
+    async def _process_image_url_item(self, item: dict) -> dict:
+        """Process and sanitize image_url items."""
+        image_url_data = item.get("image_url", {})
+        url = image_url_data.get("url", "") if isinstance(image_url_data, dict) else image_url_data
+        
+        if not url.startswith("data:"):
+            return item
+        
+        try:
+            header, encoded = url.split(",", 1)
+            file_data = base64.b64decode(encoded)
+            mime_type = header.split(";")[0].split(":")[1]
+            extension = mime_type.split("/")[-1]
+            filename = f"image.{extension}"
+            
+            sanitization_result = await self.sanitize_file_content(file_data, filename)
+            action = sanitization_result.get("action")
+            
+            if action == "block":
+                violations = sanitization_result.get("violations", [])
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File blocked by Prompt Security. Violations: {', '.join(violations)}"
+                )
+            
+            if action == "modify":
+                sanitized_content = sanitization_result.get("content", "")
+                if sanitized_content:
+                    sanitized_encoded = base64.b64encode(sanitized_content.encode()).decode()
+                    sanitized_url = f"{header},{sanitized_encoded}"
+                    if isinstance(image_url_data, dict):
+                        image_url_data["url"] = sanitized_url
+                    else:
+                        item["image_url"] = sanitized_url
+                    verbose_proxy_logger.info("File content modified by Prompt Security")
+            
+            return item
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error sanitizing image file: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"File sanitization failed: {str(e)}")
+
+    async def _process_document_item(self, item: dict) -> dict:
+        """Process and sanitize document/file items."""
+        doc_data = item.get("document") or item.get("file") or item
+        
+        if isinstance(doc_data, dict):
+            url = doc_data.get("url", "")
+            doc_content = doc_data.get("data", "")
+        else:
+            url = doc_data if isinstance(doc_data, str) else ""
+            doc_content = ""
+        
+        if not (url.startswith("data:") or doc_content):
+            return item
+        
+        try:
+            header = ""
+            if url.startswith("data:"):
+                header, encoded = url.split(",", 1)
+                file_data = base64.b64decode(encoded)
+                mime_type = header.split(";")[0].split(":")[1]
+            else:
+                file_data = base64.b64decode(doc_content)
+                mime_type = doc_data.get("mime_type", "application/pdf") if isinstance(doc_data, dict) else "application/pdf"
+            
+            if "pdf" in mime_type:
+                filename = "document.pdf"
+            elif "word" in mime_type or "docx" in mime_type:
+                filename = "document.docx"
+            elif "excel" in mime_type or "xlsx" in mime_type:
+                filename = "document.xlsx"
+            else:
+                extension = mime_type.split("/")[-1]
+                filename = f"document.{extension}"
+            
+            verbose_proxy_logger.info(f"Sanitizing document: {filename}")
+            
+            sanitization_result = await self.sanitize_file_content(file_data, filename)
+            action = sanitization_result.get("action")
+            
+            if action == "block":
+                violations = sanitization_result.get("violations", [])
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Document blocked by Prompt Security. Violations: {', '.join(violations)}"
+                )
+            
+            if action == "modify":
+                sanitized_content = sanitization_result.get("content", "")
+                if sanitized_content:
+                    sanitized_encoded = base64.b64encode(
+                        sanitized_content if isinstance(sanitized_content, bytes) else sanitized_content.encode()
+                    ).decode()
+                    
+                    if url.startswith("data:") and header:
+                        sanitized_url = f"{header},{sanitized_encoded}"
+                        if isinstance(doc_data, dict):
+                            doc_data["url"] = sanitized_url
+                    elif isinstance(doc_data, dict):
+                        doc_data["data"] = sanitized_encoded
+                    
+                    verbose_proxy_logger.info("Document content modified by Prompt Security")
+            
+            return item
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error sanitizing document: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Document sanitization failed: {str(e)}")
+
     async def process_message_files(self, messages: list) -> list:
-        """
-        Process messages and sanitize any file content (images, documents, PDFs, etc.)
-        """
+        """Process messages and sanitize any file content (images, documents, PDFs, etc.)."""
         processed_messages = []
         
         for message in messages:
             content = message.get("content")
             
-            # Handle messages with content list (multimodal messages)
-            if isinstance(content, list):
-                processed_content = []
-                for item in content:
-                    if isinstance(item, dict):
-                        item_type = item.get("type")
-                        
-                        # Handle image_url type (for images)
-                        if item_type == "image_url":
-                            image_url_data = item.get("image_url", {})
-                            if isinstance(image_url_data, dict):
-                                url = image_url_data.get("url", "")
-                            else:
-                                url = image_url_data
-                            
-                            # Check if it's a base64 encoded file
-                            if url.startswith("data:"):
-                                try:
-                                    # Extract base64 data
-                                    header, encoded = url.split(",", 1)
-                                    file_data = base64.b64decode(encoded)
-                                    
-                                    # Determine filename from mime type
-                                    mime_type = header.split(";")[0].split(":")[1]
-                                    extension = mime_type.split("/")[-1]
-                                    filename = f"image.{extension}"
-                                    
-                                    # Sanitize the file
-                                    sanitization_result = await self.sanitize_file_content(file_data, filename)
-                                    
-                                    action = sanitization_result.get("action")
-                                    
-                                    if action == "block":
-                                        violations = sanitization_result.get("violations", [])
-                                        raise HTTPException(
-                                            status_code=400,
-                                            detail=f"File blocked by Prompt Security. Violations: {', '.join(violations)}"
-                                        )
-                                    elif action == "modify":
-                                        # Replace with sanitized content
-                                        sanitized_content = sanitization_result.get("content", "")
-                                        if sanitized_content:
-                                            # Convert back to base64
-                                            sanitized_encoded = base64.b64encode(sanitized_content.encode()).decode()
-                                            sanitized_url = f"{header},{sanitized_encoded}"
-                                            if isinstance(image_url_data, dict):
-                                                image_url_data["url"] = sanitized_url
-                                            else:
-                                                item["image_url"] = sanitized_url
-                                            verbose_proxy_logger.info("File content modified by Prompt Security")
-                                    
-                                except Exception as e:
-                                    verbose_proxy_logger.error(f"Error sanitizing image file: {str(e)}")
-                                    raise HTTPException(status_code=500, detail=f"File sanitization failed: {str(e)}")
-                        
-                        # Handle document/PDF type (for PDFs and other documents)
-                        elif item_type in ["document", "file"]:
-                            # Handle different document structures
-                            doc_data = item.get("document") or item.get("file") or item
-                            
-                            # Check for base64 data or URL
-                            if isinstance(doc_data, dict):
-                                url = doc_data.get("url", "")
-                                doc_content = doc_data.get("data", "")
-                            else:
-                                url = doc_data if isinstance(doc_data, str) else ""
-                                doc_content = ""
-                            
-                            # Process base64 encoded documents
-                            if url.startswith("data:") or doc_content:
-                                try:
-                                    # Extract base64 data
-                                    if url.startswith("data:"):
-                                        header, encoded = url.split(",", 1)
-                                        file_data = base64.b64decode(encoded)
-                                        mime_type = header.split(";")[0].split(":")[1]
-                                    else:
-                                        # Direct base64 content
-                                        file_data = base64.b64decode(doc_content)
-                                        mime_type = doc_data.get("mime_type", "application/pdf")
-                                    
-                                    # Determine filename from mime type
-                                    if "pdf" in mime_type:
-                                        filename = "document.pdf"
-                                    elif "word" in mime_type or "docx" in mime_type:
-                                        filename = "document.docx"
-                                    elif "excel" in mime_type or "xlsx" in mime_type:
-                                        filename = "document.xlsx"
-                                    else:
-                                        extension = mime_type.split("/")[-1]
-                                        filename = f"document.{extension}"
-                                    
-                                    verbose_proxy_logger.info(f"Sanitizing document: {filename}")
-                                    
-                                    # Sanitize the file
-                                    sanitization_result = await self.sanitize_file_content(file_data, filename)
-                                    
-                                    action = sanitization_result.get("action")
-                                    
-                                    if action == "block":
-                                        violations = sanitization_result.get("violations", [])
-                                        raise HTTPException(
-                                            status_code=400,
-                                            detail=f"Document blocked by Prompt Security. Violations: {', '.join(violations)}"
-                                        )
-                                    elif action == "modify":
-                                        # Replace with sanitized content
-                                        sanitized_content = sanitization_result.get("content", "")
-                                        if sanitized_content:
-                                            # Convert back to base64
-                                            if isinstance(sanitized_content, bytes):
-                                                sanitized_encoded = base64.b64encode(sanitized_content).decode()
-                                            else:
-                                                sanitized_encoded = base64.b64encode(sanitized_content.encode()).decode()
-                                            
-                                            if url.startswith("data:"):
-                                                sanitized_url = f"{header},{sanitized_encoded}"
-                                                if isinstance(doc_data, dict):
-                                                    doc_data["url"] = sanitized_url
-                                            else:
-                                                if isinstance(doc_data, dict):
-                                                    doc_data["data"] = sanitized_encoded
-                                            
-                                            verbose_proxy_logger.info("Document content modified by Prompt Security")
-                                    
-                                except Exception as e:
-                                    verbose_proxy_logger.error(f"Error sanitizing document: {str(e)}")
-                                    raise HTTPException(status_code=500, detail=f"Document sanitization failed: {str(e)}")
-                        
-                        processed_content.append(item)
-                    else:
-                        processed_content.append(item)
-                
-                processed_message = message.copy()
-                processed_message["content"] = processed_content
-                processed_messages.append(processed_message)
-            else:
+            if not isinstance(content, list):
                 processed_messages.append(message)
+                continue
+            
+            processed_content = []
+            for item in content:
+                if isinstance(item, dict):
+                    item_type = item.get("type")
+                    if item_type == "image_url":
+                        item = await self._process_image_url_item(item)
+                    elif item_type in ["document", "file"]:
+                        item = await self._process_document_item(item)
+                
+                processed_content.append(item)
+            
+            processed_message = message.copy()
+            processed_message["content"] = processed_content
+            processed_messages.append(processed_message)
         
         return processed_messages
 
