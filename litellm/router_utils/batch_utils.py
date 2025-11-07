@@ -1,7 +1,7 @@
 import io
 import json
 from os import PathLike
-from typing import Optional
+from typing import List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
@@ -16,7 +16,7 @@ class InMemoryFile(io.BytesIO):
         self.content_type = content_type
 
 
-def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
+def parse_jsonl_with_embedded_newlines(content: str) -> List[dict]:
     """
     Parse JSONL content that may contain JSON objects with embedded newlines in string values.
 
