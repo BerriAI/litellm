@@ -10,7 +10,6 @@ import json
 import os
 import time
 import traceback
-import random
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union, cast, overload
 
@@ -20,7 +19,6 @@ from litellm.caching import DualCache, RedisCache
 from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
     BaseDailySpendTransaction,
     DailyTagSpendTransaction,
     DailyTeamSpendTransaction,
@@ -600,7 +598,6 @@ class DBSpendUpdateWriter:
         """
         from litellm.proxy.utils import (
             ProxyUpdateSpend,
-            _raise_failed_update_spend_exception,
             _handle_db_exception_retriable,
         )
 
@@ -812,7 +809,7 @@ class DBSpendUpdateWriter:
             prisma_client: Prisma client instance
             proxy_logging_obj: Proxy logging object
         """
-        from litellm.proxy.utils import _raise_failed_update_spend_exception, _handle_db_exception_retriable
+        from litellm.proxy.utils import _handle_db_exception_retriable
 
         verbose_proxy_logger.debug(
             f"{entity_name} Spend transactions: {transactions}"

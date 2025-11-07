@@ -26,7 +26,6 @@ from typing import (
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
     ProxyException,
