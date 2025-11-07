@@ -10340,6 +10340,7 @@
         "mode": "chat",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
+        "rpm": 100000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -10366,7 +10367,8 @@
         "supports_tool_choice": true,
         "supports_url_context": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "tpm": 8000000
     },
     "gemini-2.5-flash-lite-preview-06-17": {
         "cache_read_input_token_cost": 2.5e-08,
