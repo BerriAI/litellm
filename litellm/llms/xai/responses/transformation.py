@@ -1,6 +1,5 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -102,6 +101,8 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         
         Uses XAI_API_KEY from environment or litellm_params.
         """
+        import litellm
+        
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = (
             litellm_params.api_key
@@ -132,6 +133,8 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Returns:
             str: The full URL for the XAI /responses endpoint
         """
+        import litellm
+        
         api_base = (
             api_base
             or litellm.api_base

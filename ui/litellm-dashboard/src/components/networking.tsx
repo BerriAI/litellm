@@ -4444,9 +4444,7 @@ export const getGeneralSettingsCall = async (accessToken: string) => {
 
 export const getRouterSettingsCall = async (accessToken: string) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/router/settings`
-      : `/router/settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/router/settings` : `/router/settings`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -4473,9 +4471,7 @@ export const getRouterSettingsCall = async (accessToken: string) => {
 
 export const getCacheSettingsCall = async (accessToken: string) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/cache/settings`
-      : `/cache/settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings` : `/cache/settings`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -4500,14 +4496,9 @@ export const getCacheSettingsCall = async (accessToken: string) => {
   }
 };
 
-export const testCacheConnectionCall = async (
-  accessToken: string,
-  cacheSettings: Record<string, any>
-) => {
+export const testCacheConnectionCall = async (accessToken: string, cacheSettings: Record<string, any>) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/cache/settings/test`
-      : `/cache/settings/test`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings/test` : `/cache/settings/test`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -4535,10 +4526,7 @@ export const testCacheConnectionCall = async (
   }
 };
 
-export const updateCacheSettingsCall = async (
-  accessToken: string,
-  cacheSettings: Record<string, any>
-) => {
+export const updateCacheSettingsCall = async (accessToken: string, cacheSettings: Record<string, any>) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings` : `/cache/settings`;
 
@@ -5701,8 +5689,8 @@ export const deleteSearchTool = async (accessToken: string, searchToolId: string
 
 export const fetchAvailableSearchProviders = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/search_tools/ui/available_providers` 
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/search_tools/ui/available_providers`
       : `/search_tools/ui/available_providers`;
     console.log("Fetching available search providers from:", url);
 
@@ -5730,14 +5718,9 @@ export const fetchAvailableSearchProviders = async (accessToken: string) => {
   }
 };
 
-export const testSearchToolConnection = async (
-  accessToken: string,
-  litellmParams: Record<string, any>
-) => {
+export const testSearchToolConnection = async (accessToken: string, litellmParams: Record<string, any>) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/search_tools/test_connection`
-      : `/search_tools/test_connection`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/test_connection` : `/search_tools/test_connection`;
     console.log("Testing search tool connection:", url);
 
     const response = await fetch(url, {
@@ -6591,7 +6574,7 @@ export const applyGuardrail = async (
     if (!response.ok) {
       const errorData = await response.text();
       let errorMessage = "Failed to apply guardrail";
-      
+
       try {
         const errorJson = JSON.parse(errorData);
         if (errorJson.error?.message) {
@@ -6604,7 +6587,7 @@ export const applyGuardrail = async (
       } catch (e) {
         errorMessage = errorData || errorMessage;
       }
-      
+
       handleError(errorData);
       throw new Error(errorMessage);
     }
@@ -6697,9 +6680,22 @@ export const updateSSOSettings = async (accessToken: string, settings: Record<st
 
     if (!response.ok) {
       const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
+      const detailMessage =
+        typeof errorData?.detail === "object"
+          ? errorData.detail?.error || errorData.detail?.message
+          : errorData?.detail;
+      const errorMessage =
+        typeof detailMessage === "string" && detailMessage.length > 0 ? detailMessage : deriveErrorMessage(errorData);
+
       handleError(errorMessage);
-      throw new Error(errorMessage);
+
+      const enhancedError = new Error(errorMessage);
+      if (errorData?.detail !== undefined) {
+        (enhancedError as any).detail = errorData.detail;
+      }
+      (enhancedError as any).rawError = errorData;
+
+      throw enhancedError;
     }
 
     const data = await response.json();
