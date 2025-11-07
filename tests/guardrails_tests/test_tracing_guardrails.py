@@ -465,6 +465,7 @@ async def test_noma_guardrail_status_blocked():
     mock_response.status_code = 200
     mock_response.json.return_value = {
         "verdict": False,
+        "aggregatedScanResult": True,
         "originalResponse": {
             "prompt": {
                 "topicDetector": {"harmful": {"result": True}}
@@ -549,6 +550,7 @@ async def test_noma_guardrail_status_success():
     mock_response.status_code = 200
     mock_response.json.return_value = {
         "verdict": True,
+        "aggregatedScanResult": False,
         "originalResponse": {"prompt": {}}
     }
     mock_response.raise_for_status = MagicMock()
