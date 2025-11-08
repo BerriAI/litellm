@@ -3595,7 +3595,7 @@ class ProxyConfig:
                 "guardrails from the DB %s", str(guardrails_in_db)
             )
             for guardrail in guardrails_in_db:
-                IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                     guardrail=cast(Guardrail, guardrail),
                 )
         except Exception as e:

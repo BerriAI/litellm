@@ -38,6 +38,7 @@ interface ContentFilterManagerProps {
   isEditing: boolean;
   accessToken: string | null;
   onDataChange?: (patterns: Pattern[], blockedWords: BlockedWord[]) => void;
+  onUnsavedChanges?: (hasChanges: boolean) => void;
 }
 
 const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
@@ -46,9 +47,12 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
   isEditing,
   accessToken,
   onDataChange,
+  onUnsavedChanges,
 }) => {
   const [selectedPatterns, setSelectedPatterns] = useState<Pattern[]>([]);
   const [blockedWords, setBlockedWords] = useState<BlockedWord[]>([]);
+  const [originalPatterns, setOriginalPatterns] = useState<Pattern[]>([]);
+  const [originalBlockedWords, setOriginalBlockedWords] = useState<BlockedWord[]>([]);
 
   // Load data from guardrail on mount or when guardrailData changes
   useEffect(() => {
@@ -62,8 +66,10 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
         action: p.action || "BLOCK",
       }));
       setSelectedPatterns(patterns);
+      setOriginalPatterns(patterns);
     } else {
       setSelectedPatterns([]);
+      setOriginalPatterns([]);
     }
 
     if (guardrailData?.litellm_params?.blocked_words) {
@@ -74,8 +80,10 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
         description: w.description,
       }));
       setBlockedWords(words);
+      setOriginalBlockedWords(words);
     } else {
       setBlockedWords([]);
+      setOriginalBlockedWords([]);
     }
   }, [guardrailData]);
 
@@ -85,6 +93,19 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
       onDataChange(selectedPatterns, blockedWords);
     }
   }, [selectedPatterns, blockedWords, onDataChange]);
+
+  // Detect unsaved changes
+  const hasUnsavedChanges = React.useMemo(() => {
+    const hasPatternChanges = JSON.stringify(selectedPatterns) !== JSON.stringify(originalPatterns);
+    const hasWordChanges = JSON.stringify(blockedWords) !== JSON.stringify(originalBlockedWords);
+    return hasPatternChanges || hasWordChanges;
+  }, [selectedPatterns, blockedWords, originalPatterns, originalBlockedWords]);
+
+  useEffect(() => {
+    if (isEditing && onUnsavedChanges) {
+      onUnsavedChanges(hasUnsavedChanges);
+    }
+  }, [hasUnsavedChanges, isEditing, onUnsavedChanges]);
 
   // Check if this is a content filter guardrail
   if (guardrailData?.litellm_params?.guardrail !== "litellm_content_filter") {
@@ -106,6 +127,13 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
   return (
     <>
       <Divider orientation="left">Content Filter Configuration</Divider>
+      {hasUnsavedChanges && (
+        <div className="mb-4 px-4 py-3 bg-yellow-50 border border-yellow-200 rounded-md">
+          <p className="text-sm text-yellow-800 font-medium">
+            ⚠️ You have unsaved changes to patterns or keywords. Remember to click "Save Changes" at the bottom.
+          </p>
+        </div>
+      )}
       <div className="mb-6">
         {guardrailSettings && guardrailSettings.content_filter_settings && (
           <ContentFilterConfiguration

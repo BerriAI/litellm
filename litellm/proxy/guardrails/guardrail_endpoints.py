@@ -564,8 +564,7 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
         guardrail_name = result.get("guardrail_name", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
-                guardrail_id=guardrail_id,
+            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
             )
             verbose_proxy_logger.info(

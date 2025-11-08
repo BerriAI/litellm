@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Card,
   Title,
@@ -82,12 +82,19 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     };
   } | null>(null);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [hasUnsavedContentFilterChanges, setHasUnsavedContentFilterChanges] = useState(false);
   
   // Content Filter data ref (managed by ContentFilterManager)
   const contentFilterDataRef = React.useRef<{ patterns: any[]; blockedWords: any[] }>({
     patterns: [],
     blockedWords: [],
   });
+
+  // Memoize onDataChange callback to prevent unnecessary re-renders
+  const handleContentFilterDataChange = useCallback((patterns: any[], blockedWords: any[]) => {
+    contentFilterDataRef.current = { patterns, blockedWords };
+  }, []);
+
   const fetchGuardrailInfo = async () => {
     try {
       setLoading(true);
@@ -329,6 +336,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
       await updateGuardrailCall(accessToken, guardrailId, updateData);
       NotificationsManager.success("Guardrail updated successfully");
+      setHasUnsavedContentFilterChanges(false);
       fetchGuardrailInfo();
       setIsEditing(false);
     } catch (error) {
@@ -561,9 +569,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                       guardrailSettings={guardrailSettings}
                       isEditing={true}
                       accessToken={accessToken}
-                      onDataChange={(patterns, blockedWords) => {
-                        contentFilterDataRef.current = { patterns, blockedWords };
-                      }}
+                      onDataChange={handleContentFilterDataChange}
+                      onUnsavedChanges={setHasUnsavedContentFilterChanges}
                     />
 
                     <Divider orientation="left">Provider Settings</Divider>
@@ -608,7 +615,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     </Form.Item>
 
                     <div className="flex justify-end gap-2 mt-6">
-                      <Button onClick={() => setIsEditing(false)}>Cancel</Button>
+                      <Button onClick={() => {
+                        setIsEditing(false);
+                        setHasUnsavedContentFilterChanges(false);
+                      }}>Cancel</Button>
                       <TremorButton>Save Changes</TremorButton>
                     </div>
                   </Form>
