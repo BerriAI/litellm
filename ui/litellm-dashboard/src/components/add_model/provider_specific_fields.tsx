@@ -164,7 +164,15 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       key: "api_key",
       label: "Azure API Key",
       type: "password",
-      required: true,
+      placeholder: "Enter your Azure API Key",
+      required: false,
+    },
+    {
+      key: "azure_ad_token",
+      label: "Azure AD Token",
+      type: "password",
+      placeholder: "Enter your Azure AD Token",
+      required: false,
     },
   ],
   [Providers.Azure_AI_Studio]: [

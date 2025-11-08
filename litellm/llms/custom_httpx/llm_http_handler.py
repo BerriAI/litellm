@@ -921,11 +921,13 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=headers or {},
             model=model,
+            optional_params=optional_rerank_params,
         )
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
+            optional_params=optional_rerank_params,
         )
 
         data = provider_config.transform_rerank_request(
@@ -2009,6 +2011,9 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        if extra_body:
+            data.update(extra_body)
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2134,6 +2139,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        if extra_body:
+            data.update(extra_body)
 
         ## LOGGING
         logging_obj.pre_call(
