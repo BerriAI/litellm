@@ -33,7 +33,6 @@ from litellm.types.llms.anthropic import (
     AnthropicThinkingParam,
     AnthropicWebSearchTool,
     AnthropicWebSearchUserLocation,
-    AnthropicMemoryTool,
 )
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
