@@ -21,6 +21,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIResponse,
 )
 from litellm.types.utils import GuardrailStatus
+from litellm.types.callbacks import ModerationHookCallType, PreCallHookCallType
+
 
 
 class LakeraAIGuardrail(CustomGuardrail):
@@ -183,18 +185,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
         data: Dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Optional[Union[Exception, str, Dict]]:
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -257,16 +248,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: ModerationHookCallType,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,

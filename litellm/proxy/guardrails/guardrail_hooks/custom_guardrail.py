@@ -8,6 +8,8 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.callbacks import ModerationHookCallType, PreCallHookCallType
+
 
 
 class myCustomGuardrail(CustomGuardrail):
@@ -26,18 +28,7 @@ class myCustomGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Optional[Union[Exception, str, dict]]:
         """
         Runs before the LLM API call
@@ -66,16 +57,7 @@ class myCustomGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: ModerationHookCallType,
     ):
         """
         Runs in parallel to LLM API call

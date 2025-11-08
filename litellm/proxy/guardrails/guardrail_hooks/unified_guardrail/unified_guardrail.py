@@ -17,6 +17,8 @@ from litellm.llms import load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, ModelResponseStream
+from litellm.types.callbacks import PreCallHookCallType
+
 
 GUARDRAIL_NAME = "unified_llm_guardrails"
 endpoint_guardrail_translation_mappings = None
@@ -43,18 +45,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Union[Exception, str, dict, None]:
         """
         Runs before the LLM API call

@@ -37,6 +37,8 @@ from typing import (
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.main import stream_chunk_builder
 from litellm.types.utils import TextCompletionResponse
+from litellm.types.callbacks import ModerationHookCallType, PreCallHookCallType
+
 
 # Constants
 USER_ROLE: Final[Literal["user"]] = "user"
@@ -551,18 +553,7 @@ class NomaGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Optional[Union[Exception, str, dict]]:
     
         verbose_proxy_logger.debug("Running Noma pre-call hook")
@@ -616,16 +607,7 @@ class NomaGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: ModerationHookCallType,
     ) -> Union[Exception, str, dict, None]:
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
