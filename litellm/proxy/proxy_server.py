@@ -270,9 +270,7 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -323,9 +321,7 @@ from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -412,9 +408,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import (
-    DeploymentTypedDict,
-)
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -1833,8 +1827,12 @@ class ProxyConfig:
         """
         global llm_router
         import litellm
-        
-        if llm_router is not None and litellm.cache is not None and llm_router.cache_responses is not True:
+
+        if (
+            llm_router is not None
+            and litellm.cache is not None
+            and llm_router.cache_responses is not True
+        ):
             llm_router.cache_responses = True
             verbose_proxy_logger.debug(
                 "Set router.cache_responses=True after initializing cache"
@@ -2996,14 +2994,16 @@ class ProxyConfig:
                     "Error setting env variable: %s - %s", k, str(e)
                 )
         return decrypted_env_vars
-    
+
     def _decrypt_db_variables(self, variables_dict: dict) -> dict:
         """
         Decrypts a dictionary of variables and returns them.
         """
         decrypted_variables = {}
         for k, v in variables_dict.items():
-            decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+            decrypted_value = decrypt_value_helper(
+                value=v, key=k, return_original_value=True
+            )
             decrypted_variables[k] = decrypted_value
         return decrypted_variables
 
@@ -3401,6 +3401,7 @@ class ProxyConfig:
             from litellm.proxy.management_endpoints.cache_settings_endpoints import (
                 CacheSettingsManager,
             )
+
             await CacheSettingsManager.init_cache_settings_in_db(
                 prisma_client=prisma_client, proxy_config=self
             )
@@ -3656,7 +3657,7 @@ class ProxyConfig:
         Initialize search tools from database into the router on startup.
         """
         global llm_router
-        
+
         from litellm.proxy.search_endpoints.search_tool_registry import (
             SearchToolRegistry,
         )
@@ -5048,7 +5049,7 @@ async def embeddings(  # noqa: PLR0915
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
+            user_api_key_dict=user_api_key_dict, data=data, call_type=CallTypes.aembedding.value  # type: ignore
         )
 
         tasks = []

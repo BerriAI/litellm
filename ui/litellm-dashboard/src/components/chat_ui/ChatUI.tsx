@@ -767,6 +767,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
             effectiveApiKey,
             selectedTags,
             signal,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
           );
         } else if (endpointType === EndpointType.SPEECH) {
           // For audio speech
@@ -778,6 +779,9 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
             effectiveApiKey,
             selectedTags,
             signal,
+            undefined, // responseFormat
+            undefined, // speed
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
           );
         } else if (endpointType === EndpointType.IMAGE_EDITS) {
           // For image edits
@@ -857,6 +861,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
             selectedModel,
             effectiveApiKey,
             selectedTags,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
           );
         } else if (endpointType === EndpointType.TRANSCRIPTION) {
           // For audio transcriptions
@@ -868,6 +873,11 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
               effectiveApiKey,
               selectedTags,
               signal,
+              undefined, // language
+              undefined, // prompt
+              undefined, // responseFormat
+              undefined, // temperature
+              selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             );
           }
         }

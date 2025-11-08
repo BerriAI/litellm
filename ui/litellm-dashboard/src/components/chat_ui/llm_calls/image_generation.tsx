@@ -9,6 +9,7 @@ export async function makeOpenAIImageGenerationRequest(
   accessToken: string,
   tags?: string[],
   signal?: AbortSignal,
+  guardrails?: string[],
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -29,6 +30,7 @@ export async function makeOpenAIImageGenerationRequest(
       {
         model: selectedModel,
         prompt: prompt,
+        ...(guardrails ? { guardrails } : {}),
       },
       { signal },
     );

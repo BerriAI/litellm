@@ -13,6 +13,7 @@ export async function makeOpenAIAudioSpeechRequest(
   signal?: AbortSignal,
   responseFormat?: string,
   speed?: number,
+  guardrails?: string[],
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -36,6 +37,7 @@ export async function makeOpenAIAudioSpeechRequest(
         voice,
         ...(responseFormat ? { response_format: responseFormat as any } : {}),
         ...(speed ? { speed: speed } : {}),
+        ...(guardrails ? { guardrails } : {}),
       },
       { signal },
     );

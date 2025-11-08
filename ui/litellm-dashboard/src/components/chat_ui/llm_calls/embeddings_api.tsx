@@ -8,6 +8,7 @@ export async function makeOpenAIEmbeddingsRequest(
   selectedModel: string,
   accessToken: string,
   tags?: string[],
+  guardrails?: string[],
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -37,6 +38,7 @@ export async function makeOpenAIEmbeddingsRequest(
     const response = await client.embeddings.create({
       model: selectedModel,
       input: input,
+      ...(guardrails ? { guardrails } : {}),
     });
 
     updateEmbeddingsUI(JSON.stringify(response.data[0].embedding), selectedModel);

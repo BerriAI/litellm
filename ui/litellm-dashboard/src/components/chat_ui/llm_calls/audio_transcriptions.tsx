@@ -13,6 +13,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
   prompt?: string,
   responseFormat?: string,
   temperature?: number,
+  guardrails?: string[],
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -40,6 +41,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
         ...(prompt ? { prompt: prompt } : {}),
         ...(responseFormat ? { response_format: responseFormat as any } : {}),
         ...(temperature !== undefined ? { temperature: temperature } : {}),
+        ...(guardrails ? { guardrails } : {}),
       },
       { signal },
     );
