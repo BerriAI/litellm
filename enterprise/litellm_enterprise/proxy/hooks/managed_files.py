@@ -792,8 +792,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
-            for model_id, file_id in specific_model_file_id_mapping.items():
-                await llm_router.afile_delete(model=model_id, file_id=file_id, **data)  # type: ignore
+            for model_id, model_file_id in specific_model_file_id_mapping.items():
+                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span
