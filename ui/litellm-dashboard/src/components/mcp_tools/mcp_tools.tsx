@@ -1,14 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, CallMCPToolResponse } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
 
-import { Modal, Input, Form } from "antd";
-import { Button, Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, SafetyOutlined, ToolOutlined } from "@ant-design/icons";
-
-import NotificationsManager from "../molecules/notifications_manager";
+import { Card, Title, Text } from "@tremor/react";
+import { RobotOutlined, ToolOutlined } from "@ant-design/icons";
 
 const MCPToolsViewer = ({
   serverId,
@@ -43,11 +40,7 @@ const MCPToolsViewer = ({
       if (!accessToken) throw new Error("Access Token required");
 
       try {
-        const result = await callMCPTool(
-          accessToken,
-          args.tool.name,
-          args.arguments,
-        );
+        const result = await callMCPTool(accessToken, args.tool.name, args.arguments);
         return result;
       } catch (error) {
         throw error;

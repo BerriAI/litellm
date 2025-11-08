@@ -18,11 +18,7 @@ interface MCPServerEditProps {
   availableAccessGroups: string[];
 }
 
-const AUTH_TYPES_REQUIRING_AUTH_VALUE = [
-  AUTH_TYPE.API_KEY,
-  AUTH_TYPE.BEARER_TOKEN,
-  AUTH_TYPE.BASIC,
-];
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
 
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   mcpServer,
@@ -39,9 +35,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const authType = Form.useWatch("auth_type", form) as string | undefined;
-  const shouldShowAuthValueField = authType
-    ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType)
-    : false;
+  const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
 
   const initialStaticHeaders = React.useMemo(() => {
     if (!mcpServer.static_headers) {
@@ -159,11 +153,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (!accessToken) return;
     try {
       // Ensure access groups is always a string array
-      const {
-        static_headers: staticHeadersList,
-        credentials: credentialValues,
-        ...restValues
-      } = values;
+      const { static_headers: staticHeadersList, credentials: credentialValues, ...restValues } = values;
 
       const accessGroups = (restValues.mcp_access_groups || []).map((g: any) =>
         typeof g === "string" ? g : g.name || String(g),
@@ -178,7 +168,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             acc[header] = entry?.value ?? "";
             return acc;
           }, {})
-        : {} as Record<string, string>;
+        : ({} as Record<string, string>);
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"
@@ -201,7 +191,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           : undefined;
 
       // Prepare the payload with cost configuration and permission fields
-      const payload = {
+      const payload: Record<string, any> = {
         ...restValues,
         server_id: mcpServer.server_id,
         mcp_info: {
@@ -218,14 +208,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         static_headers: staticHeaders,
       };
 
-      const includeCredentials =
-        restValues.auth_type && AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(restValues.auth_type);
+      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(restValues.auth_type);
 
-      if (
-        includeCredentials &&
-        credentialsPayload &&
-        Object.keys(credentialsPayload).length > 0
-      ) {
+      if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
       }
 
