@@ -24,7 +24,7 @@ import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import ChatUI from "@/components/chat_ui/ChatUI";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
+import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName, LiteLLMWellKnownUiConfig } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import PromptsPanel from "@/components/prompts";
@@ -182,7 +182,8 @@ export default function CreateKeyPage() {
 
     (async () => {
       try {
-        await getUiConfig(); // ensures proxyBaseUrl etc. are ready
+        const result: LiteLLMWellKnownUiConfig = await getUiConfig(); // ensures proxyBaseUrl etc. are ready
+        setPremiumUser(result.premium_user);
       } catch {
         // proceed regardless; we still need to decide auth state
       }
@@ -260,10 +261,6 @@ export default function CreateKeyPage() {
 
       if (decoded.login_method) {
         setShowSSOBanner(decoded.login_method == "username_password" ? true : false);
-      }
-
-      if (decoded.premium_user) {
-        setPremiumUser(decoded.premium_user);
       }
 
       if (decoded.auth_header_name) {

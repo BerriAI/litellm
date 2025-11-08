@@ -155,6 +155,7 @@ export interface PublicModelHubInfo {
 export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
+  premium_user: boolean;
 }
 
 export interface CredentialsResponse {
