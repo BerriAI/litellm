@@ -289,6 +289,7 @@ LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
     "bytez",
+    "zai",
     "xai",
     "custom_openai",
     "text-completion-openai",

@@ -18,7 +18,6 @@ import litellm
 from litellm import Choices, Message, ModelResponse, Usage
 from litellm import completion
 from litellm.llms.zai.chat.transformation import ZaiChatConfig
-from litellm.llms.zai.chat.handler import ZaiChatCompletion
 from litellm.llms.zai.chat.transformation import (
     ZaiError, 
     ZaiAuthenticationError, 
@@ -482,64 +481,6 @@ class TestZaiChatConfig:
         assert result.llm_provider == "zai"
 
 
-class TestZaiChatCompletion:
-    """Test suite for ZaiChatCompletion handler"""
-
-    def test_handler_initialization(self):
-        """Test that ZaiChatCompletion can be initialized"""
-        handler = ZaiChatCompletion()
-        assert hasattr(handler, 'completion')
-        # Test basic initialization works
-
-    @patch.object(ZaiChatCompletion, '__init__', lambda x, **kwargs: None)
-    def test_completion_with_reasoning_tokens(self):
-        """Test completion method handles reasoning_tokens correctly"""
-        # Test the reasoning tokens transformation logic directly
-        config = ZaiChatConfig()
-        
-        optional_params = {}
-        litellm_params = {"reasoning_tokens": True}
-        
-        # Apply the transformation logic from the handler
-        if litellm_params.get("reasoning_tokens"):
-            optional_params.setdefault("extra_body", {})["thinking"] = {"type": "enabled"}
-            litellm_params = litellm_params.copy()
-            del litellm_params["reasoning_tokens"]
-        
-        # Verify extra_body was set with thinking parameter
-        assert "extra_body" in optional_params
-        assert optional_params["extra_body"]["thinking"] == {"type": "enabled"}
-        # Verify reasoning_tokens was removed from litellm_params
-        assert "reasoning_tokens" not in litellm_params
-
-    @patch.object(ZaiChatCompletion, '__init__', lambda x, **kwargs: None)
-    def test_completion_model_prefix_stripping(self):
-        """Test completion method strips zai/ prefix from model"""
-        # Simple test to verify model prefix stripping logic
-        model = "zai/glm-4.6"
-        
-        # ZAI model prefix strip (same logic as in handler)
-        stripped_model = model.replace("zai/", "")
-        
-        assert stripped_model == "glm-4.6"
-
-    def test_completion_default_api_base(self):
-        """Test completion method uses default API base when none provided"""
-        # Simple test to verify the transformation works correctly
-        config = ZaiChatConfig()
-        
-        # Test that the default URL is correctly set when no api_base is provided
-        url = config.get_complete_url(
-            api_base=None,
-            api_key="test-key",
-            model="zai/glm-4.6",
-            optional_params={},
-            litellm_params={}
-        )
-        
-        assert url == "https://api.z.ai/api/paas/v4/chat/completions"
-
-
 class TestZaiIntegration:
     """Integration tests for Zai provider"""
 
@@ -696,13 +637,7 @@ def test_zai_config_import():
     assert hasattr(config, 'transform_request')
     assert hasattr(config, 'transform_response')
 
-def test_zai_handler_import():
-    """Test that ZaiChatCompletion can be imported from main package"""
-    from litellm import ZaiChatCompletion
-    
-    handler = ZaiChatCompletion()
-    assert hasattr(handler, 'completion')
-    # Test basic functionality
+
 
 def test_zai_error_imports():
     """Test that ZAI error classes can be imported"""

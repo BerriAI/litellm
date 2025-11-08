@@ -3581,6 +3581,34 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             pass
+        elif custom_llm_provider == "zai":
+            api_key = (
+                api_key
+                or litellm.zai_key
+                or get_secret_str("ZAI_API_KEY")
+                or litellm.api_key
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=zai_transformation,
+            )
+
+            pass
         elif custom_llm_provider == "lemonade":
             api_key = (
                 api_key
