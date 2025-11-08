@@ -521,9 +521,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
+                        provider_specific_fields[
+                            "reasoning_content"
+                        ] = reasoning_content
 
                     message = Message(
                         content=content,
@@ -683,6 +683,14 @@ def convert_to_model_response_object(  # noqa: PLR0915
             for key in optional_keys:  # not guaranteed to be in response
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])
+
+            if "usage" in response_object and response_object["usage"] is not None:
+                usage_object = litellm.Usage(**response_object["usage"])
+                setattr(model_response_object, "usage", usage_object)
+            else:
+                # Ensure the usage attribute always exists for consistency,
+                # as TranscriptionResponse does not have it by default.
+                setattr(model_response_object, "usage", litellm.Usage())
 
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params
