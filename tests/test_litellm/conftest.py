@@ -6,6 +6,15 @@ import sys
 
 import pytest
 
+# IMPORTANT: Import 'responses' library BEFORE litellm to prevent namespace package collision
+# litellm/responses/ is a namespace package that would shadow the PyPI 'responses' library
+try:
+    import responses as _responses_lib
+    # Cache the real responses module in sys.modules to prevent it from being shadowed
+    sys.modules['responses'] = _responses_lib
+except ImportError:
+    pass  # responses library not installed
+
 # sys.path.insert(
 #     0, os.path.abspath("../..")
 # )  # Adds the parent directory to the system path - COMMENTED OUT: pytest handles PYTHONPATH automatically
