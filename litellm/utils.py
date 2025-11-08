@@ -7361,10 +7361,10 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
                 return litellm.AzureOpenAIResponsesAPIConfig()
-        elif litellm.LlmProviders.LITELLM_PROXY == provider:
-            return litellm.LiteLLMProxyResponsesAPIConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.LITELLM_PROXY == provider:
+            return litellm.LiteLLMProxyResponsesAPIConfig()
         return None
 
     @staticmethod
