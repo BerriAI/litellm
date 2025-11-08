@@ -819,6 +819,8 @@ class Delta(OpenAIObject):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
                         current_index += 1
+                    if tool_call.get("type", None) is None:
+                        tool_call["type"] = "function"
                     self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
                 elif isinstance(tool_call, ChatCompletionDeltaToolCall):
                     self.tool_calls.append(tool_call)
