@@ -2506,7 +2506,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     traceloop: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="traceloop",
         litellm_callback_params=[
-            "TRACELoop_API_KEY",
+            "TRACELOOP_API_KEY",
         ],
         ui_callback_name="Traceloop",
     )   
