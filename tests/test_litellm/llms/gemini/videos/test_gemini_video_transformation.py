@@ -3,14 +3,15 @@ Tests for Gemini (Veo) video generation transformation.
 """
 import json
 import os
-import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
+
 import httpx
+import pytest
 
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
-from litellm.types.videos.main import VideoObject
-from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.openai.cost_calculation import video_generation_cost
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.videos.main import VideoObject
 
 
 class TestGeminiVideoConfig:
@@ -335,14 +336,14 @@ class TestGeminiVideoConfig:
         assert result_4s.usage["duration_seconds"] == 4.0
 
     def test_transform_video_create_response_cost_tracking_no_duration(self):
-        """Test that usage defaults to 4 seconds when no duration in request."""
+        """Test that usage defaults to 8 seconds when no duration in request."""
         # Mock response
         mock_response = Mock(spec=httpx.Response)
         mock_response.json.return_value = {
             "name": "operations/generate_1234567890",
         }
         
-        # Request data without durationSeconds (should default to 4 seconds)
+        # Request data without durationSeconds (should default to 8 seconds for Google Veo)
         request_data = {
             "instances": [{"prompt": "A test video"}],
             "parameters": {
@@ -359,10 +360,10 @@ class TestGeminiVideoConfig:
         )
         
         assert isinstance(result, VideoObject)
-        # When no duration is provided, it defaults to 4 seconds (matching OpenAI)
+        # When no duration is provided, it defaults to 8 seconds (Google Veo default)
         assert result.usage is not None
         assert "duration_seconds" in result.usage
-        assert result.usage["duration_seconds"] == 4.0, "Should default to 4 seconds when not provided (matching OpenAI)"
+        assert result.usage["duration_seconds"] == 8.0, "Should default to 8 seconds when not provided (Google Veo default)"
 
     def test_transform_video_status_retrieve_request(self):
         """Test transformation of status retrieve request."""
