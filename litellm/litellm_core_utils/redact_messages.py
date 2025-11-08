@@ -42,52 +42,43 @@ def redact_message_input_output_from_custom_logger(
 
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
-    from litellm.types.utils import LiteLLMCommonStrings
-    redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
-    
     if isinstance(choice, litellm.Choices):
-        choice.message.content = redacted_str
+        choice.message.content = "redacted-by-litellm"
         if hasattr(choice.message, "reasoning_content"):
-            choice.message.reasoning_content = redacted_str
+            choice.message.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
     elif isinstance(choice, litellm.utils.StreamingChoices):
-        choice.delta.content = redacted_str
+        choice.delta.content = "redacted-by-litellm"
         if hasattr(choice.delta, "reasoning_content"):
-            choice.delta.reasoning_content = redacted_str
+            choice.delta.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
 
 
 def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
-    from litellm.types.utils import LiteLLMCommonStrings
-    redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
-    
     for output_item in output_items:
         if hasattr(output_item, "content") and isinstance(output_item.content, list):
             for content_part in output_item.content:
                 if hasattr(content_part, "text"):
-                    content_part.text = redacted_str
+                    content_part.text = "redacted-by-litellm"
         
         # Redact reasoning items in output array
         if hasattr(output_item, "type") and output_item.type == "reasoning":
             if hasattr(output_item, "summary") and isinstance(output_item.summary, list):
                 for summary_item in output_item.summary:
                     if hasattr(summary_item, "text"):
-                        summary_item.text = redacted_str
+                        summary_item.text = "redacted-by-litellm"
 
 
 def perform_redaction(model_call_details: dict, result):
     """
     Performs the actual redaction on the logging object and result.
     """
-    from litellm.types.utils import LiteLLMCommonStrings
-    redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
-    
     # Redact model_call_details
     model_call_details["messages"] = [
-        {"role": "user", "content": redacted_str}
+        {"role": "user", "content": "redacted-by-litellm"}
     ]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
@@ -115,7 +106,7 @@ def perform_redaction(model_call_details: dict, result):
             hasattr(result, '__aiter__') or  # async generator
             hasattr(result, '__anext__')):   # async iterator
             # For async objects, return a simple redacted response without deepcopy
-            return {"text": redacted_str}
+            return {"text": "redacted-by-litellm"}
         
         _result = copy.deepcopy(result)
         if isinstance(_result, litellm.ModelResponse):
@@ -132,7 +123,7 @@ def perform_redaction(model_call_details: dict, result):
             if hasattr(_result, "data") and _result.data is not None:
                 _result.data = []
         else:
-            return {"text": redacted_str}
+            return {"text": "redacted-by-litellm"}
         return _result
 
 
