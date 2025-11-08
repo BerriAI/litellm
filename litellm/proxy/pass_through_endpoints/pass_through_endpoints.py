@@ -2005,9 +2005,9 @@ async def initialize_pass_through_endpoints(
         )
 
     # remove the ones that are not visited from the list
-    for endpoint in registered_pass_through_endpoints:
-        if endpoint not in visited_endpoints:
-            InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint)
+    for endpoint_key in registered_pass_through_endpoints:
+        if endpoint_key not in visited_endpoints:
+            InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_key)
 
 
 async def _get_pass_through_endpoints_from_db(
