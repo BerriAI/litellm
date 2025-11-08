@@ -9578,7 +9578,7 @@ async def get_config():  # noqa: PLR0915
             """Process a single callback and return its data with environment variables"""
             env_vars = CustomLogger.get_callback_env_vars(_callback)
 
-            env_vars_dict = {}
+            env_vars_dict: dict[str, str | None] = {}
             for _var in env_vars:
                 env_variable = environment_variables.get(_var, None)
                 if env_variable is None:
