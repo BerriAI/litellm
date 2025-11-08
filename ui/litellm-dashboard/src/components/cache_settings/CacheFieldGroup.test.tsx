@@ -1,8 +1,21 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import CacheFieldGroup from "./CacheFieldGroup";
 
 describe("CacheFieldGroup", () => {
+  vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+    default: () => ({
+      token: "mock-token",
+      accessToken: "mock-access-token",
+      userId: "mock-user-id",
+      userEmail: "test@example.com",
+      userRole: "Admin",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    }),
+  }));
+
   beforeEach(() => {
     cleanup();
   });
