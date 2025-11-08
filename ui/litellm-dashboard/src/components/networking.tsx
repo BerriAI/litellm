@@ -5750,7 +5750,7 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string, authValue?: string, serverAlias?: string) => {
+export const listMCPTools = async (accessToken: string, serverId: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl
@@ -5763,14 +5763,6 @@ export const listMCPTools = async (accessToken: string, serverId: string, authVa
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     };
-
-    // Use new server-specific auth header format if serverAlias is provided
-    if (serverAlias && authValue) {
-      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
-    } else if (authValue) {
-      // Fall back to deprecated x-mcp-auth header for backward compatibility
-      headers[MCP_AUTH_HEADER] = authValue;
-    }
 
     const response = await fetch(url, {
       method: "GET",
@@ -5805,9 +5797,7 @@ export const listMCPTools = async (accessToken: string, serverId: string, authVa
 export const callMCPTool = async (
   accessToken: string,
   toolName: string,
-  toolArguments: Record<string, any>,
-  authValue: string,
-  serverAlias?: string,
+  toolArguments: Record<string, any>
 ) => {
   try {
     // Construct base URL
@@ -5819,14 +5809,6 @@ export const callMCPTool = async (
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     };
-
-    // Use new server-specific auth header format if serverAlias is provided
-    if (serverAlias) {
-      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
-    } else {
-      // Fall back to deprecated x-mcp-auth header for backward compatibility
-      headers[MCP_AUTH_HEADER] = authValue;
-    }
 
     const response = await fetch(url, {
       method: "POST",
