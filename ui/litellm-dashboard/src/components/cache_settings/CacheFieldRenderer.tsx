@@ -14,6 +14,7 @@ interface CacheFieldRendererProps {
 
 const CacheFieldRenderer: React.FC<CacheFieldRendererProps> = ({ field, currentValue }) => {
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>(currentValue || "");
   const { accessToken } = useAuthorized();
 
   useEffect(() => {
@@ -84,8 +85,6 @@ const CacheFieldRenderer: React.FC<CacheFieldRendererProps> = ({ field, currentV
   }
 
   if (field.field_type === "Models_Select") {
-    const [selectedModel, setSelectedModel] = useState<string>(currentValue || "");
-
     const embeddingModels = modelInfo
       .filter((option: ModelGroup) => option.mode === "embedding")
       .map((option: ModelGroup) => ({
