@@ -543,39 +543,32 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             else:
                 budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
 
-            return VertexGeminiConfig._build_thinking_config(budget)
+            return {
+                "thinkingBudget": budget,
+                "includeThoughts": True,
+            }
         elif reasoning_effort == "low":
-            return VertexGeminiConfig._build_thinking_config(
-                DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
-            )
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+                "includeThoughts": True,
+            }
         elif reasoning_effort == "medium":
-            return VertexGeminiConfig._build_thinking_config(
-                DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
-            )
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+                "includeThoughts": True,
+            }
         elif reasoning_effort == "high":
-            return VertexGeminiConfig._build_thinking_config(
-                DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
-            )
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+                "includeThoughts": True,
+            }
         elif reasoning_effort == "disable":
-            return VertexGeminiConfig._build_thinking_config(
-                DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
-                include_thoughts=False,
-            )
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
+                "includeThoughts": False,
+            }
         else:
             raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
-
-    @staticmethod
-    def _build_thinking_config(
-        budget: int, include_thoughts: Optional[bool] = None
-    ) -> GeminiThinkingConfig:
-        safe_budget = max(budget, 0)
-        include_thoughts = (
-            safe_budget > 0 if include_thoughts is None else include_thoughts
-        )
-        return {
-            "thinkingBudget": safe_budget,
-            "includeThoughts": include_thoughts,
-        }
 
     @staticmethod
     def _is_thinking_budget_zero(thinking_budget: Optional[int]) -> bool:
