@@ -165,13 +165,13 @@ def validate_responses_match(slp_response, litellm_response):
 
 
 @pytest.mark.asyncio
-async def test_basic_openai_responses_api_non_streaming_with_logging():
+def test_basic_openai_responses_api_non_streaming_with_logging():
     litellm._turn_on_debug()
     litellm.set_verbose = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
     request_model = "gpt-4o"
-    response = await litellm.aresponses(
+    response = litellm.responses(
         model=request_model,
         input="hi",
     )
@@ -180,7 +180,7 @@ async def test_basic_openai_responses_api_non_streaming_with_logging():
     print("response hidden params=", response._hidden_params)
 
     print("sleeping for 2 seconds...")
-    await asyncio.sleep(5)
+    time.sleep(5)
     print(
         "standard logging payload=",
         json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
