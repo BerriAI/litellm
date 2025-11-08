@@ -185,6 +185,7 @@ def test_basic_openai_responses_api_non_streaming_with_logging():
         "standard logging payload=",
         json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
     )
+    print("response usage=", response.usage)
 
     assert response is not None
     assert test_custom_logger.standard_logging_object is not None
