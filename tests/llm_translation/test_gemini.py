@@ -1021,8 +1021,8 @@ def test_gemini_reasoning_effort_env_override(monkeypatch):
         "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH", "0"
     )
 
-    import litellm.litellm.constants as constants_module
-    import litellm.litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini as gemini_module
+    import litellm.constants as constants_module
+    import litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini as gemini_module
 
     importlib.reload(constants_module)
     importlib.reload(gemini_module)
