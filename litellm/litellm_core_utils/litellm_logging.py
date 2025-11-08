@@ -1580,6 +1580,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     "usage",
                     transformed_usage.model_dump() if hasattr(transformed_usage, 'model_dump') else dict(transformed_usage),
                 )
+                if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
+                    standard_logging_payload["response"] = result.model_dump() if hasattr(result, 'model_dump') else dict(result)
 
             if (
                 litellm.max_budget
