@@ -180,7 +180,7 @@ async def test_basic_openai_responses_api_non_streaming_with_logging():
     print("response hidden params=", response._hidden_params)
 
     print("sleeping for 2 seconds...")
-    await asyncio.sleep(2)
+    await asyncio.sleep(5)
     print(
         "standard logging payload=",
         json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
