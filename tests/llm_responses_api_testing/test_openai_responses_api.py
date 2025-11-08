@@ -93,25 +93,25 @@ def validate_standard_logging_payload(
 
 
 @pytest.mark.asyncio
-async def test_basic_openai_responses_api_streaming_with_logging():
+def test_basic_openai_responses_api_streaming_with_logging():
     litellm._turn_on_debug()
     litellm.set_verbose = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
     request_model = "gpt-4o"
-    response = await litellm.aresponses(
+    response = litellm.responses(
         model=request_model,
         input="hi",
         stream=True,
     )
     final_response: Optional[ResponseCompletedEvent] = None
-    async for event in response:
+    for event in response:
         if event.type == "response.completed":
             final_response = event
         print("litellm response=", json.dumps(event, indent=4, default=str))
 
     print("sleeping for 2 seconds...")
-    await asyncio.sleep(4)
+    time.sleep(2)
     print(
         "standard logging payload=",
         json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
