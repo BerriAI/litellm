@@ -31,7 +31,6 @@ from litellm.types.integrations.pagerduty import (
     PagerDutyRequestBody,
 )
 from litellm.types.utils import (
-    CallTypesLiteral,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
@@ -143,7 +142,18 @@ class PagerDutyAlerting(SlackAlerting):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: CallTypesLiteral,
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+            "rerank",
+            "mcp_call",
+            "anthropic_messages",
+        ],
     ) -> Optional[Union[Exception, str, dict]]:
         """
         Example of detecting hanging requests by waiting a given threshold.
