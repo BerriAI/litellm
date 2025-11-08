@@ -256,7 +256,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
             side_effect=lambda generation_params, **kwargs: generation_params,
         ) as mock_add_prompt_params:
-            # 1. Create a mock response object with usage information containing None values
+            # Create a mock response object with usage information containing None values
             response_obj = MagicMock()
             response_obj.usage = MagicMock()
             response_obj.usage.prompt_tokens = None
@@ -271,7 +271,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
             response_obj.usage.get = mock_get
 
-            # 2. Prepare standard kwargs for the call
+            # Prepare standard kwargs for the call
             kwargs = {
                 "model": "gpt-4-null-usage",
                 "messages": [{"role": "user", "content": "Test"}],
@@ -282,7 +282,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 "response_cost": 0.0,
             }
 
-            # 3. Call the method under test
+            # Call the method under test
             self.logger._log_langfuse_v2(
                 user_id="test-user",
                 metadata={},
@@ -297,11 +297,11 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 level="DEFAULT",
                 litellm_call_id=kwargs["litellm_call_id"],
             )
-            # 4. Check the arguments passed to the mocked langfuse generation call
+            #  Check the arguments passed to the mocked langfuse generation call
             self.mock_langfuse_trace.generation.assert_called_once()
             call_args, call_kwargs = self.mock_langfuse_trace.generation.call_args
 
-            # 5. Inspect the usage and usage_details dictionaries
+            #  Inspect the usage and usage_details dictionaries
             usage_arg = call_kwargs.get("usage")
             usage_details_arg = call_kwargs.get("usage_details")
 
@@ -318,7 +318,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             self.assertEqual(usage_details_arg["cache_creation_input_tokens"], 0)
             self.assertEqual(usage_details_arg["cache_read_input_tokens"], 0)
 
-            # 6. Assert that our new mock was called, ensuring the test isolation worked
             mock_add_prompt_params.assert_called_once()
 
 
