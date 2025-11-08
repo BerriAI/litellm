@@ -18,8 +18,12 @@ class TestVertexAIRerankTransform:
         self.config = VertexAIRerankConfig()
         self.model = "semantic-ranker-default@latest"
 
-    def test_get_complete_url(self):
+    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
+    def test_get_complete_url(self, mock_ensure_access_token):
         """Test URL generation for Vertex AI Discovery Engine rerank API."""
+        # Mock _ensure_access_token to return (token, project_id)
+        mock_ensure_access_token.return_value = ("mock-token", None)
+        
         # Test with project ID from environment
         with patch.dict(os.environ, {"VERTEXAI_PROJECT": "test-project-123"}):
             url = self.config.get_complete_url(api_base=None, model=self.model)
@@ -29,6 +33,7 @@ class TestVertexAIRerankTransform:
         # Test with litellm.vertex_project
         with patch.dict(os.environ, {}, clear=True):
             import litellm
+
             # Set vertex_project attribute if it doesn't exist
             if not hasattr(litellm, 'vertex_project'):
                 litellm.vertex_project = None
@@ -44,6 +49,7 @@ class TestVertexAIRerankTransform:
         # Test error when no project ID is available
         with patch.dict(os.environ, {}, clear=True):
             import litellm
+
             # Set vertex_project to None to ensure no project ID is available
             if not hasattr(litellm, 'vertex_project'):
                 litellm.vertex_project = None
