@@ -810,7 +810,7 @@ def test_azure_image_generation_cost_calculator():
                 )
             ],
             output_format=None,
-            quality=None,
+            quality="hd",
             size=None,
             usage=ImageUsage(
                 input_tokens=0,
