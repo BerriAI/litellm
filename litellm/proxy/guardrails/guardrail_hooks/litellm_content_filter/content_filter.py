@@ -84,20 +84,39 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.pattern_redaction_format = pattern_redaction_format or self.PATTERN_REDACTION_FORMAT
         self.keyword_redaction_tag = keyword_redaction_tag or self.KEYWORD_REDACTION_STR
         
-        # Compile regex patterns
-        self.compiled_patterns: List[Tuple[Pattern, str, ContentFilterAction]] = []
+        # Normalize inputs: convert dicts to Pydantic models for consistent handling
+        normalized_patterns: List[ContentFilterPattern] = []
         if patterns:
             for pattern_config in patterns:
-                self._add_pattern(pattern_config)
+                if isinstance(pattern_config, dict):
+                    normalized_patterns.append(ContentFilterPattern(**pattern_config))
+                else:
+                    normalized_patterns.append(pattern_config)
         
-        # Load blocked words
-        self.blocked_words: Dict[str, Tuple[ContentFilterAction, Optional[str]]] = {}
+        normalized_blocked_words: List[BlockedWord] = []
         if blocked_words:
             for word in blocked_words:
-                self.blocked_words[word.keyword.lower()] = (
-                    word.action,
-                    word.description,
-                )
+                if isinstance(word, dict):
+                    normalized_blocked_words.append(BlockedWord(**word))
+                else:
+                    normalized_blocked_words.append(word)
+        
+        # Compile regex patterns
+        self.compiled_patterns: List[Tuple[Pattern, str, ContentFilterAction]] = []
+        for pattern_config in normalized_patterns:
+            self._add_pattern(pattern_config)
+        
+        # Load blocked words - always initialize as dict
+        self.blocked_words: Dict[str, Tuple[ContentFilterAction, Optional[str]]] = {}
+        for word in normalized_blocked_words:
+            self.blocked_words[word.keyword.lower()] = (word.action, word.description)
+        
+        # Defensive check: ensure blocked_words is a dict (not a list)
+        if not isinstance(self.blocked_words, dict):
+            verbose_proxy_logger.error(
+                f"blocked_words is not a dict, got {type(self.blocked_words)}. Resetting to empty dict."
+            )
+            self.blocked_words = {}
         
         # Load blocked words from file if provided
         if blocked_words_file:
@@ -208,6 +227,25 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             Tuple of (keyword, action, description) if match found, None otherwise
         """
+        # Handle case where blocked_words might still be a list (old instances)
+        if isinstance(self.blocked_words, list):
+            verbose_proxy_logger.warning(
+                "blocked_words is a list instead of dict. Re-initializing. "
+                "This suggests an old guardrail instance is still in use. Please restart the server."
+            )
+            # Convert list to dict on-the-fly
+            temp_dict: Dict[str, Tuple[ContentFilterAction, Optional[str]]] = {}
+            for word in self.blocked_words:
+                if isinstance(word, dict):
+                    temp_dict[word.get("keyword", "").lower()] = (
+                        word.get("action", ContentFilterAction.BLOCK),
+                        word.get("description")
+                    )
+            self.blocked_words = temp_dict
+        
+        if not self.blocked_words:
+            return None
+            
         text_lower = text.lower()
         for keyword, (action, description) in self.blocked_words.items():
             if keyword in text_lower:
