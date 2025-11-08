@@ -5027,7 +5027,7 @@ async def embeddings(  # noqa: PLR0915
             and isinstance(data["input"], list)
             and len(data["input"]) > 0
             and isinstance(data["input"][0], list)
-            and all(isinstance(token, int) for token in data["input"][0])
+            and isinstance(data["input"][0][0], int)
         ):  # check if array of tokens passed in
             # check if provider accept list of tokens as input - e.g. for langchain integration
             if llm_router is not None and data.get("model") in router_model_names:
