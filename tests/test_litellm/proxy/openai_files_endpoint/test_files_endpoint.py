@@ -185,7 +185,7 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
         "/v1/files",
         files={"file": test_file},
         data={
-            "purpose": "user_data",
+            "purpose": "assistants",
             "target_model_names": "azure-gpt-3-5-turbo, gpt-3.5-turbo",
         },
         headers={"Authorization": "Bearer test-key"},
