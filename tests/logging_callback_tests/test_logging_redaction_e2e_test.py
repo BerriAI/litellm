@@ -124,7 +124,7 @@ async def test_global_redaction_off_with_dynamic_params(turn_off_message_logging
 async def test_redaction_responses_api():
     """Test redaction with ResponsesAPIResponse format"""
     litellm.turn_off_message_logging = True
-    test_custom_logger = TestCustomLogger()
+    test_custom_logger = TestCustomLogger(turn_off_message_logging=True)
     litellm.callbacks = [test_custom_logger]
     
     # Mock a ResponsesAPIResponse-style response
@@ -174,7 +174,7 @@ async def test_redaction_responses_api():
 async def test_redaction_responses_api_stream():
     """Test redaction with ResponsesAPIResponse format"""
     litellm.turn_off_message_logging = True
-    test_custom_logger = TestCustomLogger()
+    test_custom_logger = TestCustomLogger(turn_off_message_logging=True)
     litellm.callbacks = [test_custom_logger]
     
     # Mock a ResponsesAPIResponse-style response with streaming chunks
