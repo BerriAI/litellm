@@ -187,7 +187,7 @@ Start the proxy and make requests:
 
 ```bash
 # Step 1: Generate video
-curl --location 'http://0.0.0.0:4000/videos/generations' \
+curl --location 'http://0.0.0.0:4000/videos' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: Bearer sk-1234' \
 --data '{
@@ -197,19 +197,13 @@ curl --location 'http://0.0.0.0:4000/videos/generations' \
 }'
 
 # Step 2: Poll status
-curl --location 'http://0.0.0.0:4000/videos/status' \
---header 'Authorization: Bearer sk-1234' \
---data '{
-  "video_id": "projects/.../operations/..."
-}'
+curl --location 'http://localhost:4000/v1/videos/{video_id}' \
+--header 'x-litellm-api-key: sk-1234'
 
 # Step 3: Download video
-curl --location 'http://0.0.0.0:4000/videos/retrieval' \
---header 'Authorization: Bearer sk-1234' \
---data '{
-  "video_id": "projects/.../operations/..."
-}' \
---output veo_city.mp4
+curl --location 'http://localhost:4000/v1/videos/{video_id}/content' \
+--header 'x-litellm-api-key: sk-1234' \
+--output video.mp4
 ```
 
 </TabItem>

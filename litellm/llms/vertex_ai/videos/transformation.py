@@ -24,7 +24,7 @@ from litellm.types.videos.utils import (
     extract_original_video_id,
 )
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.constants import DEFAULT_VIDEO_DURATION_SECONDS
+from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -136,10 +136,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                     mapped_params["durationSeconds"] = duration
             except (ValueError, TypeError):
                 # If conversion fails, use default
-                mapped_params["durationSeconds"] = DEFAULT_VIDEO_DURATION_SECONDS
-        else:
-            # Always set default duration if not provided
-            mapped_params["durationSeconds"] = DEFAULT_VIDEO_DURATION_SECONDS
+                pass
 
         return mapped_params
 
@@ -335,7 +332,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         usage_data = {}
         if request_data:
             parameters = request_data.get("parameters", {})
-            duration = parameters.get("durationSeconds") or DEFAULT_VIDEO_DURATION_SECONDS
+            duration = parameters.get("durationSeconds") or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
             if duration is not None:
                 try:
                     usage_data["duration_seconds"] = float(duration)
@@ -411,6 +408,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
         operation_name = response_data.get("name", "")
         is_done = response_data.get("done", False)
+        error_data = response_data.get("error")
 
         # Extract model from operation name
         model = self.extract_model_from_operation_name(operation_name)
@@ -434,12 +432,20 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         else:
             created_at = int(time.time())
 
+        if error_data:
+            status = "failed"
+        elif is_done:
+            status = "completed"
+        else:
+            status = "processing"
+
         video_obj = VideoObject(
             id=video_id,
             object="video",
-            status="completed" if is_done else "processing",
+            status=status,
             model=model,
             created_at=created_at,
+            error=error_data,
         )
         return video_obj
 

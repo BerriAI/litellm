@@ -152,7 +152,7 @@ class TestGeminiVideoConfig:
         assert mapped["image"] == "test_image.jpg"
 
     def test_map_openai_params_default_duration(self):
-        """Test that durationSeconds defaults to 4 when not provided."""
+        """Test that durationSeconds is omitted when not provided."""
         openai_params = {
             "size": "1280x720",
         }
@@ -163,9 +163,8 @@ class TestGeminiVideoConfig:
             drop_params=False
         )
         
-        # Check that default duration is added (matching OpenAI's default)
         assert mapped["aspectRatio"] == "16:9"
-        assert mapped["durationSeconds"] == 4, "Should default to 4 seconds when not provided"
+        assert "durationSeconds" not in mapped
 
     def test_map_openai_params_with_gemini_specific_params(self):
         """Test that Gemini-specific params are passed through correctly."""

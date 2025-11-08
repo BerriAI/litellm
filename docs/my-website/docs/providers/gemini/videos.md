@@ -241,7 +241,7 @@ litellm --config config.yaml
 
 ```bash
 # Step 1: Generate video
-curl --location 'http://0.0.0.0:4000/videos/generations' \
+curl --location 'http://0.0.0.0:4000/v1/videos' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: Bearer sk-1234' \
 --data '{
@@ -252,18 +252,12 @@ curl --location 'http://0.0.0.0:4000/videos/generations' \
 # Response: {"id": "gemini::operations/generate_12345::...", "status": "processing", ...}
 
 # Step 2: Check status
-curl --location 'http://0.0.0.0:4000/videos/status' \
---header 'Authorization: Bearer sk-1234' \
---data '{
-    "video_id": "gemini::operations/generate_12345::..."
-}'
+curl --location 'http://localhost:4000/v1/videos/{video_id}' \
+--header 'x-litellm-api-key: sk-1234'
 
 # Step 3: Download video (when status is "completed")
-curl --location 'http://0.0.0.0:4000/videos/retrieval' \
---header 'Authorization: Bearer sk-1234' \
---data '{
-    "video_id": "gemini::operations/generate_12345::..."
-}' \
+curl --location 'http://localhost:4000/v1/videos/{video_id}/content' \
+--header 'x-litellm-api-key: sk-1234' \
 --output video.mp4
 ```
 

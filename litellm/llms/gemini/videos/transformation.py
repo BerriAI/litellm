@@ -18,7 +18,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 import litellm
 from litellm.types.llms.gemini import GeminiLongRunningOperationResponse, GeminiVideoGenerationInstance, GeminiVideoGenerationParameters, GeminiVideoGenerationRequest
-from litellm.constants import DEFAULT_VIDEO_DURATION_SECONDS
+from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
@@ -130,10 +130,7 @@ class GeminiVideoConfig(BaseVideoConfig):
                     mapped_params["durationSeconds"] = duration
             except (ValueError, TypeError):
                 # If conversion fails, use default
-                mapped_params["durationSeconds"] = DEFAULT_VIDEO_DURATION_SECONDS
-        else:
-            # Always set default duration if not provided
-            mapped_params["durationSeconds"] = DEFAULT_VIDEO_DURATION_SECONDS
+                pass
         
         # Pass through any other params that weren't mapped (Gemini-specific params)
         for key, value in video_create_optional_params.items():
@@ -310,7 +307,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         usage_data = {}
         if request_data:
             parameters = request_data.get("parameters", {})
-            duration = parameters.get("durationSeconds") or DEFAULT_VIDEO_DURATION_SECONDS
+            duration = parameters.get("durationSeconds") or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
             if duration is not None:
                 try:
                     usage_data["duration_seconds"] = float(duration)

@@ -209,7 +209,7 @@ print(f"Video ID: {response.id}")
 
 LiteLLM provides OpenAI API compatible video endpoints for complete video generation workflow:
 
-- `/videos/generations` - Generate new videos
+- `/videos` - Generate new videos
 - `/videos/remix` - Edit existing videos with reference images  
 - `/videos/status` - Check video generation status
 - `/videos/retrieval` - Download completed videos
@@ -229,7 +229,6 @@ model_list:
       model: azure/sora-2
       api_key: os.environ/AZURE_OPENAI_API_KEY
       api_base: os.environ/AZURE_OPENAI_API_BASE
-      api_version: "2024-02-15-preview"
 ```
 
 Start litellm

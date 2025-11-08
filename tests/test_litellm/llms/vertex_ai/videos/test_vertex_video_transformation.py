@@ -216,7 +216,7 @@ class TestVertexAIVideoConfig:
         assert mapped["aspectRatio"] == "16:9"
 
     def test_map_openai_params_default_duration(self):
-        """Test that durationSeconds defaults to 4 when not provided."""
+        """Test that durationSeconds is omitted when not provided."""
         openai_params = {"size": "1280x720"}
 
         mapped = self.config.map_openai_params(
@@ -225,9 +225,8 @@ class TestVertexAIVideoConfig:
             drop_params=False,
         )
 
-        # Check that default duration is added (matching OpenAI's default)
         assert mapped["aspectRatio"] == "16:9"
-        assert mapped["durationSeconds"] == 4, "Should default to 4 seconds when not provided"
+        assert "durationSeconds" not in mapped
 
     def test_map_openai_params_size_conversions(self):
         """Test size to aspect ratio conversions."""
@@ -364,6 +363,29 @@ class TestVertexAIVideoConfig:
 
         assert isinstance(video_obj, VideoObject)
         assert video_obj.status == "completed"
+
+    def test_transform_video_status_retrieve_response_error(self):
+        """Test transformation of status response when an error is returned."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "name": "projects/test-project/locations/us-central1/publishers/google/models/veo-002/operations/12345",
+            "done": True,
+            "metadata": {"createTime": "2024-01-15T10:30:00.000Z"},
+            "error": {
+                "code": 3,
+                "message": "Unsupported output video duration 3 seconds, supported durations are [8,5,6,7] for feature text_to_video.",
+            },
+        }
+
+        video_obj = self.config.transform_video_status_retrieve_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="vertex_ai",
+        )
+
+        assert isinstance(video_obj, VideoObject)
+        assert video_obj.status == "failed"
+        assert video_obj.error == mock_response.json.return_value["error"]
 
     def test_transform_video_content_request(self):
         """Test transformation of video content request."""
