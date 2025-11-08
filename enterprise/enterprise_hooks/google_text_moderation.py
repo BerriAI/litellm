@@ -6,13 +6,14 @@
 # +-----------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+from typing import Literal
+
 from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import CallTypesLiteral
 
 
 class _ENTERPRISE_GoogleTextModeration(CustomLogger):
@@ -88,7 +89,16 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: CallTypesLiteral,
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "responses",
+            "mcp_call",
+            "anthropic_messages",
+        ],
     ):
         """
         - Calls Google's Text Moderation API
