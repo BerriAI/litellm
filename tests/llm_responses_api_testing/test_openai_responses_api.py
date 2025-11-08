@@ -65,7 +65,10 @@ def validate_standard_logging_payload(
     assert slp is not None, "Standard logging payload should not be None"
 
     # Validate token counts
-    print("response=", json.dumps(response, indent=4, default=str))
+    print("VALIDATING STANDARD LOGGING PAYLOAD. response=", json.dumps(response, indent=4, default=str))
+    print("FIELDS IN SLP=", json.dumps(slp, indent=4, default=str))
+    print("SLP PROMPT TOKENS=", slp["prompt_tokens"])
+    print("RESPONSE PROMPT TOKENS=", response["usage"]["input_tokens"])
     assert (
         slp["prompt_tokens"] == response["usage"]["input_tokens"]
     ), "Prompt tokens mismatch"
@@ -108,7 +111,7 @@ async def test_basic_openai_responses_api_streaming_with_logging():
         print("litellm response=", json.dumps(event, indent=4, default=str))
 
     print("sleeping for 2 seconds...")
-    await asyncio.sleep(2)
+    await asyncio.sleep(4)
     print(
         "standard logging payload=",
         json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
@@ -135,11 +138,11 @@ def validate_responses_match(slp_response, litellm_response):
 
     # Validate usage
     assert (
-        slp_response["usage"]["input_tokens"]
+        slp_response["usage"]["prompt_tokens"]
         == litellm_response["usage"]["input_tokens"]
     ), "Input tokens mismatch"
     assert (
-        slp_response["usage"]["output_tokens"]
+        slp_response["usage"]["completion_tokens"]
         == litellm_response["usage"]["output_tokens"]
     ), "Output tokens mismatch"
     assert (
