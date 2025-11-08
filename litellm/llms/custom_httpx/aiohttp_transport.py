@@ -253,6 +253,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             allow_redirects=False,
             auto_decompress=False,
             timeout=ClientTimeout(
+                total=timeout.get("timeout"),
                 sock_connect=timeout.get("connect"),
                 sock_read=timeout.get("read"),
                 connect=timeout.get("pool"),
