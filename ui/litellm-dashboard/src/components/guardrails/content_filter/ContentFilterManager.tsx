@@ -114,13 +114,7 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
 
   // Read-only display mode
   if (!isEditing) {
-    return (
-      <ContentFilterDisplay
-        patterns={selectedPatterns}
-        blockedWords={blockedWords}
-        readOnly={true}
-      />
-    );
+    return <ContentFilterDisplay patterns={selectedPatterns} blockedWords={blockedWords} readOnly={true} />;
   }
 
   // Edit mode
@@ -130,7 +124,8 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
       {hasUnsavedChanges && (
         <div className="mb-4 px-4 py-3 bg-yellow-50 border border-yellow-200 rounded-md">
           <p className="text-sm text-yellow-800 font-medium">
-            ⚠️ You have unsaved changes to patterns or keywords. Remember to click "Save Changes" at the bottom.
+            ⚠️ You have unsaved changes to patterns or keywords. Remember to click &quot;Save Changes&quot; at the
+            bottom.
           </p>
         </div>
       )}
@@ -165,10 +160,7 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
 export default ContentFilterManager;
 
 // Helper function to format data for API
-export const formatContentFilterDataForAPI = (
-  patterns: Pattern[],
-  blockedWords: BlockedWord[]
-) => {
+export const formatContentFilterDataForAPI = (patterns: Pattern[], blockedWords: BlockedWord[]) => {
   return {
     patterns: patterns.map((p) => ({
       pattern_type: p.type === "prebuilt" ? "prebuilt" : "regex",
@@ -184,4 +176,3 @@ export const formatContentFilterDataForAPI = (
     })),
   };
 };
-

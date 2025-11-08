@@ -21,7 +21,7 @@ import {
   getGuardrailUISettings,
   getGuardrailProviderSpecificParams,
 } from "@/components/networking";
-import { getGuardrailLogoAndName, guardrail_provider_map, shouldRenderContentFilterConfigSettings } from "./guardrail_info_helpers";
+import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_info_helpers";
 import PiiConfiguration from "./pii_configuration";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
@@ -83,7 +83,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   } | null>(null);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [hasUnsavedContentFilterChanges, setHasUnsavedContentFilterChanges] = useState(false);
-  
+
   // Content Filter data ref (managed by ContentFilterManager)
   const contentFilterDataRef = React.useRef<{ patterns: any[]; blockedWords: any[] }>({
     patterns: [],
@@ -240,10 +240,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       if (guardrailData.litellm_params?.guardrail === "litellm_content_filter") {
         const originalPatterns = guardrailData.litellm_params?.patterns || [];
         const originalBlockedWords = guardrailData.litellm_params?.blocked_words || [];
-        
+
         const formattedData = formatContentFilterDataForAPI(
           contentFilterDataRef.current.patterns,
-          contentFilterDataRef.current.blockedWords
+          contentFilterDataRef.current.blockedWords,
         );
 
         if (JSON.stringify(originalPatterns) !== JSON.stringify(formattedData.patterns)) {
@@ -615,10 +615,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     </Form.Item>
 
                     <div className="flex justify-end gap-2 mt-6">
-                      <Button onClick={() => {
-                        setIsEditing(false);
-                        setHasUnsavedContentFilterChanges(false);
-                      }}>Cancel</Button>
+                      <Button
+                        onClick={() => {
+                          setIsEditing(false);
+                          setHasUnsavedContentFilterChanges(false);
+                        }}
+                      >
+                        Cancel
+                      </Button>
                       <TremorButton>Save Changes</TremorButton>
                     </div>
                   </Form>
