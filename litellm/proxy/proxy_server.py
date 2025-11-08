@@ -3595,7 +3595,7 @@ class ProxyConfig:
                 "guardrails from the DB %s", str(guardrails_in_db)
             )
             for guardrail in guardrails_in_db:
-                IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                     guardrail=cast(Guardrail, guardrail),
                 )
         except Exception as e:
@@ -4209,7 +4209,7 @@ class ProxyStartupEvent:
         # Key fixes:
         # 1. Remove/minimize jitter to avoid normalize() memory explosion
         # 2. Use larger misfire_grace_time to prevent backlog calculations
-        # 3. Set replace_existing=True to avoid duplicate jobs (must be passed per-job, not as default)
+        # 3. Set replace_existing=True to avoid duplicate jobs
         from apscheduler.executors.asyncio import AsyncIOExecutor
         from apscheduler.jobstores.memory import MemoryJobStore
 
@@ -5081,7 +5081,7 @@ async def embeddings(  # noqa: PLR0915
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
+            user_api_key_dict=user_api_key_dict, data=data, call_type="aembedding"
         )
 
         tasks = []
@@ -5089,7 +5089,7 @@ async def embeddings(  # noqa: PLR0915
             proxy_logging_obj.during_call_hook(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
-                call_type="embeddings",
+                call_type="aembedding",
             )
         )
 
