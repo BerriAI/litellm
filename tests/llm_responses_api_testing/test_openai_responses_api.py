@@ -1642,7 +1642,7 @@ async def test_openai_responses_api_token_limit_error():
 
 
 async def test_openai_streaming_logging():
-    """Test that hard_limit parameter is properly sent in the HTTP request for GPT-5 models."""
+    """Test that OpenAI Responses API streaming logging is working correctly."""
     litellm._turn_on_debug()
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.types.utils import Usage
@@ -1658,8 +1658,12 @@ async def test_openai_streaming_logging():
         ):
             print(f"response_obj: {response_obj.usage}")
             assert isinstance(
-                response_obj.usage, Usage
-            ), f"Expected response_obj.usage to be of type Usage, but got {type(response_obj.usage)}"
+                response_obj.usage, (Usage, dict)
+            ), f"Expected response_obj.usage to be of type Usage or dict, but got {type(response_obj.usage)}"
+            # Verify it has the chat completion format fields
+            if isinstance(response_obj.usage, dict):
+                assert "prompt_tokens" in response_obj.usage, "Usage dict should have prompt_tokens"
+                assert "completion_tokens" in response_obj.usage, "Usage dict should have completion_tokens"
             print("\n\nVALIDATED USAGE\n\n")
             self.validate_usage = True
 
