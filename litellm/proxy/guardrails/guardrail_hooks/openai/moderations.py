@@ -22,6 +22,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.types.callbacks import ModerationHookCallType, PreCallHookCallType
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -184,17 +185,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         user_api_key_dict: "UserAPIKeyAuth",
         cache: Any,
         data: Dict[str, Any],
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Optional[Dict[str, Any]]:
         """
         Pre-call hook to scan user prompts before sending to LLM.
@@ -241,15 +232,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         self,
         data: Dict[str, Any],
         user_api_key_dict: "UserAPIKeyAuth",
-        call_type: Literal[
-            "completion",
-            "embeddings", 
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-        ],
+        call_type: ModerationHookCallType,
     ) -> Optional[Dict[str, Any]]:
         """
         Moderation hook to scan user prompts during call processing.

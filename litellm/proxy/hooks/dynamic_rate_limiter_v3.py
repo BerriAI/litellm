@@ -22,6 +22,8 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.rate_limiter_utils import convert_priority_to_percent
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.router import ModelGroupInfo
+from litellm.types.callbacks import PreCallHookCallType
+
 
 
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
@@ -466,18 +468,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion", 
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Optional[Union[Exception, str, dict]]:
         """
         Saturation-aware pre-call hook for priority-based rate limiting.

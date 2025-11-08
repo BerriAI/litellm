@@ -16,6 +16,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.router import ModelGroupInfo
 from litellm.utils import get_utc_datetime
+from litellm.types.callbacks import PreCallHookCallType
+
 
 from .rate_limiter_utils import convert_priority_to_percent
 
@@ -193,18 +195,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Optional[
         Union[Exception, str, dict]
     ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm

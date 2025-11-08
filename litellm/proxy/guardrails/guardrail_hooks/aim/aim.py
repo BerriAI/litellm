@@ -22,7 +22,9 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.callbacks import ModerationHookCallType, PreCallHookCallType
 from litellm.types.utils import (
+
     Choices,
     EmbeddingResponse,
     ImageResponse,
@@ -67,18 +69,7 @@ class AimGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
         return await self.call_aim_guardrail(
@@ -89,16 +80,7 @@ class AimGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: ModerationHookCallType,
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
 
