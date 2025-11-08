@@ -17,7 +17,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import CallTypesLiteral
 from litellm.utils import get_formatted_prompt
 
 
@@ -121,7 +120,16 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: CallTypesLiteral,
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "responses",
+            "mcp_call",
+            "anthropic_messages",
+        ],
     ):
         """
         - Calls the LLM Guard Endpoint
