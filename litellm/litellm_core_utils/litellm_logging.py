@@ -1571,12 +1571,14 @@ class Logging(LiteLLMLoggingBaseClass):
             # MAP RESPONSES API USAGE OBJECT TO LITELLM USAGE OBJECT
             if isinstance(result, ResponsesAPIResponse):
                 result = result.model_copy()
+                transformed_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    result.usage
+                )
+                # Set as dict instead of Usage object so model_dump() serializes it correctly
                 setattr(
                     result,
                     "usage",
-                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                        result.usage
-                    ),
+                    transformed_usage.model_dump() if hasattr(transformed_usage, 'model_dump') else dict(transformed_usage),
                 )
 
             if (
