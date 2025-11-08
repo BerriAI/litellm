@@ -56,26 +56,17 @@ class ZaiChatConfig(BaseConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Returns list of supported OpenAI parameters for Zai models.
-        Full OpenAI compatibility including tool calling.
+        Based on Zai official documentation (as of November 2025).
         """
         return [
-            "logit_bias",
-            "logprobs",
-            "max_tokens",
-            "n",
-            "presence_penalty",
-            "response_format",
-            "seed",
-            "stream",
-            "stream_options",
             "temperature",
-            "tool_choice",
-            "tools",
-            "top_logprobs",
             "top_p",
-            "user",
-            "frequency_penalty",
+            "max_tokens",
+            "stream",
             "stop",
+            "tools",
+            "tool_choice",
+            "response_format",
         ]
 
     def map_openai_params(
@@ -117,10 +108,8 @@ class ZaiChatConfig(BaseConfig):
             "messages": messages,
         }
 
-        
-
-        # ✅ PRESERVE TOOLS - Pass through directly without popping
-        TOOL_PARAMS = [
+        # ✅ PRESERVE ONLY SUPPORTED PARAMS - Based on Zai official docs
+        SUPPORTED_PARAMS = [
             "tools",
             "tool_choice",
             "temperature",
@@ -128,17 +117,15 @@ class ZaiChatConfig(BaseConfig):
             "top_p",
             "stream",
             "stop",
-            "parallel_tool_calls",
+            "response_format",
         ]
 
-        for param in TOOL_PARAMS:
+        for param in SUPPORTED_PARAMS:
             if param in optional_params:
                 payload[param] = optional_params[param]
 
-        # Add any remaining optional params
-        for param, value in optional_params.items():
-            if param not in TOOL_PARAMS and param != "extra_body":
-                payload[param] = value
+        # Filter out unsupported params like parallel_tool_calls
+        # Don't add any remaining params that aren't supported
 
         return payload
 
