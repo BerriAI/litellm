@@ -163,7 +163,6 @@ pip install litellm==1.79.2
     - Add searxng search API provider - [PR #16259](https://github.com/BerriAI/litellm/pull/16259)
 
 - **[Responses API](../../docs/response_api)**
-    - Add shared_session support to responses API - [PR #16260](https://github.com/BerriAI/litellm/pull/16260)
     - Support responses API streaming in langfuse otel - [PR #16153](https://github.com/BerriAI/litellm/pull/16153)
     - Pass extra_body parameters to provider in Responses API requests - [PR #16320](https://github.com/BerriAI/litellm/pull/16320)
 
@@ -228,7 +227,6 @@ pip install litellm==1.79.2
 - **Usage & Analytics**
     - UI - Tag Usage Top Model Table View and Label Fix - [PR #16249](https://github.com/BerriAI/litellm/pull/16249)
     - UI - Litellm usage date picker - [PR #16264](https://github.com/BerriAI/litellm/pull/16264)
-    - Handle None values in daily spend sort key - [PR #16245](https://github.com/BerriAI/litellm/pull/16245)
 
 - **Cache Settings**
     - UI - Cache Settings Redis Add Semantic Cache Settings - [PR #16398](https://github.com/BerriAI/litellm/pull/16398)
@@ -245,9 +243,9 @@ pip install litellm==1.79.2
 
 ---
 
-## Logging / Guardrail / Prompt Management Integrations
+## AI Integrations
 
-#### Features
+### Logging
 
 - **[Langfuse](../../docs/proxy/logging#langfuse)**
     - Fix langfuse input tokens logic for cached tokens - [PR #16203](https://github.com/BerriAI/litellm/pull/16203)
@@ -267,7 +265,7 @@ pip install litellm==1.79.2
 - **[DataDog](../../docs/proxy/logging#datadog)**
     - Add DD Agent Host support for `datadog` callback - [PR #16379](https://github.com/BerriAI/litellm/pull/16379)
 
-#### Guardrails
+### Guardrails
 
 - **[Noma](../../docs/proxy/guardrails)**
     - Revert Noma Apply Guardrail implementation - [PR #16214](https://github.com/BerriAI/litellm/pull/16214)
@@ -280,24 +278,7 @@ pip install litellm==1.79.2
     - Add LiteLLM Gateway built in guardrail - [PR #16338](https://github.com/BerriAI/litellm/pull/16338)
     - UI - Allow configuring LiteLLM Custom Guardrail - [PR #16339](https://github.com/BerriAI/litellm/pull/16339)
 
----
-
-## Spend Tracking, Budgets and Rate Limiting
-
-- **Cost Tracking**
-    - Fix OpenAI Responses API streaming tests usage field names and cost calculation - [PR #16236](https://github.com/BerriAI/litellm/pull/16236)
-
----
-
-## MCP Gateway
-
-- **Configuration**
-    - Configure static mcp header - [PR #16179](https://github.com/BerriAI/litellm/pull/16179)
-    - Persist mcp credentials in db - [PR #16308](https://github.com/BerriAI/litellm/pull/16308)
-
----
-
-## Secret Managers
+### Secret Managers
 
 - **[CyberArk](../../docs/secret_managers)**
     - Add CyberArk Secrets Manager Integration - [PR #16278](https://github.com/BerriAI/litellm/pull/16278)
@@ -319,13 +300,31 @@ pip install litellm==1.79.2
 
 ---
 
+## Spend Tracking, Budgets and Rate Limiting
+
+- **Cost Tracking**
+    - Fix OpenAI Responses API streaming tests usage field names and cost calculation - [PR #16236](https://github.com/BerriAI/litellm/pull/16236)
+
+---
+
+## MCP Gateway
+
+- **Configuration**
+    - Configure static mcp header - [PR #16179](https://github.com/BerriAI/litellm/pull/16179)
+    - Persist mcp credentials in db - [PR #16308](https://github.com/BerriAI/litellm/pull/16308)
+
+
 ## Performance / Loadbalancing / Reliability improvements
 
 - **Memory Leak Fixes**
     - Resolve memory accumulation caused by Pydantic 2.11+ deprecation warnings - [PR #16110](https://github.com/BerriAI/litellm/pull/16110)
 
+- **Session Management**
+    - Add shared_session support to responses API - [PR #16260](https://github.com/BerriAI/litellm/pull/16260)
+
 - **Error Handling**
     - Gracefully handle connection closed errors during streaming - [PR #16294](https://github.com/BerriAI/litellm/pull/16294)
+    - Handle None values in daily spend sort key - [PR #16245](https://github.com/BerriAI/litellm/pull/16245)
 
 - **Configuration**
     - Remove minimum validation for cache control injection index - [PR #16149](https://github.com/BerriAI/litellm/pull/16149)
@@ -337,9 +336,7 @@ pip install litellm==1.79.2
 - **Hooks**
     - Add parallel execution handling in during_call_hook - [PR #16279](https://github.com/BerriAI/litellm/pull/16279)
 
-- **Type Safety**
-    - Resolve MyPy type checking errors and CI linting - [PR #16277](https://github.com/BerriAI/litellm/pull/16277)
-    - Fix MyPy errors for aembedding call_type - CI pass - [PR #16360](https://github.com/BerriAI/litellm/pull/16360)
+
 
 ---
 
