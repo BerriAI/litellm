@@ -988,7 +988,7 @@ def test_gemini_reasoning_effort_zero_budget_disables_thoughts(monkeypatch):
     from litellm.types.utils import CallTypes
 
     monkeypatch.setattr(
-        "litellm.litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH",
+        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH",
         0,
     )
 
