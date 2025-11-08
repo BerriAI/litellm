@@ -118,6 +118,7 @@ class TestVertexImageGeneration(BaseImageGenTest):
             "n": 1,
         }
 
+
 class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()
@@ -164,9 +165,11 @@ class TestAimlImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "aiml/flux-pro/v1.1"}
 
+
 class TestFAL_AI_ImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "fal_ai/fal-ai/imagen4/preview"}
+
 
 class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
@@ -175,7 +178,6 @@ class TestGoogleImageGen(BaseImageGenTest):
 
 class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
-        litellm.set_verbose = True
         return {
             "model": "azure/dall-e-3",
             "api_version": "2024-02-01",
@@ -187,7 +189,6 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
                 }
             },
         }
-
 
 
 @pytest.mark.skip(reason="model EOL")
@@ -281,13 +282,13 @@ async def test_aiml_image_generation_with_dynamic_api_key():
         assert captured_json_data["prompt"] == "A cute baby sea otter"
         assert captured_json_data["model"] == "flux-pro/v1.1"
 
+
 @pytest.mark.asyncio
 async def test_azure_image_generation_request_body():
     from litellm import aimage_generation
+
     test_dir = os.path.dirname(__file__)
-    expected_path = os.path.join(
-        test_dir, "request_payloads", "azure_gpt_image_1.json"
-    )
+    expected_path = os.path.join(test_dir, "request_payloads", "azure_gpt_image_1.json")
     with open(expected_path, "r") as f:
         expected_body = json.load(f)
 
@@ -299,12 +300,12 @@ async def test_azure_image_generation_request_body():
 
         with pytest.raises(Exception):
             await aimage_generation(
-                    model="azure/gpt-image-1",
-                    prompt="test prompt",
-                    api_base="https://example.azure.com",
-                    api_key="test-key",
-                    api_version="2025-04-01-preview",
-                )
+                model="azure/gpt-image-1",
+                prompt="test prompt",
+                api_base="https://example.azure.com",
+                api_key="test-key",
+                api_version="2025-04-01-preview",
+            )
 
         mock_post.assert_called_once()
         call_args = mock_post.call_args
