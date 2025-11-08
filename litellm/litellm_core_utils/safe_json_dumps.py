@@ -42,25 +42,8 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             seen.remove(id(obj))
             return result
         else:
-            # Check if object is a Pydantic model and convert to dict
-            if hasattr(obj, "model_dump"):
-                # Pydantic v2
-                try:
-                    seen.remove(id(obj))
-                    return _serialize(obj.model_dump(), seen, depth)
-                except Exception:
-                    pass
-            elif hasattr(obj, "dict"):
-                # Pydantic v1
-                try:
-                    seen.remove(id(obj))
-                    return _serialize(obj.dict(), seen, depth)
-                except Exception:
-                    pass
-            
             # Fall back to string conversion for non-serializable objects.
             try:
-                seen.remove(id(obj))
                 return str(obj)
             except Exception:
                 return "Unserializable Object"
