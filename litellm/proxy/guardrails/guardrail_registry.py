@@ -582,7 +582,23 @@ class InMemoryGuardrailHandler:
             else new_params
         )
         
-        return existing_dict != new_dict
+        # Compare and identify specific differences
+        changed_fields = {}
+        all_keys = set(existing_dict.keys()) | set(new_dict.keys())
+        for key in all_keys:
+            old_val = existing_dict.get(key)
+            new_val = new_dict.get(key)
+            if old_val != new_val:
+                changed_fields[key] = {"old": old_val, "new": new_val}
+        
+        # Log differences if any found
+        if changed_fields:
+            verbose_proxy_logger.debug(
+                f"Guardrail params changed. Differences: {changed_fields}"
+            )
+        
+        # Return True if any fields changed
+        return len(changed_fields) > 0
 
     def reinitialize_guardrail(
         self, guardrail: Guardrail, config_file_path: Optional[str] = None
