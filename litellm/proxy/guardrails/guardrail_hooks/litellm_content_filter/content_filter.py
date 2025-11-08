@@ -84,20 +84,32 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.pattern_redaction_format = pattern_redaction_format or self.PATTERN_REDACTION_FORMAT
         self.keyword_redaction_tag = keyword_redaction_tag or self.KEYWORD_REDACTION_STR
         
-        # Compile regex patterns
-        self.compiled_patterns: List[Tuple[Pattern, str, ContentFilterAction]] = []
+        # Normalize inputs: convert dicts to Pydantic models for consistent handling
+        normalized_patterns: List[ContentFilterPattern] = []
         if patterns:
             for pattern_config in patterns:
-                self._add_pattern(pattern_config)
+                if isinstance(pattern_config, dict):
+                    normalized_patterns.append(ContentFilterPattern(**pattern_config))
+                else:
+                    normalized_patterns.append(pattern_config)
+        
+        normalized_blocked_words: List[BlockedWord] = []
+        if blocked_words:
+            for word in blocked_words:
+                if isinstance(word, dict):
+                    normalized_blocked_words.append(BlockedWord(**word))
+                else:
+                    normalized_blocked_words.append(word)
+        
+        # Compile regex patterns
+        self.compiled_patterns: List[Tuple[Pattern, str, ContentFilterAction]] = []
+        for pattern_config in normalized_patterns:
+            self._add_pattern(pattern_config)
         
         # Load blocked words
         self.blocked_words: Dict[str, Tuple[ContentFilterAction, Optional[str]]] = {}
-        if blocked_words:
-            for word in blocked_words:
-                self.blocked_words[word.keyword.lower()] = (
-                    word.action,
-                    word.description,
-                )
+        for word in normalized_blocked_words:
+            self.blocked_words[word.keyword.lower()] = (word.action, word.description)
         
         # Load blocked words from file if provided
         if blocked_words_file:
