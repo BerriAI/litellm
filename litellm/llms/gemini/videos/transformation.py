@@ -1,6 +1,5 @@
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 import base64
-import time
 
 import httpx
 from httpx._types import RequestFiles
@@ -13,9 +12,6 @@ from litellm.types.videos.utils import (
     extract_original_video_id,
 )
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.llms.vertex_ai.common_utils import (
-    _convert_vertex_datetime_to_openai_datetime,
-)
 import litellm
 from litellm.types.llms.gemini import GeminiLongRunningOperationResponse, GeminiVideoGenerationInstance, GeminiVideoGenerationParameters, GeminiVideoGenerationRequest
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
@@ -517,7 +513,6 @@ class GeminiVideoConfig(BaseVideoConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        from ...base_llm.chat.transformation import BaseLLMException
         from ..common_utils import GeminiError
 
         return GeminiError(

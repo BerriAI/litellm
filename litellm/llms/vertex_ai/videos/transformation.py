@@ -587,7 +587,6 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        from litellm.llms.base_llm.chat.transformation import BaseLLMException
         from litellm.llms.vertex_ai.common_utils import VertexAIError
 
         return VertexAIError(

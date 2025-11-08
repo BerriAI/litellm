@@ -1,4 +1,4 @@
-from typing import Any, Dict, cast, get_type_hints
+from typing import Any, Dict, cast
 
 import litellm
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
