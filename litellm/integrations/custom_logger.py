@@ -557,11 +557,29 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
 
         if standard_logging_object_copy.get("response") is not None:
-            model_response = ModelResponse(
-                choices=[Choices(message=Message(content=redacted_str))]
-            )
-            model_response_dict = model_response.model_dump()
-            standard_logging_object_copy["response"] = model_response_dict
+            response = standard_logging_object_copy["response"]
+            # Check if this is a ResponsesAPIResponse (has "output" field)
+            if isinstance(response, dict) and "output" in response:
+                # Make a copy to avoid modifying the original
+                from copy import deepcopy
+                response_copy = deepcopy(response)
+                # Redact content in output array
+                if isinstance(response_copy.get("output"), list):
+                    for output_item in response_copy["output"]:
+                        if isinstance(output_item, dict) and "content" in output_item:
+                            if isinstance(output_item["content"], list):
+                                # Redact text in content items
+                                for content_item in output_item["content"]:
+                                    if isinstance(content_item, dict) and "text" in content_item:
+                                        content_item["text"] = redacted_str
+                standard_logging_object_copy["response"] = response_copy
+            else:
+                # Standard ModelResponse format
+                model_response = ModelResponse(
+                    choices=[Choices(message=Message(content=redacted_str))]
+                )
+                model_response_dict = model_response.model_dump()
+                standard_logging_object_copy["response"] = model_response_dict
 
         model_call_details_copy["standard_logging_object"] = standard_logging_object_copy
         return model_call_details_copy

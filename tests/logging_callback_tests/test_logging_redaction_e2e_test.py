@@ -145,8 +145,25 @@ async def test_redaction_responses_api():
     assert standard_logging_payload is not None
     
     # Verify redaction in ResponsesAPIResponse format
-    assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
-    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+    # The response is now the full ResponsesAPIResponse object with transformed usage
+    assert isinstance(standard_logging_payload["response"], dict)
+    assert "usage" in standard_logging_payload["response"]
+    # Check that usage has been transformed to chat completion format
+    assert "prompt_tokens" in standard_logging_payload["response"]["usage"]
+    assert "completion_tokens" in standard_logging_payload["response"]["usage"]
+    from litellm.types.utils import LiteLLMCommonStrings
+    redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
+    
+    assert standard_logging_payload["messages"][0]["content"] == redacted_str
+    
+    # Verify that output content is redacted
+    assert "output" in standard_logging_payload["response"]
+    output_items = standard_logging_payload["response"]["output"]
+    for output_item in output_items:
+        if "content" in output_item and isinstance(output_item["content"], list):
+            for content_item in output_item["content"]:
+                if "text" in content_item:
+                    assert content_item["text"] == redacted_str, f"Expected redacted text but got: {content_item['text']}"
     print(
         "logged standard logging payload for ResponsesAPIResponse",
         json.dumps(standard_logging_payload, indent=2),
@@ -194,8 +211,25 @@ async def test_redaction_responses_api_stream():
     assert standard_logging_payload is not None
     
     # Verify redaction in ResponsesAPIResponse format
-    assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
-    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+    from litellm.types.utils import LiteLLMCommonStrings
+    redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
+    
+    # The streaming response is in ModelResponse format (choices), not ResponsesAPIResponse format (output)
+    assert isinstance(standard_logging_payload["response"], dict)
+    assert standard_logging_payload["messages"][0]["content"] == redacted_str
+    
+    # Verify that response content is redacted (ModelResponse format)
+    if "choices" in standard_logging_payload["response"]:
+        # ModelResponse format
+        assert standard_logging_payload["response"]["choices"][0]["message"]["content"] == redacted_str
+    elif "output" in standard_logging_payload["response"]:
+        # ResponsesAPIResponse format
+        output_items = standard_logging_payload["response"]["output"]
+        for output_item in output_items:
+            if "content" in output_item and isinstance(output_item["content"], list):
+                for content_item in output_item["content"]:
+                    if "text" in content_item:
+                        assert content_item["text"] == redacted_str, f"Expected redacted text but got: {content_item['text']}"
     print(
         "logged standard logging payload for ResponsesAPIResponse stream",
         json.dumps(standard_logging_payload, indent=2),
