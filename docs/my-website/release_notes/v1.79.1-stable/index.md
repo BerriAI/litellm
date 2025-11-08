@@ -58,7 +58,7 @@ pip install litellm==1.80.0
 
 This update fixes two major issues. First, embeddings now go through the same optimized pipeline as chat/completions, benefiting from all performance improvements applied so far. Second, while the responses API was already using the same pipeline, it now also includes our internal network management for connection handling, drastically improving latency and reducing memory overhead from per-request setup.
 
-As a result, performance improved across all latency percentiles:
+As a result, end-to-end latency improved across all percentiles:
 
 `/embeddings`
 
