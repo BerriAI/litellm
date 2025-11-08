@@ -1807,7 +1807,7 @@ class TranscriptionUsageInputTokenDetailsObject(BaseModel):
     text_tokens: int
 
 
-class TranscriptionUsageTokensObject(Usage):
+class TranscriptionUsageTokensObject(BaseModel):
     type: Literal["tokens"]
     input_tokens: int
     output_tokens: int
