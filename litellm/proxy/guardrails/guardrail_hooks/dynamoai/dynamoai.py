@@ -7,16 +7,7 @@
 
 import os
 from datetime import datetime
-from typing import (
-    Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Type,
-    Union,
-)
+from typing import Any, AsyncGenerator, Dict, List, Optional, Type, Union
 
 import httpx
 
@@ -36,7 +27,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.dynamoai import (
     DynamoAIRequest,
     DynamoAIResponse,
 )
-from litellm.types.utils import GuardrailStatus, ModelResponseStream
+from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponseStream
 
 GUARDRAIL_NAME = "dynamoai"
 
@@ -44,9 +35,10 @@ GUARDRAIL_NAME = "dynamoai"
 class DynamoAIGuardrails(CustomGuardrail):
     """
     DynamoAI Guardrails integration for LiteLLM.
-    
+
     Provides content moderation and policy enforcement using DynamoAI's guardrail API.
     """
+
     def __init__(
         self,
         guardrail_name: str = "litellm_test",
@@ -59,28 +51,30 @@ class DynamoAIGuardrails(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        
+
         # Set API configuration
         self.api_key = api_key or os.getenv("DYNAMOAI_API_KEY")
         if not self.api_key:
             raise ValueError(
                 "DynamoAI API key is required. Set DYNAMOAI_API_KEY environment variable or pass api_key parameter."
             )
-        
+
         self.api_base = api_base or os.getenv(
             "DYNAMOAI_API_BASE", "https://api.dynamo.ai"
         )
         self.api_url = f"{self.api_base}/v1/moderation/analyze/"
-        
+
         # Model ID for tracking/logging purposes
         self.model_id = model_id or os.getenv("DYNAMOAI_MODEL_ID", "")
-        
+
         # Policy IDs - get from parameter, env var, or use empty list
         env_policy_ids = os.getenv("DYNAMOAI_POLICY_IDS", "")
-        self.policy_ids = policy_ids or (env_policy_ids.split(",") if env_policy_ids else [])
+        self.policy_ids = policy_ids or (
+            env_policy_ids.split(",") if env_policy_ids else []
+        )
         self.guardrail_name = guardrail_name
         self.guardrail_provider = "dynamoai"
-        
+
         # store kwargs as optional_params
         self.optional_params = kwargs
 
@@ -108,38 +102,38 @@ class DynamoAIGuardrails(CustomGuardrail):
     ) -> DynamoAIResponse:
         """
         Call DynamoAI Guardrails API to analyze messages for policy violations.
-        
+
         Args:
             messages: List of messages to analyze
             text_type: Type of text being analyzed ("input" or "output")
             request_data: Optional request data for logging purposes
-            
+
         Returns:
             DynamoAIResponse: Response from the DynamoAI Guardrails API
         """
         start_time = datetime.now()
-        
+
         payload: DynamoAIRequest = {
             "messages": messages,
         }
-        
+
         # Add optional fields if provided
         if self.policy_ids:
             payload["policyIds"] = self.policy_ids
         if self.model_id:
             payload["modelId"] = self.model_id
-        
+
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
+            "Authorization": f"Bearer {self.api_key}",
         }
-        
+
         verbose_proxy_logger.debug(
             "DynamoAI request to %s with payload=%s",
             self.api_url,
             payload,
         )
-        
+
         try:
             response = await self.async_handler.post(
                 url=self.api_url,
@@ -148,10 +142,10 @@ class DynamoAIGuardrails(CustomGuardrail):
             )
             response.raise_for_status()
             response_json = response.json()
-            
+
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
-            
+
             # Add guardrail information to request trace
             if request_data:
                 guardrail_status = self._determine_guardrail_status(response_json)
@@ -164,17 +158,15 @@ class DynamoAIGuardrails(CustomGuardrail):
                     end_time=end_time.timestamp(),
                     duration=duration,
                 )
-            
+
             return response_json
-            
+
         except httpx.HTTPError as e:
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
-            
-            verbose_proxy_logger.error(
-                "DynamoAI API request failed: %s", str(e)
-            )
-            
+
+            verbose_proxy_logger.error("DynamoAI API request failed: %s", str(e))
+
             # Add guardrail information with failure status
             if request_data:
                 self.add_standard_logging_guardrail_information_to_request_data(
@@ -186,7 +178,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                     end_time=end_time.timestamp(),
                     duration=duration,
                 )
-            
+
             raise
 
     def _process_dynamoai_guardrails_response(
@@ -194,35 +186,35 @@ class DynamoAIGuardrails(CustomGuardrail):
     ) -> DynamoAIProcessedResult:
         """
         Process the response from the DynamoAI Guardrails API
-        
+
         Args:
             response: The response from the API with 'finalAction' and 'appliedPolicies' keys
-            
+
         Returns:
             DynamoAIProcessedResult: Processed response with detected violations
         """
         final_action = response.get("finalAction", "NONE")
         applied_policies = response.get("appliedPolicies", [])
-        
+
         violations_detected: List[str] = []
         violation_details: Dict[str, Any] = {}
-        
+
         # For now, only handle BLOCK action
         if final_action == "BLOCK":
             for applied_policy in applied_policies:
                 policy_info = applied_policy.get("policy", {})
                 policy_outputs = applied_policy.get("outputs", {})
-                
+
                 # Get policy name and action
                 policy_name = policy_info.get("name", "unknown")
-                
+
                 # Check for action in multiple places
                 policy_action = (
-                    applied_policy.get("action") or 
-                    (policy_outputs.get("action") if policy_outputs else None) or
-                    "NONE"
+                    applied_policy.get("action")
+                    or (policy_outputs.get("action") if policy_outputs else None)
+                    or "NONE"
                 )
-                
+
                 # Only include policies with BLOCK action
                 if policy_action == "BLOCK":
                     violations_detected.append(policy_name)
@@ -231,12 +223,14 @@ class DynamoAIGuardrails(CustomGuardrail):
                         "action": policy_action,
                         "method": policy_info.get("method"),
                         "description": policy_info.get("description"),
-                        "message": policy_outputs.get("message") if policy_outputs else None,
+                        "message": (
+                            policy_outputs.get("message") if policy_outputs else None
+                        ),
                     }
-        
+
         return {
             "violations_detected": violations_detected,
-            "violation_details": violation_details
+            "violation_details": violation_details,
         }
 
     def _determine_guardrail_status(
@@ -244,7 +238,7 @@ class DynamoAIGuardrails(CustomGuardrail):
     ) -> GuardrailStatus:
         """
         Determine the guardrail status based on DynamoAI API response.
-        
+
         Returns:
             "success": Content allowed through with no violations (finalAction is NONE)
             "guardrail_intervened": Content blocked (finalAction is BLOCK)
@@ -253,21 +247,21 @@ class DynamoAIGuardrails(CustomGuardrail):
         try:
             if not isinstance(response_json, dict):
                 return "guardrail_failed_to_respond"
-            
+
             # Check for error in response
             if response_json.get("error"):
                 return "guardrail_failed_to_respond"
-            
+
             final_action = response_json.get("finalAction", "NONE")
-            
+
             if final_action == "NONE":
                 return "success"
             elif final_action == "BLOCK":
                 return "guardrail_intervened"
-            
+
             # For now, treat other actions as success (WARN, REDACT, SANITIZE not implemented yet)
             return "success"
-            
+
         except Exception as e:
             verbose_proxy_logger.error(
                 "Error determining DynamoAI guardrail status: %s", str(e)
@@ -277,22 +271,24 @@ class DynamoAIGuardrails(CustomGuardrail):
     def _create_error_message(self, processed_result: DynamoAIProcessedResult) -> str:
         """
         Create a detailed error message from processed guardrail results.
-        
+
         Args:
             processed_result: Processed response with detected violations
-            
+
         Returns:
             Formatted error message string
         """
         violations_detected = processed_result["violations_detected"]
         violation_details = processed_result["violation_details"]
-        
-        error_message = f"Guardrail failed: {len(violations_detected)} violation(s) detected\n\n"
-        
+
+        error_message = (
+            f"Guardrail failed: {len(violations_detected)} violation(s) detected\n\n"
+        )
+
         for policy_name in violations_detected:
             error_message += f"- {policy_name.upper()}:\n"
             details = violation_details.get(policy_name, {})
-            
+
             # Format violation details
             if details.get("action"):
                 error_message += f"  Action: {details['action']}\n"
@@ -305,7 +301,7 @@ class DynamoAIGuardrails(CustomGuardrail):
             if details.get("policyId"):
                 error_message += f"  Policy ID: {details['policyId']}\n"
             error_message += "\n"
-        
+
         return error_message.strip()
 
     async def async_pre_call_hook(
@@ -313,18 +309,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         """
         Runs before the LLM API call
@@ -349,7 +334,9 @@ class DynamoAIGuardrails(CustomGuardrail):
                 request_data=data,
             )
 
-            verbose_proxy_logger.debug("Guardrails async_pre_call_hook result=%s", result)
+            verbose_proxy_logger.debug(
+                "Guardrails async_pre_call_hook result=%s", result
+            )
 
             # Process the guardrails response
             processed_result = self._process_dynamoai_guardrails_response(result)
@@ -364,23 +351,14 @@ class DynamoAIGuardrails(CustomGuardrail):
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
-        
+
         return data
 
     async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ):
         """
         Runs in parallel to LLM API call
@@ -404,7 +382,9 @@ class DynamoAIGuardrails(CustomGuardrail):
                 request_data=data,
             )
 
-            verbose_proxy_logger.debug("Guardrails async_moderation_hook result=%s", result)
+            verbose_proxy_logger.debug(
+                "Guardrails async_moderation_hook result=%s", result
+            )
 
             # Process the guardrails response
             processed_result = self._process_dynamoai_guardrails_response(result)
@@ -449,22 +429,26 @@ class DynamoAIGuardrails(CustomGuardrail):
             return
 
         verbose_proxy_logger.debug("async_post_call_success_hook response=%s", response)
-        
+
         # Check if the ModelResponse has text content in its choices
         # to avoid sending empty content to DynamoAI (e.g., during tool calls)
         if isinstance(response, litellm.ModelResponse):
             has_text_content = False
             dynamoai_messages: List[Dict[str, Any]] = []
-            
+
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
-                    if choice.message.content and isinstance(choice.message.content, str):
+                    if choice.message.content and isinstance(
+                        choice.message.content, str
+                    ):
                         has_text_content = True
-                        dynamoai_messages.append({
-                            "role": choice.message.role or "assistant",
-                            "content": choice.message.content
-                        })
-            
+                        dynamoai_messages.append(
+                            {
+                                "role": choice.message.role or "assistant",
+                                "content": choice.message.content,
+                            }
+                        )
+
             if not has_text_content:
                 verbose_proxy_logger.warning(
                     "DynamoAI: not running guardrail. No output text in response"
@@ -478,7 +462,9 @@ class DynamoAIGuardrails(CustomGuardrail):
                     request_data=data,
                 )
 
-                verbose_proxy_logger.debug("Guardrails async_post_call_success_hook result=%s", result)
+                verbose_proxy_logger.debug(
+                    "Guardrails async_post_call_success_hook result=%s", result
+                )
 
                 # Process the guardrails response
                 processed_result = self._process_dynamoai_guardrails_response(result)
@@ -517,4 +503,3 @@ class DynamoAIGuardrails(CustomGuardrail):
         )
 
         return DynamoAIGuardrailConfigModel
-
