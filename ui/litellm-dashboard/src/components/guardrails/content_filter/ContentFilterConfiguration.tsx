@@ -194,10 +194,10 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
         >
           <div style={{ marginBottom: 16 }}>
             <Space>
-              <Button onClick={() => setPatternModalVisible(true)} icon={PlusOutlined}>
+              <Button type="button" onClick={() => setPatternModalVisible(true)} icon={PlusOutlined}>
                 Add prebuilt pattern
               </Button>
-              <Button onClick={() => setCustomPatternModalVisible(true)} variant="secondary" icon={PlusOutlined}>
+              <Button type="button" onClick={() => setCustomPatternModalVisible(true)} variant="secondary" icon={PlusOutlined}>
                 Add custom regex
               </Button>
             </Space>
@@ -226,11 +226,11 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
         >
           <div style={{ marginBottom: 16 }}>
             <Space>
-              <Button onClick={() => setKeywordModalVisible(true)} icon={PlusOutlined}>
+              <Button type="button" onClick={() => setKeywordModalVisible(true)} icon={PlusOutlined}>
                 Add keyword
               </Button>
               <Upload beforeUpload={handleFileUpload} accept=".yaml,.yml" showUploadList={false}>
-                <Button variant="secondary" icon={UploadOutlined} loading={uploadValidating}>
+                <Button type="button" variant="secondary" icon={UploadOutlined} loading={uploadValidating}>
                   Upload YAML file
                 </Button>
               </Upload>

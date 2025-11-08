@@ -73,6 +73,7 @@ const PatternTable: React.FC<PatternTableProps> = ({
       width: 100,
       render: (_: any, record: Pattern) => (
         <Button
+          type="button"
           variant="light"
           color="red"
           size="xs"
