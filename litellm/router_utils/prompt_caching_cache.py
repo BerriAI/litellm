@@ -3,7 +3,7 @@ Wrapper around router cache. Meant to store model id when prompt caching support
 """
 
 import hashlib
-import json
+import orjson
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from typing_extensions import TypedDict
@@ -41,8 +41,8 @@ class PromptCachingCache:
             return obj.dict()
         elif isinstance(obj, dict):
             # If the object is a dictionary, serialize it with sorted keys
-            return json.dumps(
-                obj, sort_keys=True, separators=(",", ":")
+            return orjson.dumps(obj, option=orjson.OPT_SORT_KEYS).decode(
+                "utf-8"
             )  # Standardize serialization
 
         elif isinstance(obj, list):
@@ -69,14 +69,10 @@ class PromptCachingCache:
             data_to_hash["tools"] = serialized_tools
 
         # Combine serialized data into a single string
-        data_to_hash_str = json.dumps(
-            data_to_hash,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        data_to_hash_bytes = orjson.dumps(data_to_hash, option=orjson.OPT_SORT_KEYS)
 
         # Create a hash of the serialized data for a stable cache key
-        hashed_data = hashlib.sha256(data_to_hash_str.encode()).hexdigest()
+        hashed_data = hashlib.sha256(data_to_hash_bytes).hexdigest()
         return f"deployment:{hashed_data}:prompt_caching"
 
     def add_model_id(

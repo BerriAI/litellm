@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import traceback
-from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -48,6 +47,7 @@ else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+import datetime
 
 
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:

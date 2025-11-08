@@ -1,4 +1,5 @@
 import json
+import orjson
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -139,7 +140,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else json.dumps(data)
+                        else orjson.dumps(data)
                     ),
                     timeout=timeout,
                     stream=stream,
@@ -199,7 +200,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else json.dumps(data)
+                        else orjson.dumps(data)
                     ),
                     timeout=timeout,
                     stream=stream,
@@ -837,7 +838,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                data=json.dumps(data),
+                data=orjson.dumps(data),
                 timeout=timeout,
             )
         except Exception as e:
@@ -971,7 +972,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                data=json.dumps(data),
+                data=orjson.dumps(data),
                 timeout=timeout,
             )
         except Exception as e:
@@ -1013,7 +1014,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                data=json.dumps(request_data),
+                data=orjson.dumps(request_data),
                 timeout=timeout,
             )
         except Exception as e:
@@ -1863,7 +1864,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.post(
                 url=request_url,
                 headers=headers,
-                data=signed_json_body or json.dumps(request_body),
+                data=signed_json_body or orjson.dumps(request_body),
                 stream=stream or False,
                 logging_obj=logging_obj,
             )
@@ -2801,7 +2802,7 @@ class BaseLLMHTTPHandler:
                         **headers,
                         **transformed_request["initial_request"]["headers"],
                     },
-                    data=json.dumps(transformed_request["initial_request"]["data"]),
+                    data=orjson.dumps(transformed_request["initial_request"]["data"]),
                     timeout=timeout,
                 )
 
@@ -2912,7 +2913,7 @@ class BaseLLMHTTPHandler:
                         **headers,
                         **transformed_request["initial_request"]["headers"],
                     },
-                    data=json.dumps(transformed_request["initial_request"]["data"]),
+                    data=orjson.dumps(transformed_request["initial_request"]["data"]),
                     timeout=timeout,
                 )
 
@@ -5692,7 +5693,7 @@ class BaseLLMHTTPHandler:
         )
 
         request_data = (
-            json.dumps(request_body) if signed_json_body is None else signed_json_body
+            orjson.dumps(request_body) if signed_json_body is None else signed_json_body
         )
 
         try:
@@ -5795,7 +5796,7 @@ class BaseLLMHTTPHandler:
         )
 
         request_data = (
-            json.dumps(request_body) if signed_json_body is None else signed_json_body
+            orjson.dumps(request_body) if signed_json_body is None else signed_json_body
         )
 
         try:
