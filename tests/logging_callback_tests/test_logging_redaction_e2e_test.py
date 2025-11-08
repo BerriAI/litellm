@@ -151,10 +151,8 @@ async def test_redaction_responses_api():
     # Check that usage has been transformed to chat completion format
     assert "prompt_tokens" in standard_logging_payload["response"]["usage"]
     assert "completion_tokens" in standard_logging_payload["response"]["usage"]
-    from litellm.types.utils import LiteLLMCommonStrings
-    redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
     
-    assert standard_logging_payload["messages"][0]["content"] == redacted_str
+    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
     
     # Verify that output content is redacted
     assert "output" in standard_logging_payload["response"]
@@ -163,7 +161,7 @@ async def test_redaction_responses_api():
         if "content" in output_item and isinstance(output_item["content"], list):
             for content_item in output_item["content"]:
                 if "text" in content_item:
-                    assert content_item["text"] == redacted_str, f"Expected redacted text but got: {content_item['text']}"
+                    assert content_item["text"] == "redacted-by-litellm", f"Expected redacted text but got: {content_item['text']}"
     print(
         "logged standard logging payload for ResponsesAPIResponse",
         json.dumps(standard_logging_payload, indent=2),
@@ -211,17 +209,14 @@ async def test_redaction_responses_api_stream():
     assert standard_logging_payload is not None
     
     # Verify redaction in ResponsesAPIResponse format
-    from litellm.types.utils import LiteLLMCommonStrings
-    redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
-    
     # The streaming response is in ModelResponse format (choices), not ResponsesAPIResponse format (output)
     assert isinstance(standard_logging_payload["response"], dict)
-    assert standard_logging_payload["messages"][0]["content"] == redacted_str
+    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
     
     # Verify that response content is redacted (ModelResponse format)
     if "choices" in standard_logging_payload["response"]:
         # ModelResponse format
-        assert standard_logging_payload["response"]["choices"][0]["message"]["content"] == redacted_str
+        assert standard_logging_payload["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
     elif "output" in standard_logging_payload["response"]:
         # ResponsesAPIResponse format
         output_items = standard_logging_payload["response"]["output"]
@@ -229,7 +224,7 @@ async def test_redaction_responses_api_stream():
             if "content" in output_item and isinstance(output_item["content"], list):
                 for content_item in output_item["content"]:
                     if "text" in content_item:
-                        assert content_item["text"] == redacted_str, f"Expected redacted text but got: {content_item['text']}"
+                        assert content_item["text"] == "redacted-by-litellm", f"Expected redacted text but got: {content_item['text']}"
     print(
         "logged standard logging payload for ResponsesAPIResponse stream",
         json.dumps(standard_logging_payload, indent=2),
