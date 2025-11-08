@@ -4,6 +4,7 @@
 
 export interface PrebuiltPattern {
   name: string;
+  display_name: string;
   category: string;
   description: string;
 }
@@ -12,6 +13,7 @@ export interface Pattern {
   id: string;
   type: "prebuilt" | "custom";
   name: string;
+  display_name?: string;
   pattern?: string;
   action: "BLOCK" | "MASK";
 }

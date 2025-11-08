@@ -7,6 +7,7 @@ const { Option } = Select;
 
 interface PrebuiltPattern {
   name: string;
+  display_name: string;
   category: string;
   description: string;
 }
@@ -52,8 +53,12 @@ const PatternModal: React.FC<PatternModalProps> = ({
             style={{ width: "100%", marginTop: 8 }}
             showSearch
             filterOption={(input, option) => {
-              if (typeof option?.value === 'string') {
-                return option.value.toLowerCase().includes(input.toLowerCase());
+              const pattern = prebuiltPatterns.find((p) => p.name === option?.value);
+              if (pattern) {
+                return (
+                  pattern.display_name.toLowerCase().includes(input.toLowerCase()) ||
+                  pattern.name.toLowerCase().includes(input.toLowerCase())
+                );
               }
               return false;
             }}
@@ -66,7 +71,7 @@ const PatternModal: React.FC<PatternModalProps> = ({
                 <Select.OptGroup key={category} label={category}>
                   {categoryPatterns.map((pattern) => (
                     <Option key={pattern.name} value={pattern.name}>
-                      {pattern.name}
+                      {pattern.display_name}
                     </Option>
                   ))}
                 </Select.OptGroup>

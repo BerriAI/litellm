@@ -10,6 +10,7 @@ interface Pattern {
   id: string;
   type: "prebuilt" | "custom";
   name: string;
+  display_name?: string;
   pattern?: string;
   action: "BLOCK" | "MASK";
 }
@@ -41,6 +42,7 @@ const PatternTable: React.FC<PatternTableProps> = ({
       title: "Pattern name",
       dataIndex: "name",
       key: "name",
+      render: (_: string, record: Pattern) => record.display_name || record.name,
     },
     {
       title: "Regex pattern",

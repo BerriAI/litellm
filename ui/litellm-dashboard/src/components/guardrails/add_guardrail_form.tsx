@@ -49,6 +49,7 @@ interface GuardrailSettings {
   content_filter_settings?: {
     prebuilt_patterns: Array<{
       name: string;
+      display_name: string;
       category: string;
       description: string;
     }>;
