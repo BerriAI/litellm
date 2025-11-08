@@ -18,7 +18,13 @@ from typing_extensions import Required, TypedDict
 from litellm._uuid import uuid
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
-from litellm.types.mcp import MCPAuthType, MCPTransport, MCPTransportType
+from litellm.types.mcp import (
+    MCPAuth,
+    MCPAuthType,
+    MCPCredentials,
+    MCPTransport,
+    MCPTransportType,
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
@@ -960,6 +966,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
     auth_type: Optional[MCPAuthType] = None
+    credentials: Optional[MCPCredentials] = None
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
@@ -986,6 +993,28 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("url is required for HTTP/SSE transport")
         return values
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_credentials_requirements(cls, values):
+        if not isinstance(values, dict):
+            return values
+
+        auth_type = values.get("auth_type")
+        if auth_type in {MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic}:
+            credentials = values.get("credentials")
+            auth_value = None
+            if isinstance(credentials, dict):
+                auth_value = credentials.get("auth_value")
+            elif hasattr(credentials, "get"):
+                auth_value = credentials.get("auth_value")  # type: ignore[attr-defined]
+
+            if not auth_value:
+                raise ValueError(
+                    "auth_value is required when auth_type is api_key, bearer_token, or basic"
+                )
+
+        return values
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -994,6 +1023,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
     auth_type: Optional[MCPAuthType] = None
+    credentials: Optional[MCPCredentials] = None
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
@@ -1029,6 +1059,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     url: Optional[str] = None
     transport: MCPTransportType
     auth_type: Optional[MCPAuthType] = None
+    credentials: Optional[MCPCredentials] = None
     created_at: Optional[datetime] = None
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
@@ -2365,6 +2396,7 @@ class WebhookEvent(CallInfo):
         "threshold_crossed",
         "projected_limit_exceeded",
         "key_created",
+        "key_rotated",
         "internal_user_created",
         "spend_tracked",
     ]

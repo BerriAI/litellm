@@ -9,6 +9,11 @@ model_list:
       model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
       aws_region_name: us-west-2
       custom_llm_provider: bedrock
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
+      custom_llm_provider: bedrock
+      aws_region_name: us-west-2
     
 
 # like MCPs/vector stores
@@ -28,7 +33,7 @@ litellm_settings:
   store_audit_logs: true
   verbose: true
   log_level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
-  success_callback: ["s3_v2"]
+  callbacks: ["s3_v2", "smtp_email"]
   s3_callback_params:
     s3_endpoint_url: "https://localhost:443"  # Replace with your Minio server URL and port
     s3_aws_access_key_id: "minioadmin"
@@ -40,3 +45,8 @@ litellm_settings:
   cache: True
   cache_params:
     type: local
+  drop_params: True
+
+
+general_settings:
+  store_prompts_in_spend_logs: True

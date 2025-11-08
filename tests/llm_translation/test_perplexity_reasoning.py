@@ -62,12 +62,13 @@ class TestPerplexityReasoning:
         """
         Test that reasoning_effort is correctly passed in actual completion call (mocked)
         """
-        import httpx
+        from openai import OpenAI
+        from openai.types.chat.chat_completion import ChatCompletion
         
         litellm.set_verbose = True
         
         # Mock successful response with reasoning content
-        response_json = {
+        response_object = {
             "id": "cmpl-test",
             "object": "chat.completion",
             "created": 1677652288,
@@ -93,37 +94,35 @@ class TestPerplexityReasoning:
             },
         }
 
-        def mock_post(*args, **kwargs):
-            # Create a mock response
-            mock_response = MagicMock(spec=httpx.Response)
-            mock_response.status_code = 200
-            mock_response.headers = {"content-type": "application/json"}
-            mock_response.json.return_value = response_json
-            mock_response.text = json.dumps(response_json)
-            
-            # Store the request data for verification
-            mock_post.last_request_data = kwargs.get("data")
-            if isinstance(mock_post.last_request_data, (str, bytes)):
-                mock_post.last_request_data = json.loads(mock_post.last_request_data)
-            
-            return mock_response
+        pydantic_obj = ChatCompletion(**response_object)
 
-        # Mock at the HTTP handler level
-        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", side_effect=mock_post) as mock_http:
+        def _return_pydantic_obj(*args, **kwargs):
+            new_response = MagicMock()
+            new_response.headers = {"content-type": "application/json"}
+            new_response.parse.return_value = pydantic_obj
+            return new_response
+
+        openai_client = OpenAI(api_key="fake-api-key")
+
+        with patch.object(
+            openai_client.chat.completions.with_raw_response, "create", side_effect=_return_pydantic_obj
+        ) as mock_client:
             
             response = completion(
                 model=model,
                 messages=[{"role": "user", "content": "Hello, please think about this carefully."}],
                 reasoning_effort="high",
-                api_key="fake-api-key",
+                client=openai_client,
             )
             
             # Verify the call was made
-            assert mock_http.called
+            assert mock_client.called
+            
+            # Get the request data from the mock call
+            call_args = mock_client.call_args
+            request_data = call_args.kwargs
             
             # Verify reasoning_effort was included in the request
-            request_data = mock_post.last_request_data
-            assert request_data is not None
             assert "reasoning_effort" in request_data
             assert request_data["reasoning_effort"] == "high"
             

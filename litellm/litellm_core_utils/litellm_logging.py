@@ -1,7 +1,6 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
-import asyncio
 import copy
 import datetime
 import json
@@ -120,7 +119,6 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.types.containers.main import ContainerObject
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
@@ -1573,13 +1571,17 @@ class Logging(LiteLLMLoggingBaseClass):
             # MAP RESPONSES API USAGE OBJECT TO LITELLM USAGE OBJECT
             if isinstance(result, ResponsesAPIResponse):
                 result = result.model_copy()
+                transformed_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    result.usage
+                )
+                # Set as dict instead of Usage object so model_dump() serializes it correctly
                 setattr(
                     result,
                     "usage",
-                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                        result.usage
-                    ),
+                    transformed_usage.model_dump() if hasattr(transformed_usage, 'model_dump') else dict(transformed_usage),
                 )
+                if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
+                    standard_logging_payload["response"] = result.model_dump() if hasattr(result, 'model_dump') else dict(result)
 
             if (
                 litellm.max_budget
@@ -2837,9 +2839,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                 )
                 # Track callback logging failures in Prometheus
-                asyncio.create_task(
-                    self._handle_callback_failure(callback=callback)
-                )
+                self._handle_callback_failure(callback=callback)
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
         """
@@ -2979,12 +2979,12 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if isinstance(cb, str):
             return cb
-        if hasattr(cb, "__class__"):
-            return cb.__class__.__name__
         if hasattr(cb, "__name__"):
             return cb.__name__
         if hasattr(cb, "__func__"):
             return cb.__func__.__name__
+        if hasattr(cb, "__class__"):
+            return cb.__class__.__name__
         return str(cb)
 
     def _is_internal_litellm_proxy_callback(self, cb) -> bool:
@@ -3040,14 +3040,14 @@ class Logging(LiteLLMLoggingBaseClass):
         elif isinstance(result, ResponseCompletedEvent):
             ## return unified Usage object
             if isinstance(result.response.usage, ResponseAPIUsage):
+                transformed_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    result.response.usage
+                )
+                # Set as dict instead of Usage object so model_dump() serializes it correctly
                 setattr(
                     result.response,
                     "usage",
-                    (
-                        ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                            result.response.usage
-                        )
-                    ),
+                    transformed_usage.model_dump() if hasattr(transformed_usage, 'model_dump') else dict(transformed_usage),
                 )
             return result.response
         else:
@@ -4373,7 +4373,7 @@ class StandardLoggingPayloadSetup:
 
             s3_object_key = get_s3_object_key(
                 s3_path=s3_path,  # Use actual s3_path from logger configuration
-                team_alias_prefix="",  # Don't split by team alias for cold storage
+                prefix="",  # Don't split by team alias for cold storage
                 start_time=start_time,
                 s3_file_name=s3_file_name,
             )
@@ -4536,7 +4536,7 @@ class StandardLoggingPayloadSetup:
 
 def _get_status_fields(
     status: StandardLoggingPayloadStatus,
-    guardrail_information: Optional[list[dict]],
+    guardrail_information: Optional[List[dict]],
     error_str: Optional[str],
 ) -> "StandardLoggingPayloadStatusFields":
     """

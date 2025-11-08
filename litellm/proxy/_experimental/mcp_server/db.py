@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterable, List, Optional, Set, Union
+from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -11,7 +11,12 @@ from litellm.proxy._types import (
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    _get_salt_key,
+    encrypt_value_helper,
+)
 from litellm.proxy.utils import PrismaClient
+from litellm.types.mcp import MCPCredentials
 
 
 def _prepare_mcp_server_data(
@@ -35,6 +40,14 @@ def _prepare_mcp_server_data(
     if "alias" not in data_dict:
         data_dict["alias"] = getattr(data, "alias", None)
 
+    # Handle credentials serialization
+    credentials = data_dict.get("credentials")
+    if credentials is not None:
+        data_dict["credentials"] = encrypt_credentials(
+            credentials=credentials, encryption_key=_get_salt_key()
+        )
+        data_dict["credentials"] = safe_dumps(data_dict["credentials"])
+
     # Handle static_headers serialization
     if data.static_headers is not None:
         data_dict["static_headers"] = safe_dumps(data.static_headers)
@@ -50,6 +63,30 @@ def _prepare_mcp_server_data(
     # mcp_access_groups is already List[str], no serialization needed
 
     return data_dict
+
+
+def encrypt_credentials(
+    credentials: MCPCredentials, encryption_key: Optional[str]
+) -> MCPCredentials:
+    auth_value = credentials.get("auth_value")
+    if auth_value is not None:
+        credentials["auth_value"] = encrypt_value_helper(
+            value=auth_value,
+            new_encryption_key=encryption_key,
+        )
+    client_id = credentials.get("client_id")
+    if client_id is not None:
+        credentials["client_id"] = encrypt_value_helper(
+            value=client_id,
+            new_encryption_key=encryption_key,
+        )
+    client_secret = credentials.get("client_secret")
+    if client_secret is not None:
+        credentials["client_secret"] = encrypt_value_helper(
+            value=client_secret,
+            new_encryption_key=encryption_key,
+        )
+    return credentials
 
 
 async def get_all_mcp_servers(
@@ -303,3 +340,32 @@ async def update_mcp_server(
     )
 
     return updated_mcp_server
+
+
+async def rotate_mcp_server_credentials_master_key(
+    prisma_client: PrismaClient, touched_by: str, new_master_key: str
+):
+    mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+
+    for mcp_server in mcp_servers:
+        credentials = mcp_server.credentials
+        if not credentials:
+            continue
+
+        credentials_copy = dict(credentials)
+        encrypted_credentials = encrypt_credentials(
+            credentials=cast(MCPCredentials, credentials_copy),
+            encryption_key=new_master_key,
+        )
+
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        serialized_credentials = safe_dumps(encrypted_credentials)
+
+        await prisma_client.db.litellm_mcpservertable.update(
+            where={"server_id": mcp_server.server_id},
+            data={
+                "credentials": serialized_credentials,
+                "updated_by": touched_by,
+            },
+        )
