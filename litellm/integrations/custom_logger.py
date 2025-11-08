@@ -536,7 +536,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         from copy import copy
 
         from litellm import Choices, Message, ModelResponse
-        from litellm.types.utils import LiteLLMCommonStrings
         turn_off_message_logging: bool = getattr(self, "turn_off_message_logging", False)
         
         if turn_off_message_logging is False:
@@ -545,7 +544,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         # Only make a shallow copy of the top-level dict to avoid deepcopy issues
         # with complex objects like AuthenticationError that may be present
         model_call_details_copy = copy(model_call_details)
-        redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
+        redacted_str = "redacted-by-litellm"
         standard_logging_object = model_call_details.get("standard_logging_object")
         if standard_logging_object is None:
             return model_call_details_copy
