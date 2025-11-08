@@ -25,11 +25,7 @@ interface CreateMCPServerProps {
   availableAccessGroups: string[];
 }
 
-const AUTH_TYPES_REQUIRING_AUTH_VALUE = [
-  AUTH_TYPE.API_KEY,
-  AUTH_TYPE.BEARER_TOKEN,
-  AUTH_TYPE.BASIC,
-];
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
 
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   userRole,
@@ -50,9 +46,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [searchValue, setSearchValue] = useState<string>("");
   const [urlWarning, setUrlWarning] = useState<string>("");
   const authType = formValues.auth_type as string | undefined;
-  const shouldShowAuthValueField = authType
-    ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType)
-    : false;
+  const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
 
   // Function to check URL format based on transport type
   const checkUrlFormat = (url: string, transport: string) => {
@@ -92,7 +86,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             acc[header] = entry?.value ?? "";
             return acc;
           }, {})
-        : {} as Record<string, string>;
+        : ({} as Record<string, string>);
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"
@@ -154,7 +148,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
 
       // Prepare the payload with cost configuration and allowed tools
-      const payload = {
+      const payload: Record<string, any> = {
         ...restValues,
         ...stdioFields,
         // Remove the raw stdio_config field as we've extracted its components
@@ -171,14 +165,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       };
 
       payload.static_headers = staticHeaders;
-      const includeCredentials =
-        restValues.auth_type && AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(restValues.auth_type);
+      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(restValues.auth_type);
 
-      if (
-        includeCredentials &&
-        credentialsPayload &&
-        Object.keys(credentialsPayload).length > 0
-      ) {
+      if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
       }
 
