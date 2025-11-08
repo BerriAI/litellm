@@ -66,6 +66,7 @@ diskcache = {version = "^5.6.1", optional = true}
 polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
 semantic-router = {version = "*", optional = true, python = ">=3.9"}
 mlflow = {version = ">3.1.4", optional = true, python = ">=3.10"}
+soundfile = {version = "^0.12.1", optional = true}
 
 [tool.poetry.extras]
 proxy = [
@@ -92,6 +93,7 @@ proxy = [
     "litellm-enterprise",
     "rich",
     "polars",
+    "soundfile",
 ]
 
 extra_proxy = [
