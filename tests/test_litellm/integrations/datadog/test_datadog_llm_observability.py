@@ -3,7 +3,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -406,13 +406,13 @@ async def test_dd_llms_obs_redaction(mock_env_vars):
 
     assert (
         dd_llms_obs_logger.logged_standard_logging_payload["messages"][0]["content"]
-        == LiteLLMCommonStrings.redacted_by_litellm.value
+        == "redacted-by-litellm"
     )
     assert (
         dd_llms_obs_logger.logged_standard_logging_payload["response"]["choices"][0][
             "message"
         ]["content"]
-        == LiteLLMCommonStrings.redacted_by_litellm.value
+        == "redacted-by-litellm"
     )
 
     assert test_s3_logger.logged_standard_logging_payload["messages"] == [

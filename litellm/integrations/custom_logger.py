@@ -536,7 +536,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         from copy import copy
 
         from litellm import Choices, Message, ModelResponse
-        from litellm.types.utils import LiteLLMCommonStrings
         turn_off_message_logging: bool = getattr(self, "turn_off_message_logging", False)
         
         if turn_off_message_logging is False:
@@ -545,7 +544,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         # Only make a shallow copy of the top-level dict to avoid deepcopy issues
         # with complex objects like AuthenticationError that may be present
         model_call_details_copy = copy(model_call_details)
-        redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
+        redacted_str = "redacted-by-litellm"
         standard_logging_object = model_call_details.get("standard_logging_object")
         if standard_logging_object is None:
             return model_call_details_copy
@@ -557,11 +556,29 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
 
         if standard_logging_object_copy.get("response") is not None:
-            model_response = ModelResponse(
-                choices=[Choices(message=Message(content=redacted_str))]
-            )
-            model_response_dict = model_response.model_dump()
-            standard_logging_object_copy["response"] = model_response_dict
+            response = standard_logging_object_copy["response"]
+            # Check if this is a ResponsesAPIResponse (has "output" field)
+            if isinstance(response, dict) and "output" in response:
+                # Make a copy to avoid modifying the original
+                from copy import deepcopy
+                response_copy = deepcopy(response)
+                # Redact content in output array
+                if isinstance(response_copy.get("output"), list):
+                    for output_item in response_copy["output"]:
+                        if isinstance(output_item, dict) and "content" in output_item:
+                            if isinstance(output_item["content"], list):
+                                # Redact text in content items
+                                for content_item in output_item["content"]:
+                                    if isinstance(content_item, dict) and "text" in content_item:
+                                        content_item["text"] = redacted_str
+                standard_logging_object_copy["response"] = response_copy
+            else:
+                # Standard ModelResponse format
+                model_response = ModelResponse(
+                    choices=[Choices(message=Message(content=redacted_str))]
+                )
+                model_response_dict = model_response.model_dump()
+                standard_logging_object_copy["response"] = model_response_dict
 
         model_call_details_copy["standard_logging_object"] = standard_logging_object_copy
         return model_call_details_copy
