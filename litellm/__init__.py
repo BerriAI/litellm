@@ -1098,6 +1098,7 @@ from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
+from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
 from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
 from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
