@@ -76,7 +76,6 @@ class ZaiChatConfig(BaseConfig):
             "user",
             "frequency_penalty",
             "stop",
-            "reasoning_tokens",  # ZAI-specific reasoning support
         ]
 
     def map_openai_params(
@@ -118,12 +117,7 @@ class ZaiChatConfig(BaseConfig):
             "messages": messages,
         }
 
-        # Handle reasoning via extra_body (doesn't interfere with tools)
-        if litellm_params and litellm_params.get("reasoning_tokens", False):
-            extra_body = optional_params.get("extra_body", {})
-            extra_body["thinking"] = {"type": "enabled"}
-            optional_params["extra_body"] = extra_body
-            litellm_params.pop("reasoning_tokens", None)
+        
 
         # ✅ PRESERVE TOOLS - Pass through directly without popping
         TOOL_PARAMS = [
