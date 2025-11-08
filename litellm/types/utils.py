@@ -1797,12 +1797,12 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             return self.dict()
 
 
-class TranscriptionUsageDurationObject(Usage):
+class TranscriptionUsageDurationObject(BaseModel):
     type: Literal["duration"]
     seconds: int
 
 
-class TranscriptionUsageInputTokenDetailsObject(Usage):
+class TranscriptionUsageInputTokenDetailsObject(BaseModel):
     audio_tokens: int
     text_tokens: int
 

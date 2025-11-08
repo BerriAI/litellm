@@ -692,6 +692,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         TranscriptionUsageDurationObject, TranscriptionUsageTokensObject
                     ]
                 ] = None
+
                 if response_object["usage"].get("type", None) == "duration":
                     tr_usage_object = TranscriptionUsageDurationObject(
                         **response_object["usage"]
