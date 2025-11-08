@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import {
   getCacheSettingsCall,
@@ -24,14 +24,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken, userRole, us
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
-  useEffect(() => {
-    if (!accessToken) {
-      return;
-    }
-    loadCacheSettings();
-  }, [accessToken]);
-
-  const loadCacheSettings = async () => {
+  const loadCacheSettings = useCallback(async () => {
     try {
       const data = await getCacheSettingsCall(accessToken!);
       console.log("cache settings from API", data);
@@ -56,7 +49,14 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken, userRole, us
       console.error("Failed to load cache settings:", error);
       NotificationsManager.fromBackend("Failed to load cache settings");
     }
-  };
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      return;
+    }
+    loadCacheSettings();
+  }, [accessToken, loadCacheSettings]);
 
   const handleTestConnection = async () => {
     if (!accessToken) {
