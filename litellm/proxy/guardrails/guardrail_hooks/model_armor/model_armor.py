@@ -28,7 +28,9 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.callbacks import ModerationHookCallType, PreCallHookCallType
 from litellm.types.utils import (
+
     Choices,
     GuardrailStatus,
     ModelResponse,
@@ -360,18 +362,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Union[Exception, str, dict, None]:
         """Pre-call hook to sanitize user prompts."""
         verbose_proxy_logger.debug("Inside Model Armor Pre-Call Hook")
@@ -475,16 +466,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: ModerationHookCallType,
     ) -> Union[Exception, str, dict, None]:
         """During-call hook to sanitize user prompts in parallel with LLM call."""
         verbose_proxy_logger.debug("Inside Model Armor Moderation Hook")

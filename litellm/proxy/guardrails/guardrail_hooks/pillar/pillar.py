@@ -31,6 +31,8 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import LLMResponseTypes
+from litellm.types.callbacks import ModerationHookCallType, PreCallHookCallType
+
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -188,18 +190,7 @@ class PillarGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Optional[Union[Exception, str, dict]]:
         """
         Pre-call hook to scan the request for security threats before sending to LLM.
@@ -234,16 +225,7 @@ class PillarGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: ModerationHookCallType,
     ) -> Optional[Union[Exception, str, dict]]:
         """
         During-call hook to scan the request in parallel with LLM processing.

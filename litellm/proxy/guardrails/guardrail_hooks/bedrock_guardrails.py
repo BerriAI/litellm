@@ -40,7 +40,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockRequest,
     BedrockTextContent,
 )
+from litellm.types.callbacks import ModerationHookCallType, PreCallHookCallType
 from litellm.types.utils import (
+
     CallTypes,
     Choices,
     GuardrailStatus,
@@ -608,18 +610,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug(
             "Inside Bedrock Pre-Call Hook for call_type: %s", call_type
@@ -685,16 +676,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: ModerationHookCallType,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,

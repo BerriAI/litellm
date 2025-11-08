@@ -19,6 +19,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.javelin import (
     JavelinGuardResponse,
 )
 from litellm.types.utils import GuardrailStatus
+from litellm.types.callbacks import PreCallHookCallType
+
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -165,18 +167,7 @@ class JavelinGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
         data: Dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Optional[Union[Exception, str, Dict]]:
         """
         Pre-call hook for the Javelin guardrail.

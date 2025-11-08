@@ -30,6 +30,8 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.utils import LLMResponseTypes, SpecialEnums
+from litellm.types.callbacks import PreCallHookCallType
+
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -45,18 +47,7 @@ class ResponsesIDSecurity(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: PreCallHookCallType,
     ) -> Optional[Union[Exception, str, dict]]:
         # MAP all the responses api response ids to the encrypted response ids
         responses_api_call_types = {

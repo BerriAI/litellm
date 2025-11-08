@@ -18,6 +18,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import get_formatted_prompt
+from litellm.types.callbacks import ModerationHookCallType
+
 
 
 class _ENTERPRISE_LLMGuard(CustomLogger):
@@ -120,16 +122,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: ModerationHookCallType,
     ):
         """
         - Calls the LLM Guard Endpoint
