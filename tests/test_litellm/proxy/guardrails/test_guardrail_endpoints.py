@@ -751,13 +751,14 @@ async def test_patch_guardrail_endpoint(
     mock_logger = None
     if scenario == "success_with_sync":
         mock_prisma_client = mocker.Mock()
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock()
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
         mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
         
     elif scenario == "success_sync_fails":
         mock_prisma_client = mocker.Mock()
-        mock_in_memory_handler.update_in_memory_guardrail.side_effect = Exception("Sync failed")
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(side_effect=Exception("Sync failed"))
         mock_logger = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger")
         
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -792,8 +793,7 @@ async def test_patch_guardrail_endpoint(
         
         mock_guardrail_registry.update_guardrail_in_db.assert_called_once()
         
-        mock_in_memory_handler.update_in_memory_guardrail.assert_called_once_with(
-            guardrail_id="test-guardrail-id",
+        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
             guardrail=mocker.ANY
         )
         
