@@ -14,6 +14,7 @@ const { Title, Text } = Typography;
 
 interface PrebuiltPattern {
   name: string;
+  display_name: string;
   category: string;
   description: string;
 }
@@ -22,6 +23,7 @@ interface Pattern {
   id: string;
   type: "prebuilt" | "custom";
   name: string;
+  display_name?: string;
   pattern?: string;
   action: "BLOCK" | "MASK";
 }
@@ -84,10 +86,13 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
       return;
     }
 
+    const selectedPattern = prebuiltPatterns.find((p) => p.name === selectedPatternName);
+
     onPatternAdd({
       id: `pattern-${Date.now()}`,
       type: "prebuilt",
       name: selectedPatternName,
+      display_name: selectedPattern?.display_name,
       action: patternAction,
     });
 
