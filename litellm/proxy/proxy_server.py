@@ -4209,7 +4209,7 @@ class ProxyStartupEvent:
         # Key fixes:
         # 1. Remove/minimize jitter to avoid normalize() memory explosion
         # 2. Use larger misfire_grace_time to prevent backlog calculations
-        # 3. Set replace_existing=True to avoid duplicate jobs (must be passed per-job, not as default)
+        # 3. Set replace_existing=True to avoid duplicate jobs
         from apscheduler.executors.asyncio import AsyncIOExecutor
         from apscheduler.jobstores.memory import MemoryJobStore
 
