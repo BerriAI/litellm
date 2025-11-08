@@ -948,10 +948,14 @@ def test_gemini_reasoning_effort_minimal():
             actual_budget == expected_min_budget
         ), f"Model {model} should map 'minimal' to {expected_min_budget} tokens, got {actual_budget}"
 
-        # Verify that includeThoughts is True for minimal reasoning effort
+        # Verify that includeThoughts aligns with whether the budget is greater than zero
+        expected_include_thoughts = expected_min_budget > 0
         assert thinking_config.get(
-            "includeThoughts", True
-        ), f"Model {model} should have includeThoughts=True for minimal reasoning effort"
+            "includeThoughts"
+        ) == expected_include_thoughts, (
+            f"Model {model} should set includeThoughts={expected_include_thoughts} "
+            f"when reasoning_effort is 'minimal'"
+        )
 
     # Test with unknown model (should use generic fallback)
     try:
@@ -976,6 +980,75 @@ def test_gemini_reasoning_effort_minimal():
         # The important part is that our known models work correctly
         print(f"Note: Unknown model test skipped due to: {e}")
         pass
+
+
+def test_gemini_reasoning_effort_zero_budget_disables_thoughts(monkeypatch):
+    """Ensure zero thinking budget turns off includeThoughts."""
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+
+    monkeypatch.setattr(
+        "litellm.litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH",
+        0,
+    )
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "reasoning_effort": "minimal",
+        },
+    )
+
+    request_body = raw_request["raw_request_body"]
+    generation_config = request_body["generationConfig"]
+    thinking_config = generation_config["thinkingConfig"]
+
+    assert (
+        thinking_config.get("thinkingBudget") == 0
+    ), "Zero reasoning budget should be preserved in request"
+    assert (
+        thinking_config.get("includeThoughts") is False
+    ), "includeThoughts should be False when thinking budget is zero"
+
+
+def test_gemini_reasoning_effort_env_override(monkeypatch):
+    """Verify env vars override default minimal thinking budget."""
+    import importlib
+
+    monkeypatch.setenv(
+        "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH", "0"
+    )
+
+    import litellm.litellm.constants as constants_module
+    import litellm.litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini as gemini_module
+
+    importlib.reload(constants_module)
+    importlib.reload(gemini_module)
+
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "reasoning_effort": "minimal",
+        },
+    )
+
+    request_body = raw_request["raw_request_body"]
+    generation_config = request_body["generationConfig"]
+    thinking_config = generation_config["thinkingConfig"]
+
+    assert (
+        thinking_config.get("thinkingBudget") == 0
+    ), "Env override should set thinkingBudget to 0"
+    assert (
+        thinking_config.get("includeThoughts") is False
+    ), "Env override should disable includeThoughts"
 
 
 def test_gemini_exception_message_format():
