@@ -533,6 +533,102 @@ async def test_logging_hook_multiple_content_items(presidio_guardrail):
     print("✓ Logging hook multiple content items test passed")
 
 
+@pytest.mark.asyncio
+async def test_presidio_sets_guardrail_information_in_request_data():
+    """
+    Test that Presidio populates guardrail information into request_data metadata.
+    
+    This validates that add_standard_logging_guardrail_information_to_request_data
+    correctly sets the guardrail information that will be used for logging.
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="test_presidio",
+        output_parse_pii=True,
+    )
+    
+    request_data = {
+        "messages": [{"role": "user", "content": "Test"}],
+        "model": "gpt-4o",
+        "metadata": {},
+    }
+    
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        assert request_data is not None
+        
+        presidio.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_provider="presidio",
+            guardrail_json_response=[],
+            request_data=request_data,
+            guardrail_status="success",
+            start_time=1234567890.0,
+            end_time=1234567891.0,
+            duration=1.0,
+            masked_entity_count={"EMAIL_ADDRESS": 1, "PERSON": 1},
+        )
+        
+        return text
+    
+    with patch.object(presidio, 'check_pii', mock_check_pii):
+        await presidio.apply_guardrail(
+            text="Test message",
+            request_data=request_data,
+        )
+    
+    assert "metadata" in request_data
+    assert "standard_logging_guardrail_information" in request_data["metadata"]
+    
+    guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert isinstance(guardrail_info_list, list)
+    assert len(guardrail_info_list) > 0
+    
+    guardrail_info = guardrail_info_list[0]
+    assert "masked_entity_count" in guardrail_info
+    assert guardrail_info["masked_entity_count"]["EMAIL_ADDRESS"] == 1
+    assert guardrail_info["masked_entity_count"]["PERSON"] == 1
+    
+    print("✓ Presidio sets guardrail_information in request_data")
+
+
+@pytest.mark.asyncio
+async def test_request_data_flows_to_apply_guardrail():
+    """
+    Test that request_data is correctly passed to apply_guardrail method.
+    
+    This validates the fix where guardrail translation handler passes data
+    as request_data to apply_guardrail so guardrails can store metadata for logging.
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="test_presidio",
+        output_parse_pii=True,
+    )
+    
+    request_data = {
+        "messages": [{"role": "user", "content": "Test message"}],
+        "model": "gpt-4o",
+        "metadata": {},
+    }
+    
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        assert request_data is not None, "request_data should be passed to check_pii"
+        assert "metadata" in request_data, "request_data should have metadata"
+        
+        request_data.setdefault("metadata", {})
+        request_data["metadata"]["test_flag"] = "passed_correctly"
+        
+        return text
+    
+    with patch.object(presidio, 'check_pii', mock_check_pii):
+        result = await presidio.apply_guardrail(
+            text="Test message",
+            request_data=request_data,
+        )
+        
+        assert "metadata" in request_data
+        assert request_data["metadata"].get("test_flag") == "passed_correctly"
+        
+    print("✓ request_data correctly passed to apply_guardrail")
+
+
 if __name__ == "__main__":
     # Run tests
     asyncio.run(

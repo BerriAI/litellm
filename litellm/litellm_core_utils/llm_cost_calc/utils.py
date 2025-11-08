@@ -726,6 +726,15 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
             )
+        elif custom_llm_provider == litellm.LlmProviders.FAL_AI.value:
+            from litellm.llms.fal_ai.cost_calculator import (
+                cost_calculator as fal_ai_image_cost_calculator,
+            )
+
+            return fal_ai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
         else:
             return default_image_cost_calculator(
                 model=model,

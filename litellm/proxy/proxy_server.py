@@ -227,6 +227,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
+from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -252,6 +253,9 @@ from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
+)
+from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+    router as cache_settings_router,
 )
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
@@ -288,6 +292,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
+)
+from litellm.proxy.management_endpoints.router_settings_endpoints import (
+    router as router_settings_router,
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
@@ -762,7 +769,13 @@ def get_openapi_schema():
     if app.openapi_schema:
         return app.openapi_schema
 
-    openapi_schema = get_openapi(
+    # Use compatibility wrapper for FastAPI 0.120+ schema generation
+    from litellm.proxy.common_utils.openapi_schema_compat import (
+        get_openapi_schema_with_compat,
+    )
+
+    openapi_schema = get_openapi_schema_with_compat(
+        get_openapi_func=get_openapi,
         title=app.title,
         version=app.version,
         description=app.description,
@@ -781,18 +794,25 @@ def get_openapi_schema():
 
         # Extract parameters from the route
         parameters = []
-        if hasattr(route, "dependant"):
-            for param in route.dependant.query_params:
-                parameters.append(
-                    {
-                        "name": param.name,
-                        "in": "query",
-                        "required": param.required,
-                        "schema": {
-                            "type": "string"
-                        },  # You can make this more specific if needed
-                    }
-                )
+        try:
+            if hasattr(route, "dependant") and route.dependant is not None:
+                # Handle both FastAPI <0.120 and >=0.120
+                query_params = getattr(route.dependant, "query_params", [])
+                if query_params:
+                    for param in query_params:
+                        parameters.append(
+                            {
+                                "name": param.name,
+                                "in": "query",
+                                "required": param.required,
+                                "schema": {
+                                    "type": "string"
+                                },  # You can make this more specific if needed
+                            }
+                        )
+        except (AttributeError, TypeError):
+            # If we can't access query_params, continue without them
+            pass
 
         openapi_schema["paths"][base_path] = {
             "get": {
@@ -877,6 +897,20 @@ try:
     ui_path = os.path.join(current_dir, "_experimental", "out")
     litellm_asset_prefix = "/litellm-asset-prefix"
 
+    # For non-root Docker, use the pre-built UI from /tmp/litellm_ui
+    # Support both "true" and "True" for case-insensitive comparison
+    if os.getenv("LITELLM_NON_ROOT", "").lower() == "true":
+        non_root_ui_path = "/tmp/litellm_ui"
+        
+        # Check if the UI was built and exists at the expected location
+        if os.path.exists(non_root_ui_path) and os.listdir(non_root_ui_path):
+            verbose_proxy_logger.info(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
+            verbose_proxy_logger.info(f"UI files found: {len(os.listdir(non_root_ui_path))} items")
+            ui_path = non_root_ui_path
+        else:
+            verbose_proxy_logger.error(f"UI not found at {non_root_ui_path}. UI will not be available.")
+            verbose_proxy_logger.error(f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}")
+
     # Only modify files if a custom server root path is set
     if server_root_path and server_root_path != "/":
         # Iterate through files in the UI directory
@@ -936,17 +970,22 @@ try:
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
     # Handle HTML file restructuring
-    for filename in os.listdir(ui_path):
-        if filename.endswith(".html") and filename != "index.html":
-            # Create a folder with the same name as the HTML file
-            folder_name = os.path.splitext(filename)[0]
-            folder_path = os.path.join(ui_path, folder_name)
-            os.makedirs(folder_path, exist_ok=True)
+    # Skip this for non-root Docker since it's done at build time
+    # Support both "true" and "True" for case-insensitive comparison
+    if os.getenv("LITELLM_NON_ROOT", "").lower() != "true":
+        for filename in os.listdir(ui_path):
+            if filename.endswith(".html") and filename != "index.html":
+                # Create a folder with the same name as the HTML file
+                folder_name = os.path.splitext(filename)[0]
+                folder_path = os.path.join(ui_path, folder_name)
+                os.makedirs(folder_path, exist_ok=True)
 
-            # Move the HTML file into the folder and rename it to 'index.html'
-            src = os.path.join(ui_path, filename)
-            dst = os.path.join(folder_path, "index.html")
-            os.rename(src, dst)
+                # Move the HTML file into the folder and rename it to 'index.html'
+                src = os.path.join(ui_path, filename)
+                dst = os.path.join(folder_path, "index.html")
+                os.rename(src, dst)
+    else:
+        verbose_proxy_logger.info("Skipping runtime HTML restructuring for non-root Docker (already done at build time)")
 
 except Exception:
     pass
@@ -1064,6 +1103,7 @@ celery_fn = None  # Redis Queue for handling requests
 # Global variables for model cost map reload scheduling
 scheduler = None
 last_model_cost_map_reload = None
+
 
 ### DB WRITER ###
 db_writer_client: Optional[AsyncHTTPHandler] = None
@@ -1798,6 +1838,21 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
+    def switch_on_llm_response_caching(self):
+        """
+        Enable caching on the router by setting cache_responses=True.
+        This ensures caching works without needing caching=True in request body.
+        Router passes caching=self.cache_responses to litellm.completion()
+        """
+        global llm_router
+        import litellm
+        
+        if llm_router is not None and litellm.cache is not None and llm_router.cache_responses is not True:
+            llm_router.cache_responses = True
+            verbose_proxy_logger.debug(
+                "Set router.cache_responses=True after initializing cache"
+            )
+
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
         Load config file
@@ -2239,9 +2294,7 @@ class ProxyConfig:
         if general_settings is None:
             general_settings = {}
         if general_settings:
-            ### LOAD SECRET MANAGER ###
-            key_management_system = general_settings.get("key_management_system", None)
-            self.initialize_secret_manager(key_management_system=key_management_system)
+            ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
                 "key_management_settings", None
             )
@@ -2249,6 +2302,13 @@ class ProxyConfig:
                 litellm._key_management_settings = KeyManagementSettings(
                     **key_management_settings
                 )
+            
+            ### LOAD SECRET MANAGER ###
+            key_management_system = general_settings.get("key_management_system", None)
+            self.initialize_secret_manager(
+                key_management_system=key_management_system,
+                config_file_path=config_file_path
+            )
             ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
             use_google_kms = general_settings.get("use_google_kms", False)
             load_google_kms(use_google_kms=use_google_kms)
@@ -2580,7 +2640,9 @@ class ProxyConfig:
                         litellm.logging_callback_manager.add_litellm_callback(_logger)
         pass
 
-    def initialize_secret_manager(self, key_management_system: Optional[str]):
+    def initialize_secret_manager(
+        self, key_management_system: Optional[str], config_file_path: Optional[str] = None
+    ):
         """
         Initialize the relevant secret manager if `key_management_system` is provided
         """
@@ -2616,6 +2678,19 @@ class ProxyConfig:
                 )
 
                 HashicorpSecretManager()
+            elif key_management_system == KeyManagementSystem.CYBERARK.value:
+                from litellm.secret_managers.cyberark_secret_manager import (
+                    CyberArkSecretManager,
+                )
+
+                CyberArkSecretManager()
+            elif key_management_system == KeyManagementSystem.CUSTOM.value:
+                ### LOAD CUSTOM SECRET MANAGER ###
+                from litellm.secret_managers.custom_secret_manager_loader import (
+                    load_custom_secret_manager,
+                )
+
+                load_custom_secret_manager(config_file_path=config_file_path)
             else:
                 raise ValueError("Invalid Key Management System selected")
 
@@ -2948,6 +3023,16 @@ class ProxyConfig:
                     "Error setting env variable: %s - %s", k, str(e)
                 )
         return decrypted_env_vars
+    
+    def _decrypt_db_variables(self, variables_dict: dict) -> dict:
+        """
+        Decrypts a dictionary of variables and returns them.
+        """
+        decrypted_variables = {}
+        for k, v in variables_dict.items():
+            decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+            decrypted_variables[k] = decrypted_value
+        return decrypted_variables
 
     async def _add_router_settings_from_db_config(
         self,
@@ -3319,6 +3404,10 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="vector_stores"):
             await self._init_vector_stores_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="vector_store_indexes"):
+
+            await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="mcp"):
             await self._init_mcp_servers_in_db()
 
@@ -3333,6 +3422,40 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
+        if self._should_load_db_object(object_type="sso_settings"):
+            await self._init_sso_settings_in_db(prisma_client=prisma_client)
+        if self._should_load_db_object(object_type="cache_settings"):
+            from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+                CacheSettingsManager,
+            )
+            await CacheSettingsManager.init_cache_settings_in_db(
+                prisma_client=prisma_client, proxy_config=self
+            )
+
+    async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize SSO settings from database into the router on startup.
+        """
+
+        try:
+            sso_settings = await prisma_client.db.litellm_ssoconfig.find_unique(
+                where={"id": "sso_config"}
+            )
+            if sso_settings is not None:
+                # Capitalize all keys in sso_settings dictionary
+                uppercase_sso_settings = {
+                    key.upper(): value
+                    for key, value in sso_settings.sso_settings.items()
+                }
+                self._decrypt_and_set_db_env_variables(
+                    environment_variables=uppercase_sso_settings
+                )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {}".format(
+                    str(e)
+                )
+            )
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
         """
@@ -3466,7 +3589,7 @@ class ProxyConfig:
                 "guardrails from the DB %s", str(guardrails_in_db)
             )
             for guardrail in guardrails_in_db:
-                IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                     guardrail=cast(Guardrail, guardrail),
                 )
         except Exception as e:
@@ -3503,6 +3626,36 @@ class ProxyConfig:
                 )
             )
 
+    async def _init_vector_store_indexes_in_db(self, prisma_client: PrismaClient):
+        from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+        try:
+            # read vector stores from db table
+            vector_store_indexes = (
+                await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(
+                    prisma_client=prisma_client
+                )
+            )
+
+            if len(vector_store_indexes) <= 0:
+                return
+
+            if litellm.vector_store_index_registry is None:
+                litellm.vector_store_index_registry = VectorStoreIndexRegistry(
+                    vector_store_indexes=vector_store_indexes
+                )
+            else:
+                for vector_store_index in vector_store_indexes:
+                    litellm.vector_store_index_registry.upsert_vector_store_index(
+                        vector_store_index=vector_store_index
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - {}".format(
+                    str(e)
+                )
+            )
+
     async def _init_mcp_servers_in_db(self):
         from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
 
@@ -3530,7 +3683,7 @@ class ProxyConfig:
         Initialize search tools from database into the router on startup.
         """
         global llm_router
-
+        
         from litellm.proxy.search_endpoints.search_tool_registry import (
             SearchToolRegistry,
         )
@@ -4059,7 +4212,8 @@ class ProxyStartupEvent:
                 "coalesce": APSCHEDULER_COALESCE,
                 "misfire_grace_time": APSCHEDULER_MISFIRE_GRACE_TIME,
                 "max_instances": APSCHEDULER_MAX_INSTANCES,
-                "replace_existing": APSCHEDULER_REPLACE_EXISTING,
+                # Note: replace_existing is NOT a valid job_default in APScheduler
+                # It must be passed individually when calling add_job()
             },
             # Limit job store size to prevent memory growth
             jobstores={"default": MemoryJobStore()},  # explicitly use memory job store
@@ -4082,7 +4236,7 @@ class ProxyStartupEvent:
         )
 
         # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
-        batch_writing_interval = max(30, proxy_batch_write_at) + random.randint(0, 5)
+        batch_writing_interval = proxy_batch_write_at + random.randint(0, 5)
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
@@ -4931,7 +5085,7 @@ async def embeddings(  # noqa: PLR0915
             proxy_logging_obj.during_call_hook(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
-                call_type="embedding",
+                call_type="aembedding",
             )
         )
 
@@ -9990,6 +10144,7 @@ app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
 app.include_router(video_router)
+app.include_router(container_router)
 app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
@@ -10025,6 +10180,8 @@ app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(tag_management_router)
 app.include_router(cost_tracking_settings_router)
+app.include_router(router_settings_router)
+app.include_router(cache_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)

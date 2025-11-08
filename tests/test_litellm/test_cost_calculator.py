@@ -161,7 +161,7 @@ def test_custom_pricing_with_router_model_id():
             {
                 "model_name": "prod/claude-3-5-sonnet-20240620",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "test_api_key",
                 },
                 "model_info": {
@@ -175,7 +175,7 @@ def test_custom_pricing_with_router_model_id():
             {
                 "model_name": "claude-3-5-sonnet-20240620",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "test_api_key",
                 },
                 "model_info": {
@@ -204,7 +204,7 @@ def test_custom_pricing_with_router_model_id():
     )
 
     model_info = router.get_deployment_model_info(
-        model_id="my-unique-model-id", model_name="anthropic/claude-3-5-sonnet-20240620"
+        model_id="my-unique-model-id", model_name="anthropic/claude-sonnet-4-5-20250929"
     )
     assert model_info is not None
     assert model_info["input_cost_per_token"] == 0.000006
@@ -461,18 +461,18 @@ def test_gemini_25_implicit_caching_cost():
         model="gemini/gemini-2.5-flash",
     )
 
-    # From the issue:
-    # input: $0.15 / 1000000 tokens
-    # output: $0.60 / 1000000 tokens
-    # With caching: 0.15*0.25*(14316/1000000)+0.15*((15033-14316)/1000000)+0.6*(17/1000000) = 0.0006546
+    # Current pricing for gemini/gemini-2.5-flash:
+    # input: $0.30 / 1M tokens (3e-07 per token)
+    # cache_read: $0.03 / 1M tokens (3e-08 per token)
+    # output: $2.50 / 1M tokens (2.5e-06 per token)
 
     # Breakdown:
-    # - Cached tokens: 14316 * 0.15/1M * 0.25 = 0.00053685
-    # - Non-cached tokens: (15033-14316) * 0.15/1M = 717 * 0.15/1M = 0.00010755
-    # - Output tokens: 17 * 0.6/1M = 0.00001020
-    # Total: 0.00053685 + 0.00010755 + 0.00001020 = 0.0006546
+    # - Cached tokens: 14316 * 3e-08 = 0.00042948
+    # - Non-cached tokens: (15033-14316) * 3e-07 = 717 * 3e-07 = 0.00021510
+    # - Output tokens: 17 * 2.5e-06 = 0.00004250
+    # Total: 0.00042948 + 0.00021510 + 0.00004250 = 0.00068708
 
-    expected_cost = 0.0013312999999999999
+    expected_cost = 0.00068708
 
     # Allow for small floating point differences
     assert (

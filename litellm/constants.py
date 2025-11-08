@@ -1,6 +1,7 @@
 import os
 from typing import List, Literal
 
+DEFAULT_HEALTH_CHECK_PROMPT = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(
     os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview")
 )
@@ -175,11 +176,6 @@ OPENAI_FILE_SEARCH_COST_PER_1K_CALLS = float(
 AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY = float(
     os.getenv("AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day
 )
-AZURE_CODE_INTERPRETER_COST_PER_SESSION = float(
-    os.getenv(
-        "AZURE_CODE_INTERPRETER_COST_PER_SESSION", 0.03
-    )  # $0.03 USD per 1 Session
-)
 AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS = float(
     os.getenv(
         "AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 3.0
@@ -214,8 +210,17 @@ DEFAULT_POLLING_INTERVAL = float(
     os.getenv("DEFAULT_POLLING_INTERVAL", 0.03)
 )  # default polling interval for the scheduler
 AZURE_OPERATION_POLLING_TIMEOUT = int(os.getenv("AZURE_OPERATION_POLLING_TIMEOUT", 120))
+AZURE_DOCUMENT_INTELLIGENCE_API_VERSION = str(
+    os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30")
+)
+AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI = int(
+    os.getenv("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI", 96)
+)
 REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
 REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
+# Default Redis major version to assume when version cannot be determined
+# Using 7 as it's the modern version that supports LPOP with count parameter
+DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
 NON_LLM_CONNECTION_TIMEOUT = int(
     os.getenv("NON_LLM_CONNECTION_TIMEOUT", 15)
 )  # timeout for adjacent services (e.g. jwt auth)
@@ -1050,16 +1055,14 @@ PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 360
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
-# MEMORY LEAK FIX: Increased from 10s to 30s minimum to prevent memory issues with APScheduler
-# Very frequent intervals (<30s) can cause memory leaks in APScheduler's internal functions
-PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 30))  # in seconds, increased from 10
+PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds, increased from 10
 
 # APScheduler Configuration - MEMORY LEAK FIX
 # These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
-APSCHEDULER_COALESCE = True  # collapse many missed runs into one
-APSCHEDULER_MISFIRE_GRACE_TIME = 3600  # ignore runs older than 1 hour (was 120)
-APSCHEDULER_MAX_INSTANCES = 1  # prevent concurrent job instances
-APSCHEDULER_REPLACE_EXISTING = True  # always replace existing jobs
+APSCHEDULER_COALESCE = os.getenv("APSCHEDULER_COALESCE", "True").lower() in ["true", "1"]  # collapse many missed runs into one
+APSCHEDULER_MISFIRE_GRACE_TIME = int(os.getenv("APSCHEDULER_MISFIRE_GRACE_TIME", 3600))  # ignore runs older than 1 hour (was 120)
+APSCHEDULER_MAX_INSTANCES = int(os.getenv("APSCHEDULER_MAX_INSTANCES", 1))  # prevent concurrent job instances
+APSCHEDULER_REPLACE_EXISTING = os.getenv("APSCHEDULER_REPLACE_EXISTING", "True").lower() in ["true", "1"]  # always replace existing jobs
 
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)

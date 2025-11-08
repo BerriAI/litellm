@@ -1599,7 +1599,8 @@ class BaseTokenUsageProcessor:
                     combined.prompt_tokens_details = PromptTokensDetailsWrapper()
 
                 # Check what keys exist in the model's prompt_tokens_details
-                for attr in usage.prompt_tokens_details.model_fields:
+                # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
+                for attr in type(usage.prompt_tokens_details).model_fields:
                     if (
                         hasattr(usage.prompt_tokens_details, attr)
                         and not attr.startswith("_")
@@ -1630,7 +1631,8 @@ class BaseTokenUsageProcessor:
                     )
 
                 # Check what keys exist in the model's completion_tokens_details
-                for attr in usage.completion_tokens_details.model_fields:
+                # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
+                for attr in type(usage.completion_tokens_details).model_fields:
                     if not attr.startswith("_") and not callable(
                         getattr(usage.completion_tokens_details, attr)
                     ):

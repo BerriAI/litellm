@@ -519,3 +519,66 @@ async def test_ahealth_check_ocr():
     )
     print(response)
     return response
+
+@pytest.mark.asyncio
+async def test_image_generation_health_check_prompt(monkeypatch):
+    """Health checks should respect default and environment-configured prompts."""
+
+    import importlib
+    import litellm.constants as litellm_constants
+    import litellm.proxy.health_check as health_check
+
+    def reload_modules():
+        reloaded_constants = importlib.reload(litellm_constants)
+        reloaded_health_check = importlib.reload(health_check)
+        return reloaded_constants, reloaded_health_check
+
+    async def run_health_check(health_check_module):
+        health_check_calls = []
+
+        async def mock_health_check(litellm_params, mode=None, prompt=None, input=None):
+            health_check_calls.append(
+                {
+                    "mode": mode,
+                    "prompt": prompt,
+                    "model": litellm_params.get("model"),
+                }
+            )
+            return {"status": "healthy"}
+
+        model_list = [
+            {
+                "litellm_params": {"model": "dall-e-3", "api_key": "fake-key"},
+                "model_info": {
+                    "mode": "image_generation",
+                },
+            }
+        ]
+
+        with patch(
+            "litellm.proxy.health_check.litellm.ahealth_check",
+            side_effect=mock_health_check,
+        ):
+            await health_check_module._perform_health_check(model_list)
+
+        return health_check_calls
+
+    # Default prompt is used when env var is unset
+    monkeypatch.delenv("DEFAULT_HEALTH_CHECK_PROMPT", raising=False)
+    litellm_constants, health_check = reload_modules()
+    health_check_calls = await run_health_check(health_check)
+
+    assert len(health_check_calls) == 1
+    assert (
+        health_check_calls[0]["prompt"]
+        == litellm_constants.DEFAULT_HEALTH_CHECK_PROMPT
+    )
+
+    # Environment override should change the prompt without code changes
+    override_prompt = "environment override prompt"
+    monkeypatch.setenv("DEFAULT_HEALTH_CHECK_PROMPT", override_prompt)
+    litellm_constants, health_check = reload_modules()
+    health_check_calls = await run_health_check(health_check)
+
+    assert len(health_check_calls) == 1
+    assert health_check_calls[0]["prompt"] == override_prompt

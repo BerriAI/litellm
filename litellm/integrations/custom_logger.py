@@ -561,6 +561,33 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
+    def handle_callback_failure(self, callback_name: str):
+        """
+        Handle callback logging failures by incrementing Prometheus metrics.
+        
+        Call this method in exception handlers within your callback when logging fails.
+        """
+        try:
+            import litellm
+            from litellm._logging import verbose_logger
+            
+            all_callbacks = litellm.logging_callback_manager._get_all_callbacks()
+            
+            for callback_obj in all_callbacks:
+                if hasattr(callback_obj, 'increment_callback_logging_failure'):
+                    verbose_logger.debug(f"Incrementing callback failure metric for {callback_name}")
+                    callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
+                    return
+            
+            verbose_logger.debug(
+                f"No callback with increment_callback_logging_failure method found for {callback_name}. "
+                "Ensure 'prometheus' is in your callbacks config."
+            )
+                    
+        except Exception as e:
+            from litellm._logging import verbose_logger
+            verbose_logger.debug(f"Error in handle_callback_failure for {callback_name}: {str(e)}")
+
     async def _strip_base64_from_messages(
         self,
         payload: "StandardLoggingPayload",
@@ -577,10 +604,40 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
           • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
         raw_messages: Any = payload.get("messages", [])
-        messages: list[Any] = raw_messages if isinstance(raw_messages, list) else []
+        messages: List[Any] = raw_messages if isinstance(raw_messages, list) else []
+        verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
+
+        if messages:
+            payload["messages"] = self._process_messages(messages=messages, max_depth=max_depth)
+
+        total_items = 0
+        for m in payload.get("messages", []) or []:
+            if isinstance(m, dict):
+                content = m.get("content", [])
+                if isinstance(content, list):
+                    total_items += len(content)
+
         verbose_logger.debug(
-            f"[CustomLogger] Stripping base64 from {len(messages)} messages"
+            f"[CustomLogger] Completed base64 strip; retained {total_items} content items"
         )
+        return payload
+
+    def _strip_base64_from_messages_sync(
+            self, payload: "StandardLoggingPayload", max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+    ) -> "StandardLoggingPayload":
+        """
+        Removes or redacts base64-encoded file data (e.g., PDFs, images, audio)
+        from messages and responses before sending to SQS.
+
+        Behavior:
+          • Drop entries with a 'file' key.
+          • Drop entries with type == 'file' or any non-text type.
+          • Keep untyped or text content.
+          • Recursively redact inline base64 blobs in *any* string field, at any depth.
+        """
+        raw_messages: Any = payload.get("messages", [])
+        messages: List[Any] = raw_messages if isinstance(raw_messages, list) else []
+        verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
 
         if messages:
             payload["messages"] = self._process_messages(
@@ -643,18 +700,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         ctype = content.get("type")
         return not (isinstance(ctype, str) and ctype != "text")
 
-    def _process_messages(
-        self,
-        messages: list[Any],
-        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
-    ) -> List[Dict[str, Any]]:
+    def _process_messages(self, messages: List[Any], max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER) -> List[Dict[str, Any]]:
         filtered_messages: List[Dict[str, Any]] = []
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
             contents: Any = msg.get("content")
             if isinstance(contents, list):
-                cleaned: list[Any] = []
+                cleaned: List[Any] = []
                 for c in contents:
                     if self._should_keep_content(content=c):
                         cleaned.append(
