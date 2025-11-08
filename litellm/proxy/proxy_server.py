@@ -6678,6 +6678,132 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     )
 
 
+@router.post(
+    "/v1/tokenize",
+    tags=["tokenization"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenizeResponse,
+)
+async def tokenize_endpoint(
+    request: TokenizeRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    OpenAI-compatible tokenize endpoint that counts tokens for text or messages.
+
+    Args:
+        request: TokenizeRequest with model and either text or messages
+
+    Returns:
+        TokenizeResponse with token count and optionally token IDs
+
+    Example curl:
+    ```bash
+    curl -X POST http://localhost:4000/v1/tokenize \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer sk-1234" \
+        -d '{
+            "model": "gpt-4",
+            "text": "Hello, how are you?"
+        }'
+    ```
+
+    Or with messages:
+    ```bash
+    curl -X POST http://localhost:4000/v1/tokenize \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer sk-1234" \
+        -d '{
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user", "content": "Hello, how are you?"}
+            ]
+        }'
+    ```
+    """
+    from litellm import token_counter
+
+    global llm_router
+
+    # Validate request
+    if request.text is None and request.messages is None:
+        raise HTTPException(
+            status_code=400, detail="Either 'text' or 'messages' must be provided"
+        )
+
+    deployment: Optional[Dict[str, Any]] = None
+    litellm_model_name = None
+    model_info: Optional[ModelMapInfo] = None
+
+    # Get deployment information if using router
+    if llm_router is not None:
+        try:
+            deployment = await llm_router.async_get_available_deployment(
+                model=request.model,
+                request_kwargs={},
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.tokenize_endpoint(): Exception occurred while getting deployment"
+            )
+            pass
+
+    if deployment is not None:
+        litellm_model_name = deployment.get("litellm_params", {}).get("model")
+        model_info = deployment.get("model_info", {})
+        load_credentials_from_list(deployment.get("litellm_params", {}))
+        # Remove the custom_llm_provider_prefix in the litellm_model_name
+        if "/" in litellm_model_name:
+            litellm_model_name = litellm_model_name.split("/", 1)[1]
+
+    model_to_use: str = litellm_model_name or request.model
+
+    # Get custom tokenizer if available
+    custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None
+    if model_info is not None:
+        custom_tokenizer = cast(
+            Optional[CustomHuggingfaceTokenizer],
+            model_info.get("custom_tokenizer", None),
+        )
+
+    # Select tokenizer
+    _tokenizer_used = litellm.utils._select_tokenizer(
+        model=model_to_use, custom_tokenizer=custom_tokenizer
+    )
+
+    # Count tokens
+    total_tokens = token_counter(
+        model=model_to_use,
+        text=request.text,
+        messages=request.messages,
+        custom_tokenizer=_tokenizer_used,  # type: ignore
+    )
+
+    # Try to get actual token IDs if possible
+    tokens: Optional[List[int]] = None
+    try:
+        if request.text is not None:
+            # Try to encode the text to get token IDs
+            if _tokenizer_used.get("type") == "huggingface_tokenizer":
+                tokenizer = _tokenizer_used.get("tokenizer")
+                if tokenizer is not None:
+                    tokens = tokenizer.encode(request.text)
+            elif _tokenizer_used.get("type") == "openai_tokenizer":
+                encoding = _tokenizer_used.get("tokenizer")
+                if encoding is not None:
+                    tokens = encoding.encode(request.text)
+    except Exception:
+        # If we can't get token IDs, just return None
+        verbose_proxy_logger.debug(
+            "Could not encode text to get token IDs, returning token count only"
+        )
+        pass
+
+    return TokenizeResponse(
+        tokens=tokens, total_tokens=total_tokens, model=model_to_use
+    )
+
+
 @router.get(
     "/utils/supported_openai_params",
     tags=["llm utils"],
