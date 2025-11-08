@@ -584,12 +584,15 @@ class InMemoryGuardrailHandler:
         
         # Compare and identify specific differences
         changed_fields = {}
-        all_keys = set(existing_dict.keys()) | set(new_dict.keys())
-        for key in all_keys:
-            old_val = existing_dict.get(key)
-            new_val = new_dict.get(key)
-            if old_val != new_val:
-                changed_fields[key] = {"old": old_val, "new": new_val}
+        if existing_dict is not None and new_dict is not None:
+            all_keys = set(existing_dict.keys()) | set(new_dict.keys())
+            for key in all_keys:
+                old_val = existing_dict.get(key)
+                new_val = new_dict.get(key)
+                if old_val != new_val:
+                    changed_fields[key] = {"old": old_val, "new": new_val}
+        elif existing_dict != new_dict:
+            changed_fields = {"litellm_params": {"old": existing_dict, "new": new_dict}}
         
         # Log differences if any found
         if changed_fields:
