@@ -156,7 +156,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
                 f"Error parsing response: {raw_response.text}, status_code={raw_response.status_code}"
             )
 
-        return RerankResponse(**raw_response_json)
+        return self._transform_response(raw_response_json)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

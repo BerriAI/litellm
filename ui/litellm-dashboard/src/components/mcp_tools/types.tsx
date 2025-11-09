@@ -34,10 +34,6 @@ export const handleAuth = (authType?: string | null): string => {
   return authType;
 };
 
-export const mcpServerHasAuth = (authType?: string | null): boolean => {
-  return handleAuth(authType) !== AUTH_TYPE.NONE;
-};
-
 // Define the structure for tool input schema properties
 export interface InputSchemaProperty {
   type: string;

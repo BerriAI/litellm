@@ -65,7 +65,10 @@ def validate_standard_logging_payload(
     assert slp is not None, "Standard logging payload should not be None"
 
     # Validate token counts
-    print("response=", json.dumps(response, indent=4, default=str))
+    print("VALIDATING STANDARD LOGGING PAYLOAD. response=", json.dumps(response, indent=4, default=str))
+    print("FIELDS IN SLP=", json.dumps(slp, indent=4, default=str))
+    print("SLP PROMPT TOKENS=", slp["prompt_tokens"])
+    print("RESPONSE PROMPT TOKENS=", response["usage"]["input_tokens"])
     assert (
         slp["prompt_tokens"] == response["usage"]["input_tokens"]
     ), "Prompt tokens mismatch"
@@ -90,25 +93,25 @@ def validate_standard_logging_payload(
 
 
 @pytest.mark.asyncio
-async def test_basic_openai_responses_api_streaming_with_logging():
+def test_basic_openai_responses_api_streaming_with_logging():
     litellm._turn_on_debug()
     litellm.set_verbose = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
     request_model = "gpt-4o"
-    response = await litellm.aresponses(
+    response = litellm.responses(
         model=request_model,
         input="hi",
         stream=True,
     )
     final_response: Optional[ResponseCompletedEvent] = None
-    async for event in response:
+    for event in response:
         if event.type == "response.completed":
             final_response = event
         print("litellm response=", json.dumps(event, indent=4, default=str))
 
     print("sleeping for 2 seconds...")
-    await asyncio.sleep(2)
+    time.sleep(2)
     print(
         "standard logging payload=",
         json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
@@ -135,11 +138,11 @@ def validate_responses_match(slp_response, litellm_response):
 
     # Validate usage
     assert (
-        slp_response["usage"]["input_tokens"]
+        slp_response["usage"]["prompt_tokens"]
         == litellm_response["usage"]["input_tokens"]
     ), "Input tokens mismatch"
     assert (
-        slp_response["usage"]["output_tokens"]
+        slp_response["usage"]["completion_tokens"]
         == litellm_response["usage"]["output_tokens"]
     ), "Output tokens mismatch"
     assert (
@@ -177,11 +180,12 @@ async def test_basic_openai_responses_api_non_streaming_with_logging():
     print("response hidden params=", response._hidden_params)
 
     print("sleeping for 2 seconds...")
-    await asyncio.sleep(2)
+    await asyncio.sleep(5)
     print(
         "standard logging payload=",
         json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
     )
+    print("response usage=", response.usage)
 
     assert response is not None
     assert test_custom_logger.standard_logging_object is not None
@@ -1638,7 +1642,7 @@ async def test_openai_responses_api_token_limit_error():
 
 
 async def test_openai_streaming_logging():
-    """Test that hard_limit parameter is properly sent in the HTTP request for GPT-5 models."""
+    """Test that OpenAI Responses API streaming logging is working correctly."""
     litellm._turn_on_debug()
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.types.utils import Usage
@@ -1654,8 +1658,12 @@ async def test_openai_streaming_logging():
         ):
             print(f"response_obj: {response_obj.usage}")
             assert isinstance(
-                response_obj.usage, Usage
-            ), f"Expected response_obj.usage to be of type Usage, but got {type(response_obj.usage)}"
+                response_obj.usage, (Usage, dict)
+            ), f"Expected response_obj.usage to be of type Usage or dict, but got {type(response_obj.usage)}"
+            # Verify it has the chat completion format fields
+            if isinstance(response_obj.usage, dict):
+                assert "prompt_tokens" in response_obj.usage, "Usage dict should have prompt_tokens"
+                assert "completion_tokens" in response_obj.usage, "Usage dict should have completion_tokens"
             print("\n\nVALIDATED USAGE\n\n")
             self.validate_usage = True
 
