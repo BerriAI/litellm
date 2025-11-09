@@ -3,7 +3,7 @@
 import importlib
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Type, cast
+from typing import Any, Dict, List, Optional, Type, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -233,7 +233,7 @@ class GuardrailRegistry:
         try:
             guardrail_name = guardrail.get("guardrail_name")
             # Properly serialize LitellmParams Pydantic model to dict
-            litellm_params_obj = guardrail.get("litellm_params", {})
+            litellm_params_obj: Any = guardrail.get("litellm_params", {})
             if hasattr(litellm_params_obj, 'model_dump'):
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
@@ -285,7 +285,7 @@ class GuardrailRegistry:
         try:
             guardrail_name = guardrail.get("guardrail_name")
             # Properly serialize LitellmParams Pydantic model to dict
-            litellm_params_obj = guardrail.get("litellm_params", {})
+            litellm_params_obj: Any = guardrail.get("litellm_params", {})
             if hasattr(litellm_params_obj, 'model_dump'):
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
