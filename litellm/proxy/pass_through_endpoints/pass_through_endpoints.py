@@ -1894,6 +1894,11 @@ class InitPassThroughEndpointHelpers:
         _registered_pass_through_routes.clear()
 
     @staticmethod
+    def get_registered_pass_through_endpoints_keys() -> List[str]:
+        """Get all registered pass-through endpoints from the registry"""
+        return list(_registered_pass_through_routes.keys())
+
+    @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
         """
         Check if route is a registered pass-through endpoint from DB
@@ -1995,7 +2000,16 @@ async def initialize_pass_through_endpoints(
         combined_pass_through_endpoints = pass_through_endpoints  # type: ignore
 
     ## clear all existing pass-through endpoints from the FastAPI app routes
-    InitPassThroughEndpointHelpers.clear_all_pass_through_routes()
+    # InitPassThroughEndpointHelpers.clear_all_pass_through_routes()
+
+    # get a list of all registered pass-through endpoints
+    # mark the ones that are visited in the list
+    # remove the ones that are not visited from the list
+    registered_pass_through_endpoints = (
+        InitPassThroughEndpointHelpers.get_registered_pass_through_endpoints_keys()
+    )
+
+    visited_endpoints = set()
 
     for endpoint in combined_pass_through_endpoints:
         if isinstance(endpoint, PassThroughGenericEndpoint):
@@ -2049,6 +2063,8 @@ async def initialize_pass_through_endpoints(
             endpoint_id=endpoint_id,
         )
 
+        visited_endpoints.add(f"{endpoint_id}:exact:{_path}")
+
         # Add wildcard route for sub-paths
         if endpoint.get("include_subpath", False) is True:
             InitPassThroughEndpointHelpers.add_subpath_route(
@@ -2063,9 +2079,16 @@ async def initialize_pass_through_endpoints(
                 endpoint_id=endpoint_id,
             )
 
+            visited_endpoints.add(f"{endpoint_id}:subpath:{_path}")
+
         verbose_proxy_logger.debug(
             "Added new pass through endpoint: %s (ID: %s)", _path, endpoint_id
         )
+
+    # remove the ones that are not visited from the list
+    for endpoint_key in registered_pass_through_endpoints:
+        if endpoint_key not in visited_endpoints:
+            InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_key)
 
 
 async def _get_pass_through_endpoints_from_db(

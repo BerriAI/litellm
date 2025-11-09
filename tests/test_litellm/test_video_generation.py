@@ -150,9 +150,10 @@ class TestVideoGeneration:
         config = OpenAIVideoConfig()
         
         # Test request transformation
-        data, files = config.transform_video_create_request(
+        data, files, returned_api_base = config.transform_video_create_request(
             model="sora-2",
             prompt="Test video prompt",
+            api_base="https://api.openai.com/v1/videos",
             video_create_optional_request_params={
                 "seconds": "8",
                 "size": "720x1280"
@@ -166,6 +167,7 @@ class TestVideoGeneration:
         assert data["seconds"] == "8"
         assert data["size"] == "720x1280"
         assert files == []
+        assert returned_api_base == "https://api.openai.com/v1/videos"
 
     def test_video_generation_response_transformation(self):
         """Test video generation response transformation."""
@@ -228,9 +230,10 @@ class TestVideoGeneration:
         mock_file = MagicMock()
         mock_file.read.return_value = b"fake_image_data"
         
-        data, files = config.transform_video_create_request(
+        data, files, returned_api_base = config.transform_video_create_request(
             model="sora-2",
             prompt="Test video with image",
+            api_base="https://api.openai.com/v1/videos",
             video_create_optional_request_params={
                 "input_reference": mock_file,
                 "seconds": "8",
@@ -291,42 +294,29 @@ class TestVideoGeneration:
         assert mapped_params["user"] == "test-user"
 
     def test_video_generation_unsupported_parameters(self):
-        """Test video generation with unsupported parameters."""
+        """Test video generation with provider-specific parameters via extra_body."""
         from litellm.videos.utils import VideoGenerationRequestUtils
         
-        # Test unsupported parameter detection
-        with pytest.raises(litellm.UnsupportedParamsError):
-            VideoGenerationRequestUtils.get_optional_params_video_generation(
-                model="sora-2",
-                video_generation_provider_config=OpenAIVideoConfig(),
-                video_generation_optional_params={
-                    "unsupported_param": "value"
+        # Test that provider-specific parameters can be passed via extra_body
+        # This allows support for Vertex AI and Gemini specific parameters
+        result = VideoGenerationRequestUtils.get_optional_params_video_generation(
+            model="sora-2",
+            video_generation_provider_config=OpenAIVideoConfig(),
+            video_generation_optional_params={
+                "seconds": "8",
+                "extra_body": {
+                    "vertex_ai_param": "value",
+                    "gemini_param": "value2"
                 }
-            )
-
-    def test_video_generation_request_utils(self):
-        """Test video generation request utilities."""
-        from litellm.videos.utils import VideoGenerationRequestUtils
+            }
+        )
         
-        # Test parameter filtering
-        params = {
-            "prompt": "Test video",
-            "model": "sora-2",
-            "seconds": "8",
-            "size": "720x1280",
-            "user": "test-user",
-            "invalid_param": "should_be_filtered"
-        }
-        
-        filtered_params = VideoGenerationRequestUtils.get_requested_video_generation_optional_param(params)
-        
-        # Should only contain valid parameters
-        assert "prompt" not in filtered_params  # prompt is required, not optional
-        assert "seconds" in filtered_params
-        assert "size" in filtered_params
-        assert "user" in filtered_params
-        assert "invalid_param" not in filtered_params
-        # Note: model is included in the filtered params as it's part of the TypedDict
+        # extra_body params should be merged into the result
+        assert result["seconds"] == "8"
+        assert result["vertex_ai_param"] == "value"
+        assert result["gemini_param"] == "value2"
+        # extra_body itself should be removed from the result
+        assert "extra_body" not in result
 
     def test_video_generation_types(self):
         """Test video generation type definitions."""

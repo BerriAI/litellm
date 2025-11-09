@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.79.1-stable - FAL AI Support"
+title: "v1.79.1-stable - Guardrail Playground"
 slug: "v1-79-1"
 date: 2025-11-01T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.0-stable
+ghcr.io/berriai/litellm:v1.79.1-stable
 ```
 
 </TabItem>
