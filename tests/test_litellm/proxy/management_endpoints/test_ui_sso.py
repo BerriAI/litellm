@@ -497,6 +497,42 @@ def test_apply_user_info_values_to_sso_user_defined_values():
     assert sso_user_defined_values["user_id"] == "123"
 
 
+def test_apply_user_info_values_to_sso_user_defined_values_with_models():
+    """Test that user's models from DB are preserved when they log in via SSO"""
+    from litellm.proxy._types import LiteLLM_UserTable, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import (
+        apply_user_info_values_to_sso_user_defined_values,
+    )
+
+    # Simulate existing user with models=['no-default-models'] in DB
+    user_info = LiteLLM_UserTable(
+        user_id="123",
+        user_email="test@example.com",
+        user_role="admin",
+        models=["no-default-models"],  # User has this set in DB
+    )
+
+    # Simulate SSO login where models defaults to empty list
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],  # Empty on SSO login
+        "user_id": "456",
+        "user_email": "test@example.com",
+        "user_role": "admin",
+        "max_budget": None,
+        "budget_duration": None,
+    }
+
+    sso_user_defined_values = apply_user_info_values_to_sso_user_defined_values(
+        user_info=user_info,
+        user_defined_values=user_defined_values,
+    )
+
+    assert sso_user_defined_values is not None
+    assert sso_user_defined_values["user_id"] == "123"
+    # This is the fix: models from DB should be preserved
+    assert sso_user_defined_values["models"] == ["no-default-models"]
+
+
 @pytest.mark.asyncio
 async def test_get_user_info_from_db():
     """

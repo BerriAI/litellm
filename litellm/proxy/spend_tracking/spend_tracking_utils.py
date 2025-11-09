@@ -51,7 +51,7 @@ def _get_spend_logs_metadata(
     vector_store_request_metadata: Optional[
         List[StandardLoggingVectorStoreRequest]
     ] = None,
-    guardrail_information: Optional[list[StandardLoggingGuardrailInformation]] = None,
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
     cold_storage_object_key: Optional[str] = None,

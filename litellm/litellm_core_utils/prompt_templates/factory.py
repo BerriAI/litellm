@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import mimetypes
 import re
@@ -2706,12 +2707,39 @@ class BedrockImageProcessor:
             for video_type in supported_video_formats
         )
 
+        HASH_SAMPLE_BYTES = 64 * 1024  # hash up to 64 KB of data
+
         if is_document:
+            # --- Prepare normalized bytes for hashing (without modifying original) ---
+            if isinstance(image_bytes, str):
+                # Remove whitespace/newlines so base64 variations hash identically
+                normalized = "".join(image_bytes.split()).encode("utf-8")
+            else:
+                normalized = image_bytes
+
+            # --- Use only the first 64 KB for speed ---
+            if len(normalized) <= HASH_SAMPLE_BYTES:
+                sample = normalized
+            else:
+                sample = normalized[:HASH_SAMPLE_BYTES]
+
+            # --- Compute deterministic hash (sample + total length) ---
+            hasher = hashlib.sha256()
+            hasher.update(sample)
+            hasher.update(
+                str(len(normalized)).encode("utf-8")
+            )  # include full length for uniqueness
+            full_hash = hasher.hexdigest()
+            content_hash = full_hash[:16]  # short deterministic ID
+
+            document_name = f"DocumentPDFmessages_{content_hash}_{image_format}"
+
+            # --- Return content block ---
             return BedrockContentBlock(
                 document=BedrockDocumentBlock(
                     source=_blob,
                     format=image_format,
-                    name=f"DocumentPDFmessages_{str(uuid.uuid4())}",
+                    name=document_name,
                 )
             )
         elif is_video:

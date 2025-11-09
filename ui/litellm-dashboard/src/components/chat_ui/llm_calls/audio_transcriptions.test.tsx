@@ -7,6 +7,7 @@ vi.mock("openai");
 describe("audio_transcription", () => {
   const mockCreate = vi.fn();
   const mockUpdateUI = vi.fn();
+  let abortController: AbortController | null = null;
 
   beforeEach(() => {
     // Mock the response structure from OpenAI audio transcription API
@@ -25,6 +26,11 @@ describe("audio_transcription", () => {
   });
 
   afterEach(() => {
+    // Clean up abort controller if it exists
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
     vi.clearAllMocks();
   });
 
@@ -49,7 +55,8 @@ describe("audio_transcription", () => {
     const mockFile = new File(["audio data"], "test.mp3", {
       type: "audio/mpeg",
     });
-    const signal = new AbortController().signal;
+    abortController = new AbortController();
+    const signal = abortController.signal;
 
     await makeOpenAIAudioTranscriptionRequest(
       mockFile,

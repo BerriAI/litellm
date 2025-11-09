@@ -82,9 +82,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens: Optional[int] = (
-        DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
-    )
+    max_tokens: Optional[
+        int
+    ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -118,7 +118,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-
         params = [
             "stream",
             "stop",
@@ -465,11 +464,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
             if param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
-                    self._map_tool_choice(
-                        tool_choice=non_default_params.get("tool_choice"),
-                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
-                    )
+                _tool_choice: Optional[
+                    AnthropicMessagesToolChoice
+                ] = self._map_tool_choice(
+                    tool_choice=non_default_params.get("tool_choice"),
+                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
                 )
 
                 if _tool_choice is not None:
@@ -517,6 +516,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[hosted_web_search_tool]
                 )
+            elif param == "extra_headers":
+                optional_params["extra_headers"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
@@ -575,9 +576,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content["cache_control"] = (
-                            system_message_block["cache_control"]
-                        )
+                        anthropic_system_message_content[
+                            "cache_control"
+                        ] = system_message_block["cache_control"]
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -591,9 +592,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content["cache_control"] = (
-                                _content["cache_control"]
-                            )
+                            anthropic_system_message_content[
+                                "cache_control"
+                            ] = _content["cache_control"]
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -641,13 +642,25 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
             )
         return tools
-    
-    def update_headers_with_optional_anthropic_beta(self, headers: dict, optional_params: dict) -> dict:
+
+    def update_headers_with_optional_anthropic_beta(
+        self, headers: dict, optional_params: dict
+    ) -> dict:
         """Update headers with optional anthropic beta."""
         _tools = optional_params.get("tools", [])
         for tool in _tools:
-            if tool.get("type", None) and tool.get("type").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_FETCH.value):
-                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+            if tool.get("type", None) and tool.get("type").startswith(
+                ANTHROPIC_HOSTED_TOOLS.WEB_FETCH.value
+            ):
+                headers[
+                    "anthropic-beta"
+                ] = ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+            elif tool.get("type", None) and tool.get("type").startswith(
+                ANTHROPIC_HOSTED_TOOLS.MEMORY.value
+            ):
+                headers[
+                    "anthropic-beta"
+                ] = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
         return headers
 
     def transform_request(
@@ -685,7 +698,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     llm_provider="anthropic",
                 )
 
-        headers = self.update_headers_with_optional_anthropic_beta(headers=headers, optional_params=optional_params)
+        headers = self.update_headers_with_optional_anthropic_beta(
+            headers=headers, optional_params=optional_params
+        )
 
         # Separate system prompt from rest of message
         anthropic_system_message_list = self.translate_system_message(messages=messages)
@@ -764,7 +779,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _message
 
-    def extract_response_content(self, completion_response: dict) -> Tuple[
+    def extract_response_content(
+        self, completion_response: dict
+    ) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[

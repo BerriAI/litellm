@@ -33,7 +33,7 @@ litellm_settings:
   store_audit_logs: true
   verbose: true
   log_level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
-  success_callback: ["s3_v2"]
+  callbacks: ["s3_v2", "smtp_email"]
   s3_callback_params:
     s3_endpoint_url: "https://localhost:443"  # Replace with your Minio server URL and port
     s3_aws_access_key_id: "minioadmin"
@@ -46,3 +46,7 @@ litellm_settings:
   cache_params:
     type: local
   drop_params: True
+
+
+general_settings:
+  store_prompts_in_spend_logs: True
