@@ -5098,7 +5098,7 @@ async def embeddings(  # noqa: PLR0915
             proxy_logging_obj.during_call_hook(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
-                call_type="embeddings",
+                call_type="aembedding",
             )
         )
 
