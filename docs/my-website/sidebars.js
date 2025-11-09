@@ -31,6 +31,7 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/test_playground",
         ...[
           "adding_provider/adding_guardrail_support",
           "proxy/guardrails/aim_security",
