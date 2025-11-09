@@ -17,6 +17,9 @@ from litellm.constants import (
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
+from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+    TranscriptionUsageObjectTransformation,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
@@ -81,6 +84,8 @@ from litellm.types.utils import (
     LlmProvidersSet,
     ModelInfo,
     StandardBuiltInToolsParams,
+    TranscriptionUsageDurationObject,
+    TranscriptionUsageTokensObject,
     Usage,
     VectorStoreSearchResponse,
 )
@@ -319,11 +324,19 @@ def cost_per_token(  # noqa: PLR0915
             usage=usage_block, model=model, custom_llm_provider=custom_llm_provider
         )
     elif call_type == "atranscription" or call_type == "transcription":
-        return openai_cost_per_second(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            duration=audio_transcription_file_duration,
-        )
+
+        if model == "gpt-4o-mini-transcribe":
+            return openai_cost_per_token(
+                model=model,
+                usage=usage_block,
+                service_tier=service_tier,
+            )
+        else:
+            return openai_cost_per_second(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                duration=audio_transcription_file_duration,
+            )
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing
         from litellm.search import search_provider_cost_per_query
@@ -579,6 +592,19 @@ def _get_usage_object(
         return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
             usage_obj
         )
+    elif TranscriptionUsageObjectTransformation.is_transcription_usage_object(
+        usage_obj
+    ):
+        return (
+            TranscriptionUsageObjectTransformation.transform_transcription_usage_object(
+                cast(
+                    Union[
+                        TranscriptionUsageDurationObject, TranscriptionUsageTokensObject
+                    ],
+                    usage_obj,
+                )
+            )
+        )
     elif isinstance(usage_obj, dict):
         return Usage(**usage_obj)
     elif isinstance(usage_obj, BaseModel):
@@ -592,8 +618,12 @@ def _get_usage_object(
 
 def _is_known_usage_objects(usage_obj):
     """Returns True if the usage obj is a known Usage type"""
-    return isinstance(usage_obj, litellm.Usage) or isinstance(
-        usage_obj, ResponseAPIUsage
+    return (
+        isinstance(usage_obj, litellm.Usage)
+        or isinstance(usage_obj, ResponseAPIUsage)
+        or TranscriptionUsageObjectTransformation.is_transcription_usage_object(
+            usage_obj
+        )
     )
 
 
@@ -833,6 +863,22 @@ def completion_cost(  # noqa: PLR0915
                         _usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
                             _usage
                         ).model_dump()
+                    elif TranscriptionUsageObjectTransformation.is_transcription_usage_object(
+                        _usage
+                    ):
+                        tr_usage = TranscriptionUsageObjectTransformation.transform_transcription_usage_object(
+                            cast(
+                                Union[
+                                    TranscriptionUsageDurationObject,
+                                    TranscriptionUsageTokensObject,
+                                ],
+                                _usage,
+                            )
+                        )
+                        if tr_usage is not None:
+                            _usage = tr_usage.model_dump()
+                    else:
+                        _usage = _usage
 
                     # get input/output tokens from completion_response
                     prompt_tokens = _usage.get("prompt_tokens", 0)
