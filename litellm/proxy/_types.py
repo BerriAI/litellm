@@ -12,7 +12,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic.v1.types import OptionalInt
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
