@@ -1,42 +1,42 @@
-import React, { useState, useEffect } from "react";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Card,
-  Title,
-  Text,
+  Grid,
   Tab,
-  TabList,
   TabGroup,
+  TabList,
   TabPanel,
   TabPanels,
-  Grid,
-  Button as TremorButton,
+  Text,
   TextInput,
+  Title,
+  Button as TremorButton,
 } from "@tremor/react";
-import NumericalInput from "./shared/numerical_input";
-import { ArrowLeftIcon, TrashIcon, KeyIcon, RefreshIcon } from "@heroicons/react/outline";
+import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
+import { truncateString } from "../utils/textUtils";
+import CacheControlSettings from "./add_model/cache_control_settings";
+import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
+import ReuseCredentialsModal from "./model_add/reuse_credentials";
+import NotificationsManager from "./molecules/notifications_manager";
 import {
-  modelDeleteCall,
   CredentialItem,
-  credentialGetCall,
   credentialCreateCall,
+  credentialGetCall,
+  getGuardrailsList,
+  modelDeleteCall,
   modelInfoV1Call,
   modelPatchUpdateCall,
-  getGuardrailsList,
   tagListCall,
+  testConnectionRequest,
 } from "./networking";
-import { Button, Form, Input, Select, Modal, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { getProviderLogoAndName } from "./provider_info_helpers";
-import { getDisplayModelName } from "./view_model/model_name_display";
-import ReuseCredentialsModal from "./model_add/reuse_credentials";
-import CacheControlSettings from "./add_model/cache_control_settings";
-import { CheckIcon, CopyIcon, LoaderIcon } from "lucide-react";
-import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
-import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
-import NotificationsManager from "./molecules/notifications_manager";
+import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
-import { testConnectionRequest } from "./networking";
-import { truncateString } from "../utils/textUtils";
+import { getDisplayModelName } from "./view_model/model_name_display";
 
 interface ModelInfoViewProps {
   modelId: string;
