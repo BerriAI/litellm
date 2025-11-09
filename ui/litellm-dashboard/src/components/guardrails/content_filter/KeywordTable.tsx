@@ -59,6 +59,7 @@ const KeywordTable: React.FC<KeywordTableProps> = ({
       width: 100,
       render: (_: any, record: BlockedWord) => (
         <Button
+          type="button"
           variant="light"
           color="red"
           size="xs"

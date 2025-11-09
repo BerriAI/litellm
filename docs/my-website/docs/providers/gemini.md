@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `gemini/` |
 | Provider Doc | [Google AI Studio ↗](https://aistudio.google.com/) |
 | API Endpoint for Provider | https://generativelanguage.googleapis.com |
-| Supported OpenAI Endpoints | `/chat/completions`, [`/embeddings`](../embedding/supported_embedding#gemini-ai-embedding-models), `/completions` |
+| Supported OpenAI Endpoints | `/chat/completions`, [`/embeddings`](../embedding/supported_embedding#gemini-ai-embedding-models), `/completions`, [`/videos`](./gemini/videos.md) |
 | Pass-through Endpoint | [Supported](../pass_through/google_ai_studio.md) |
 
 <br />

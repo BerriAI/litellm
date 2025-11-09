@@ -74,6 +74,7 @@ interface EntityUsageProps {
   userRole: string | null;
   entityList: EntityList[] | null;
   premiumUser: boolean;
+  dateValue: DateRangePickerValue;
 }
 
 const EntityUsage: React.FC<EntityUsageProps> = ({
@@ -84,6 +85,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   userRole,
   entityList,
   premiumUser,
+  dateValue,
 }) => {
   const [spendData, setSpendData] = useState<EntitySpendData>({
     results: [],
@@ -99,10 +101,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const modelMetrics = processActivityData(spendData, "models");
   const keyMetrics = processActivityData(spendData, "api_keys");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
-    to: new Date(),
-  });
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -331,7 +329,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     <div style={{ width: "100%" }} className="relative">
       <UsageExportHeader
         dateValue={dateValue}
-        onDateChange={setDateValue}
         entityType={entityType}
         spendData={spendData}
         showFilters={entityList !== null && entityList.length > 0}

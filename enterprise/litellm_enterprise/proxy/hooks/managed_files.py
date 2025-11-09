@@ -36,6 +36,7 @@ from litellm.types.llms.openai import (
     OpenAIFilesPurpose,
 )
 from litellm.types.utils import (
+    CallTypesLiteral,
     LiteLLMBatch,
     LiteLLMFineTuningJob,
     LLMResponseTypes,
@@ -272,28 +273,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: Dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "acreate_batch",
-            "aretrieve_batch",
-            "acreate_file",
-            "afile_list",
-            "afile_delete",
-            "afile_content",
-            "acreate_fine_tuning_job",
-            "aretrieve_fine_tuning_job",
-            "alist_fine_tuning_jobs",
-            "acancel_fine_tuning_job",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, Dict, None]:
         """
         - Detect litellm_proxy/ file_id
