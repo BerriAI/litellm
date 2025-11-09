@@ -1,5 +1,5 @@
 ---
-title: "v1.79.2-stable - OCR API Support, XAI Responses API, Secret Manager Integrations"
+title: "v1.79.2-stable - Built-in Guardrails on AI Gateway" "
 slug: "v1-79-2"
 date: 2025-11-08T10:00:00
 authors:
