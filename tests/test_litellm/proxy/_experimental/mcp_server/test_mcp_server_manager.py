@@ -1245,6 +1245,7 @@ class TestMCPServerManager:
         # Register the server and map a tool to it
         manager.registry = {"test-server": server}
         manager.tool_name_to_mcp_server_name_mapping["test_tool"] = "test-server"
+        manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = "test-server"
 
         # Create mock client that tracks context manager usage
         mock_client = MagicMock()
@@ -1302,6 +1303,7 @@ class TestMCPServerManager:
 
         # Call the tool
         result = await manager.call_tool(
+            server_name="test-server",
             name="test_tool",
             arguments={"param": "value"},
             user_api_key_auth=user_api_key_auth,

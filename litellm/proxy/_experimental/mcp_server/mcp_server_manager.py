@@ -1357,12 +1357,16 @@ class MCPServerManager:
 
         # If not found and tool name is prefixed, try extracting server name from prefix
         if is_tool_name_prefixed(tool_name):
-            _, server_name_from_prefix = get_server_name_prefix_tool_mcp(tool_name)
-            for server in self.get_registry().values():
-                if normalize_server_name(server.name) == normalize_server_name(
-                    server_name_from_prefix
-                ):
-                    return server
+            (
+                original_tool_name,
+                server_name_from_prefix,
+            ) = get_server_name_prefix_tool_mcp(tool_name)
+            if original_tool_name in self.tool_name_to_mcp_server_name_mapping:
+                for server in self.get_registry().values():
+                    if normalize_server_name(server.name) == normalize_server_name(
+                        server_name_from_prefix
+                    ):
+                        return server
 
         return None
 
