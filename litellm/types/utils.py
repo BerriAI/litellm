@@ -2788,6 +2788,10 @@ class SpecialEnums(Enum):
 
     LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR = "litellm_proxy;model_id:{};generic_response_id:{}"  # generic implementation of 'managed batches' - used for finetuning and any future work.
 
+    LITELLM_MANAGED_VIDEO_COMPLETE_STR = (
+        "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
+    )
+
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
