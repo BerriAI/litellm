@@ -283,10 +283,6 @@ View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cach
 - **Cache Settings**
     - UI - Cache Settings Redis Add Semantic Cache Settings - [PR #16398](https://github.com/BerriAI/litellm/pull/16398)
 
-- **Admin Settings**
-    - UI - Initial changes for supporting prompts to multiple models - [PR #16223](https://github.com/BerriAI/litellm/pull/16223)
-    - Building UI for sanity testing - [PR #16399](https://github.com/BerriAI/litellm/pull/16399)
-
 #### Bugs
 
 - **General**
