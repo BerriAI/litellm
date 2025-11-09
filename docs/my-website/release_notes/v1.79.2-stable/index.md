@@ -89,6 +89,7 @@ pip install litellm==1.79.2
 - **[Azure](../../docs/providers/azure)**
     - Add Azure GPT-5-Pro Responses API support with reasoning capabilities - [PR #16235](https://github.com/BerriAI/litellm/pull/16235)
     - Add gpt-image-1-mini pricing for Azure with quality tiers (low/medium/high) - [PR #16182](https://github.com/BerriAI/litellm/pull/16182)
+    - Add support for returning Azure Content Policy error information when exceptions from Azure OpenAI occur - [PR #16231](https://github.com/BerriAI/litellm/pull/16231)
     - Fix Azure GPT-5 incorrectly routed to O-series config (temperature parameter unsupported) - [PR #16246](https://github.com/BerriAI/litellm/pull/16246)
     - Fix Azure doesn't accept extra body param - [PR #16116](https://github.com/BerriAI/litellm/pull/16116)
     - Fix Azure DALL-E-3 health check content policy violation by using safe default prompt - [PR #16329](https://github.com/BerriAI/litellm/pull/16329)
@@ -171,7 +172,11 @@ pip install litellm==1.79.2
     - Update container documentation to be similar to others - [PR #16327](https://github.com/BerriAI/litellm/pull/16327)
 
 - **[Video Generation API](../../docs/video_generation)**
+    - Add Vertex and Gemini Videos API with Cost Tracking + UI support - [PR #16323](https://github.com/BerriAI/litellm/pull/16323)
     - Add `custom_llm_provider` support for video endpoints (non-generation) - [PR #16121](https://github.com/BerriAI/litellm/pull/16121)
+
+- **[Audio API](../../docs/audio)**
+    - Add gpt-4o-transcribe cost tracking - [PR #16412](https://github.com/BerriAI/litellm/pull/16412)
 
 - **[Vector Stores](../../docs/vector_stores)**
     - Milvus - search vector store support + support multi-part form data on passthrough - [PR #16035](https://github.com/BerriAI/litellm/pull/16035)
@@ -240,6 +245,7 @@ pip install litellm==1.79.2
 - **General**
     - UI - Remove encoding_format in request for embedding models - [PR #16367](https://github.com/BerriAI/litellm/pull/16367)
     - UI - Revert Changes for Test Key Multiple Model Select - [PR #16372](https://github.com/BerriAI/litellm/pull/16372)
+    - UI - Various Small Issues - [PR #16406](https://github.com/BerriAI/litellm/pull/16406)
 
 ---
 
@@ -277,6 +283,7 @@ pip install litellm==1.79.2
 - **[LiteLLM Custom Guardrail](../../docs/proxy/guardrails)**
     - Add LiteLLM Gateway built in guardrail - [PR #16338](https://github.com/BerriAI/litellm/pull/16338)
     - UI - Allow configuring LiteLLM Custom Guardrail - [PR #16339](https://github.com/BerriAI/litellm/pull/16339)
+    - Bug Fix: Content Filter Guard - [PR #16414](https://github.com/BerriAI/litellm/pull/16414)
 
 ### Secret Managers
 
@@ -336,6 +343,9 @@ pip install litellm==1.79.2
 - **Hooks**
     - Add parallel execution handling in during_call_hook - [PR #16279](https://github.com/BerriAI/litellm/pull/16279)
 
+- **Infrastructure**
+    - Install runtime node for prisma - [PR #16410](https://github.com/BerriAI/litellm/pull/16410)
+
 
 
 ---
@@ -350,6 +360,7 @@ pip install litellm==1.79.2
 - **General Documentation**
     - Add minimum resource requirement for production - [PR #16146](https://github.com/BerriAI/litellm/pull/16146)
     - Add benchmark comparison with other AI gateways - [PR #16248](https://github.com/BerriAI/litellm/pull/16248)
+    - LiteLLM content filter guard documentation - [PR #16413](https://github.com/BerriAI/litellm/pull/16413)
     - Fix typo of the word orginal - [PR #16255](https://github.com/BerriAI/litellm/pull/16255)
 
 - **Security**
