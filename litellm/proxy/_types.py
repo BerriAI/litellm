@@ -12,6 +12,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.v1.types import OptionalInt
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
@@ -2669,6 +2670,7 @@ class ProxyException(Exception):
         code: Optional[Union[int, str]] = None,  # maps to status code
         headers: Optional[Dict[str, str]] = None,
         openai_code: Optional[str] = None,  # maps to 'code'  in openai
+        provider_specific_fields: Optional[dict] = None,
     ):
         self.message = str(message)
         self.type = type
@@ -2683,7 +2685,7 @@ class ProxyException(Exception):
                 if not isinstance(v, str):
                     headers[k] = str(v)
         self.headers = headers or {}
-
+        self.provider_specific_fields = provider_specific_fields
         # rules for proxyExceptions
         # Litellm router.py returns "No healthy deployment available" when there are no deployments available
         # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
@@ -2697,12 +2699,15 @@ class ProxyException(Exception):
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
-        return {
+        error_dict: Dict[str, Optional[Union[str, Dict]]] = {
             "message": self.message,
             "type": self.type,
             "param": self.param,
             "code": self.code,
         }
+        if self.provider_specific_fields:
+            error_dict["provider_specific_fields"] = self.provider_specific_fields
+        return error_dict
 
 
 class CommonProxyErrors(str, enum.Enum):
