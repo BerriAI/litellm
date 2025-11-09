@@ -53,7 +53,25 @@ pip install litellm==1.79.3.rc.1
 
 ---
 
---
+### Built-in Guardrails on AI Gateway
+
+<Image 
+  img={require('../../img/release_notes/built_in_guard.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+
+This release introduces built-in guardrails for LiteLLM AI Gateway, allowing you to enforce protections without depending on an external guardrail API.
+
+- **Blocking Keywords** - Block known sensitive keywords like "litellm", "python", etc.
+- **Pattern Detection** - Block known sensitive patterns like emails, Social Security Numbers, API keys, etc.
+- **Custom Regex Patterns** - Define custom regex patterns for your specific use case.
+
+
+Get started with the built-in guardrails on AI Gateway [here](https://docs.litellm.ai/docs/proxy/guardrails/litellm_content_filter).
+
+---
 
 
 ### Performance – `/responses` 19× Lower Median Latency
