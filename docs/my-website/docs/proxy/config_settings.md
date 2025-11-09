@@ -480,6 +480,7 @@ router_settings:
 | DEFAULT_FAILURE_THRESHOLD_PERCENT | Threshold percentage of failures to cool down a deployment. Default is 0.5 (50%)
 | DEFAULT_FLUSH_INTERVAL_SECONDS | Default interval in seconds for flushing operations. Default is 5
 | DEFAULT_HEALTH_CHECK_INTERVAL | Default interval in seconds for health checks. Default is 300 (5 minutes)
+| DEFAULT_HEALTH_CHECK_PROMPT | Default prompt used during health checks for non-image models. Default is "test from litellm"
 | DEFAULT_IMAGE_HEIGHT | Default height for images. Default is 300
 | DEFAULT_IMAGE_TOKEN_COUNT | Default token count for images. Default is 250
 | DEFAULT_IMAGE_WIDTH | Default width for images. Default is 300
@@ -518,6 +519,7 @@ router_settings:
 | DEFAULT_SLACK_ALERTING_THRESHOLD | Default threshold for Slack alerting. Default is 300
 | DEFAULT_SOFT_BUDGET | Default soft budget for LiteLLM proxy keys. Default is 50.0
 | DEFAULT_TRIM_RATIO | Default ratio of tokens to trim from prompt end. Default is 0.75
+| DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS | Default duration for video generation in seconds in google. Default is 8
 | DIRECT_URL | Direct URL for service endpoint
 | DISABLE_ADMIN_UI | Toggle to disable the admin UI
 | DISABLE_AIOHTTP_TRANSPORT | Flag to disable aiohttp transport. When this is set to True, litellm will use httpx instead of aiohttp. **Default is False**

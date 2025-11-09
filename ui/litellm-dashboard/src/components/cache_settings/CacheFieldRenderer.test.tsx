@@ -1,6 +1,20 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import CacheFieldRenderer from "./CacheFieldRenderer";
+
+// Mock the useAuthorized hook to avoid Next.js router dependency
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({
+    token: "mock-token",
+    accessToken: "mock-access-token",
+    userId: "mock-user-id",
+    userEmail: "test@example.com",
+    userRole: "Admin",
+    premiumUser: false,
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  }),
+}));
 
 describe("CacheFieldRenderer", () => {
   it("should render a checkbox for Boolean field type", () => {
@@ -110,4 +124,3 @@ describe("CacheFieldRenderer", () => {
     expect(input).toHaveValue("localhost");
   });
 });
-
