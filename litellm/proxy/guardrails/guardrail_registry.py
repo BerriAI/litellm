@@ -232,7 +232,13 @@ class GuardrailRegistry:
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
-            litellm_params: str = safe_dumps(dict(guardrail.get("litellm_params", {})))
+            # Properly serialize LitellmParams Pydantic model to dict
+            litellm_params_obj = guardrail.get("litellm_params", {})
+            if hasattr(litellm_params_obj, 'model_dump'):
+                litellm_params_dict = litellm_params_obj.model_dump()
+            else:
+                litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
+            litellm_params: str = safe_dumps(litellm_params_dict)
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
@@ -278,7 +284,13 @@ class GuardrailRegistry:
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
-            litellm_params: str = safe_dumps(dict(guardrail.get("litellm_params", {})))
+            # Properly serialize LitellmParams Pydantic model to dict
+            litellm_params_obj = guardrail.get("litellm_params", {})
+            if hasattr(litellm_params_obj, 'model_dump'):
+                litellm_params_dict = litellm_params_obj.model_dump()
+            else:
+                litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
+            litellm_params: str = safe_dumps(litellm_params_dict)
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
