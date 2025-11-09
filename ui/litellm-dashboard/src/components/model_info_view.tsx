@@ -13,7 +13,7 @@ import {
   TextInput,
 } from "@tremor/react";
 import NumericalInput from "./shared/numerical_input";
-import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, TrashIcon, KeyIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
   modelDeleteCall,
   CredentialItem,
@@ -30,11 +30,13 @@ import { getProviderLogoAndName } from "./provider_info_helpers";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import CacheControlSettings from "./add_model/cache_control_settings";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, LoaderIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Tag } from "./tag_management/types";
+import { testConnectionRequest } from "./networking";
+import { truncateString } from "../utils/textUtils";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -262,6 +264,37 @@ export default function ModelInfoView({
     );
   }
 
+  const handleTestConnection = async () => {
+    if (!accessToken) return;
+    try {
+      NotificationsManager.info("Testing connection...");
+      const response = await testConnectionRequest(
+        accessToken,
+        {
+          custom_llm_provider: localModelData.litellm_params.custom_llm_provider,
+          litellm_credential_name: localModelData.litellm_params.litellm_credential_name,
+          model: localModelData.litellm_model_name,
+        },
+        {
+          mode: localModelData.model_info?.mode,
+        },
+        localModelData.model_info?.mode,
+      );
+
+      if (response.status === "success") {
+        NotificationsManager.success("Connection test successful!");
+      } else {
+        throw new Error(response?.result?.error || response?.message || "Unknown error");
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        NotificationsManager.error("Error testing connection: " + truncateString(error.message, 100));
+      } else {
+        NotificationsManager.error("Error testing connection: " + String(error));
+      }
+    }
+  };
+
   const handleDelete = async () => {
     try {
       if (!accessToken) return;
@@ -323,26 +356,36 @@ export default function ModelInfoView({
           </div>
         </div>
         <div className="flex gap-2">
-          {isAdmin && (
-            <TremorButton
-              icon={KeyIcon}
-              variant="secondary"
-              onClick={() => setIsCredentialModalOpen(true)}
-              className="flex items-center"
-            >
-              Re-use Credentials
-            </TremorButton>
-          )}
-          {canEditModel && (
-            <TremorButton
-              icon={TrashIcon}
-              variant="secondary"
-              onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center"
-            >
-              Delete Model
-            </TremorButton>
-          )}
+          <TremorButton
+            variant="secondary"
+            icon={RefreshIcon}
+            onClick={handleTestConnection}
+            className="flex items-center gap-2"
+            data-testid="test-connection-button"
+          >
+            Test Connection
+          </TremorButton>
+
+          <TremorButton
+            icon={KeyIcon}
+            variant="secondary"
+            onClick={() => setIsCredentialModalOpen(true)}
+            className="flex items-center"
+            disabled={!isAdmin}
+            data-testid="reuse-credentials-button"
+          >
+            Re-use Credentials
+          </TremorButton>
+          <TremorButton
+            icon={TrashIcon}
+            variant="secondary"
+            onClick={() => setIsDeleteModalOpen(true)}
+            className="flex items-center text-red-500 border-red-500"
+            disabled={!canEditModel}
+            data-testid="delete-model-button"
+          >
+            Delete Model
+          </TremorButton>
         </div>
       </div>
 
