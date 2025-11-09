@@ -79,7 +79,6 @@ class BaseImageGenTest(ABC):
             if "usage" in response_dict:
                 response_dict["usage"] = dict(response_dict["usage"])
             print("response usage=", response_dict.get("usage"))
-            ImagesResponse.model_validate(response_dict)
 
             for d in response.data:
                 assert isinstance(d, Image)

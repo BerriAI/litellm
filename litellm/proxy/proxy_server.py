@@ -270,9 +270,7 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -323,9 +321,7 @@ from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -412,9 +408,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import (
-    DeploymentTypedDict,
-)
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -901,15 +895,23 @@ try:
     # Support both "true" and "True" for case-insensitive comparison
     if os.getenv("LITELLM_NON_ROOT", "").lower() == "true":
         non_root_ui_path = "/tmp/litellm_ui"
-        
+
         # Check if the UI was built and exists at the expected location
         if os.path.exists(non_root_ui_path) and os.listdir(non_root_ui_path):
-            verbose_proxy_logger.info(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
-            verbose_proxy_logger.info(f"UI files found: {len(os.listdir(non_root_ui_path))} items")
+            verbose_proxy_logger.info(
+                f"Using pre-built UI for non-root Docker: {non_root_ui_path}"
+            )
+            verbose_proxy_logger.info(
+                f"UI files found: {len(os.listdir(non_root_ui_path))} items"
+            )
             ui_path = non_root_ui_path
         else:
-            verbose_proxy_logger.error(f"UI not found at {non_root_ui_path}. UI will not be available.")
-            verbose_proxy_logger.error(f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}")
+            verbose_proxy_logger.error(
+                f"UI not found at {non_root_ui_path}. UI will not be available."
+            )
+            verbose_proxy_logger.error(
+                f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}"
+            )
 
     # Only modify files if a custom server root path is set
     if server_root_path and server_root_path != "/":
@@ -985,7 +987,9 @@ try:
                 dst = os.path.join(folder_path, "index.html")
                 os.rename(src, dst)
     else:
-        verbose_proxy_logger.info("Skipping runtime HTML restructuring for non-root Docker (already done at build time)")
+        verbose_proxy_logger.info(
+            "Skipping runtime HTML restructuring for non-root Docker (already done at build time)"
+        )
 
 except Exception:
     pass
@@ -1846,8 +1850,12 @@ class ProxyConfig:
         """
         global llm_router
         import litellm
-        
-        if llm_router is not None and litellm.cache is not None and llm_router.cache_responses is not True:
+
+        if (
+            llm_router is not None
+            and litellm.cache is not None
+            and llm_router.cache_responses is not True
+        ):
             llm_router.cache_responses = True
             verbose_proxy_logger.debug(
                 "Set router.cache_responses=True after initializing cache"
@@ -2302,12 +2310,12 @@ class ProxyConfig:
                 litellm._key_management_settings = KeyManagementSettings(
                     **key_management_settings
                 )
-            
+
             ### LOAD SECRET MANAGER ###
             key_management_system = general_settings.get("key_management_system", None)
             self.initialize_secret_manager(
                 key_management_system=key_management_system,
-                config_file_path=config_file_path
+                config_file_path=config_file_path,
             )
             ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
             use_google_kms = general_settings.get("use_google_kms", False)
@@ -2641,7 +2649,9 @@ class ProxyConfig:
         pass
 
     def initialize_secret_manager(
-        self, key_management_system: Optional[str], config_file_path: Optional[str] = None
+        self,
+        key_management_system: Optional[str],
+        config_file_path: Optional[str] = None,
     ):
         """
         Initialize the relevant secret manager if `key_management_system` is provided
@@ -3023,14 +3033,16 @@ class ProxyConfig:
                     "Error setting env variable: %s - %s", k, str(e)
                 )
         return decrypted_env_vars
-    
+
     def _decrypt_db_variables(self, variables_dict: dict) -> dict:
         """
         Decrypts a dictionary of variables and returns them.
         """
         decrypted_variables = {}
         for k, v in variables_dict.items():
-            decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+            decrypted_value = decrypt_value_helper(
+                value=v, key=k, return_original_value=True
+            )
             decrypted_variables[k] = decrypted_value
         return decrypted_variables
 
@@ -3428,6 +3440,7 @@ class ProxyConfig:
             from litellm.proxy.management_endpoints.cache_settings_endpoints import (
                 CacheSettingsManager,
             )
+
             await CacheSettingsManager.init_cache_settings_in_db(
                 prisma_client=prisma_client, proxy_config=self
             )
@@ -3683,7 +3696,7 @@ class ProxyConfig:
         Initialize search tools from database into the router on startup.
         """
         global llm_router
-        
+
         from litellm.proxy.search_endpoints.search_tool_registry import (
             SearchToolRegistry,
         )
@@ -5075,7 +5088,9 @@ async def embeddings(  # noqa: PLR0915
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="aembedding"
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type=CallTypes.aembedding.value,
         )
 
         tasks = []
@@ -5488,7 +5503,7 @@ async def audio_transcriptions(
             data = await proxy_logging_obj.pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
                 data=data,
-                call_type="audio_transcription",
+                call_type="transcription",
             )
 
             ## ROUTE TO CORRECT ENDPOINT ##
