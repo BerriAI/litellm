@@ -45,11 +45,9 @@ pip install litellm==1.79.3.rc.1
 
 ## Key Highlights
 
-- **OCR API Support** - VertexAI and Azure AI Doc Intelligence OCR providers with cost tracking
-- **Secret Manager Integrations** - CyberArk and Custom Secret Manager support with key rotation
-- **Search API Expansion** - Firecrawl and SearXNG search providers with tiered pricing
-- **Bedrock Agentcore Provider** - New provider support for AWS Bedrock Agentcore
 - **LiteLLM Custom Guardrail** - Built-in guardrail with UI configuration support
+- **Performance Improvements** - `/responses` API 19× Lower Median Latency
+- **Veo3 Video Generation (Vertex AI + Google AI Studio)** - Use OpenAI Video API to generate videos with Vertex AI and Google AI Studio Veo3 models
 
 ---
 
