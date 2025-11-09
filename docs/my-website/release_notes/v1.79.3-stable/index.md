@@ -73,48 +73,29 @@ Get started with the built-in guardrails on AI Gateway [here](https://docs.litel
 
 ---
 
-
 ### Performance – `/responses` 19× Lower Median Latency
 
-This update improves latency and reduces memory overhead from per-request setup by including our internal network management for connection handling while the responses API was already using the same pipeline.
+This update significantly improves `/responses` latency by integrating our internal network management for connection handling, eliminating per-request setup overhead.
 
-As a result, end-to-end latency improved across all percentiles:
+#### Results
 
-`/responses`
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| Median latency | 3,600 ms | **190 ms** | **−95% (~19× faster)** |
+| p95 latency | 4,300 ms | **280 ms** | −93% |
+| p99 latency | 4,600 ms | **590 ms** | −87% |
+| Average latency | 3,571 ms | **208 ms** | −94% |
+| RPS | 231 | **1,059** | +358% |
 
-**Median latency:** 3,600 ms → **190 ms** (−94.7%, ~19× faster)
+#### Test Setup
 
-**p95 latency:** 4,300 ms → **280 ms** (−93.5%)
-
-**p99 latency:** 4,600 ms → **590 ms** (−87.2%)
-
-**Average latency:** 3,571 ms → **208 ms** (−94.2%)
-
-**RPS:** 231.3 → **1,058.6** (+357.5%)
-
-#### **Test Setup**
-
-**Locust**
-
-- **Concurrent users:** 1,000
-- **Ramp-up:** 500
-
-**System Specs**
-
-- **CPU:** 4 vCPUs
-- **Memory:** 8 GB RAM
-- **LiteLLM Workers:** 4
-- **Instances**: 4
-
-> Database used; Redis unused.
-
-**Configuration (config.yaml)**
-
-View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](https://gist.github.com/AlexsanderHamir/550791675fd752befcac6a9e44024652)
-
-**Load Script (no_cache_hits.py)**
-
-View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/99d673bf74cdd81fd39f59fa9048f2e8)
+| Category | Specification |
+|----------|---------------|
+| **Load Testing** | Locust: 1,000 concurrent users, 500 ramp-up |
+| **System** | 4 vCPUs, 8 GB RAM, 4 workers, 4 instances |
+| **Database** | PostgreSQL (Redis unused) |
+| **Configuration** | [config.yaml](https://gist.github.com/AlexsanderHamir/550791675fd752befcac6a9e44024652) |
+| **Load Script** | [no_cache_hits.py](https://gist.github.com/AlexsanderHamir/99d673bf74cdd81fd39f59fa9048f2e8) |
 
 ---
 
