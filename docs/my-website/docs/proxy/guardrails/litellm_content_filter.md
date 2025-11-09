@@ -1,5 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
+
 
 # LiteLLM Content Filter
 
@@ -50,9 +52,9 @@ Test examples:
 
 <Image img={require('../../../img/add_guard5.gif')} alt="Test guardrail in playground" />
 
+## LiteLLM Config.yaml Setup
 
-
-### 1. Define Guardrails in config.yaml
+### Step 1: Define Guardrails in config.yaml
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
@@ -84,13 +86,13 @@ guardrails:
           description: "Sensitive internal information"
 ```
 
-### 2. Start LiteLLM Gateway
+### Step 2: Start LiteLLM Gateway
 
 ```shell
 litellm --config config.yaml
 ```
 
-### 3. Test Request
+### Step 3: Test Request
 
 <Tabs>
 <TabItem label="SSN Blocked" value="ssn-blocked">
