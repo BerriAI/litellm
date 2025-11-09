@@ -34,7 +34,7 @@ from litellm.types.utils import (
     all_litellm_params as _litellm_completion_params,
     CredentialItem,
     PriorityReservationDict,
-)  # maintain backwards compatibility for root param
+)  # maintain backwards compatibility for root param.
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
