@@ -1597,7 +1597,16 @@ class Logging(LiteLLMLoggingBaseClass):
                         if hasattr(result, "model_dump")
                         else dict(result)
                     )
+            elif isinstance(result, TranscriptionResponse):
+                from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+                    TranscriptionUsageObjectTransformation,
+                )
 
+                result = result.model_copy()
+                transformed_usage = TranscriptionUsageObjectTransformation.transform_transcription_usage_object(
+                    result.usage  # type: ignore
+                )
+                setattr(result, "usage", transformed_usage)
             if (
                 litellm.max_budget
                 and self.stream is False
