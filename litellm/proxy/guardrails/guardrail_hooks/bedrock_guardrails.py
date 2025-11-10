@@ -42,6 +42,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
 )
 from litellm.types.utils import (
     CallTypes,
+    CallTypesLiteral,
     Choices,
     GuardrailStatus,
     ModelResponse,
@@ -608,18 +609,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug(
             "Inside Bedrock Pre-Call Hook for call_type: %s", call_type
@@ -685,16 +675,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -1163,7 +1144,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         This method allows users to test Bedrock guardrails without making actual LLM calls.
         It creates a mock request and response to test the guardrail functionality.
-        
+
         Args:
             text: The text to analyze
             language: Optional language parameter (not used by Bedrock)
@@ -1175,11 +1156,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             mock_messages: List[AllMessageValues] = [
                 ChatCompletionUserMessage(role="user", content=text)
             ]
-            
+
             # Use provided request_data or create a mock one for testing
             if request_data is None:
                 request_data = {"messages": mock_messages}
-            
+
             bedrock_response = await self.make_bedrock_api_request(
                 source="INPUT",
                 messages=mock_messages,

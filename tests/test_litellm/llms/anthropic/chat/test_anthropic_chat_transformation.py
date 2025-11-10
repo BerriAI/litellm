@@ -387,3 +387,26 @@ def test_prompt_cache_key_removed_from_request():
     assert "tools" in supported_params
     
     print("✅ Test passed: prompt_cache_key is not in Anthropic's supported params")
+def test_anthropic_memory_tool_auto_adds_beta_header():
+    """
+    Tests that LiteLLM automatically adds the required 'anthropic-beta' header
+    when the memory tool is present, and the user has NOT provided a beta header.
+    """
+
+    config = AnthropicConfig()
+    memory_tool = [{"type": "memory_20250818", "name": "memory"}]
+    messages = [{"role": "user", "content": "Remember this."}]
+
+    headers = {}
+    optional_params = {"tools": memory_tool}
+
+    config.transform_request(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert "anthropic-beta" in headers
+    assert headers["anthropic-beta"] == "context-management-2025-06-27"

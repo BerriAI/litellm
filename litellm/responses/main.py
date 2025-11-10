@@ -651,6 +651,7 @@ def responses(
                 model=model, stream=stream, custom_llm_provider=custom_llm_provider
             ),
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            shared_session=kwargs.get("shared_session"),
         )
 
         # Update the responses_api_response_id with the model_id
@@ -818,6 +819,7 @@ def delete_responses(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
         )
 
         return response
@@ -997,6 +999,7 @@ def get_responses(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
         )
 
         # Update the responses_api_response_id with the model_id
@@ -1151,6 +1154,7 @@ def list_input_items(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
         )
 
         return response
@@ -1310,6 +1314,7 @@ def cancel_responses(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
         )
 
         return response
