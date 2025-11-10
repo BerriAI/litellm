@@ -2536,6 +2536,7 @@ class LlmProviders(str, Enum):
     NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
+    APPLE_FOUNDATION_MODELS = "apple_foundation_models"
     VOLCENGINE = "volcengine"
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
