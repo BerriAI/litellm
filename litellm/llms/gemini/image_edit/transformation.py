@@ -73,7 +73,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         base_url = base_url.rstrip("/")
         return f"{base_url}/models/{model}:generateContent"
 
-    def transform_image_edit_request(
+    def transform_image_edit_request(  # type: ignore[override]
         self,
         model: str,
         prompt: str,
