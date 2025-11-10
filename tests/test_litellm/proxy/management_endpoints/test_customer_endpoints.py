@@ -227,3 +227,77 @@ def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
     error = validate_error_schema(response.json())
     assert error["type"] == "bad_request"
     assert error["code"] == "400"
+
+
+def test_customer_endpoints_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
+    """
+    Test the exact scenarios from the curl examples provided.
+    
+    Scenario 1: GET /end_user/info with non-existent user
+    OLD (incorrect): {"detail":{"error":"End User Id=... does not exist in db"}}
+    NEW (correct):   {"error":{"message":"...","type":"not_found","param":"end_user_id","code":"404"}}
+    
+    Scenario 2: POST /end_user/new with existing user
+    Expected:        {"error":{"message":"...","type":"bad_request","param":"user_id","code":"400"}}
+    
+    Both should use the same error format structure.
+    """
+    
+    # Scenario 1: GET /end_user/info with non-existent user
+    # Should return 404 with proper error schema
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=None)
+    
+    response1 = client.get(
+        "/end_user/info?end_user_id=fake-test-end-user-michaels-local-testng",
+        headers={"Authorization": "Bearer test-key"},
+    )
+    
+    assert response1.status_code == 404, "Should return 404 for non-existent user"
+    response1_json = response1.json()
+
+    
+    # Should have the correct format with {"error": {...}}
+    assert "error" in response1_json, "Should have top-level 'error' key"
+    error1 = response1_json["error"]
+    assert "message" in error1, "Error should have 'message' field"
+    assert "type" in error1, "Error should have 'type' field"
+    assert "param" in error1, "Error should have 'param' field"
+    assert "code" in error1, "Error should have 'code' field"
+    assert error1["type"] == "not_found"
+    assert error1["code"] == "404"
+    assert "does not exist in db" in error1["message"]
+    
+    # Scenario 2: POST /end_user/new with existing user
+    # Should return 400 with proper error schema
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(
+        side_effect=Exception("Unique constraint failed on the fields: (`user_id`)")
+    )
+    
+    response2 = client.post(
+        "/end_user/new",
+        json={"user_id": "fake-test-end-user-michaels-local-testing", "budget_id": "Tier0"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+    
+    assert response2.status_code == 400, "Should return 400 for duplicate user"
+    response2_json = response2.json()
+    
+    # Should have the same error structure as Scenario 1
+    assert "error" in response2_json, "Should have top-level 'error' key"
+    error2 = response2_json["error"]
+    assert "message" in error2, "Error should have 'message' field"
+    assert "type" in error2, "Error should have 'type' field"
+    assert "param" in error2, "Error should have 'param' field"
+    assert "code" in error2, "Error should have 'code' field"
+    assert error2["type"] == "bad_request"
+    assert error2["code"] == "400"
+    assert "Customer already exists" in error2["message"]
+    
+    # Verify both errors have the same schema structure
+    assert set(error1.keys()) == set(error2.keys()), \
+        "Both errors should have the same top-level keys"
+    
+    # Both should have string values for all fields
+    for key in ["message", "type", "code"]:
+        assert isinstance(error1[key], str), f"error1[{key}] should be a string"
+        assert isinstance(error2[key], str), f"error2[{key}] should be a string"
