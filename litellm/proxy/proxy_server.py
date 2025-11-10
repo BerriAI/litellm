@@ -2804,11 +2804,6 @@ class ProxyConfig:
         """
         import base64
 
-        if master_key is None or not isinstance(master_key, str):
-            raise Exception(
-                f"Master key is not initialized or formatted. master_key={master_key}"
-            )
-
         if llm_router is None:
             return 0
 
@@ -2820,13 +2815,9 @@ class ProxyConfig:
                 # decrypt values
                 for k, v in _litellm_params.items():
                     if isinstance(v, str):
-                        # decrypt value
-                        _value = decrypt_value_helper(value=v, key=k)
-                        if _value is None:
-                            raise Exception("Unable to decrypt value={}".format(v))
-                        # sanity check if string > size 0
-                        if len(_value) > 0:
-                            _litellm_params[k] = _value
+                        # decrypt value - returns original value if decryption fails or no key is set
+                        _value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+                        _litellm_params[k] = _value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
             else:
@@ -3370,11 +3361,6 @@ class ProxyConfig:
         global llm_router, llm_model_list, master_key, general_settings
 
         try:
-            if master_key is None or not isinstance(master_key, str):
-                raise ValueError(
-                    f"Master key is not initialized or formatted. master_key={master_key}"
-                )
-
             # Only load models from DB if "models" is in supported_db_objects (or if supported_db_objects is not set)
             if self._should_load_db_object(object_type="models"):
                 new_models = await self._get_models_from_db(prisma_client=prisma_client)
