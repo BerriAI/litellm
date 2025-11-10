@@ -25,7 +25,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
         status_code=(
             int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
         ),
-        content={"detail": {"error": error_dict["message"]}},
+        content={"error": error_dict},
         headers=headers,
     )
 
@@ -101,7 +101,12 @@ def test_update_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
 
     # Assert response
     assert response.status_code == 404
-    assert "End User Id=non-existent-user does not exist in db" in response.json()["detail"]["error"]
+    response_json = response.json()
+    assert "error" in response_json
+    assert response_json["error"]["message"] == "End User Id=non-existent-user does not exist in db"
+    assert response_json["error"]["type"] == "not_found"
+    assert response_json["error"]["param"] == "user_id"
+    assert response_json["error"]["code"] == "404"
 
 
 def test_info_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
@@ -119,7 +124,12 @@ def test_info_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
 
     # Assert response
     assert response.status_code == 404
-    assert "End User Id=non-existent-user does not exist in db" in response.json()["detail"]["error"]
+    response_json = response.json()
+    assert "error" in response_json
+    assert response_json["error"]["message"] == "End User Id=non-existent-user does not exist in db"
+    assert response_json["error"]["type"] == "not_found"
+    assert response_json["error"]["param"] == "end_user_id"
+    assert response_json["error"]["code"] == "404"
 
 
 def test_delete_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
@@ -141,5 +151,79 @@ def test_delete_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
 
     # Assert response
     assert response.status_code == 404
-    assert "do not exist in db" in response.json()["detail"]["error"]
-    assert "non-existent-user-1" in response.json()["detail"]["error"]
+    response_json = response.json()
+    assert "error" in response_json
+    assert "do not exist in db" in response_json["error"]["message"]
+    assert "non-existent-user-1" in response_json["error"]["message"]
+    assert response_json["error"]["type"] == "not_found"
+    assert response_json["error"]["param"] == "user_ids"
+    assert response_json["error"]["code"] == "404"
+
+
+def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
+    """
+    Test that all customer endpoints return the same error schema format.
+    All ProxyException errors should have: message, type, param, and code fields.
+    """
+    
+    def validate_error_schema(response_json):
+        assert "error" in response_json, "Response should have 'error' key"
+        error = response_json["error"]
+        assert "message" in error, "Error should have 'message' field"
+        assert "type" in error, "Error should have 'type' field"
+        assert "param" in error, "Error should have 'param' field"
+        assert "code" in error, "Error should have 'code' field"
+        assert isinstance(error["message"], str), "message should be a string"
+        assert isinstance(error["type"], str), "type should be a string"
+        assert isinstance(error["code"], str), "code should be a string"
+        return error
+
+    # Test /customer/info - not found error
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=None)
+    response = client.get(
+        "/customer/info?end_user_id=non-existent",
+        headers={"Authorization": "Bearer test-key"},
+    )
+    error = validate_error_schema(response.json())
+    assert error["type"] == "not_found"
+    assert error["code"] == "404"
+
+    # Test /customer/update - not found error
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=None)
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "non-existent", "alias": "Test"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+    error = validate_error_schema(response.json())
+    assert error["type"] == "not_found"
+    assert error["code"] == "404"
+
+    # Test /customer/delete - not found error
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    response = client.post(
+        "/customer/delete",
+        json={"user_ids": ["non-existent"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+    error = validate_error_schema(response.json())
+    assert error["type"] == "not_found"
+    assert error["code"] == "404"
+
+    # Test /customer/new - duplicate user error
+    from unittest.mock import MagicMock
+    
+    mock_end_user = LiteLLM_EndUserTable(
+        user_id="existing-user", alias="Existing User", blocked=False
+    )
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(
+        side_effect=Exception("Unique constraint failed on the fields: (`user_id`)")
+    )
+    response = client.post(
+        "/customer/new",
+        json={"user_id": "existing-user"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+    error = validate_error_schema(response.json())
+    assert error["type"] == "bad_request"
+    assert error["code"] == "400"
