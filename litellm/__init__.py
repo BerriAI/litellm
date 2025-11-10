@@ -366,6 +366,7 @@ max_ui_session_budget: Optional[float] = 10  # $10 USD budgets for UI Chat sessi
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
 max_end_user_budget: Optional[float] = None
+max_end_user_budget_id: Optional[str] = None
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
