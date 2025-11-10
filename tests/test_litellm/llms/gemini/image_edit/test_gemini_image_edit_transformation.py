@@ -51,7 +51,7 @@ class TestGeminiImageEditTransformation:
             headers={},
         )
 
-        assert files is None
+        assert files == []
 
         parts = request_body["contents"][0]["parts"]
         assert parts[-1]["text"] == self.prompt
@@ -76,7 +76,7 @@ class TestGeminiImageEditTransformation:
             headers={},
         )
 
-        assert files is None
+        assert files == []
         parts = request_body["contents"][0]["parts"]
 
         assert len(parts) == 3  # two images + text prompt
