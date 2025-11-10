@@ -33,7 +33,7 @@ import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
 import ChatImageRenderer from "./ChatImageRenderer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
-import { truncateString } from "./chatUtils";
+import { truncateString } from "../../utils/textUtils";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
 import { makeAnthropicMessagesRequest } from "./llm_calls/anthropic_messages";
