@@ -449,7 +449,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Tool Permission Guardrail: Checking response")
 
             # Extract tool_calls from the response
-            tool_calls = self._extract_tool_calls_from_response(assembled_model_response)
+            tool_calls = self._extract_tool_calls_from_response(
+                assembled_model_response
+            )
 
             if not tool_calls:
                 verbose_proxy_logger.debug(

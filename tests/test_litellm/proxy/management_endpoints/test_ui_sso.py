@@ -1412,7 +1412,6 @@ class TestCLIKeyRegenerationFlow:
             "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
             return_value="<html>Success</html>",
         ):
-
             # Act
             result = await cli_sso_callback(
                 request=mock_request, key=new_key, existing_key=existing_key
@@ -1445,7 +1444,6 @@ class TestCLIKeyRegenerationFlow:
             "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
             return_value="<html>Success</html>",
         ):
-
             # Act
             result = await cli_sso_callback(
                 request=mock_request, key=new_key, existing_key=None
@@ -1561,7 +1559,6 @@ class TestCLIKeyRegenerationFlow:
             "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
             return_value="<html>Success</html>",
         ):
-
             # Test regeneration path
             await cli_sso_callback(
                 mock_request, key="sk-new-123", existing_key="sk-existing-456"

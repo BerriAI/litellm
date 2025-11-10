@@ -73,7 +73,6 @@ async def make_chat_completions_request() -> ChatCompletion:
 
 @pytest.mark.asyncio
 async def test_e2e_langfuse_callbacks_in_db():
-
     session = aiohttp.ClientSession()
 
     # add langfuse callback to DB

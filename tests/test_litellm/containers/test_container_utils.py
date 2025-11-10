@@ -12,7 +12,7 @@ from litellm.containers.utils import ContainerRequestUtils
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
-    ContainerListOptionalRequestParams
+    ContainerListOptionalRequestParams,
 )
 
 
@@ -26,7 +26,7 @@ class TestContainerRequestUtils:
         optional_params = ContainerCreateOptionalRequestParams(
             {
                 "expires_after": {"anchor": "last_active_at", "minutes": 30},
-                "file_ids": ["file_123", "file_456"]
+                "file_ids": ["file_123", "file_456"],
             }
         )
 
@@ -47,13 +47,13 @@ class TestContainerRequestUtils:
         """Test that unsupported parameters are filtered out by ContainerCreateOptionalRequestParams."""
         # Setup
         config = OpenAIContainerConfig()
-        
+
         # ContainerCreateOptionalRequestParams will only accept valid parameters
         # so this test verifies the type validation works correctly
         valid_params = ContainerCreateOptionalRequestParams(
             {
                 "expires_after": {"anchor": "last_active_at", "minutes": 30},
-                "file_ids": ["file_123"]
+                "file_ids": ["file_123"],
             }
         )
 
@@ -138,10 +138,7 @@ class TestContainerRequestUtils:
         # Setup
         config = OpenAIContainerConfig()
         optional_params = ContainerCreateOptionalRequestParams(
-            {
-                "expires_after": None,
-                "file_ids": None
-            }
+            {"expires_after": None, "file_ids": None}
         )
 
         # Execute
@@ -185,10 +182,10 @@ class TestContainerRequestUtils:
         valid_params = ContainerCreateOptionalRequestParams(
             {
                 "expires_after": {"anchor": "last_active_at", "minutes": 20},
-                "file_ids": ["file_1", "file_2"]
+                "file_ids": ["file_1", "file_2"],
             }
         )
-        
+
         assert valid_params["expires_after"]["anchor"] == "last_active_at"
         assert valid_params["expires_after"]["minutes"] == 20
         assert valid_params["file_ids"] == ["file_1", "file_2"]
@@ -197,13 +194,9 @@ class TestContainerRequestUtils:
         """Test that ContainerListOptionalRequestParams validates types correctly."""
         # Test with valid parameters
         valid_params = ContainerListOptionalRequestParams(
-            {
-                "after": "cntr_123",
-                "limit": 10,
-                "order": "desc"
-            }
+            {"after": "cntr_123", "limit": 10, "order": "desc"}
         )
-        
+
         assert valid_params["after"] == "cntr_123"
         assert valid_params["limit"] == 10
         assert valid_params["order"] == "desc"
@@ -212,13 +205,13 @@ class TestContainerRequestUtils:
         """Test that only supported parameters are accepted."""
         # Setup
         config = OpenAIContainerConfig()
-        
+
         # Get supported params to understand what should be allowed
         supported_params = config.get_supported_openai_params()
-        
+
         # Create params with only valid parameters
         test_params = {"expires_after": {"anchor": "last_active_at", "minutes": 15}}
-        
+
         optional_params = ContainerCreateOptionalRequestParams(test_params)
 
         # Execute - should work fine with supported params
@@ -226,5 +219,5 @@ class TestContainerRequestUtils:
             container_provider_config=config,
             container_create_optional_params=optional_params,
         )
-        
+
         assert result["expires_after"]["minutes"] == 15

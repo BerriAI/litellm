@@ -115,7 +115,6 @@ def test_gpt5_codex_temperature_error(config: OpenAIConfig):
         )
 
 
-
 def test_gpt5_codex_temperature_one_allowed(config: OpenAIConfig):
     """Test that GPT-5-Codex allows temperature=1."""
     params = config.map_openai_params(

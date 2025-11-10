@@ -348,7 +348,6 @@ class LoggingCallbackManager:
         elif callable(callback):
             return getattr(callback, "__name__", str(callback))
         return str(callback)
-    
 
     def get_active_custom_logger_for_callback_name(
         self,
@@ -362,12 +361,16 @@ class LoggingCallbackManager:
         )
 
         # get the custom logger class type
-        custom_logger_class_type = CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name)
+        custom_logger_class_type = (
+            CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name)
+        )
 
         # get the active custom logger
         custom_logger = self.get_custom_loggers_for_type(custom_logger_class_type)
 
         if len(custom_logger) == 0:
-            raise ValueError(f"No active custom logger found for callback name: {callback_name}")
+            raise ValueError(
+                f"No active custom logger found for callback name: {callback_name}"
+            )
 
         return custom_logger[0]

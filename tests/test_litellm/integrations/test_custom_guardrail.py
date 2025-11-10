@@ -7,7 +7,6 @@ from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 
 
 class TestCustomGuardrailDeploymentHook:
-
     @pytest.mark.asyncio
     async def test_async_pre_call_deployment_hook_no_guardrails(self):
         """Test that method returns kwargs unchanged when no guardrails are present"""
@@ -85,7 +84,6 @@ class TestCustomGuardrailDeploymentHook:
 
 
 class TestCustomGuardrailShouldRunGuardrail:
-
     def test_should_run_guardrail_with_litellm_metadata(self):
         """Test that should_run_guardrail works with litellm_metadata pattern"""
         from litellm.types.guardrails import GuardrailEventHooks
@@ -304,7 +302,9 @@ class TestGuardrailLoggingAggregation:
 
         self._invoke_add_log(request_data)
 
-        info = request_data["litellm_metadata"]["standard_logging_guardrail_information"]
+        info = request_data["litellm_metadata"][
+            "standard_logging_guardrail_information"
+        ]
         assert isinstance(info, list)
         assert len(info) == 2
         assert info[1]["guardrail_name"] == "test_guardrail"

@@ -10,9 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)
+sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.proxy.management_endpoints.cost_tracking_settings import router
@@ -77,9 +75,7 @@ class TestCostTrackingSettings:
         """
         # Mock the proxy_config to return a config without cost_discount_config
         mock_proxy_config = AsyncMock()
-        mock_proxy_config.get_config = AsyncMock(
-            return_value={"litellm_settings": {}}
-        )
+        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
 
         mock_prisma_client = MagicMock()
 
@@ -110,9 +106,7 @@ class TestCostTrackingSettings:
         """
         # Mock the proxy_config
         mock_proxy_config = AsyncMock()
-        mock_proxy_config.get_config = AsyncMock(
-            return_value={"litellm_settings": {}}
-        )
+        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
         mock_proxy_config.save_config = AsyncMock()
 
         mock_prisma_client = MagicMock()
@@ -134,7 +128,9 @@ class TestCostTrackingSettings:
         ), patch(
             "litellm.proxy.proxy_server.store_model_in_db",
             mock_store_model_in_db,
-        ), patch.object(litellm, "cost_discount_config", {}):
+        ), patch.object(
+            litellm, "cost_discount_config", {}
+        ):
             # Make request
             response = client.patch(
                 "/config/cost_discount_config",
@@ -269,4 +265,3 @@ class TestCostTrackingSettings:
             response_data = response.json()
             assert "error" in response_data["detail"]
             assert "STORE_MODEL_IN_DB" in response_data["detail"]["error"]
-

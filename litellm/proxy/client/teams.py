@@ -60,10 +60,10 @@ class TeamsManagementClient:
             params["organization_id"] = organization_id
 
         response = requests.get(url, headers=self._get_headers(), params=params)
-        
+
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
-        
+
         response.raise_for_status()
         return response.json()
 
@@ -104,7 +104,7 @@ class TeamsManagementClient:
             "page_size": page_size,
             "sort_order": sort_order,
         }
-        
+
         if user_id:
             params["user_id"] = user_id
         if organization_id:
@@ -117,10 +117,10 @@ class TeamsManagementClient:
             params["sort_by"] = sort_by
 
         response = requests.get(url, headers=self._get_headers(), params=params)
-        
+
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
-        
+
         response.raise_for_status()
         return response.json()
 
@@ -136,11 +136,11 @@ class TeamsManagementClient:
             UnauthorizedError: If authentication fails
         """
         url = f"{self._base_url}/team/available"
-        
+
         response = requests.get(url, headers=self._get_headers())
-        
+
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
-        
+
         response.raise_for_status()
         return response.json()

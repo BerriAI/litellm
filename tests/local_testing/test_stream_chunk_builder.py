@@ -880,10 +880,14 @@ def execute_completion(opts: dict):
     print(f"partial_streaming_chunks: {partial_streaming_chunks}")
     print("\n\n")
     assembly = litellm.stream_chunk_builder(partial_streaming_chunks)
-    print(f"assembly.choices[0].message.tool_calls: {assembly.choices[0].message.tool_calls}")
+    print(
+        f"assembly.choices[0].message.tool_calls: {assembly.choices[0].message.tool_calls}"
+    )
     print(assembly.choices[0].message.tool_calls)
     for tool_call in assembly.choices[0].message.tool_calls:
-        json.loads(tool_call.function.arguments) # assert valid json - https://github.com/BerriAI/litellm/issues/10034
+        json.loads(
+            tool_call.function.arguments
+        )  # assert valid json - https://github.com/BerriAI/litellm/issues/10034
 
 
 def test_grok_bug(load_env):

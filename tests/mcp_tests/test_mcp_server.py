@@ -98,9 +98,9 @@ async def test_mcp_server_manager_https_server():
         assert tools[0].name == f"{expected_prefix}-gmail_send_email"
 
         # Manually set up the tool mapping for the call_tool test
-        mcp_server_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
-            expected_prefix
-        )
+        mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            "gmail_send_email"
+        ] = expected_prefix
         mcp_server_manager.tool_name_to_mcp_server_name_mapping[
             f"{expected_prefix}-gmail_send_email"
         ] = expected_prefix
@@ -260,9 +260,9 @@ async def test_mcp_http_transport_call_tool_mock():
         )
 
         # Manually set up tool mapping (normally done by list_tools)
-        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
-            "test_http_server"
-        )
+        test_manager.tool_name_to_mcp_server_name_mapping[
+            "gmail_send_email"
+        ] = "test_http_server"
 
         # Call the tool
         result = await test_manager.call_tool(
@@ -326,9 +326,9 @@ async def test_mcp_http_transport_call_tool_error_mock():
         )
 
         # Manually set up tool mapping
-        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
-            "test_http_server"
-        )
+        test_manager.tool_name_to_mcp_server_name_mapping[
+            "gmail_send_email"
+        ] = "test_http_server"
 
         # Call the tool with invalid data
         result = await test_manager.call_tool(

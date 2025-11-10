@@ -639,7 +639,6 @@ if MCP_AVAILABLE:
             allowed_mcp_servers=allowed_mcp_servers,
             server_name=server_name_from_prefix,
         ):
-
             raise HTTPException(
                 status_code=403,
                 detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
@@ -656,9 +655,9 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
-                standard_logging_mcp_tool_call
-            )
+            litellm_logging_obj.model_call_details[
+                "mcp_tool_call_metadata"
+            ] = standard_logging_mcp_tool_call
             litellm_logging_obj.model = f"MCP: {name}"
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
@@ -672,9 +671,9 @@ if MCP_AVAILABLE:
         # Primary and recommended way to use external MCP servers
         #########################################################
         else:
-            mcp_server: Optional[MCPServer] = (
-                global_mcp_server_manager._get_mcp_server_from_tool_name(name)
-            )
+            mcp_server: Optional[
+                MCPServer
+            ] = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
             if mcp_server:
                 standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
                     mcp_server.mcp_info or {}
@@ -1050,14 +1049,16 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> Tuple[
-        Optional[UserAPIKeyAuth],
-        Optional[str],
-        Optional[List[str]],
-        Optional[Dict[str, Dict[str, str]]],
-        Optional[Dict[str, str]],
-        Optional[Dict[str, str]],
-    ]:
+    def get_auth_context() -> (
+        Tuple[
+            Optional[UserAPIKeyAuth],
+            Optional[str],
+            Optional[List[str]],
+            Optional[Dict[str, Dict[str, str]]],
+            Optional[Dict[str, str]],
+            Optional[Dict[str, str]],
+        ]
+    ):
         """
         Get the UserAPIKeyAuth from the auth context variable.
 

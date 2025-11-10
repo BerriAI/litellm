@@ -1034,7 +1034,6 @@ class TestBedrockLLMProxyRoute:
             "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
             return_value=mock_processor,
         ):
-
             # Test application-inference-profile endpoint
             endpoint = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/r742sbn2zckd/converse"
 
@@ -1076,7 +1075,6 @@ class TestBedrockLLMProxyRoute:
             "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
             return_value=mock_processor,
         ):
-
             # Test regular model endpoint
             endpoint = "model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
 

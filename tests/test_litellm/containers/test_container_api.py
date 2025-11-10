@@ -12,12 +12,20 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.types.containers.main import ContainerObject, ContainerListResponse, DeleteContainerResult
+from litellm.types.containers.main import (
+    ContainerObject,
+    ContainerListResponse,
+    DeleteContainerResult,
+)
 from litellm.containers.main import (
-    create_container, acreate_container,
-    list_containers, alist_containers,
-    retrieve_container, aretrieve_container,
-    delete_container, adelete_container
+    create_container,
+    acreate_container,
+    list_containers,
+    alist_containers,
+    retrieve_container,
+    aretrieve_container,
+    delete_container,
+    adelete_container,
 )
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -36,17 +44,16 @@ class TestContainerAPI:
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Test Container"
+            name="Test Container",
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_create_handler.return_value = mock_response
-            
+
             response = create_container(
-                name="Test Container",
-                custom_llm_provider="openai"
+                name="Test Container", custom_llm_provider="openai"
             )
-            
+
             assert isinstance(response, ContainerObject)
             assert response.id == "cntr_123456"
             assert response.name == "Test Container"
@@ -57,23 +64,23 @@ class TestContainerAPI:
         """Test container creation with expires_after parameter."""
         mock_response = ContainerObject(
             id="cntr_789",
-            object="container", 
+            object="container",
             created_at=1747857508,
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 30},
             last_active_at=1747857508,
-            name="Expiring Container"
+            name="Expiring Container",
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_create_handler.return_value = mock_response
-            
+
             response = create_container(
                 name="Expiring Container",
                 expires_after={"anchor": "last_active_at", "minutes": 30},
-                custom_llm_provider="openai"
+                custom_llm_provider="openai",
             )
-            
+
             assert response.expires_after.minutes == 30
             assert response.expires_after.anchor == "last_active_at"
 
@@ -86,18 +93,18 @@ class TestContainerAPI:
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Container with Files"
+            name="Container with Files",
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_create_handler.return_value = mock_response
-            
+
             response = create_container(
                 name="Container with Files",
                 file_ids=["file_123", "file_456"],
-                custom_llm_provider="openai"
+                custom_llm_provider="openai",
             )
-            
+
             assert response.name == "Container with Files"
 
     @pytest.mark.asyncio
@@ -107,20 +114,19 @@ class TestContainerAPI:
             id="cntr_async_123",
             object="container",
             created_at=1747857508,
-            status="running", 
+            status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Async Test Container"
+            name="Async Test Container",
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_create_handler.return_value = mock_response
-            
+
             response = await acreate_container(
-                name="Async Test Container",
-                custom_llm_provider="openai"
+                name="Async Test Container", custom_llm_provider="openai"
             )
-            
+
             assert isinstance(response, ContainerObject)
             assert response.id == "cntr_async_123"
             assert response.name == "Async Test Container"
@@ -137,30 +143,28 @@ class TestContainerAPI:
                     status="running",
                     expires_after={"anchor": "last_active_at", "minutes": 20},
                     last_active_at=1747857508,
-                    name="Container 1"
+                    name="Container 1",
                 ),
                 ContainerObject(
-                    id="cntr_2", 
+                    id="cntr_2",
                     object="container",
                     created_at=1747857600,
                     status="running",
                     expires_after={"anchor": "last_active_at", "minutes": 15},
                     last_active_at=1747857600,
-                    name="Container 2"
-                )
+                    name="Container 2",
+                ),
             ],
             first_id="cntr_1",
             last_id="cntr_2",
-            has_more=False
+            has_more=False,
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_list_handler.return_value = mock_response
-            
-            response = list_containers(
-                custom_llm_provider="openai"
-            )
-            
+
+            response = list_containers(custom_llm_provider="openai")
+
             assert isinstance(response, ContainerListResponse)
             assert len(response.data) == 2
             assert response.data[0].id == "cntr_1"
@@ -179,24 +183,21 @@ class TestContainerAPI:
                     status="running",
                     expires_after={"anchor": "last_active_at", "minutes": 20},
                     last_active_at=1747857508,
-                    name="Limited Container"
+                    name="Limited Container",
                 )
             ],
             first_id="cntr_limited",
-            last_id="cntr_limited", 
-            has_more=True
+            last_id="cntr_limited",
+            has_more=True,
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_list_handler.return_value = mock_response
-            
+
             response = list_containers(
-                limit=1,
-                order="desc",
-                after="cntr_prev",
-                custom_llm_provider="openai"
+                limit=1, order="desc", after="cntr_prev", custom_llm_provider="openai"
             )
-            
+
             assert len(response.data) == 1
             assert response.has_more == True
 
@@ -213,21 +214,19 @@ class TestContainerAPI:
                     status="running",
                     expires_after={"anchor": "last_active_at", "minutes": 20},
                     last_active_at=1747857508,
-                    name="Async List Container"
+                    name="Async List Container",
                 )
             ],
             first_id="cntr_async_list",
             last_id="cntr_async_list",
-            has_more=False
+            has_more=False,
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_list_handler.return_value = mock_response
-            
-            response = await alist_containers(
-                custom_llm_provider="openai"
-            )
-            
+
+            response = await alist_containers(custom_llm_provider="openai")
+
             assert isinstance(response, ContainerListResponse)
             assert len(response.data) == 1
 
@@ -241,17 +240,16 @@ class TestContainerAPI:
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Retrieved Container"
+            name="Retrieved Container",
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_retrieve_handler.return_value = mock_response
-            
+
             response = retrieve_container(
-                container_id=container_id,
-                custom_llm_provider="openai"
+                container_id=container_id, custom_llm_provider="openai"
             )
-            
+
             assert isinstance(response, ContainerObject)
             assert response.id == container_id
             assert response.name == "Retrieved Container"
@@ -267,17 +265,16 @@ class TestContainerAPI:
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Async Retrieved Container"
+            name="Async Retrieved Container",
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_retrieve_handler.return_value = mock_response
-            
+
             response = await aretrieve_container(
-                container_id=container_id,
-                custom_llm_provider="openai"
+                container_id=container_id, custom_llm_provider="openai"
             )
-            
+
             assert isinstance(response, ContainerObject)
             assert response.id == container_id
 
@@ -285,19 +282,16 @@ class TestContainerAPI:
         """Test basic container deletion functionality."""
         container_id = "cntr_delete_test"
         mock_response = DeleteContainerResult(
-            id=container_id,
-            object="container.deleted",
-            deleted=True
+            id=container_id, object="container.deleted", deleted=True
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_delete_handler.return_value = mock_response
-            
+
             response = delete_container(
-                container_id=container_id,
-                custom_llm_provider="openai"
+                container_id=container_id, custom_llm_provider="openai"
             )
-            
+
             assert isinstance(response, DeleteContainerResult)
             assert response.id == container_id
             assert response.deleted == True
@@ -308,40 +302,40 @@ class TestContainerAPI:
         """Test basic async container deletion functionality."""
         container_id = "cntr_async_delete"
         mock_response = DeleteContainerResult(
-            id=container_id,
-            object="container.deleted",
-            deleted=True
+            id=container_id, object="container.deleted", deleted=True
         )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_delete_handler.return_value = mock_response
-            
+
             response = await adelete_container(
-                container_id=container_id,
-                custom_llm_provider="openai"
+                container_id=container_id, custom_llm_provider="openai"
             )
-            
+
             assert isinstance(response, DeleteContainerResult)
             assert response.id == container_id
             assert response.deleted == True
 
     def test_create_container_error_handling(self):
         """Test error handling in container creation."""
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+        with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_create_handler.side_effect = Exception("API Error")
-            
+
             with pytest.raises(Exception):
                 create_container(
-                    name="Error Test Container",
-                    custom_llm_provider="openai"
+                    name="Error Test Container", custom_llm_provider="openai"
                 )
 
     def test_container_provider_config_retrieval(self):
         """Test that provider config is retrieved correctly."""
-        with patch('litellm.containers.main.ProviderConfigManager') as mock_config_manager:
-            mock_config_manager.get_provider_container_config.return_value = OpenAIContainerConfig()
-            
-            with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+        with patch(
+            "litellm.containers.main.ProviderConfigManager"
+        ) as mock_config_manager:
+            mock_config_manager.get_provider_container_config.return_value = (
+                OpenAIContainerConfig()
+            )
+
+            with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
                 mock_response = ContainerObject(
                     id="cntr_config_test",
                     object="container",
@@ -349,15 +343,14 @@ class TestContainerAPI:
                     status="running",
                     expires_after={"anchor": "last_active_at", "minutes": 20},
                     last_active_at=1747857508,
-                    name="Config Test"
+                    name="Config Test",
                 )
                 mock_handler.container_create_handler.return_value = mock_response
-                
+
                 response = create_container(
-                    name="Config Test",
-                    custom_llm_provider="openai"
+                    name="Config Test", custom_llm_provider="openai"
                 )
-                
+
                 # Verify provider config was requested
                 mock_config_manager.get_provider_container_config.assert_called_once()
                 assert response.name == "Config Test"

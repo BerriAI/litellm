@@ -25,6 +25,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
     Base configuration for Fal AI image generation models.
     Handles common functionality like URL construction and authentication.
     """
+
     DEFAULT_BASE_URL: str = "https://fal.run"
     IMAGE_GENERATION_ENDPOINT: str = ""
 
@@ -43,9 +44,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         Some providers need `model` in `api_base`
         """
         complete_url: str = (
-            api_base 
-            or get_secret_str("FAL_AI_API_BASE") 
-            or self.DEFAULT_BASE_URL
+            api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
         )
 
         complete_url = complete_url.rstrip("/")
@@ -63,14 +62,11 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
-            api_key or 
-            get_secret_str("FAL_AI_API_KEY")
-        )
+        final_api_key: Optional[str] = api_key or get_secret_str("FAL_AI_API_KEY")
         if not final_api_key:
             raise ValueError("FAL_AI_API_KEY is not set")
-        
-        headers["Authorization"] = f"Key {final_api_key}"        
+
+        headers["Authorization"] = f"Key {final_api_key}"
         return headers
 
     def transform_image_generation_response(
@@ -99,23 +95,27 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
             )
         if not model_response.data:
             model_response.data = []
-        
+
         # Handle fal.ai response format
         images = response_data.get("images", [])
         if isinstance(images, list):
             for image_data in images:
                 if isinstance(image_data, dict):
-                    model_response.data.append(ImageObject(
-                        url=image_data.get("url", None),
-                        b64_json=image_data.get("b64_json", None),
-                    ))
+                    model_response.data.append(
+                        ImageObject(
+                            url=image_data.get("url", None),
+                            b64_json=image_data.get("b64_json", None),
+                        )
+                    )
                 elif isinstance(image_data, str):
                     # If images is just a list of URLs
-                    model_response.data.append(ImageObject(
-                        url=image_data,
-                        b64_json=None,
-                    ))
-        
+                    model_response.data.append(
+                        ImageObject(
+                            url=image_data,
+                            b64_json=None,
+                        )
+                    )
+
         return model_response
 
 
@@ -123,7 +123,7 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
     """
     Default Fal AI image generation configuration for generic models.
     """
-    
+
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
@@ -135,7 +135,7 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
             "response_format",
             "size",
         ]
-    
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -173,4 +173,3 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
             **optional_params,
         }
         return fal_ai_image_generation_request_body
-

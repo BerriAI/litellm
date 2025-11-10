@@ -157,7 +157,7 @@ async def test_update_daily_spend_sorting():
     upsert_calls = []
     for i in range(50):
         daily_spend_transactions[f"test_key_{i}"] = {
-            "user_id": f"user{60-i}", # user60 ... user11, reverse order
+            "user_id": f"user{60-i}",  # user60 ... user11, reverse order
             "date": "2024-01-01",
             "api_key": "test-api-key",
             "model": "gpt-4",
@@ -169,43 +169,45 @@ async def test_update_daily_spend_sorting():
             "successful_requests": 1,
             "failed_requests": 0,
         }
-        upsert_calls.append(call(
-            where={
-                "user_id_date_api_key_model_custom_llm_provider": {
-                    "user_id": f"user{i+11}", # user11 ... user60, sorted order
-                    "date": "2024-01-01",
-                    "api_key": "test-api-key",
-                    "model": "gpt-4",
-                    "custom_llm_provider": "openai",
-                    "mcp_namespaced_tool_name": "",
-                }
-            },
-            data={
-                "create": {
-                    "user_id": f"user{i+11}",
-                    "date": "2024-01-01",
-                    "api_key": "test-api-key",
-                    "model": "gpt-4",
-                    "model_group": None,
-                    "mcp_namespaced_tool_name": "",
-                    "custom_llm_provider": "openai",
-                    "prompt_tokens": 10,
-                    "completion_tokens": 20,
-                    "spend": 0.1,
-                    "api_requests": 1,
-                    "successful_requests": 1,
-                    "failed_requests": 0,
+        upsert_calls.append(
+            call(
+                where={
+                    "user_id_date_api_key_model_custom_llm_provider": {
+                        "user_id": f"user{i+11}",  # user11 ... user60, sorted order
+                        "date": "2024-01-01",
+                        "api_key": "test-api-key",
+                        "model": "gpt-4",
+                        "custom_llm_provider": "openai",
+                        "mcp_namespaced_tool_name": "",
+                    }
                 },
-                "update": {
-                    "prompt_tokens": {"increment": 10},
-                    "completion_tokens": {"increment": 20},
-                    "spend": {"increment": 0.1},
-                    "api_requests": {"increment": 1},
-                    "successful_requests": {"increment": 1},
-                    "failed_requests": {"increment": 0},
+                data={
+                    "create": {
+                        "user_id": f"user{i+11}",
+                        "date": "2024-01-01",
+                        "api_key": "test-api-key",
+                        "model": "gpt-4",
+                        "model_group": None,
+                        "mcp_namespaced_tool_name": "",
+                        "custom_llm_provider": "openai",
+                        "prompt_tokens": 10,
+                        "completion_tokens": 20,
+                        "spend": 0.1,
+                        "api_requests": 1,
+                        "successful_requests": 1,
+                        "failed_requests": 0,
+                    },
+                    "update": {
+                        "prompt_tokens": {"increment": 10},
+                        "completion_tokens": {"increment": 20},
+                        "spend": {"increment": 0.1},
+                        "api_requests": {"increment": 1},
+                        "successful_requests": {"increment": 1},
+                        "failed_requests": {"increment": 0},
+                    },
                 },
-            },
-        ))
+            )
+        )
 
     # Call the method
     await DBSpendUpdateWriter._update_daily_spend(
@@ -221,6 +223,8 @@ async def test_update_daily_spend_sorting():
 
     # Verify that table.upsert was called
     mock_table.upsert.assert_has_calls(upsert_calls)
+
+
 # Tag Spend Tracking Tests
 
 

@@ -207,22 +207,22 @@ def test_vertex_tool_type_field_removal():
     """
     # Test with Google Search tool that has 'type' field
     tools_with_type = [{"type": "google_search", "googleSearch": {}}]
-    
+
     optional_params = get_optional_params(
         model="gemini-1.5-pro",
         custom_llm_provider="vertex_ai",
         tools=tools_with_type,
     )
-    
+
     # Verify the tool is processed correctly
     assert "tools" in optional_params
     assert len(optional_params["tools"]) == 1
     assert "googleSearch" in optional_params["tools"][0]
     assert optional_params["tools"][0]["googleSearch"] == {}
-    
+
     # Verify the 'type' field is not present in the final result
     assert "type" not in optional_params["tools"][0]
-    
+
     # Test with function tool that has 'type' field
     function_tools_with_type = [
         {
@@ -232,25 +232,28 @@ def test_vertex_tool_type_field_removal():
                 "description": "A test function",
                 "parameters": {
                     "type": "object",
-                    "properties": {"param": {"type": "string"}}
-                }
-            }
+                    "properties": {"param": {"type": "string"}},
+                },
+            },
         }
     ]
-    
+
     optional_params_function = get_optional_params(
         model="gemini-1.5-pro",
         custom_llm_provider="vertex_ai",
         tools=function_tools_with_type,
     )
-    
+
     # Verify function tool is processed correctly
     assert "tools" in optional_params_function
     assert len(optional_params_function["tools"]) == 1
     assert "function_declarations" in optional_params_function["tools"][0]
     assert len(optional_params_function["tools"][0]["function_declarations"]) == 1
-    assert optional_params_function["tools"][0]["function_declarations"][0]["name"] == "test_function"
-    
+    assert (
+        optional_params_function["tools"][0]["function_declarations"][0]["name"]
+        == "test_function"
+    )
+
     # Verify the 'type' field is not present in the final result
     assert "type" not in optional_params_function["tools"][0]
 
@@ -1552,7 +1555,6 @@ def test_system_prompt_only_adds_blank_user_message():
     first_content = data["contents"][0]
     assert first_content["role"] == "user"
     assert len(first_content["parts"]) == 1
-
 
     #########################################################
     # system message was passed in

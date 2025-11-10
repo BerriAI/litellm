@@ -459,7 +459,7 @@ class TestOllamaTextCompletionResponseIterator:
         assert result.choices and result.choices[0].delta is not None
         assert result.choices[0].delta.content == "Hello world"
         assert getattr(result.choices[0].delta, "reasoning_content", None) is None
-        
+
     def test_chunk_parser_empty_response_without_thinking(self):
         """Test that empty response chunks without thinking still work."""
         iterator = OllamaTextCompletionResponseIterator(

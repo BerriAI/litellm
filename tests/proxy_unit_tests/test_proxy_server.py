@@ -978,7 +978,6 @@ from test_key_generate_prisma import prisma_client
 )
 @pytest.mark.asyncio
 async def test_create_user_default_budget(prisma_client, user_role):
-
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm, "max_internal_user_budget", 10)
@@ -1061,7 +1060,6 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
         new=AsyncMock(return_value=team_obj),
     ) as mock_team_obj:
-
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
                 user_id="1234", max_budget=100, user_email="1234"
@@ -1305,7 +1303,6 @@ async def test_user_info_team_list(prisma_client):
         "litellm.proxy.management_endpoints.team_endpoints.list_team",
         new_callable=AsyncMock,
     ) as mock_client:
-
         prisma_client.get_data = AsyncMock(
             return_value=LiteLLM_UserTable(
                 user_role="proxy_admin",
@@ -2288,7 +2285,10 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
 
     test_model_list = [
         {"model_name": "model-a"},
-        {"model_name": "model-b", "model_info": {"disable_background_health_check": True}},
+        {
+            "model_name": "model-b",
+            "model_info": {"disable_background_health_check": True},
+        },
     ]
     called_model_lists = []
 
@@ -2334,15 +2334,15 @@ def test_get_timeout_from_request():
 @pytest.mark.parametrize(
     "ui_exists, ui_has_content",
     [
-        (True, True),   # UI path exists and has content
+        (True, True),  # UI path exists and has content
         (True, False),  # UI path exists but is empty
-        (False, False), # UI path doesn't exist
+        (False, False),  # UI path doesn't exist
     ],
 )
 def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content):
     """
     Test the non-root Docker UI path detection logic.
-    
+
     Tests that when LITELLM_NON_ROOT is set to "true":
     - If UI path exists and has content, it should be used
     - If UI path doesn't exist or is empty, proper error logging occurs
@@ -2350,44 +2350,54 @@ def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content
     import tempfile
     import shutil
     from unittest.mock import MagicMock
-    
+
     # Create a temporary directory to act as /tmp/litellm_ui
     test_ui_path = tmp_path / "litellm_ui"
-    
+
     if ui_exists:
         test_ui_path.mkdir(parents=True, exist_ok=True)
         if ui_has_content:
             # Create some dummy files to simulate built UI
             (test_ui_path / "index.html").write_text("<html></html>")
             (test_ui_path / "app.js").write_text("console.log('test');")
-    
+
     # Mock the environment variable and os.path operations
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
-    
+
     # Create a mock logger to capture log messages
     mock_logger = MagicMock()
-    
+
     # We need to reimport or reload the relevant code section
     # Since this is module-level code, we'll test the logic directly
     ui_path = None
     non_root_ui_path = str(test_ui_path)
-    
+
     # Simulate the logic from proxy_server.py lines 909-920
     if os.getenv("LITELLM_NON_ROOT", "").lower() == "true":
         if os.path.exists(non_root_ui_path) and os.listdir(non_root_ui_path):
-            mock_logger.info(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
-            mock_logger.info(f"UI files found: {len(os.listdir(non_root_ui_path))} items")
+            mock_logger.info(
+                f"Using pre-built UI for non-root Docker: {non_root_ui_path}"
+            )
+            mock_logger.info(
+                f"UI files found: {len(os.listdir(non_root_ui_path))} items"
+            )
             ui_path = non_root_ui_path
         else:
-            mock_logger.error(f"UI not found at {non_root_ui_path}. UI will not be available.")
-            mock_logger.error(f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}")
-    
+            mock_logger.error(
+                f"UI not found at {non_root_ui_path}. UI will not be available."
+            )
+            mock_logger.error(
+                f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}"
+            )
+
     # Verify behavior based on test parameters
     if ui_exists and ui_has_content:
         # UI should be found and used
         assert ui_path == non_root_ui_path
         assert mock_logger.info.call_count == 2
-        mock_logger.info.assert_any_call(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
+        mock_logger.info.assert_any_call(
+            f"Using pre-built UI for non-root Docker: {non_root_ui_path}"
+        )
         # Verify the second info call mentions the number of items
         info_calls = [call[0][0] for call in mock_logger.info.call_args_list]
         assert any("UI files found:" in call and "items" in call for call in info_calls)
@@ -2396,7 +2406,9 @@ def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content
         # UI should not be found, error should be logged
         assert ui_path is None
         assert mock_logger.error.call_count == 2
-        mock_logger.error.assert_any_call(f"UI not found at {non_root_ui_path}. UI will not be available.")
+        mock_logger.error.assert_any_call(
+            f"UI not found at {non_root_ui_path}. UI will not be available."
+        )
         # Verify the second error call has path existence info
         error_calls = [call[0][0] for call in mock_logger.error.call_args_list]
         assert any("Path exists:" in call for call in error_calls)

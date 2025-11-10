@@ -120,17 +120,13 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
-
 def test_metadata_to_labels_vertex_only():
     """Test that metadata->labels conversion only happens for Vertex AI"""
     messages = [{"role": "user", "content": "test"}]
     optional_params = {}
     litellm_params = {
         "metadata": {
-            "requester_metadata": {
-                "user": "john_doe",
-                "project": "test-project"
-            }
+            "requester_metadata": {"user": "john_doe", "project": "test-project"}
         }
     }
 
@@ -161,15 +157,10 @@ def test_metadata_to_labels_vertex_only():
 def test_empty_content_handling():
     """Test that empty content strings are properly handled in Gemini message transformation"""
     # Test with empty content in user message
-    messages = [
-        {
-            "content": "",
-            "role": "user"
-        }
-    ]
-    
+    messages = [{"content": "", "role": "user"}]
+
     contents = _gemini_convert_messages_with_history(messages=messages)
-    
+
     # Verify that the content was properly transformed
     assert len(contents) == 1
     assert contents[0]["role"] == "user"

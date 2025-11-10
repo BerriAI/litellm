@@ -61,7 +61,7 @@ def test_get_api_key_with_custom_litellm_key_header(
 
 def test_route_checks_is_llm_api_route():
     """Test RouteChecks.is_llm_api_route() correctly identifies LLM API routes including passthrough endpoints"""
-    
+
     # Test OpenAI routes
     openai_routes = [
         "/v1/chat/completions",
@@ -85,18 +85,22 @@ def test_route_checks_is_llm_api_route():
         "/v1/realtime",
         "/realtime",
     ]
-    
+
     for route in openai_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test Anthropic routes
     anthropic_routes = [
         "/v1/messages",
         "/v1/messages/count_tokens",
     ]
-    
+
     for route in anthropic_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test passthrough routes (this is the key improvement over the old route checking)
     passthrough_routes = [
@@ -114,9 +118,11 @@ def test_route_checks_is_llm_api_route():
         "/vllm/v1/chat/completions",
         "/mistral/v1/chat/completions",
     ]
-    
+
     for route in passthrough_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test MCP routes
     mcp_routes = [
@@ -124,9 +130,11 @@ def test_route_checks_is_llm_api_route():
         "/mcp/",
         "/mcp/test",
     ]
-    
+
     for route in mcp_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test routes with placeholders
     placeholder_routes = [
@@ -139,9 +147,11 @@ def test_route_checks_is_llm_api_route():
         "/v1/batches/batch_123",
         "/batches/batch_123",
     ]
-    
+
     for route in placeholder_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test Azure OpenAI routes
     azure_routes = [
@@ -150,9 +160,11 @@ def test_route_checks_is_llm_api_route():
         "/engines/gpt-4/chat/completions",
         "/engines/gpt-3.5-turbo/completions",
     ]
-    
+
     for route in azure_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test non-LLM routes (should return False)
     non_llm_routes = [
@@ -169,9 +181,11 @@ def test_route_checks_is_llm_api_route():
         "/debug",
         "/test",
     ]
-    
+
     for route in non_llm_routes:
-        assert not RouteChecks.is_llm_api_route(route=route), f"Route {route} should NOT be identified as LLM API route"
+        assert not RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should NOT be identified as LLM API route"
 
     # Test invalid inputs
     invalid_inputs = [
@@ -181,6 +195,8 @@ def test_route_checks_is_llm_api_route():
         {},
         "",
     ]
-    
+
     for invalid_input in invalid_inputs:
-        assert not RouteChecks.is_llm_api_route(route=invalid_input), f"Invalid input {invalid_input} should return False"
+        assert not RouteChecks.is_llm_api_route(
+            route=invalid_input
+        ), f"Invalid input {invalid_input} should return False"

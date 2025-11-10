@@ -2,4 +2,3 @@
 from .transformation import VertexAIOCRConfig
 
 __all__ = ["VertexAIOCRConfig"]
-

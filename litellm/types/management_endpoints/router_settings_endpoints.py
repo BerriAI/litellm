@@ -13,7 +13,9 @@ class RouterSettingsField(BaseModel):
     field_value: Any
     field_description: str
     field_default: Any = None
-    options: Optional[List[str]] = None  # For fields with predefined options/enum values
+    options: Optional[
+        List[str]
+    ] = None  # For fields with predefined options/enum values
     ui_field_name: str  # User-friendly display name
     link: Optional[str] = None  # Documentation link for the field
 
@@ -194,4 +196,3 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         ui_field_name="Disable Cooldowns",
     ),
 ]
-

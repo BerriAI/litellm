@@ -198,13 +198,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         return primary_secret_kv_pairs.get(secret_name)
 
     async def async_write_secret(
-            self,
-            secret_name: str,
-            secret_value: str,
-            description: Optional[str] = None,
-            optional_params: Optional[dict] = None,
-            timeout: Optional[Union[float, httpx.Timeout]] = None,
-            tags: Optional[Union[dict, list]] = None
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        tags: Optional[Union[dict, list]] = None,
     ) -> dict:
         """
         Async function to write a secret to AWS Secrets Manager

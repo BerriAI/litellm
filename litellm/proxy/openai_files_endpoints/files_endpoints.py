@@ -594,7 +594,6 @@ async def get_file(
 
     data: Dict = {}
     try:
-
         custom_llm_provider = (
             provider
             or get_custom_llm_provider_from_request_headers(request=request)

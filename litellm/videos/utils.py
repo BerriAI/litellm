@@ -69,7 +69,8 @@ class VideoGenerationRequestUtils:
         base_params_raw = {
             key: value
             for key, value in params.items()
-            if key not in {"kwargs", "extra_body", "prompt", "model"} and value is not None
+            if key not in {"kwargs", "extra_body", "prompt", "model"}
+            and value is not None
         }
         base_params = filter_out_litellm_params(kwargs=base_params_raw)
 

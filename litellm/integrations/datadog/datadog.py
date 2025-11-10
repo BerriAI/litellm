@@ -67,30 +67,30 @@ class DataDogLogger(
         Optional environment variables (DataDog Agent):
         `DD_AGENT_HOST` - hostname or IP of DataDog agent, example = `"localhost"`
         `DD_AGENT_PORT` - port of DataDog agent (default: 10518 for logs)
-        
+
         Note: If DD_AGENT_HOST is set, logs will be sent to the agent instead of directly to DataDog API.
         In this case, DD_API_KEY and DD_SITE are not required (agent handles authentication).
         """
         try:
             verbose_logger.debug("Datadog: in init datadog logger")
-            
+
             #########################################################
             # Handle datadog_params set as litellm.datadog_params
             #########################################################
             dict_datadog_params = self._get_datadog_params()
             kwargs.update(dict_datadog_params)
-            
+
             self.async_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
             )
-            
+
             # Configure DataDog endpoint (Agent or Direct API)
             dd_agent_host = os.getenv("DD_AGENT_HOST")
             if dd_agent_host:
                 self._configure_dd_agent(dd_agent_host=dd_agent_host)
             else:
                 self._configure_dd_direct_api()
-            
+
             # Optional override for testing
             self._apply_dd_base_url_override()
             self.sync_client = _get_httpx_client()
@@ -117,13 +117,15 @@ class DataDogLogger(
                 dict_datadog_params = litellm.datadog_params.model_dump()
             elif isinstance(litellm.datadog_params, Dict):
                 # only allow params that are of DatadogInitParams
-                dict_datadog_params = DatadogInitParams(**litellm.datadog_params).model_dump()
+                dict_datadog_params = DatadogInitParams(
+                    **litellm.datadog_params
+                ).model_dump()
         return dict_datadog_params
 
     def _configure_dd_agent(self, dd_agent_host: str) -> None:
         """
         Configure DataDog Agent for log forwarding
-        
+
         Args:
             dd_agent_host: Hostname or IP of DataDog agent
         """
@@ -135,7 +137,7 @@ class DataDogLogger(
     def _configure_dd_direct_api(self) -> None:
         """
         Configure direct DataDog API connection
-        
+
         Raises:
             Exception: If required environment variables are not set
         """
@@ -143,11 +145,9 @@ class DataDogLogger(
             raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
         if os.getenv("DD_SITE", None) is None:
             raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
-        
+
         self.DD_API_KEY = os.getenv("DD_API_KEY")
-        self.intake_url = (
-            f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
-        )
+        self.intake_url = f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
 
     def _apply_dd_base_url_override(self) -> None:
         """
@@ -269,7 +269,7 @@ class DataDogLogger(
             # Add API key if available (required for direct API, optional for agent)
             if self.DD_API_KEY:
                 headers["DD-API-KEY"] = self.DD_API_KEY
-            
+
             response = self.sync_client.post(
                 url=self.intake_url,
                 json=dd_payload,  # type: ignore
@@ -317,6 +317,7 @@ class DataDogLogger(
         status: DataDogStatus,
     ) -> DatadogPayload:
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
         json_payload = safe_dumps(standard_logging_object)
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
         dd_payload = DatadogPayload(
@@ -383,18 +384,19 @@ class DataDogLogger(
         import gzip
 
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
         compressed_data = gzip.compress(safe_dumps(data).encode("utf-8"))
-        
+
         # Build headers
         headers = {
             "Content-Encoding": "gzip",
             "Content-Type": "application/json",
         }
-        
+
         # Add API key if available (required for direct API, optional for agent)
         if self.DD_API_KEY:
             headers["DD-API-KEY"] = self.DD_API_KEY
-        
+
         response = await self.async_client.post(
             url=self.intake_url,
             data=compressed_data,  # type: ignore
@@ -420,6 +422,7 @@ class DataDogLogger(
             _payload_dict = payload.model_dump()
             _payload_dict.update(event_metadata or {})
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
             _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
                 ddsource=self._get_datadog_source(),
@@ -461,6 +464,7 @@ class DataDogLogger(
             _payload_dict.update(event_metadata or {})
 
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
             _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
                 ddsource=self._get_datadog_source(),
@@ -529,7 +533,6 @@ class DataDogLogger(
                 else:
                     clean_metadata[key] = value
 
-
         # Build the initial payload
         payload = {
             "id": id,
@@ -549,6 +552,7 @@ class DataDogLogger(
         }
 
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
         json_payload = safe_dumps(payload)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)

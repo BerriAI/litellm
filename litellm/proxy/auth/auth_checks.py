@@ -933,7 +933,6 @@ async def _cache_management_object(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-
     await user_api_key_cache.async_set_cache(
         key=key,
         value=value,

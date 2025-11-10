@@ -172,9 +172,12 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         raise ValueError("PANW Prisma AIRS: profile_name is required")
 
     _panw_callback = PanwPrismaAirsHandler(
-        guardrail_name=guardrail.get("guardrail_name", "panw_prisma_airs"),  # Use .get() with default
+        guardrail_name=guardrail.get(
+            "guardrail_name", "panw_prisma_airs"
+        ),  # Use .get() with default
         api_key=litellm_params.api_key,
-        api_base=litellm_params.api_base or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
+        api_base=litellm_params.api_base
+        or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
         profile_name=litellm_params.profile_name,
         default_on=litellm_params.default_on,
     )

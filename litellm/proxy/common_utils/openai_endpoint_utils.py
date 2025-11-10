@@ -28,7 +28,9 @@ def remove_sensitive_info_from_deployment(deployment_dict: dict) -> dict:
     deployment_dict["litellm_params"].pop("aws_access_key_id", None)
     deployment_dict["litellm_params"].pop("aws_secret_access_key", None)
 
-    deployment_dict["litellm_params"] = SENSITIVE_DATA_MASKER.mask_dict(deployment_dict["litellm_params"])
+    deployment_dict["litellm_params"] = SENSITIVE_DATA_MASKER.mask_dict(
+        deployment_dict["litellm_params"]
+    )
 
     return deployment_dict
 
@@ -54,6 +56,7 @@ def get_custom_llm_provider_from_request_query(request: Request) -> Optional[str
     if "custom_llm_provider" in request.query_params:
         return request.query_params["custom_llm_provider"]
     return None
+
 
 def get_custom_llm_provider_from_request_headers(request: Request) -> Optional[str]:
     """

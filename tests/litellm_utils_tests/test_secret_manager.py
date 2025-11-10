@@ -360,6 +360,7 @@ def test_get_secret_with_access_mode():
     litellm._key_management_settings = KeyManagementSettings()
     del os.environ[test_secret_name]
 
+
 def test_key_management_settings_defaults():
     """
     Test that KeyManagementSettings initializes with correct default values.
