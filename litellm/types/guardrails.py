@@ -52,6 +52,7 @@ class SupportedGuardrailIntegrations(Enum):
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
     IBM_GUARDRAILS = "ibm_guardrails"
+    LITELLM_CONTENT_FILTER = "litellm_content_filter"
 
 
 class Role(Enum):
@@ -443,6 +444,65 @@ class JavelinGuardrailConfigModel(BaseModel):
     )
 
 
+class ContentFilterAction(str, Enum):
+    """Action to take when content filter detects a match"""
+
+    BLOCK = "BLOCK"
+    MASK = "MASK"
+
+
+class BlockedWord(BaseModel):
+    """Represents a blocked word with its action and optional description"""
+
+    keyword: str = Field(description="The keyword to block or mask")
+    action: ContentFilterAction = Field(
+        description="Action to take when keyword is detected (BLOCK or MASK)"
+    )
+    description: Optional[str] = Field(
+        default=None, description="Optional description explaining why this keyword is sensitive"
+    )
+
+
+class ContentFilterPattern(BaseModel):
+    """Represents a content filter pattern (prebuilt or custom regex)"""
+
+    pattern_type: Literal["prebuilt", "regex"] = Field(
+        description="Type of pattern: 'prebuilt' for predefined patterns or 'regex' for custom"
+    )
+    pattern_name: Optional[str] = Field(
+        default=None,
+        description="Name of prebuilt pattern (e.g., 'us_ssn', 'credit_card'). Required if pattern_type is 'prebuilt'"
+    )
+    pattern: Optional[str] = Field(
+        default=None,
+        description="Custom regex pattern. Required if pattern_type is 'regex'"
+    )
+    name: Optional[str] = Field(
+        default=None,
+        description="Name for this pattern (used in logging and error messages)"
+    )
+    action: ContentFilterAction = Field(
+        description="Action to take when pattern matches (BLOCK or MASK)"
+    )
+
+
+class ContentFilterConfigModel(BaseModel):
+    """Configuration parameters for the content filter guardrail"""
+
+    patterns: Optional[List[ContentFilterPattern]] = Field(
+        default=None,
+        description="List of patterns (prebuilt or custom regex) to detect"
+    )
+    blocked_words: Optional[List[BlockedWord]] = Field(
+        default=None,
+        description="List of blocked words with individual actions"
+    )
+    blocked_words_file: Optional[str] = Field(
+        default=None,
+        description="Path to YAML file containing blocked_words list"
+    )
+
+
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
@@ -534,6 +594,7 @@ class LitellmParams(
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
     JavelinGuardrailConfigModel,
+    ContentFilterConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
@@ -615,6 +676,7 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_actions: List[str]
     supported_modes: List[str]
     pii_entity_categories: List[PiiEntityCategoryMap]
+    content_filter_settings: Optional[Dict[str, Any]] = None
 
 
 class PresidioPerRequestConfig(BaseModel):

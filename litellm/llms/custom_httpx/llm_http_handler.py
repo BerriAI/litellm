@@ -921,11 +921,13 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=headers or {},
             model=model,
+            optional_params=optional_rerank_params,
         )
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
+            optional_params=optional_rerank_params,
         )
 
         data = provider_config.transform_rerank_request(
@@ -2009,6 +2011,9 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        if extra_body:
+            data.update(extra_body)
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2134,6 +2139,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        if extra_body:
+            data.update(extra_body)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4091,7 +4099,7 @@ class BaseLLMHTTPHandler:
             or {},
             model=model,
         )
-
+        
         if extra_headers:
             headers.update(extra_headers)
 
@@ -4101,12 +4109,13 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data, files = video_generation_provider_config.transform_video_create_request(
+        data, files, api_base = video_generation_provider_config.transform_video_create_request(
             model=model,
             prompt=prompt,
             video_create_optional_request_params=video_generation_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
+            api_base=api_base,
         )
 
         ## LOGGING
@@ -4132,8 +4141,8 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
 
-            # --- END MOCK VIDEO RESPONSE ---
             else:
+                # Use JSON content type for POST requests without files
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -4151,6 +4160,8 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            request_data=data,
         )
 
     async def async_video_generation_handler(
@@ -4198,9 +4209,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data, files = video_generation_provider_config.transform_video_create_request(
+        data, files, api_base = video_generation_provider_config.transform_video_create_request(
             model=model,
             prompt=prompt,
+            api_base=api_base,
             video_create_optional_request_params=video_generation_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
@@ -4218,7 +4230,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Use JSON when no files, otherwise use form data with files
+            #Use JSON when no files, otherwise use form data with files
             if files is None or len(files) == 0:
                 response = await async_httpx_client.post(
                     url=api_base,
@@ -4245,6 +4257,8 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            request_data=data,
         )
 
     ###### VIDEO CONTENT HANDLER ######
@@ -4300,7 +4314,7 @@ class BaseLLMHTTPHandler:
         )
 
         # Transform the request using the provider config
-        url, params = video_content_provider_config.transform_video_content_request(
+        url, data = video_content_provider_config.transform_video_content_request(
             video_id=video_id,
             api_base=api_base,
             litellm_params=litellm_params,
@@ -4308,12 +4322,21 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Make the GET request to download content
-            response = sync_httpx_client.get(
-                url=url,
-                headers=headers,
-                params=params,
-            )
+            # Use POST if params contains data (e.g., Vertex AI fetchPredictOperation)
+            # Otherwise use GET (e.g., OpenAI video content download)
+            if data:
+                response = sync_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    json=data,
+                )
+            else:
+                # Otherwise it's a GET request with query params
+                response = sync_httpx_client.get(
+                    url=url,
+                    headers=headers,
+                    params=data,
+                )
 
             # Transform the response using the provider config
             return video_content_provider_config.transform_video_content_response(
@@ -4366,7 +4389,7 @@ class BaseLLMHTTPHandler:
         )
 
         # Transform the request using the provider config
-        url, params = video_content_provider_config.transform_video_content_request(
+        url, data = video_content_provider_config.transform_video_content_request(
             video_id=video_id,
             api_base=api_base,
             litellm_params=litellm_params,
@@ -4374,12 +4397,21 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Make the GET request to download content
-            response = await async_httpx_client.get(
-                url=url,
-                headers=headers,
-                params=params,
-            )
+            # Use POST if params contains data (e.g., Vertex AI fetchPredictOperation)
+            # Otherwise use GET (e.g., OpenAI video content download)
+            if data:
+                response = await async_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    json=data,
+                )
+            else:
+                # Otherwise it's a GET request with query params
+                response = await async_httpx_client.get(
+                    url=url,
+                    headers=headers,
+                    params=data,
+                )
 
             # Transform the response using the provider config
             return video_content_provider_config.transform_video_content_response(
@@ -4484,6 +4516,7 @@ class BaseLLMHTTPHandler:
             return video_remix_provider_config.transform_video_remix_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4565,6 +4598,7 @@ class BaseLLMHTTPHandler:
             return video_remix_provider_config.transform_video_remix_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4700,6 +4734,7 @@ class BaseLLMHTTPHandler:
             return video_list_provider_config.transform_video_list_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4855,17 +4890,29 @@ class BaseLLMHTTPHandler:
                 "api_base": url,
                 "headers": headers,
                 "video_id": video_id,
+                "data": data,
             },
         )
 
         try:
-            response = sync_httpx_client.get(
-                url=url,
-                headers=headers,
-            )
+            # Use POST if data is provided (e.g., Vertex AI fetchPredictOperation)
+            # Otherwise use GET (e.g., OpenAI video status)
+            if data:
+                response = sync_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    json=data,
+                )
+            else:
+                response = sync_httpx_client.get(
+                    url=url,
+                    headers=headers,
+                )
+
             return video_status_provider_config.transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4929,17 +4976,28 @@ class BaseLLMHTTPHandler:
                 "api_base": url,
                 "headers": headers,
                 "video_id": video_id,
+                "data": data,
             },
         )
 
         try:
-            response = await async_httpx_client.get(
-                url=url,
-                headers=headers,
-            )
+            # Use POST if data is provided (e.g., Vertex AI fetchPredictOperation)
+            # Otherwise use GET (e.g., OpenAI video status)
+            if data:
+                response = await async_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    json=data,
+                )
+            else:
+                response = await async_httpx_client.get(
+                    url=url,
+                    headers=headers,
+                )
             return video_status_provider_config.transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:

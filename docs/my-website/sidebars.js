@@ -31,6 +31,7 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/test_playground",
         ...[
           "adding_provider/adding_guardrail_support",
           "proxy/guardrails/aim_security",
@@ -41,6 +42,7 @@ const sidebars = {
           "proxy/guardrails/ibm_guardrails",
           "proxy/guardrails/grayswan",
           "proxy/guardrails/lasso_security",
+          "proxy/guardrails/litellm_content_filter",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
@@ -477,6 +479,7 @@ const sidebars = {
           label: "Vertex AI",
           items: [
             "providers/vertex",
+            "providers/vertex_ai/videos",
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
             "providers/vertex_image",
@@ -489,6 +492,7 @@ const sidebars = {
           label: "Google AI Studio",
           items: [
             "providers/gemini",
+            "providers/gemini/videos",
             "providers/google_ai_studio/files",
             "providers/google_ai_studio/image_gen",
             "providers/google_ai_studio/realtime",

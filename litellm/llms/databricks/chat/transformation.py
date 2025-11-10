@@ -640,7 +640,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     for _tc in tool_calls:
                         if _tc.get("function", {}).get("arguments") == "{}":
                             _tc["function"]["arguments"] = ""  # avoid invalid json
-                if isinstance(choice["delta"]["content"], list) and (
+                if isinstance(choice["delta"].get("content"), list) and (
                     content := choice["delta"]["content"]
                 ):
                     if citations := content[0].get("citations"):
