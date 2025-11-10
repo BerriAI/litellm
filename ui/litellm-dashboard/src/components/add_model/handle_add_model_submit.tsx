@@ -1,8 +1,5 @@
-import { message } from "antd";
 import { provider_map, Providers } from "../provider_info_helpers";
 import { modelCreateCall, Model } from "../networking";
-import React, { useState } from "react";
-import ConnectionErrorDisplay from "./model_connection_test";
 import NotificationManager from "../molecules/notifications_manager";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {

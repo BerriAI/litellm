@@ -123,10 +123,23 @@ class CohereEmbeddingConfig:
         """
         embeddings = response_json["embeddings"]
         output_data = []
-        for idx, embedding in enumerate(embeddings):
-            output_data.append(
-                {"object": "embedding", "index": idx, "embedding": embedding}
-            )
+        is_embeddings_by_type = response_json.get("response_type") == "embeddings_by_type"
+        if is_embeddings_by_type:
+            for embedding_type in embeddings:
+                for idx, embedding in enumerate(embeddings[embedding_type]):
+                    output_data.append(
+                        {
+                            "object": "embedding",
+                            "index": idx,
+                            "embedding": embedding,
+                            "type": embedding_type,
+                        }
+                    )
+        else:
+            for idx, embedding in enumerate(embeddings):
+                output_data.append(
+                    {"object": "embedding", "index": idx, "embedding": embedding}
+                )
         model_response.object = "list"
         model_response.data = output_data
         model_response.model = model

@@ -7,6 +7,15 @@ export interface Tag {
   updated_at: string;
   created_by?: string;
   updated_by?: string;
+  litellm_budget_table?: {
+    max_budget?: number;
+    soft_budget?: number;
+    tpm_limit?: number;
+    rpm_limit?: number;
+    max_parallel_requests?: number;
+    budget_duration?: string;
+    model_max_budget?: any;
+  };
 }
 
 export interface TagInfoRequest {
@@ -17,12 +26,22 @@ export interface TagNewRequest {
   name: string;
   description?: string;
   models: string[];
+  max_budget?: number;
+  soft_budget?: number;
+  tpm_limit?: number;
+  rpm_limit?: number;
+  budget_duration?: string;
 }
 
 export interface TagUpdateRequest {
   name: string;
   description?: string;
   models: string[];
+  max_budget?: number;
+  soft_budget?: number;
+  tpm_limit?: number;
+  rpm_limit?: number;
+  budget_duration?: string;
 }
 
 export interface TagDeleteRequest {

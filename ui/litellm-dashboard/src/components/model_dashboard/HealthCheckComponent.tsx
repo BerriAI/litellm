@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Title, Text, Button, Badge } from "@tremor/react";
-import { Modal, message } from "antd";
+import { Modal } from "antd";
 import { Button as AntdButton } from "antd";
 import { ModelDataTable } from "./table";
 import { healthCheckColumns } from "./health_check_columns";

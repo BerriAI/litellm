@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { Form, Input, Select as Select2, message, Tooltip, Button as AntButton } from "antd";
+import { Form, Input, Select as Select2, Tooltip, Button as AntButton } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { vectorStoreInfoCall, vectorStoreUpdateCall, credentialListCall, CredentialItem } from "../networking";

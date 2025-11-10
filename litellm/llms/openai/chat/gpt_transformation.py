@@ -158,6 +158,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "parallel_tool_calls",
             "audio",
             "web_search_options",
+            "service_tier",
             "safety_identifier",
         ]  # works across all models
 
@@ -397,13 +398,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         from litellm.types.llms.openai import ChatCompletionToolParam
 
-        for message in messages:
-            message = cast(
+        for i, message in enumerate(messages):
+            messages[i] = cast(
                 AllMessageValues, filter_value_from_dict(message, "cache_control")  # type: ignore
             )
         if tools is not None:
-            for tool in tools:
-                tool = cast(
+            for i, tool in enumerate(tools):
+                tools[i] = cast(
                     ChatCompletionToolParam,
                     filter_value_from_dict(tool, "cache_control"),  # type: ignore
                 )

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Card, Text, Grid, Button } from "@tremor/react";
+import { Card, Text, Button } from "@tremor/react";
 import { Typography, Divider, Spin, Checkbox } from "antd";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getEmailEventSettings, updateEmailEventSettings, resetEmailEventSettings } from "../networking";

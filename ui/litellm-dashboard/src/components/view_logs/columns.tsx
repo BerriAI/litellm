@@ -4,7 +4,6 @@ import { getProviderLogoAndName } from "../provider_info_helpers";
 import { Tooltip } from "antd";
 import { TimeCell } from "./time_cell";
 import { Button, Badge } from "@tremor/react";
-import { Eye, EyeOff } from "lucide-react";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 // Helper to get the appropriate logo URL

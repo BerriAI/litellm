@@ -12,13 +12,6 @@ import {
   Grid,
   Badge,
   Button as TremorButton,
-  TableRow,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  Table,
-  Icon,
   TextInput,
 } from "@tremor/react";
 import TeamMembersComponent from "./team_member_view";
@@ -32,14 +25,12 @@ import {
   teamUpdateCall,
   getGuardrailsList,
 } from "@/components/networking";
-import { Button, Form, Input, Select, message, Tooltip } from "antd";
+import { Button, Form, Input, Select, message, Modal, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as Select2 } from "antd";
-import { ArrowLeftIcon, PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -51,6 +42,8 @@ import { fetchMCPAccessGroups } from "../networking";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import NotificationsManager from "../molecules/notifications_manager";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 
 export interface TeamMembership {
   user_id: string;
@@ -145,6 +138,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   console.log("userModels in team info", userModels);
 
@@ -275,13 +270,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
-  const handleMemberDelete = async (member: Member) => {
-    try {
-      if (accessToken == null) {
-        return;
-      }
+  const handleMemberDelete = (member: Member) => {
+    setMemberToDelete(member);
+  };
 
-      await teamMemberDeleteCall(accessToken, teamId, member);
+  const handleDeleteConfirm = async () => {
+    if (!memberToDelete || !accessToken) return;
+
+    setIsDeleting(true);
+    try {
+      await teamMemberDeleteCall(accessToken, teamId, memberToDelete);
 
       NotificationsManager.success("Team member removed successfully");
 
@@ -294,7 +292,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     } catch (error) {
       NotificationsManager.fromBackend("Failed to remove team member");
       console.error("Error removing team member:", error);
+    } finally {
+      setIsDeleting(false);
+      setMemberToDelete(null);
     }
+  };
+
+  const handleDeleteCancel = () => {
+    setMemberToDelete(null);
   };
 
   const handleTeamUpdate = async (values: any) => {
@@ -332,6 +337,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         organization_id: values.organization_id,
       };
 
+      updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
+
       if (values.team_member_budget !== undefined) {
         updateData.team_member_budget = Number(values.team_member_budget);
       }
@@ -351,8 +358,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         accessGroups: [],
       };
       const mcpToolPermissions = values.mcp_tool_permissions || {};
-      
-      if ((servers && servers.length > 0) || (accessGroups && accessGroups.length > 0) || Object.keys(mcpToolPermissions).length > 0) {
+
+      if (
+        (servers && servers.length > 0) ||
+        (accessGroups && accessGroups.length > 0) ||
+        Object.keys(mcpToolPermissions).length > 0
+      ) {
         updateData.object_permission = {};
         if (servers && servers.length > 0) {
           updateData.object_permission.mcp_servers = servers;
@@ -672,6 +683,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </Form.Item>
 
+                  <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
+                    <PassThroughRoutesSelector
+                      onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                      value={form.getFieldValue("allowed_passthrough_routes")}
+                      accessToken={accessToken || ""}
+                      placeholder="Select pass through routes"
+                    />
+                  </Form.Item>
+
                   <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
                     <MCPServerSelector
                       onChange={(val) => form.setFieldValue("mcp_servers_and_groups", val)}
@@ -686,9 +706,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Input type="hidden" />
                   </Form.Item>
 
-                  <Form.Item 
+                  <Form.Item
                     noStyle
-                    shouldUpdate={(prevValues, currentValues) => 
+                    shouldUpdate={(prevValues, currentValues) =>
                       prevValues.mcp_servers_and_groups !== currentValues.mcp_servers_and_groups ||
                       prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
                     }
@@ -877,6 +897,30 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onSubmit={handleMemberCreate}
         accessToken={accessToken}
       />
+
+      {/* Delete Member Confirmation Modal */}
+      {memberToDelete && (
+        <Modal
+          title="Delete Team Member"
+          open={memberToDelete !== null}
+          onOk={handleDeleteConfirm}
+          onCancel={handleDeleteCancel}
+          confirmLoading={isDeleting}
+          okText={isDeleting ? "Deleting..." : "Delete"}
+          okButtonProps={{ danger: true }}
+        >
+          <p>Are you sure you want to remove this member from the team?</p>
+          <p className="mt-2">
+            <strong>User ID:</strong> {memberToDelete.user_id}
+          </p>
+          {memberToDelete.user_email && (
+            <p>
+              <strong>Email:</strong> {memberToDelete.user_email}
+            </p>
+          )}
+          <p className="mt-2 text-red-600">This action cannot be undone.</p>
+        </Modal>
+      )}
     </div>
   );
 };

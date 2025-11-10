@@ -9,7 +9,6 @@ import {
   TabPanel,
   TabPanels,
   Grid,
-  Badge,
   Button as TremorButton,
   TextInput,
 } from "@tremor/react";
@@ -17,28 +16,25 @@ import NumericalInput from "./shared/numerical_input";
 import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
 import {
   modelDeleteCall,
-  modelUpdateCall,
   CredentialItem,
   credentialGetCall,
   credentialCreateCall,
-  modelInfoCall,
   modelInfoV1Call,
   modelPatchUpdateCall,
   getGuardrailsList,
+  tagListCall,
 } from "./networking";
-import { Button, Form, Input, InputNumber, message, Select, Modal, Tooltip } from "antd";
+import { Button, Form, Input, Select, Modal, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import EditModelModal from "./edit_model/edit_model_modal";
-import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { getDisplayModelName } from "./view_model/model_name_display";
-import AddCredentialsModal from "./model_add/add_credentials_tab";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import CacheControlSettings from "./add_model/cache_control_settings";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import NotificationsManager from "./molecules/notifications_manager";
+import { Tag } from "./tag_management/types";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -79,7 +75,9 @@ export default function ModelInfoView({
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
-  const canEditModel = userRole === "Admin" || modelData?.model_info?.created_by === userID;
+  const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
+  const canEditModel =
+    (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
   const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
@@ -88,6 +86,8 @@ export default function ModelInfoView({
     modelData?.litellm_params?.litellm_credential_name != undefined;
   console.log("usingExistingCredential, ", usingExistingCredential);
   console.log("modelData.litellm_params.litellm_credential_name, ", modelData?.litellm_params?.litellm_credential_name);
+
+  console.log("tagsList, ", modelData.litellm_params?.tags);
 
   useEffect(() => {
     const getExistingCredential = async () => {
@@ -137,9 +137,20 @@ export default function ModelInfoView({
       }
     };
 
+    const fetchTags = async () => {
+      if (!accessToken) return;
+      try {
+        const response = await tagListCall(accessToken);
+        setTagsList(response);
+      } catch (error) {
+        console.error("Failed to fetch tags:", error);
+      }
+    };
+
     getExistingCredential();
     getModelInfo();
     fetchGuardrails();
+    fetchTags();
   }, [accessToken, modelId]);
 
   const handleReuseCredential = async (values: any) => {
@@ -178,6 +189,7 @@ export default function ModelInfoView({
         stream_timeout: values.stream_timeout,
         input_cost_per_token: values.input_cost / 1_000_000,
         output_cost_per_token: values.output_cost / 1_000_000,
+        tags: values.tags,
       };
       if (values.guardrails) {
         updatedLitellmParams.guardrails = values.guardrails;
@@ -435,10 +447,20 @@ export default function ModelInfoView({
                       Edit Auto Router
                     </TremorButton>
                   )}
-                  {canEditModel && !isEditing && (
-                    <TremorButton variant="secondary" onClick={() => setIsEditing(true)} className="flex items-center">
-                      Edit Model
-                    </TremorButton>
+                  {canEditModel ? (
+                    !isEditing && (
+                      <TremorButton
+                        variant="secondary"
+                        onClick={() => setIsEditing(true)}
+                        className="flex items-center"
+                      >
+                        Edit Model
+                      </TremorButton>
+                    )
+                  ) : (
+                    <Tooltip title="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
+                      <InfoCircleOutlined />
+                    </Tooltip>
                   )}
                 </div>
               </div>
@@ -471,6 +493,7 @@ export default function ModelInfoView({
                     guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
                       ? localModelData.litellm_params.guardrails
                       : [],
+                    tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                   }}
                   layout="vertical"
                   onValuesChange={() => setIsDirty(true)}
@@ -686,7 +709,7 @@ export default function ModelInfoView({
 
                       <div>
                         <Text className="font-medium">
-                          Guardrails{" "}
+                          Guardrails
                           <Tooltip title="Apply safety guardrails to this model to filter content or enforce policies">
                             <a
                               href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
@@ -737,6 +760,54 @@ export default function ModelInfoView({
                                 )
                               ) : (
                                 localModelData.litellm_params.guardrails
+                              )
+                            ) : (
+                              "Not Set"
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Tags</Text>
+                        {isEditing ? (
+                          <Form.Item name="tags" className="mb-0">
+                            <Select
+                              mode="tags"
+                              showSearch
+                              placeholder="Select existing tags or type to create new ones"
+                              optionFilterProp="children"
+                              tokenSeparators={[","]}
+                              maxTagCount="responsive"
+                              allowClear
+                              style={{ width: "100%" }}
+                              options={Object.values(tagsList).map((tag: Tag) => ({
+                                value: tag.name,
+                                label: tag.name,
+                                title: tag.description || tag.name,
+                              }))}
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData.litellm_params?.tags ? (
+                              Array.isArray(localModelData.litellm_params.tags) ? (
+                                localModelData.litellm_params.tags.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {localModelData.litellm_params.tags.map((tag: string, index: number) => (
+                                      <span
+                                        key={index}
+                                        className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800"
+                                      >
+                                        {tag}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  "No tags assigned"
+                                )
+                              ) : (
+                                localModelData.litellm_params.tags
                               )
                             ) : (
                               "Not Set"

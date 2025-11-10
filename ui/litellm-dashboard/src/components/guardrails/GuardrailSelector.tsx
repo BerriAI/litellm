@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Select, Typography, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Select } from "antd";
 import { Guardrail } from "./types";
 import { getGuardrailsList } from "../networking";
 

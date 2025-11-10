@@ -1,36 +1,30 @@
 import React, { useState, useEffect } from "react";
 import {
   Card,
-  Title,
   BarChart,
   Subtitle,
   Grid,
   Col,
-  Select,
-  SelectItem,
-  DateRangePicker,
   DateRangePickerValue,
   MultiSelect,
   MultiSelectItem,
-  Button,
   TabPanel,
   TabPanels,
   TabGroup,
   TabList,
   Tab,
-  TextInput,
   Icon,
   Text,
 } from "@tremor/react";
 import UsageDatePicker from "./shared/usage_date_picker";
 import NotificationsManager from "./molecules/notifications_manager";
 
-import { Button as Button2, message } from "antd";
-import { RefreshIcon, CheckCircleIcon, XCircleIcon } from "@heroicons/react/outline";
-import { adminGlobalCacheActivity, cachingHealthCheckCall, healthCheckCall } from "./networking";
+import { RefreshIcon } from "@heroicons/react/outline";
+import { adminGlobalCacheActivity, cachingHealthCheckCall } from "./networking";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
+import CacheSettings from "./cache_settings";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
@@ -280,6 +274,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           <Tab>
             <pre>Cache Health</pre>
           </Tab>
+          <Tab>Cache Settings</Tab>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -390,6 +385,13 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
             accessToken={accessToken}
             healthCheckResponse={healthCheckResponse}
             runCachingHealthCheck={runCachingHealthCheck}
+          />
+        </TabPanel>
+        <TabPanel>
+          <CacheSettings
+            accessToken={accessToken}
+            userRole={userRole}
+            userID={userID}
           />
         </TabPanel>
       </TabPanels>

@@ -1,7 +1,6 @@
 import React, { useState } from "react";
-import { Button, Space, Card, message } from "antd";
+import { Button, Space, Card } from "antd";
 import AzureTextModerationConfiguration from "./azure_text_moderation_configuration";
-import { AZURE_TEXT_MODERATION_CATEGORIES } from "./azure_text_moderation_types";
 import NotificationsManager from "../molecules/notifications_manager";
 
 /**

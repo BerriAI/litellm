@@ -6,6 +6,7 @@ from .cache_control_check import _PROXY_CacheControlCheck
 from .max_budget_limiter import _PROXY_MaxBudgetLimiter
 from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 from .parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+from .responses_id_security import ResponsesIDSecurity
 
 ### CHECK IF ENTERPRISE HOOKS ARE AVAILABLE ###
 
@@ -19,6 +20,7 @@ PROXY_HOOKS = {
     "max_budget_limiter": _PROXY_MaxBudgetLimiter,
     "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler_v3,
     "cache_control_check": _PROXY_CacheControlCheck,
+    "responses_id_security": ResponsesIDSecurity,
 }
 
 ## FEATURE FLAG HOOKS ##
@@ -40,7 +42,7 @@ def get_proxy_hook(
             "cache_control_check",
         ],
         str,
-    ]
+    ],
 ):
     """
     Factory method to get a proxy hook instance by name

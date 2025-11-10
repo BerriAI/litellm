@@ -72,7 +72,7 @@ def create_batch_oai_sdk(filepath: str, custom_llm_provider: str) -> str:
     batch_input_file = client.files.create(
         file=open(filepath, "rb"),
         purpose="batch",
-        extra_body={"custom_llm_provider": custom_llm_provider},
+        extra_headers={"custom-llm-provider": custom_llm_provider},
     )
     batch_input_file_id = batch_input_file.id
 
@@ -85,7 +85,7 @@ def create_batch_oai_sdk(filepath: str, custom_llm_provider: str) -> str:
         metadata={
             "description": filepath,
         },
-        extra_body={"custom_llm_provider": custom_llm_provider},
+        extra_headers={"custom-llm-provider": custom_llm_provider},
     )
 
     print(f"Batch submitted. ID: {rq.id}")
@@ -98,7 +98,7 @@ def await_batch_completion(batch_id: str, custom_llm_provider: str):
 
     while tries < max_tries:
         batch = client.batches.retrieve(
-            batch_id, extra_body={"custom_llm_provider": custom_llm_provider}
+            batch_id, extra_headers={"custom-llm-provider": custom_llm_provider}
         )
         if batch.status == "completed":
             print(f"Batch {batch_id} completed.")
@@ -117,11 +117,11 @@ def write_content_to_file(
     batch_id: str, output_path: str, custom_llm_provider: str
 ) -> str:
     batch = client.batches.retrieve(
-        batch_id=batch_id, extra_body={"custom_llm_provider": custom_llm_provider}
+        batch_id=batch_id, extra_headers={"custom-llm-provider": custom_llm_provider}
     )
     content = client.files.content(
         file_id=batch.output_file_id,
-        extra_body={"custom_llm_provider": custom_llm_provider},
+        extra_headers={"custom-llm-provider": custom_llm_provider},
     )
     print("content from files.content", content.content)
     content.write_to_file(output_path)
@@ -144,7 +144,7 @@ def read_jsonl(filepath: str):
 
 def get_any_completed_batch_id_azure():
     print("AZURE getting any completed batch id")
-    list_of_batches = client.batches.list(extra_body={"custom_llm_provider": "azure"})
+    list_of_batches = client.batches.list(extra_headers={"custom-llm-provider": "azure"})
     print("list of batches", list_of_batches)
     for batch in list_of_batches:
         if batch.status == "completed":
@@ -202,7 +202,7 @@ def test_vertex_batches_endpoint():
     file_obj = oai_client.files.create(
         file=open(file_path, "rb"),
         purpose="batch",
-        extra_body={"custom_llm_provider": "vertex_ai"},
+        extra_headers={"custom-llm-provider": "vertex_ai"},
     )
     print("Response from creating file=", file_obj)
 
@@ -215,7 +215,7 @@ def test_vertex_batches_endpoint():
         completion_window="24h",
         endpoint="/v1/chat/completions",
         input_file_id=batch_input_file_id,
-        extra_body={"custom_llm_provider": "vertex_ai"},
+        extra_headers={"custom-llm-provider": "vertex_ai"},
         metadata={"key1": "value1", "key2": "value2"},
     )
     print("response from create batch", create_batch_response)

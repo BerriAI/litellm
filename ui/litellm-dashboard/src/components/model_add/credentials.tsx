@@ -11,27 +11,17 @@ import {
   Badge,
   Button,
 } from "@tremor/react";
-import {
-  InformationCircleIcon,
-  PencilAltIcon,
-  PencilIcon,
-  RefreshIcon,
-  StatusOnlineIcon,
-  TrashIcon,
-} from "@heroicons/react/outline";
+import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { UploadProps } from "antd/es/upload";
-import { PlusIcon } from "@heroicons/react/solid";
 import {
-  credentialListCall,
   credentialCreateCall,
   credentialDeleteCall,
   credentialUpdateCall,
   CredentialItem,
-  CredentialsResponse,
 } from "@/components/networking"; // Assume this is your networking function
 import AddCredentialsTab from "./add_credentials_tab";
 import CredentialDeleteModal from "./CredentialDeleteModal";
-import { Form, message } from "antd";
+import { Form } from "antd";
 import NotificationsManager from "../molecules/notifications_manager";
 interface CredentialsPanelProps {
   accessToken: string | null;

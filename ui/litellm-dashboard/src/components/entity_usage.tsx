@@ -21,8 +21,6 @@ import {
   TabPanels,
   Subtitle,
 } from "@tremor/react";
-import AdvancedDatePicker from "./shared/advanced_date_picker";
-import { Select } from "antd";
 import { ActivityMetrics, processActivityData } from "./activity_metrics";
 import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata, TagUsage } from "./usage/types";
 import { tagDailyActivityCall, teamDailyActivityCall } from "./networking";
@@ -30,6 +28,8 @@ import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import { UsageExportHeader } from "./EntityUsageExport";
+import TopModelView from "./top_model_view";
 
 interface EntityMetrics {
   metrics: {
@@ -74,6 +74,7 @@ interface EntityUsageProps {
   userRole: string | null;
   entityList: EntityList[] | null;
   premiumUser: boolean;
+  dateValue: DateRangePickerValue;
 }
 
 const EntityUsage: React.FC<EntityUsageProps> = ({
@@ -84,6 +85,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   userRole,
   entityList,
   premiumUser,
+  dateValue,
 }) => {
   const [spendData, setSpendData] = useState<EntitySpendData>({
     results: [],
@@ -99,10 +101,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const modelMetrics = processActivityData(spendData, "models");
   const keyMetrics = processActivityData(spendData, "api_keys");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
-    to: new Date(),
-  });
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -328,27 +326,18 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
 
   return (
-    <div style={{ width: "100%" }}>
-      <Grid numItems={2} className="gap-2 w-full mb-4">
-        <Col>
-          <AdvancedDatePicker value={dateValue} onValueChange={setDateValue} />
-        </Col>
-        {entityList && entityList.length > 0 && (
-          <Col>
-            <Text>Filter by {entityType === "tag" ? "Tags" : "Teams"}</Text>
-            <Select
-              mode="multiple"
-              style={{ width: "100%" }}
-              placeholder={`Select ${entityType === "tag" ? "tags" : "teams"} to filter...`}
-              value={selectedTags}
-              onChange={setSelectedTags}
-              options={getAllTags()}
-              className="mt-2"
-              allowClear
-            />
-          </Col>
-        )}
-      </Grid>
+    <div style={{ width: "100%" }} className="relative">
+      <UsageExportHeader
+        dateValue={dateValue}
+        entityType={entityType}
+        spendData={spendData}
+        showFilters={entityList !== null && entityList.length > 0}
+        filterLabel={`Filter by ${entityType === "tag" ? "Tags" : "Teams"}`}
+        filterPlaceholder={`Select ${entityType === "tag" ? "tags" : "teams"} to filter...`}
+        selectedFilters={selectedTags}
+        onFiltersChange={setSelectedTags}
+        filterOptions={getAllTags() || undefined}
+      />
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
@@ -559,17 +548,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               <Col numColSpan={1}>
                 <Card>
                   <Title>Top Models</Title>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={getTopModels()}
-                    index="display_key"
-                    categories={["spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-                    layout="vertical"
-                    yAxisWidth={200}
-                    showLegend={false}
-                  />
+                  <TopModelView topModels={getTopModels()} />
                 </Card>
               </Col>
 

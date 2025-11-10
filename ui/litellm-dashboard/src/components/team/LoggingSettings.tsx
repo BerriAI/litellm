@@ -1,11 +1,11 @@
 /* eslint-disable @next/next/no-img-element */
 /* eslint-disable react/no-unescaped-entities */
-import React, { useState } from "react";
-import { Form, Select, Space, Tooltip, Divider } from "antd";
+import React from "react";
+import { Select, Tooltip, Divider } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, Card, TextInput } from "@tremor/react";
 import { PlusIcon, TrashIcon, CogIcon, BanIcon } from "@heroicons/react/outline";
-import { callbackInfo, Callbacks, callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
+import { callbackInfo, callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
 import NumericalInput from "../shared/numerical_input";
 
 const { Option } = Select;

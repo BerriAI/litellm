@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import { Form, Select, Spin } from "antd";
 import { TextInput } from "@tremor/react";
 import {
-  GuardrailProviders,
   guardrail_provider_map,
   populateGuardrailProviders,
   populateGuardrailProviderMap,

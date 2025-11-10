@@ -21,8 +21,7 @@ import {
   Icon,
 } from "@tremor/react";
 import NumericalInput from "../shared/numerical_input";
-import { Button, Form, Input, Select, message, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Button, Form, Input, Select } from "antd";
 import { ArrowLeftIcon, PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import {

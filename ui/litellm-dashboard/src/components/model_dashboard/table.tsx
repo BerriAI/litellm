@@ -1,4 +1,3 @@
-import { Fragment } from "react";
 import {
   ColumnDef,
   flexRender,
@@ -8,7 +7,6 @@ import {
   useReactTable,
   ColumnResizeMode,
   VisibilityState,
-  PaginationState,
 } from "@tanstack/react-table";
 import React from "react";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";

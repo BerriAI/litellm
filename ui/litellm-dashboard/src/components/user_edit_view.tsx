@@ -1,5 +1,5 @@
 import React from "react";
-import { Form, InputNumber, Select, Tooltip } from "antd";
+import { Form, Select, Tooltip } from "antd";
 import NumericalInput from "./shared/numerical_input";
 import { TextInput, Textarea, SelectItem } from "@tremor/react";
 import { Button } from "@tremor/react";

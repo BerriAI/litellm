@@ -1,11 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal, Upload, message } from "antd";
+import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
 import type { FormInstance } from "antd";
-import type { UploadProps } from "antd/es/upload";
-import { UploadOutlined } from "@ant-design/icons";
 import { Text, TextInput } from "@tremor/react";
-import { Row, Col } from "antd";
-import { CredentialItem, modelAvailableCall } from "../networking";
+import { modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";

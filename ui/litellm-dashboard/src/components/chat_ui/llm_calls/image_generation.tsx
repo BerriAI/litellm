@@ -1,5 +1,4 @@
 import openai from "openai";
-import { message } from "antd";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
 

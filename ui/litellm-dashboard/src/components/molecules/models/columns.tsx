@@ -3,9 +3,7 @@ import { Button, Badge, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { ModelData } from "../../model_dashboard/types";
-import { TrashIcon, PencilIcon, PencilAltIcon, KeyIcon } from "@heroicons/react/outline";
-import DeleteModelButton from "../../delete_model_button";
-import { useState } from "react";
+import { TrashIcon, KeyIcon } from "@heroicons/react/outline";
 
 export const columns = (
   userRole: string,

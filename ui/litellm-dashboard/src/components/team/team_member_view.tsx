@@ -15,7 +15,7 @@ import {
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Tooltip } from "antd";
 import { TeamData } from "./team_info";
-import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
+import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface TeamMembersComponentProps {

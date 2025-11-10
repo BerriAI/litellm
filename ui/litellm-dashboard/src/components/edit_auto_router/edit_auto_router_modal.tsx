@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Modal, Form, Button, Select as AntdSelect, message } from "antd";
+import { Modal, Form, Button, Select as AntdSelect } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "../chat_ui/llm_calls/fetch_models";

@@ -55,7 +55,12 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
     def __init__(self) -> None:
         pass
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         """
         Construct the Nvidia NIM rerank URL.
         
@@ -131,6 +136,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> dict:
         """
         Validate that the Nvidia NIM API key is present.

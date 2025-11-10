@@ -1,5 +1,3 @@
-import { Member } from "../networking";
-
 export interface EditModalProps {
   visible: boolean;
   onCancel: () => void;

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Form, Select, Upload, Button, message, Divider } from "antd";
+import { Modal, Form, Select, Upload, Button, Divider } from "antd";
 import { TextInput } from "@tremor/react";
 import { UploadOutlined } from "@ant-design/icons";
 import type { UploadFile, UploadProps } from "antd";
