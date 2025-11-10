@@ -118,7 +118,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_completion(setup_vector_
 @pytest.mark.asyncio
 async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(setup_vector_store_registry):
     """
-    Test that the Bedrock Knowledge Base Hook works when making a real llm api call
+    Test that the Bedrock Knowledge Base Hook works when making a real llm api call and returns citations.
     """
     
     # Init client
@@ -132,9 +132,85 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(setup_vecto
         ],
         client=async_client
     )
+    print("OPENAI RESPONSE:", json.dumps(dict(response), indent=4, default=str))
     assert response is not None
+    
+    # Check that search_results are present in provider_specific_fields
+    assert hasattr(response.choices[0].message, "provider_specific_fields")
+    provider_fields = response.choices[0].message.provider_specific_fields
+    assert provider_fields is not None
+    assert "search_results" in provider_fields
+    search_results = provider_fields["search_results"]
+    assert search_results is not None
+    assert len(search_results) > 0
+    
+    # Check search result structure (OpenAI-compatible format)
+    first_search_result = search_results[0]
+    assert "object" in first_search_result
+    assert first_search_result["object"] == "vector_store.search_results.page"
+    assert "data" in first_search_result
+    assert len(first_search_result["data"]) > 0
+    
+    # Check individual result structure
+    first_result = first_search_result["data"][0]
+    assert "score" in first_result
+    assert "content" in first_result
+    print(f"Search results returned: {len(search_results)}")
+    print(f"First search result has {len(first_search_result['data'])} items")
 
 
+
+
+@pytest.mark.asyncio
+async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(setup_vector_store_registry):
+    """
+    Test that the Bedrock Knowledge Base Hook works with streaming and returns search_results in chunks.
+    """
+    
+    # Init client
+    # litellm._turn_on_debug()
+    async_client = AsyncHTTPHandler()
+    response = await litellm.acompletion(
+        model="anthropic/claude-3-5-haiku-latest",
+        messages=[{"role": "user", "content": "what is litellm?"}],
+        vector_store_ids = [
+            "T37J8R4WTM"
+        ],
+        stream=True,
+        client=async_client
+    )
+    
+    # Collect chunks
+    chunks = []
+    search_results_found = False
+    async for chunk in response:
+        chunks.append(chunk)
+        print(f"Chunk: {chunk}")
+        
+        # Check if this chunk has search_results in provider_specific_fields
+        if hasattr(chunk, "choices") and chunk.choices:
+            for choice in chunk.choices:
+                if hasattr(choice, "delta") and choice.delta:
+                    provider_fields = getattr(choice.delta, "provider_specific_fields", None)
+                    if provider_fields and "search_results" in provider_fields:
+                        search_results = provider_fields["search_results"]
+                        print(f"Found search_results in streaming chunk: {len(search_results)} results")
+                        
+                        # Verify structure
+                        assert search_results is not None
+                        assert len(search_results) > 0
+                        
+                        first_search_result = search_results[0]
+                        assert "object" in first_search_result
+                        assert first_search_result["object"] == "vector_store.search_results.page"
+                        assert "data" in first_search_result
+                        assert len(first_search_result["data"]) > 0
+                        
+                        search_results_found = True
+    
+    print(f"Total chunks received: {len(chunks)}")
+    assert len(chunks) > 0
+    assert search_results_found, "search_results should be present in streaming chunks"
 
 
 @pytest.mark.asyncio

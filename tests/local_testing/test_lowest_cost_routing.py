@@ -60,7 +60,7 @@ async def test_get_available_deployments_custom_price():
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "azure/gpt-4.1-nano",
+                "model": "azure/gpt-4.1-mini",
                 "input_cost_per_token": 0.00003,
                 "output_cost_per_token": 0.00003,
             },

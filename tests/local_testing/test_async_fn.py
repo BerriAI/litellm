@@ -91,35 +91,6 @@ def test_async_response_openai():
 # test_async_response_openai()
 
 
-def test_async_response_azure():
-    import asyncio
-
-    litellm.set_verbose = True
-
-    async def test_get_response():
-        user_message = "What do you know?"
-        messages = [{"content": user_message, "role": "user"}]
-        try:
-            response = await acompletion(
-                model="azure/gpt-turbo",
-                messages=messages,
-                base_url=os.getenv("CLOUDFLARE_AZURE_BASE_URL"),
-                api_key=os.getenv("AZURE_FRANCE_API_KEY"),
-            )
-            print(f"response: {response}")
-        except litellm.Timeout as e:
-            pass
-        except litellm.InternalServerError:
-            pass
-        except Exception as e:
-            pytest.fail(f"An exception occurred: {e}")
-
-    asyncio.run(test_get_response())
-
-
-# test_async_response_azure()
-
-
 @pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_async_anyscale_response():
     import asyncio

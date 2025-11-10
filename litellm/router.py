@@ -54,7 +54,10 @@ from litellm.caching.caching import (
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    _get_parent_otel_span_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -140,6 +143,7 @@ from litellm.types.router import (
     RouterRateLimitError,
     RouterRateLimitErrorBasic,
     RoutingStrategy,
+    SearchToolTypedDict,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -204,6 +208,8 @@ class Router:
         ] = None,
         ## ASSISTANTS API ##
         assistants_config: Optional[AssistantsTypedDict] = None,
+        ## SEARCH API ##
+        search_tools: Optional[List[SearchToolTypedDict]] = None,
         ## CACHING ##
         redis_url: Optional[str] = None,
         redis_host: Optional[str] = None,
@@ -363,6 +369,7 @@ class Router:
         )
 
         self.assistants_config = assistants_config
+        self.search_tools = search_tools or []
         self.deployment_names: List = (
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
@@ -429,8 +436,7 @@ class Router:
         self.model_name_to_deployment_indices: Dict[str, List[int]] = {}
 
         if model_list is not None:
-            # Build model index immediately to enable O(1) lookups from the start
-            self._build_model_id_to_deployment_index_map(model_list)
+            # set_model_list will build indices automatically
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list  # type: ignore
             for m in model_list:
@@ -766,119 +772,101 @@ class Router:
         self.aget_messages = self.factory_function(litellm.aget_messages)
         self.arun_thread = self.factory_function(litellm.arun_thread)
 
-    def initialize_router_endpoints(self):
-        self.amoderation = self.factory_function(
-            litellm.amoderation, call_type="moderation"
-        )
-        self.aanthropic_messages = self.factory_function(
-            litellm.anthropic_messages, call_type="anthropic_messages"
-        )
-        self.agenerate_content = self.factory_function(
-            litellm.agenerate_content, call_type="agenerate_content"
-        )
-
-        self.aadapter_generate_content = self.factory_function(
-            litellm.aadapter_generate_content, call_type="aadapter_generate_content"
-        )
-
-        self.aresponses = self.factory_function(
-            litellm.aresponses, call_type="aresponses"
-        )
-        self.afile_delete = self.factory_function(
-            litellm.afile_delete, call_type="afile_delete"
-        )
-
-        self.afile_content = self.factory_function(
-            litellm.afile_content, call_type="afile_content"
-        )
+    def _initialize_core_endpoints(self):
+        """Helper to initialize core router endpoints."""
+        self.amoderation = self.factory_function(litellm.amoderation, call_type="moderation")
+        self.aanthropic_messages = self.factory_function(litellm.anthropic_messages, call_type="anthropic_messages")
+        self.agenerate_content = self.factory_function(litellm.agenerate_content, call_type="agenerate_content")
+        self.aadapter_generate_content = self.factory_function(litellm.aadapter_generate_content, call_type="aadapter_generate_content")
+        self.aresponses = self.factory_function(litellm.aresponses, call_type="aresponses")
+        self.afile_delete = self.factory_function(litellm.afile_delete, call_type="afile_delete")
+        self.afile_content = self.factory_function(litellm.afile_content, call_type="afile_content")
         self.responses = self.factory_function(litellm.responses, call_type="responses")
-        self.aget_responses = self.factory_function(
-            litellm.aget_responses, call_type="aget_responses"
-        )
-        self.acancel_responses = self.factory_function(
-            litellm.acancel_responses, call_type="acancel_responses"
-        )
-        self.adelete_responses = self.factory_function(
-            litellm.adelete_responses, call_type="adelete_responses"
-        )
-        self.alist_input_items = self.factory_function(
-            litellm.alist_input_items, call_type="alist_input_items"
-        )
-        self._arealtime = self.factory_function(
-            litellm._arealtime, call_type="_arealtime"
-        )
-        self.acreate_fine_tuning_job = self.factory_function(
-            litellm.acreate_fine_tuning_job, call_type="acreate_fine_tuning_job"
-        )
-        self.acancel_fine_tuning_job = self.factory_function(
-            litellm.acancel_fine_tuning_job, call_type="acancel_fine_tuning_job"
-        )
-        self.alist_fine_tuning_jobs = self.factory_function(
-            litellm.alist_fine_tuning_jobs, call_type="alist_fine_tuning_jobs"
-        )
-        self.aretrieve_fine_tuning_job = self.factory_function(
-            litellm.aretrieve_fine_tuning_job, call_type="aretrieve_fine_tuning_job"
-        )
-        self.afile_list = self.factory_function(
-            litellm.afile_list, call_type="alist_files"
-        )
-        self.aimage_edit = self.factory_function(
-            litellm.aimage_edit, call_type="aimage_edit"
-        )
-        self.allm_passthrough_route = self.factory_function(
-            litellm.allm_passthrough_route, call_type="allm_passthrough_route"
-        )
+        self.aget_responses = self.factory_function(litellm.aget_responses, call_type="aget_responses")
+        self.acancel_responses = self.factory_function(litellm.acancel_responses, call_type="acancel_responses")
+        self.adelete_responses = self.factory_function(litellm.adelete_responses, call_type="adelete_responses")
+        self.alist_input_items = self.factory_function(litellm.alist_input_items, call_type="alist_input_items")
+        self._arealtime = self.factory_function(litellm._arealtime, call_type="_arealtime")
+        self.acreate_fine_tuning_job = self.factory_function(litellm.acreate_fine_tuning_job, call_type="acreate_fine_tuning_job")
+        self.acancel_fine_tuning_job = self.factory_function(litellm.acancel_fine_tuning_job, call_type="acancel_fine_tuning_job")
+        self.alist_fine_tuning_jobs = self.factory_function(litellm.alist_fine_tuning_jobs, call_type="alist_fine_tuning_jobs")
+        self.aretrieve_fine_tuning_job = self.factory_function(litellm.aretrieve_fine_tuning_job, call_type="aretrieve_fine_tuning_job")
+        self.afile_list = self.factory_function(litellm.afile_list, call_type="alist_files")
+        self.aimage_edit = self.factory_function(litellm.aimage_edit, call_type="aimage_edit")
+        self.allm_passthrough_route = self.factory_function(litellm.allm_passthrough_route, call_type="allm_passthrough_route")
 
-        #########################################################
-        # Vector Store routes
-        #########################################################
+    def _initialize_specialized_endpoints(self):
+        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container)."""
         from litellm.vector_stores.main import acreate, asearch, create, search
+        self.avector_store_search = self.factory_function(asearch, call_type="avector_store_search")
+        self.avector_store_create = self.factory_function(acreate, call_type="avector_store_create")
+        self.vector_store_search = self.factory_function(search, call_type="vector_store_search")
+        self.vector_store_create = self.factory_function(create, call_type="vector_store_create")
 
-        # async routes
-        self.avector_store_search = self.factory_function(
-            asearch, call_type="avector_store_search"
-        )
-        self.avector_store_create = self.factory_function(
-            acreate, call_type="avector_store_create"
-        )
-        # sync routes
-        self.vector_store_search = self.factory_function(
-            search, call_type="vector_store_search"
-        )
-        self.vector_store_create = self.factory_function(
-            create, call_type="vector_store_create"
-        )
-
-        #########################################################
-        # Gemini Native routes
-        #########################################################
         from litellm.google_genai import (
             agenerate_content,
             agenerate_content_stream,
             generate_content,
             generate_content_stream,
         )
+        self.agenerate_content = self.factory_function(agenerate_content, call_type="agenerate_content")
+        self.generate_content = self.factory_function(generate_content, call_type="generate_content")
+        self.agenerate_content_stream = self.factory_function(agenerate_content_stream, call_type="agenerate_content_stream")
+        self.generate_content_stream = self.factory_function(generate_content_stream, call_type="generate_content_stream")
 
-        self.agenerate_content = self.factory_function(
-            agenerate_content, call_type="agenerate_content"
-        )
-        self.generate_content = self.factory_function(
-            generate_content, call_type="generate_content"
-        )
-        self.agenerate_content_stream = self.factory_function(
-            agenerate_content_stream, call_type="agenerate_content_stream"
-        )
-        self.generate_content_stream = self.factory_function(
-            generate_content_stream, call_type="generate_content_stream"
-        )
-
-        #########################################################
-        # OCR routes
-        #########################################################
         from litellm.ocr import aocr, ocr
-
         self.aocr = self.factory_function(aocr, call_type="aocr")
         self.ocr = self.factory_function(ocr, call_type="ocr")
+
+        from litellm.search import asearch, search
+        self.asearch = self.factory_function(asearch, call_type="asearch")
+        self.search = self.factory_function(search, call_type="search")
+
+        from litellm.videos import (
+            avideo_content,
+            avideo_generation,
+            avideo_list,
+            avideo_remix,
+            avideo_status,
+            video_content,
+            video_generation,
+            video_list,
+            video_remix,
+            video_status,
+        )
+        self.avideo_generation = self.factory_function(avideo_generation, call_type="avideo_generation")
+        self.video_generation = self.factory_function(video_generation, call_type="video_generation")
+        self.avideo_list = self.factory_function(avideo_list, call_type="avideo_list")
+        self.video_list = self.factory_function(video_list, call_type="video_list")
+        self.avideo_status = self.factory_function(avideo_status, call_type="avideo_status")
+        self.video_status = self.factory_function(video_status, call_type="video_status")
+        self.avideo_content = self.factory_function(avideo_content, call_type="avideo_content")
+        self.video_content = self.factory_function(video_content, call_type="video_content")
+        self.avideo_remix = self.factory_function(avideo_remix, call_type="avideo_remix")
+        self.video_remix = self.factory_function(video_remix, call_type="video_remix")
+
+        from litellm.containers import (
+            acreate_container,
+            adelete_container,
+            alist_containers,
+            aretrieve_container,
+            create_container,
+            delete_container,
+            list_containers,
+            retrieve_container,
+        )
+        self.acreate_container = self.factory_function(acreate_container, call_type="acreate_container")
+        self.create_container = self.factory_function(create_container, call_type="create_container")
+        self.alist_containers = self.factory_function(alist_containers, call_type="alist_containers")
+        self.list_containers = self.factory_function(list_containers, call_type="list_containers")
+        self.aretrieve_container = self.factory_function(aretrieve_container, call_type="aretrieve_container")
+        self.retrieve_container = self.factory_function(retrieve_container, call_type="retrieve_container")
+        self.adelete_container = self.factory_function(adelete_container, call_type="adelete_container")
+        self.delete_container = self.factory_function(delete_container, call_type="delete_container")
+
+    def initialize_router_endpoints(self):
+        self._initialize_core_endpoints()
+        self._initialize_specialized_endpoints()
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -974,7 +962,8 @@ class Router:
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
-            data = deployment["litellm_params"].copy()
+            # No copy needed - data is only read and spread into new dict below
+            data = deployment["litellm_params"]
             model_name = data["model"]
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs
@@ -1281,7 +1270,8 @@ class Router:
                 deployment=deployment, parent_otel_span=parent_otel_span
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-            data = deployment["litellm_params"].copy()
+            # No copy needed - data is only read and spread into new dict below
+            data = deployment["litellm_params"]
 
             model_name = data["model"]
 
@@ -1945,21 +1935,15 @@ class Router:
 
     def _is_prompt_management_model(self, model: str) -> bool:
         model_list = self.get_model_list(model_name=model)
-        if model_list is None:
-            return False
-        if len(model_list) != 1:
+        if model_list is None or len(model_list) != 1:
             return False
 
         litellm_model = model_list[0]["litellm_params"].get("model", None)
-
-        if litellm_model is None:
+        if litellm_model is None or "/" not in litellm_model:
             return False
 
-        if "/" in litellm_model:
-            split_litellm_model = litellm_model.split("/")[0]
-            if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
-                return True
-        return False
+        split_litellm_model = litellm_model.split("/")[0]
+        return split_litellm_model in litellm._known_custom_logger_compatible_callbacks
 
     async def _prompt_management_factory(
         self,
@@ -2709,6 +2693,37 @@ class Router:
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
+
+    async def _asearch_with_fallbacks(
+        self, original_function: Callable, **kwargs
+    ):
+        """
+        Helper function to make a search API call through the router with load balancing and fallbacks.
+        Reuses the router's retry/fallback infrastructure.
+        """
+        from litellm.router_utils.search_api_router import SearchAPIRouter
+        
+        return await SearchAPIRouter.async_search_with_fallbacks(
+            router_instance=self,
+            original_function=original_function,
+            **kwargs,
+        )
+    
+    async def _asearch_with_fallbacks_helper(
+        self, model: str, original_generic_function: Callable, **kwargs
+    ):
+        """
+        Helper function for search API calls - selects a search tool and calls the original function.
+        Called by async_function_with_fallbacks for each retry attempt.
+        """
+        from litellm.router_utils.search_api_router import SearchAPIRouter
+        
+        return await SearchAPIRouter.async_search_with_fallbacks_helper(
+            router_instance=self,
+            model=model,
+            original_generic_function=original_generic_function,
+            **kwargs,
+        )
 
     async def _ageneric_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
@@ -3585,7 +3600,27 @@ class Router:
             "vector_store_create",
             "aocr",
             "ocr",
-            "aadapter_generate_content"
+            "asearch",
+            "search",
+            "aadapter_generate_content",
+            "avideo_generation",
+            "video_generation",
+            "avideo_list",
+            "video_list",
+            "avideo_status",
+            "video_status",
+            "avideo_content",
+            "video_content",
+            "avideo_remix",
+            "video_remix",
+            "acreate_container",
+            "create_container",
+            "alist_containers",
+            "list_containers",
+            "aretrieve_container",
+            "retrieve_container",
+            "adelete_container",
+            "delete_container"
         ] = "assistants",
     ):
         """
@@ -3603,6 +3638,16 @@ class Router:
             "vector_store_search",
             "vector_store_create",
             "ocr",
+            "search",
+            "video_generation",
+            "video_list",
+            "video_status",
+            "video_content",
+            "video_remix",
+            "create_container",
+            "list_containers",
+            "retrieve_container",
+            "delete_container",
         ):
 
             def sync_wrapper(
@@ -3633,6 +3678,11 @@ class Router:
                 return await self._pass_through_moderation_endpoint_factory(
                     original_function=original_function, **kwargs
                 )
+            elif call_type in ("asearch", "search"):
+                return await self._asearch_with_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
+                )
             elif call_type in (
                 "anthropic_messages",
                 "aresponses",
@@ -3647,6 +3697,15 @@ class Router:
                 "agenerate_content_stream",
                 "aocr",
                 "ocr",
+                "avideo_generation",
+                "avideo_list",
+                "avideo_status",
+                "avideo_content",
+                "avideo_remix",
+                "acreate_container",
+                "alist_containers",
+                "aretrieve_container",
+                "adelete_container",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -4665,7 +4724,7 @@ class Router:
         - OpenAI then started using this field for their metadata
         - LiteLLM is now moving to using `litellm_metadata` for our metadata
         """
-        return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+        return get_metadata_variable_name_from_kwargs(kwargs)
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """
@@ -5211,8 +5270,8 @@ class Router:
         )
         self.model_names = {m["model_name"] for m in model_list}
         
-        # Build model_name index for O(1) lookups
-        self._build_model_name_index(self.model_list)
+        # Note: model_name_to_deployment_indices is already built incrementally
+        # by _create_deployment -> _add_model_to_list_and_index_map
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
@@ -5435,6 +5494,26 @@ class Router:
         # Remove the deleted model from index
         if model_id in self.model_id_to_deployment_index_map:
             del self.model_id_to_deployment_index_map[model_id]
+        
+        # Update model_name_to_deployment_indices
+        for model_name, indices in list(self.model_name_to_deployment_indices.items()):
+            # Remove the deleted index
+            if removal_idx in indices:
+                indices.remove(removal_idx)
+            
+            # Decrement all indices greater than removal_idx
+            updated_indices = []
+            for idx in indices:
+                if idx > removal_idx:
+                    updated_indices.append(idx - 1)
+                else:
+                    updated_indices.append(idx)
+            
+            # Update or remove the entry
+            if len(updated_indices) > 0:
+                self.model_name_to_deployment_indices[model_name] = updated_indices
+            else:
+                del self.model_name_to_deployment_indices[model_name]
 
     def _add_model_to_list_and_index_map(
         self, model: dict, model_id: Optional[str] = None
@@ -6707,9 +6786,11 @@ class Router:
             f"Starting Pre-call checks for deployments in model={model}"
         )
 
-        _returned_deployments = copy.deepcopy(healthy_deployments)
+        # Optimized: Use list() shallow copy instead of deepcopy
+        # We only pop from the list, not modify deployment dicts - 100x+ faster on hot path (every request)
+        _returned_deployments = list(healthy_deployments)
 
-        invalid_model_indices = []
+        invalid_model_indices = set()  # Use set for O(1) membership checks
 
         try:
             input_tokens = litellm.token_counter(messages=messages)
@@ -6759,7 +6840,7 @@ class Router:
                         isinstance(model_info["max_input_tokens"], int)
                         and input_tokens > model_info["max_input_tokens"]
                     ):
-                        invalid_model_indices.append(idx)
+                        invalid_model_indices.add(idx)
                         _context_window_error = True
                         _potential_error_str += (
                             "Model={}, Max Input Tokens={}, Got={}".format(
@@ -6798,7 +6879,7 @@ class Router:
                         isinstance(_litellm_params["rpm"], int)
                         and _litellm_params["rpm"] <= current_request
                     ):
-                        invalid_model_indices.append(idx)
+                        invalid_model_indices.add(idx)
                         _rate_limit_error = True
                         continue
 
@@ -6814,7 +6895,7 @@ class Router:
                         litellm_params=LiteLLM_Params(**_litellm_params),
                         allowed_model_region=allowed_model_region,
                     ):
-                        invalid_model_indices.append(idx)
+                        invalid_model_indices.add(idx)
                         continue
 
             ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
@@ -6843,7 +6924,7 @@ class Router:
                             verbose_router_logger.debug(
                                 f"INVALID MODEL INDEX @ REQUEST KWARG FILTERING, k={k}"
                             )
-                            invalid_model_indices.append(idx)
+                            invalid_model_indices.add(idx)
 
         if len(invalid_model_indices) == len(_returned_deployments):
             """
@@ -6866,8 +6947,10 @@ class Router:
                     llm_provider="",
                 )
         if len(invalid_model_indices) > 0:
-            for idx in reversed(invalid_model_indices):
-                _returned_deployments.pop(idx)
+            # Single-pass filter using set for O(1) lookups (avoids O(n^2) from repeated pops)
+            _returned_deployments = [
+                d for i, d in enumerate(_returned_deployments) if i not in invalid_model_indices
+            ]
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         if len(_returned_deployments) > 0:
@@ -6967,9 +7050,11 @@ class Router:
 
             # check if default deployment is set
             if self.default_deployment is not None:
-                updated_deployment = copy.deepcopy(
-                    self.default_deployment
-                )  # self.default_deployment
+                # Shallow copy with nested litellm_params copy (100x+ faster than deepcopy)
+                updated_deployment = self.default_deployment.copy()
+                updated_deployment["litellm_params"] = self.default_deployment[
+                    "litellm_params"
+                ].copy()
                 updated_deployment["litellm_params"]["model"] = model
                 return model, updated_deployment
 

@@ -20,13 +20,19 @@ def test_google_generate_content_endpoint():
     """Test that the google_generate_content endpoint correctly routes requests"""
     # Skip this test if we can't import the required modules due to missing dependencies
     try:
+        from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
         from litellm.proxy.google_endpoints.endpoints import router as google_router
     except ImportError as e:
         pytest.skip(f"Skipping test due to missing dependency: {e}")
     
+    # Create a FastAPI app and include the router (required for FastAPI 0.120+)
+    app = FastAPI()
+    app.include_router(google_router)
+    
     # Create a test client
-    client = TestClient(google_router)
+    client = TestClient(app)
     
     # Mock the router's agenerate_content method
     with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
@@ -52,13 +58,19 @@ def test_google_stream_generate_content_endpoint():
     """Test that the google_stream_generate_content endpoint correctly routes streaming requests"""
     # Skip this test if we can't import the required modules due to missing dependencies
     try:
+        from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
         from litellm.proxy.google_endpoints.endpoints import router as google_router
     except ImportError as e:
         pytest.skip(f"Skipping test due to missing dependency: {e}")
     
+    # Create a FastAPI app and include the router (required for FastAPI 0.120+)
+    app = FastAPI()
+    app.include_router(google_router)
+    
     # Create a test client
-    client = TestClient(google_router)
+    client = TestClient(app)
     
     # Mock the router's agenerate_content_stream method to return a stream
     async def mock_stream_generator():
@@ -91,14 +103,20 @@ def test_google_stream_generate_content_endpoint():
 def test_google_generate_content_with_cost_tracking_metadata():
     """Test that the google_generate_content endpoint includes user metadata for cost tracking"""
     try:
+        from fastapi import FastAPI
         from fastapi.testclient import TestClient
-        from litellm.proxy.google_endpoints.endpoints import router as google_router
+
         from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.google_endpoints.endpoints import router as google_router
     except ImportError as e:
         pytest.skip(f"Skipping test due to missing dependency: {e}")
     
+    # Create a FastAPI app and include the router (required for FastAPI 0.120+)
+    app = FastAPI()
+    app.include_router(google_router)
+    
     # Create a test client
-    client = TestClient(google_router)
+    client = TestClient(app)
     
     # Mock all required proxy server dependencies
     with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
@@ -150,13 +168,19 @@ def test_google_generate_content_with_cost_tracking_metadata():
 def test_google_stream_generate_content_with_cost_tracking_metadata():
     """Test that the google_stream_generate_content endpoint includes user metadata for cost tracking"""
     try:
+        from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
         from litellm.proxy.google_endpoints.endpoints import router as google_router
     except ImportError as e:
         pytest.skip(f"Skipping test due to missing dependency: {e}")
     
+    # Create a FastAPI app and include the router (required for FastAPI 0.120+)
+    app = FastAPI()
+    app.include_router(google_router)
+    
     # Create a test client
-    client = TestClient(google_router)
+    client = TestClient(app)
     
     # Mock the router's agenerate_content_stream method to return a stream
     mock_stream = AsyncMock()

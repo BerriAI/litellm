@@ -332,3 +332,25 @@ describe("KeyInfoView handleKeyUpdate premium guard", () => {
     expect(sentPayload.key).toBe("tok_123");
   });
 });
+
+describe("KeyInfoView handleKeyUpdate empty strings", () => {
+  ["tpm_limit", "rpm_limit", "max_parallel_requests", "max_budget"].forEach((limit) => {
+    it(`maps empty strings to null for ${limit}`, async () => {
+      renderView(true); // premiumUser = true
+
+      fireEvent.click(screen.getByText("Edit Settings"));
+      (globalThis as any).__TEST_FORM_VALUES = {
+        token: "tok_123",
+        [limit]: "",
+      };
+
+      fireEvent.click(screen.getByText("Mock Submit"));
+
+      await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+      const [sentAccessToken, sentPayload] = keyUpdateCallMock.mock.calls[0];
+      expect(sentAccessToken).toBe("access_abc");
+      expect(sentPayload[limit]).toBeNull();
+    });
+  });
+});

@@ -54,6 +54,28 @@ MCPAuthType = Optional[
 ]
 
 
+class MCPCredentials(TypedDict, total=False):
+    auth_value: Optional[str]
+    """
+    Authentication value
+    """
+
+    client_id: Optional[str]
+    """
+    OAuth 2.0 client identifier used when auth_type is oauth2
+    """
+
+    client_secret: Optional[str]
+    """
+    OAuth 2.0 client secret used when auth_type is oauth2
+    """
+
+    scopes: Optional[List[str]]
+    """
+    OAuth 2.0 scopes to request when exchanging the client credentials
+    """
+
+
 class MCPServerCostInfo(TypedDict, total=False):
     default_cost_per_query: Optional[float]
     """

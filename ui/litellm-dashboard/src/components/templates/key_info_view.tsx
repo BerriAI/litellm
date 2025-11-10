@@ -144,6 +144,11 @@ export default function KeyInfoView({
         delete formValues.mcp_tool_permissions;
       }
 
+      formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
+      formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
+      formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);
+      formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
+
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {

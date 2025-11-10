@@ -1,10 +1,14 @@
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import Dict, Iterable, List, Optional, Union
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel
 from typing_extensions import Literal, Required, TypedDict
 
-from .openai import ChatCompletionCachedContent, ChatCompletionThinkingBlock
+from .openai import (
+    ChatCompletionCachedContent,
+    ChatCompletionThinkingBlock,
+    ChatCompletionRedactedThinkingBlock,
+)
 
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
@@ -65,12 +69,19 @@ class AnthropicCodeExecutionTool(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class AnthropicMemoryTool(TypedDict, total=False):
+    type: Required[str]
+    name: Required[Literal["memory"]]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 AllAnthropicToolsValues = Union[
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicMessagesTool,
     AnthropicWebSearchTool,
     AnthropicCodeExecutionTool,
+    AnthropicMemoryTool,
 ]
 
 
@@ -104,6 +115,7 @@ AnthropicMessagesAssistantMessageValues = Union[
     AnthropicMessagesTextParam,
     AnthropicMessagesToolUseParam,
     ChatCompletionThinkingBlock,
+    ChatCompletionRedactedThinkingBlock,
 ]
 
 
@@ -154,6 +166,38 @@ class AnthropicMessagesImageParam(TypedDict, total=False):
 
 class CitationsObject(TypedDict):
     enabled: bool
+
+
+class AnthropicCitationPageLocation(TypedDict, total=False):
+    """
+    Anthropic citation for page-based references.
+    Used when citing from documents with page numbers.
+    """
+
+    type: Literal["page_location"]
+    cited_text: str  # The exact text being cited (not counted towards output tokens)
+    document_index: int  # Index referencing the cited document
+    document_title: Optional[str]  # Title of the cited document
+    start_page_number: int  # 1-indexed starting page
+    end_page_number: int  # Exclusive ending page
+
+
+class AnthropicCitationCharLocation(TypedDict, total=False):
+    """
+    Anthropic citation for character-based references.
+    Used when citing from text with character positions.
+    """
+
+    type: Literal["char_location"]
+    cited_text: str  # The exact text being cited (not counted towards output tokens)
+    document_index: int  # Index referencing the cited document
+    document_title: Optional[str]  # Title of the cited document
+    start_char_index: int  # Starting character index for the citation
+    end_char_index: int  # Ending character index for the citation
+
+
+# Union type for all citation formats
+AnthropicCitation = Union[AnthropicCitationPageLocation, AnthropicCitationCharLocation]
 
 
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
@@ -264,11 +308,33 @@ class ContentJsonBlockDelta(TypedDict):
     partial_json: str
 
 
+class ContentThinkingBlockDelta(TypedDict):
+    """
+    "delta": {"type": "thinking_delta", "thinking": "Let me solve this step by step:"}}
+    """
+
+    type: Literal["thinking_delta"]
+    thinking: str
+
+
+class ContentThinkingSignatureBlockDelta(TypedDict):
+    """
+    "delta": {"type": "signature_delta", "signature": "EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds..."}}
+    """
+
+    type: Literal["signature_delta"]
+    signature: str
+
+
 class ContentBlockDelta(TypedDict):
     type: Literal["content_block_delta"]
     index: int
     delta: Union[
-        ContentTextBlockDelta, ContentJsonBlockDelta, ContentCitationsBlockDelta
+        ContentTextBlockDelta,
+        ContentJsonBlockDelta,
+        ContentCitationsBlockDelta,
+        ContentThinkingBlockDelta,
+        ContentThinkingSignatureBlockDelta,
     ]
 
 
@@ -311,7 +377,9 @@ class ContentBlockStartText(TypedDict):
     content_block: TextBlock
 
 
-ContentBlockContentBlockDict = Union[ToolUseBlock, TextBlock]
+ContentBlockContentBlockDict = Union[
+    ToolUseBlock, TextBlock, ChatCompletionThinkingBlock
+]
 
 ContentBlockStart = Union[ContentBlockStartToolUse, ContentBlockStartText]
 
@@ -384,6 +452,17 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     input: dict
 
 
+class AnthropicResponseContentBlockThinking(BaseModel):
+    type: Literal["thinking"]
+    thinking: str
+    signature: Optional[str]
+
+
+class AnthropicResponseContentBlockRedactedThinking(BaseModel):
+    type: Literal["redacted_thinking"]
+    data: str
+
+
 class AnthropicResponseUsageBlock(BaseModel):
     input_tokens: int
     output_tokens: int
@@ -403,7 +482,12 @@ class AnthropicResponse(BaseModel):
     """Conversational role of the generated message. This will always be "assistant"."""
 
     content: List[
-        Union[AnthropicResponseContentBlockText, AnthropicResponseContentBlockToolUse]
+        Union[
+            AnthropicResponseContentBlockText,
+            AnthropicResponseContentBlockToolUse,
+            AnthropicResponseContentBlockThinking,
+            AnthropicResponseContentBlockRedactedThinking,
+        ]
     ]
     """Content generated by the model."""
 
@@ -442,15 +526,20 @@ class AnthropicThinkingParam(TypedDict, total=False):
     type: Literal["enabled"]
     budget_tokens: int
 
+
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     WEB_SEARCH = "web_search"
     BASH = "bash"
     TEXT_EDITOR = "text_editor"
     CODE_EXECUTION = "code_execution"
     WEB_FETCH = "web_fetch"
+    MEMORY = "memory"
+
 
 class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     """
     Known beta header values for Anthropic.
     """
+
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
+    CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"

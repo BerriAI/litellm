@@ -5,6 +5,7 @@
 | Cost Tracking | ✅ |
 | Logging | ✅ (Basic Logging not supported) |
 | Load Balancing | ✅ |
+| Supported Providers | `mistral`, `azure_ai`, `vertex_ai` |
 
 :::tip
 
@@ -260,4 +261,6 @@ The response follows Mistral's OCR format with the following structure:
 | Provider    | Link to Usage      |
 |-------------|--------------------|
 | Mistral AI  |   [Usage](#quick-start)                 |
+| Azure AI    |   [Usage](../docs/providers/azure_ocr)                 |
+| Vertex AI   |   [Usage](../docs/providers/vertex_ocr)                 |
 

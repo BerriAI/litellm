@@ -8,6 +8,12 @@ from typing_extensions import Required, TypedDict
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
+    GraySwanGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
+    IBMGuardrailsBaseConfigModel,
+)
 
 
 
@@ -37,6 +43,7 @@ class SupportedGuardrailIntegrations(Enum):
     PANGEA = "pangea"
     LASSO = "lasso"
     PILLAR = "pillar"
+    GRAYSWAN = "grayswan"
     PANW_PRISMA_AIRS = "panw_prisma_airs"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
@@ -47,6 +54,9 @@ class SupportedGuardrailIntegrations(Enum):
     ZSCALER_AI_GUARD = "zscaler_ai_guard"    
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
+    IBM_GUARDRAILS = "ibm_guardrails"
+    LITELLM_CONTENT_FILTER = "litellm_content_filter"
+
 
 class Role(Enum):
     SYSTEM = "system"
@@ -225,8 +235,8 @@ PII_ENTITY_CATEGORIES_MAP = {
 
 
 class PiiEntityCategoryMap(TypedDict):
-    category: PiiEntityCategory
-    entities: List[PiiEntityType]
+    category: str
+    entities: List[str]
 
 
 class GuardrailParamUITypes(str, Enum):
@@ -354,6 +364,9 @@ class LassoGuardrailConfigModel(BaseModel):
     lasso_conversation_id: Optional[str] = Field(
         default=None, description="Conversation ID for the Lasso guardrail"
     )
+    mask: Optional[bool] = Field(
+        default=False, description="Enable content masking using Lasso classifix API"
+    )
 
 
 class PillarGuardrailConfigModel(BaseModel):
@@ -451,6 +464,65 @@ class JavelinGuardrailConfigModel(BaseModel):
     )
 
 
+class ContentFilterAction(str, Enum):
+    """Action to take when content filter detects a match"""
+
+    BLOCK = "BLOCK"
+    MASK = "MASK"
+
+
+class BlockedWord(BaseModel):
+    """Represents a blocked word with its action and optional description"""
+
+    keyword: str = Field(description="The keyword to block or mask")
+    action: ContentFilterAction = Field(
+        description="Action to take when keyword is detected (BLOCK or MASK)"
+    )
+    description: Optional[str] = Field(
+        default=None, description="Optional description explaining why this keyword is sensitive"
+    )
+
+
+class ContentFilterPattern(BaseModel):
+    """Represents a content filter pattern (prebuilt or custom regex)"""
+
+    pattern_type: Literal["prebuilt", "regex"] = Field(
+        description="Type of pattern: 'prebuilt' for predefined patterns or 'regex' for custom"
+    )
+    pattern_name: Optional[str] = Field(
+        default=None,
+        description="Name of prebuilt pattern (e.g., 'us_ssn', 'credit_card'). Required if pattern_type is 'prebuilt'"
+    )
+    pattern: Optional[str] = Field(
+        default=None,
+        description="Custom regex pattern. Required if pattern_type is 'regex'"
+    )
+    name: Optional[str] = Field(
+        default=None,
+        description="Name for this pattern (used in logging and error messages)"
+    )
+    action: ContentFilterAction = Field(
+        description="Action to take when pattern matches (BLOCK or MASK)"
+    )
+
+
+class ContentFilterConfigModel(BaseModel):
+    """Configuration parameters for the content filter guardrail"""
+
+    patterns: Optional[List[ContentFilterPattern]] = Field(
+        default=None,
+        description="List of patterns (prebuilt or custom regex) to detect"
+    )
+    blocked_words: Optional[List[BlockedWord]] = Field(
+        default=None,
+        description="List of blocked words with individual actions"
+    )
+    blocked_words_file: Optional[str] = Field(
+        default=None,
+        description="Path to YAML file containing blocked_words list"
+    )
+
+
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
@@ -538,12 +610,15 @@ class LitellmParams(
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
+    GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel, 
     JavelinGuardrailConfigModel,
+    ContentFilterConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
+    IBMGuardrailsBaseConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
@@ -596,6 +671,9 @@ class GuardrailEventHooks(str, Enum):
 class DynamicGuardrailParams(TypedDict):
     extra_body: Dict[str, Any]
 
+class GUARDRAIL_DEFINITION_LOCATION(str, Enum):
+    DB = "db"
+    CONFIG = "config"
 
 class GuardrailInfoResponse(BaseModel):
     guardrail_id: Optional[str] = None
@@ -604,7 +682,7 @@ class GuardrailInfoResponse(BaseModel):
     guardrail_info: Optional[Dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    guardrail_definition_location: Literal["config", "db"] = "config"
+    guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -615,10 +693,11 @@ class ListGuardrailsResponse(BaseModel):
 
 
 class GuardrailUIAddGuardrailSettings(BaseModel):
-    supported_entities: List[PiiEntityType]
-    supported_actions: List[PiiAction]
-    supported_modes: List[GuardrailEventHooks]
+    supported_entities: List[str]
+    supported_actions: List[str]
+    supported_modes: List[str]
     pii_entity_categories: List[PiiEntityCategoryMap]
+    content_filter_settings: Optional[Dict[str, Any]] = None
 
 
 class PresidioPerRequestConfig(BaseModel):

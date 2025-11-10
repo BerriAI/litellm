@@ -1,10 +1,9 @@
-from fastapi import HTTPException
-
 import re
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
 
-from litellm import ChatCompletionToolParam
+from fastapi import HTTPException
 
+from litellm import ChatCompletionToolParam
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.exceptions import GuardrailRaisedException
@@ -23,11 +22,11 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolResult,
 )
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
-    LLMResponseTypes,
-    Choices,
-    ChatCompletionMessageToolCall,
 )
 
 GUARDRAIL_NAME = "tool_permission"
@@ -282,6 +281,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
         """ """

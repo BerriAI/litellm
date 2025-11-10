@@ -50,8 +50,6 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             try:
                 # Ensure required fields are present for ResponseReasoningItem
                 item_data = dict(item)
-                if "id" not in item_data:
-                    item_data["id"] = f"rs_{hash(str(item_data))}"
                 if "summary" not in item_data:
                     item_data["summary"] = (
                         item_data.get("reasoning_content", "")[:100] + "..."
