@@ -140,6 +140,7 @@ from litellm import completion
 
 messages = [{"content": "Hello, how are you?", "role": "user"}]
 
+# gpt-4o
 response = completion(model="openai/gpt-4o", messages=messages, stream=True)
 for part in response:
     print(part.choices[0].delta.content or "")
