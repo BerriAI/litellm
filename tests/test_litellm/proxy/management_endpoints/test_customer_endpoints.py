@@ -120,3 +120,26 @@ def test_info_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     # Assert response
     assert response.status_code == 404
     assert "End User Id=non-existent-user does not exist in db" in response.json()["detail"]["error"]
+
+
+def test_delete_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
+    """
+    Test that delete_end_user raises a 404 ProxyException when user_ids do not exist.
+    """
+    # Mock the database response to return empty list (no users found)
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+
+    # Test data
+    test_data = {"user_ids": ["non-existent-user-1", "non-existent-user-2"]}
+
+    # Make the request
+    response = client.post(
+        "/customer/delete",
+        json=test_data,
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    # Assert response
+    assert response.status_code == 404
+    assert "do not exist in db" in response.json()["detail"]["error"]
+    assert "non-existent-user-1" in response.json()["detail"]["error"]
