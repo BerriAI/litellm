@@ -3,7 +3,17 @@
 import base64
 import io
 import struct
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union, cast, get_type_hints
+from typing import (
+    Any,
+    Callable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    get_type_hints,
+)
 
 import tiktoken
 
@@ -562,14 +572,14 @@ def _count_image_tokens(
 ) -> int:
     """
     Count tokens for an image_url content block.
-    
+
     Args:
         image_url: The image URL data - can be a string URL or dict with 'url' and 'detail'
         use_default_image_token_count: Whether to use default image token counts
-        
+
     Returns:
         int: Number of tokens for the image
-        
+
     Raises:
         ValueError: If image_url is invalid type or detail value is invalid
     """
@@ -587,7 +597,7 @@ def _count_image_tokens(
             mode=detail,  # type: ignore
             use_default_image_token_count=use_default_image_token_count,
         )
-    
+
     elif isinstance(image_url, str):
         if not image_url.strip():
             raise ValueError("Empty image_url string is not valid.")
@@ -596,7 +606,7 @@ def _count_image_tokens(
             mode="auto",
             use_default_image_token_count=use_default_image_token_count,
         )
-    
+
     else:
         raise ValueError(
             f"Invalid image_url type: {type(image_url).__name__}. "
@@ -624,8 +634,7 @@ def _validate_anthropic_content(content: dict) -> type:
         raise ValueError(f"Unknown Anthropic content type: '{content_type}'")
 
     missing = [
-        k for k in getattr(expected_cls, "__required_keys__", set())
-        if k not in content
+        k for k in getattr(expected_cls, "__required_keys__", set()) if k not in content
     ]
     if missing:
         raise ValueError(
@@ -646,17 +655,17 @@ def _count_anthropic_content(
 
     Uses TypedDict definitions from litellm.types.llms.anthropic to determine
     what fields to count and how to handle nested structures.
-    
+
     Dynamically infers which fields to count based on the TypedDict definition,
     avoiding hardcoded field names.
     """
     typeddict_cls = _validate_anthropic_content(content)
     type_hints = getattr(typeddict_cls, "__annotations__", {})
     tokens = 0
-    
+
     # Fields to skip (metadata/identifiers that don't contribute to prompt tokens)
     skip_fields = {"type", "id", "tool_use_id", "cache_control", "is_error"}
-    
+
     # Iterate over all fields defined in the TypedDict
     for field_name, field_type in type_hints.items():
         if field_name in skip_fields:
@@ -682,6 +691,7 @@ def _count_anthropic_content(
                 return default_token_count
             raise ValueError(f"Error counting field '{field_name}': {e}")
     return tokens
+
 
 def _count_content_list(
     count_function: TokenCounterFunction,
