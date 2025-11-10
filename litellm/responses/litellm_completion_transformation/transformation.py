@@ -99,22 +99,22 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def filter_unsupported_params(
-        params: dict,
+        params: Union[ResponsesAPIOptionalRequestParams, Dict[str, Any]],
         model: str,
         custom_llm_provider: Optional[str] = None,
-    ) -> dict:
+    ) -> ResponsesAPIOptionalRequestParams:
         """Return params with only those supported by the provider."""
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
         if supported_params:
             # Only add params if they're in supported_params
-            final_params = {}
+            final_params: Dict[str, Any] = {}
             for p in params:
                 if p in supported_params:
                     final_params[p] = params[p]
-            return final_params
-        return params
+            return cast(ResponsesAPIOptionalRequestParams, final_params)
+        return cast(ResponsesAPIOptionalRequestParams, params)
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
