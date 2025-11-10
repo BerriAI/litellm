@@ -2,7 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union, cast
 
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
@@ -99,10 +99,10 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def filter_unsupported_params(
-        params: Union[ResponsesAPIOptionalRequestParams, Dict[str, Any]],
+        params: Mapping[str, Any],
         model: str,
         custom_llm_provider: Optional[str] = None,
-    ) -> ResponsesAPIOptionalRequestParams:
+    ) -> Dict[str, Any]:
         """Return params with only those supported by the provider."""
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -110,11 +110,12 @@ class LiteLLMCompletionResponsesConfig:
         if supported_params:
             # Only add params if they're in supported_params
             final_params: Dict[str, Any] = {}
-            for p in params:
+            params_dict = dict(params)
+            for p in params_dict:
                 if p in supported_params:
-                    final_params[p] = params[p]
-            return cast(ResponsesAPIOptionalRequestParams, final_params)
-        return cast(ResponsesAPIOptionalRequestParams, params)
+                    final_params[p] = params_dict[p]
+            return final_params
+        return dict(params)
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -140,10 +141,13 @@ class LiteLLMCompletionResponsesConfig:
                 text_param
             )
 
-        responses_api_request = LiteLLMCompletionResponsesConfig.filter_unsupported_params(
-            params=responses_api_request,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
+        responses_api_request = cast(
+            ResponsesAPIOptionalRequestParams,
+            LiteLLMCompletionResponsesConfig.filter_unsupported_params(
+                params=responses_api_request,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+            ),
         )
 
         litellm_completion_request: dict = {
