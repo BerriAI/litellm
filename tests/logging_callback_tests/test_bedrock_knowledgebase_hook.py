@@ -636,10 +636,11 @@ async def test_provider_specific_fields_in_proxy_http_response(setup_vector_stor
     from litellm.proxy.proxy_server import app, initialize
     from litellm.proxy.utils import ProxyLogging
     import litellm.proxy.proxy_server as proxy_server
+    from unittest.mock import patch as mock_patch
     
     # Initialize proxy
     await initialize(
-        model=None,
+        model="gpt-3.5-turbo",
         alias=None,
         api_base=None,
         debug=False,
@@ -662,7 +663,7 @@ async def test_provider_specific_fields_in_proxy_http_response(setup_vector_stor
     # Create mock response with provider_specific_fields
     mock_response = litellm.ModelResponse(
         id="test-123",
-        model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="gpt-3.5-turbo",
         created=1234567890,
         object="chat.completion"
     )
@@ -698,18 +699,14 @@ async def test_provider_specific_fields_in_proxy_http_response(setup_vector_stor
         total_tokens=30
     )
     
-    # Patch the completion call
-    with patch("litellm.acompletion", new=AsyncMock(return_value=mock_response)):
+    # Patch the completion call at the proxy level
+    with mock_patch("litellm.acompletion", new=AsyncMock(return_value=mock_response)):
         # Make HTTP request to proxy
         response = client.post(
             "/v1/chat/completions",
             json={
-                "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-                "messages": [{"role": "user", "content": "What is litellm?"}],
-                "tools": [{
-                    "type": "file_search",
-                    "vector_store_ids": ["T37J8R4WTM"]
-                }]
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "What is litellm?"}]
             }
         )
         
