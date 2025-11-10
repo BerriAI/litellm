@@ -110,4 +110,41 @@ describe("Guardrail Info", () => {
       });
     }
   });
+
+  it("should render the guardrail info", async () => {
+    // Mock the network responses
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Test Guardrail",
+      litellm_params: {
+        guardrail: "presidio",
+        mode: "pre_call",
+        default_on: true,
+        pii_entities_config: {
+          PERSON: "MASK",
+          EMAIL: "REDACT",
+        },
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: ["PERSON", "EMAIL"],
+      supported_actions: ["MASK", "REDACT"],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call", "post_call"],
+    });
+
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    const { getByText } = render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText("PII Entity Configuration")).toBeInTheDocument();
+    });
+  });
 });
