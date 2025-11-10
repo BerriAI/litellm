@@ -3971,7 +3971,9 @@ def test_completion_hf_prompt_array():
 # test_completion_hf_prompt_array()
 
 
-@pytest.mark.skip(reason="HF Inference API is unstable, this is now the 3rd time it's stopped working")
+@pytest.mark.skip(
+    reason="HF Inference API is unstable, this is now the 3rd time it's stopped working"
+)
 def test_text_completion_stream():
     try:
         for _ in range(2):  # check if closed client used

@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    strip_name_from_message
+    strip_name_from_message,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
@@ -173,9 +173,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # Build DatabricksFunction explicitly to avoid parameter conflicts
         function_params: DatabricksFunction = {
             "name": tool["name"],
-            "parameters": cast(dict, tool.get("input_schema") or {})
+            "parameters": cast(dict, tool.get("input_schema") or {}),
         }
-        
+
         # Only add description if it exists
         description = tool.get("description")
         if description is not None:
@@ -229,7 +229,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks supports Anthropic-style cache control for Claude models.
         Databricks ignores the cache_control flag with other models.
         """
-        # TODO: Think about how to best design the request transformation so that 
+        # TODO: Think about how to best design the request transformation so that
         # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
         return messages, tools
 
@@ -347,15 +347,17 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 messages=new_messages, model=model, is_async=cast(Literal[False], False)
             )
 
-    def _move_cache_control_into_string_content_block(self, message: AllMessageValues) -> AllMessageValues:
+    def _move_cache_control_into_string_content_block(
+        self, message: AllMessageValues
+    ) -> AllMessageValues:
         """
         Moves message-level cache_control into a content block when content is a string.
-        
+
         Transforms:
             {"role": "user", "content": "text", "cache_control": {...}}
         Into:
             {"role": "user", "content": [{"type": "text", "text": "text", "cache_control": {...}}]}
-        
+
         This is required for Anthropic's prompt caching API when cache_control is specified
         at the message level but content is a simple string (not already an array of content blocks).
         """
@@ -371,7 +373,6 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             }
         ]
         return cast(AllMessageValues, transformed_message)
-        
 
     @staticmethod
     def extract_content_str(

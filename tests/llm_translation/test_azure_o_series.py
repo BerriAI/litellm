@@ -24,7 +24,7 @@ class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
             "model": "azure/o3-mini",
             "api_key": os.getenv("AZURE_O3_API_KEY"),
             "api_base": os.getenv("AZURE_O3_API_BASE"),
-            "api_version": "2025-01-01-preview"
+            "api_version": "2025-01-01-preview",
         }
 
     def get_client(self):
@@ -185,13 +185,31 @@ async def test_azure_o1_series_response_format_extra_params():
     litellm.set_verbose = True
 
     client = AsyncAzureOpenAI(
-        api_key="fake-api-key", 
-        base_url="https://openai-prod-test.openai.azure.com/openai/deployments/o1/chat/completions?api-version=2025-01-01-preview", 
-        api_version="2025-01-01-preview"
+        api_key="fake-api-key",
+        base_url="https://openai-prod-test.openai.azure.com/openai/deployments/o1/chat/completions?api-version=2025-01-01-preview",
+        api_version="2025-01-01-preview",
     )
 
-    tools = [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
-    response_format = {'type': 'json_object'}
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_time",
+                "description": "Get the current time in a given location.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city name, e.g. San Francisco",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    response_format = {"type": "json_object"}
     tool_choice = "auto"
     with patch.object(
         client.chat.completions.with_raw_response, "create"
@@ -206,7 +224,7 @@ async def test_azure_o1_series_response_format_extra_params():
                 messages=[{"role": "user", "content": "Hello! return a json object"}],
                 tools=tools,
                 response_format=response_format,
-                tool_choice=tool_choice
+                tool_choice=tool_choice,
             )
         except Exception as e:
             print(f"Error: {e}")
@@ -218,7 +236,3 @@ async def test_azure_o1_series_response_format_extra_params():
         assert request_body["tools"] == tools
         assert request_body["response_format"] == response_format
         assert request_body["tool_choice"] == tool_choice
-
-    
-
-

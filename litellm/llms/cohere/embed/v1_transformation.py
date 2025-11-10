@@ -123,7 +123,9 @@ class CohereEmbeddingConfig:
         """
         embeddings = response_json["embeddings"]
         output_data = []
-        is_embeddings_by_type = response_json.get("response_type") == "embeddings_by_type"
+        is_embeddings_by_type = (
+            response_json.get("response_type") == "embeddings_by_type"
+        )
         if is_embeddings_by_type:
             for embedding_type in embeddings:
                 for idx, embedding in enumerate(embeddings[embedding_type]):

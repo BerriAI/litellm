@@ -34,7 +34,7 @@ async def test_openai_moderation_error_raising(monkeypatch):
     """
     from unittest.mock import AsyncMock, MagicMock
     from litellm.types.llms.openai import OpenAIModerationResponse
-    
+
     litellm.openai_moderations_model_name = "text-moderation-latest"
     openai_mod = _ENTERPRISE_OpenAI_Moderation()
     _api_key = "sk-12345"
@@ -59,10 +59,10 @@ async def test_openai_moderation_error_raising(monkeypatch):
     # Mock the amoderation call to return a flagged response
     mock_response = MagicMock(spec=OpenAIModerationResponse)
     mock_response.results = [MagicMock(flagged=True)]
-    
+
     async def mock_amoderation(*args, **kwargs):
         return mock_response
-    
+
     llm_router.amoderation = mock_amoderation
 
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)

@@ -1439,7 +1439,6 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
         "litellm.proxy.proxy_server.prisma_client",
         MockPrismaClientDB(mock_team_data, mock_key_data),
     ):
-
         from litellm.proxy.management_endpoints.internal_user_endpoints import (
             _get_user_info_for_proxy_admin,
         )
@@ -2170,27 +2169,27 @@ async def test_during_call_hook_parallel_execution():
     cache = DualCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
     execution_order = []
-    
+
     class TestGuardrail(CustomGuardrail):
         def __init__(self, name):
             super().__init__(
                 guardrail_name=name,
                 event_hook=GuardrailEventHooks.during_call,
-                default_on=True
+                default_on=True,
             )
             self.name = name
-        
+
         async def async_moderation_hook(self, data, user_api_key_dict, call_type):
             execution_order.append(f"{self.name}_start")
             await asyncio.sleep(0.1)
             execution_order.append(f"{self.name}_end")
             return data
-    
+
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
-    
+
     try:
         litellm.callbacks = [TestGuardrail(f"g{i}") for i in range(3)]
-        
+
         start_time = asyncio.get_event_loop().time()
         result = await proxy_logging.during_call_hook(
             data={"model": "gpt-4", "messages": [{"role": "user", "content": "test"}]},
@@ -2198,14 +2197,22 @@ async def test_during_call_hook_parallel_execution():
             call_type="completion",
         )
         execution_time = asyncio.get_event_loop().time() - start_time
-        
+
         # Verify parallel execution: all start before any end
-        first_end_idx = next(i for i, item in enumerate(execution_order) if "end" in item)
-        starts_before_end = sum(1 for item in execution_order[:first_end_idx] if "start" in item)
-        assert starts_before_end == 3, f"Expected 3 starts before first end, got {starts_before_end}"
-        
+        first_end_idx = next(
+            i for i, item in enumerate(execution_order) if "end" in item
+        )
+        starts_before_end = sum(
+            1 for item in execution_order[:first_end_idx] if "start" in item
+        )
+        assert (
+            starts_before_end == 3
+        ), f"Expected 3 starts before first end, got {starts_before_end}"
+
         # Verify timing: parallel ~0.1s vs sequential ~0.3s
-        assert execution_time < 0.2, f"Parallel execution took {execution_time}s, expected < 0.2s"
+        assert (
+            execution_time < 0.2
+        ), f"Parallel execution took {execution_time}s, expected < 0.2s"
         assert result["model"] == "gpt-4"
     finally:
         litellm.callbacks = original_callbacks
@@ -2223,30 +2230,35 @@ async def test_during_call_hook_parallel_execution_with_error():
 
     cache = DualCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
-    
+
     class FailingGuardrail(CustomGuardrail):
         def __init__(self):
             super().__init__(
                 guardrail_name="failing_guardrail",
                 event_hook=GuardrailEventHooks.during_call,
-                default_on=True
+                default_on=True,
             )
-        
+
         async def async_moderation_hook(self, data, user_api_key_dict, call_type):
             raise ValueError("Guardrail violation detected!")
-    
+
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
-    
+
     try:
         litellm.callbacks = [FailingGuardrail()]
-        
+
         with pytest.raises(ValueError) as exc_info:
             await proxy_logging.during_call_hook(
-                data={"model": "gpt-4", "messages": [{"role": "user", "content": "test"}]},
-                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+                data={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "test"}],
+                },
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test_key", user_id="test_user"
+                ),
                 call_type="completion",
             )
-        
+
         assert "Guardrail violation detected!" in str(exc_info.value)
     finally:
         litellm.callbacks = original_callbacks

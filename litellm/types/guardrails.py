@@ -459,7 +459,8 @@ class BlockedWord(BaseModel):
         description="Action to take when keyword is detected (BLOCK or MASK)"
     )
     description: Optional[str] = Field(
-        default=None, description="Optional description explaining why this keyword is sensitive"
+        default=None,
+        description="Optional description explaining why this keyword is sensitive",
     )
 
 
@@ -471,15 +472,15 @@ class ContentFilterPattern(BaseModel):
     )
     pattern_name: Optional[str] = Field(
         default=None,
-        description="Name of prebuilt pattern (e.g., 'us_ssn', 'credit_card'). Required if pattern_type is 'prebuilt'"
+        description="Name of prebuilt pattern (e.g., 'us_ssn', 'credit_card'). Required if pattern_type is 'prebuilt'",
     )
     pattern: Optional[str] = Field(
         default=None,
-        description="Custom regex pattern. Required if pattern_type is 'regex'"
+        description="Custom regex pattern. Required if pattern_type is 'regex'",
     )
     name: Optional[str] = Field(
         default=None,
-        description="Name for this pattern (used in logging and error messages)"
+        description="Name for this pattern (used in logging and error messages)",
     )
     action: ContentFilterAction = Field(
         description="Action to take when pattern matches (BLOCK or MASK)"
@@ -491,15 +492,13 @@ class ContentFilterConfigModel(BaseModel):
 
     patterns: Optional[List[ContentFilterPattern]] = Field(
         default=None,
-        description="List of patterns (prebuilt or custom regex) to detect"
+        description="List of patterns (prebuilt or custom regex) to detect",
     )
     blocked_words: Optional[List[BlockedWord]] = Field(
-        default=None,
-        description="List of blocked words with individual actions"
+        default=None, description="List of blocked words with individual actions"
     )
     blocked_words_file: Optional[str] = Field(
-        default=None,
-        description="Path to YAML file containing blocked_words list"
+        default=None, description="Path to YAML file containing blocked_words list"
     )
 
 
@@ -650,9 +649,11 @@ class GuardrailEventHooks(str, Enum):
 class DynamicGuardrailParams(TypedDict):
     extra_body: Dict[str, Any]
 
+
 class GUARDRAIL_DEFINITION_LOCATION(str, Enum):
     DB = "db"
     CONFIG = "config"
+
 
 class GuardrailInfoResponse(BaseModel):
     guardrail_id: Optional[str] = None
@@ -661,7 +662,9 @@ class GuardrailInfoResponse(BaseModel):
     guardrail_info: Optional[Dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
+    guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = (
+        GUARDRAIL_DEFINITION_LOCATION.CONFIG
+    )
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

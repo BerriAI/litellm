@@ -558,7 +558,6 @@ class NomaGuardrail(CustomGuardrail):
         data: dict,
         call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
-
         verbose_proxy_logger.debug("Running Noma pre-call hook")
 
         if (

@@ -37,6 +37,7 @@ V0 Scope:
 - Run Thread -> `/v1/threads/{thread_id}/run`
 """
 
+
 def _add_azure_related_dynamic_params(data: dict) -> dict:
     data["api_version"] = "2024-02-15-preview"
     data["api_base"] = os.getenv("AZURE_API_BASE")
@@ -235,8 +236,6 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
     - Create run w/ Assistants + Thread
     """
     import openai
-
-
 
     try:
         get_assistants_data = {

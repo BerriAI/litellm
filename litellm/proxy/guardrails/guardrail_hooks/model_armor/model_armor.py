@@ -63,7 +63,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 GuardrailEventHooks.during_call,
                 GuardrailEventHooks.post_call,
             ]
-        
+
         # Initialize parent classes first
         super().__init__(**kwargs)
         VertexBase.__init__(self)

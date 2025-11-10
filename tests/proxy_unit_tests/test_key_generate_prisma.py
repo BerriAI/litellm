@@ -3717,9 +3717,15 @@ async def test_user_api_key_auth_db_unavailable_not_allowed():
 
 
 @pytest.mark.asyncio
-@mock.patch("litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_write_secret")
-@mock.patch("litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_read_secret")
-@mock.patch("litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_delete_secret")
+@mock.patch(
+    "litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_write_secret"
+)
+@mock.patch(
+    "litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_read_secret"
+)
+@mock.patch(
+    "litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_delete_secret"
+)
 async def test_key_generate_with_secret_manager_call(
     mock_delete_secret, mock_read_secret, mock_write_secret, prisma_client
 ):
@@ -3767,10 +3773,10 @@ async def test_key_generate_with_secret_manager_call(
     spend = 100
     max_budget = 400
     models = ["fake-openai-endpoint"]
-    
+
     # Mock write_secret to return success
     mock_write_secret.return_value = None
-    
+
     new_key = await generate_key_fn(
         data=GenerateKeyRequest(
             key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
@@ -3802,7 +3808,7 @@ async def test_key_generate_with_secret_manager_call(
 
     # Mock delete_secret to return success
     mock_delete_secret.return_value = None
-    
+
     # delete the key
     await delete_key_fn(
         data=KeyRequest(keys=[generated_key]),

@@ -160,7 +160,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.token_increment_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
-        
+
         # Batch rate limiter (lazy loaded)
         self._batch_rate_limiter: Optional[Any] = None
 
@@ -1006,7 +1006,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             # Fail safe: enforce limits if we can't check
             return True
-    
+
     def get_rate_limiter_for_call_type(self, call_type: str) -> Optional[Any]:
         """Get the rate limiter for the call type."""
         if call_type == "acreate_batch":
@@ -1088,9 +1088,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
                 now = self._get_current_time().timestamp()
                 reset_time = now + self.window_size
-                reset_time_formatted = datetime.fromtimestamp(
-                    reset_time
-                ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                reset_time_formatted = datetime.fromtimestamp(reset_time).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
 
                 remaining_display = max(0, status["limit_remaining"])
                 rate_limit_type = status["rate_limit_type"]
@@ -1130,7 +1130,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Check if the call type has a specific rate limiter
         # eg. for Batch APIs we need to use the batch rate limiter to read the input file and count the tokens and requests
         #########################################################
-        call_type_specific_rate_limiter = self.get_rate_limiter_for_call_type(call_type=call_type)
+        call_type_specific_rate_limiter = self.get_rate_limiter_for_call_type(
+            call_type=call_type
+        )
         if call_type_specific_rate_limiter:
             return await call_type_specific_rate_limiter.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -1532,7 +1534,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             verbose_proxy_logger.exception(
                 f"Error in rate limit failure event: {str(e)}"
             )
-
 
     async def async_post_call_success_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, response

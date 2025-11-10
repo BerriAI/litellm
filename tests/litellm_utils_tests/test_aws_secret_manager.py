@@ -194,6 +194,7 @@ async def test_primary_secret_functionality():
         print("Delete Response:", delete_response)
         assert delete_response is not None
 
+
 @pytest.mark.asyncio
 async def test_write_secret_with_description_and_tags():
     """Test writing a secret with description and tags"""
@@ -228,7 +229,9 @@ async def test_write_secret_with_description_and_tags():
         # --- Validate the secret metadata via AWS CLI / boto3 ---
         import boto3
 
-        client = boto3.client("secretsmanager", region_name=os.getenv("AWS_REGION_NAME"))
+        client = boto3.client(
+            "secretsmanager", region_name=os.getenv("AWS_REGION_NAME")
+        )
         describe_resp = client.describe_secret(SecretId=test_secret_name)
         print("Describe Response:", describe_resp)
 
@@ -239,17 +242,23 @@ async def test_write_secret_with_description_and_tags():
         if "Tags" in describe_resp:
             tag_dict = {t["Key"]: t["Value"] for t in describe_resp["Tags"]}
             for k, v in test_tags.items():
-                assert tag_dict.get(k) == v, f"Expected tag {k}={v}, got {tag_dict.get(k)}"
+                assert (
+                    tag_dict.get(k) == v
+                ), f"Expected tag {k}={v}, got {tag_dict.get(k)}"
         else:
             pytest.fail("No tags found in describe_secret response")
 
         # --- Validate secret value ---
-        read_value = await secret_manager.async_read_secret(secret_name=test_secret_name)
+        read_value = await secret_manager.async_read_secret(
+            secret_name=test_secret_name
+        )
         print("Read Value:", read_value)
         assert read_value == test_secret_value
 
     finally:
         # Cleanup: Delete the secret
-        delete_response = await secret_manager.async_delete_secret(secret_name=test_secret_name)
+        delete_response = await secret_manager.async_delete_secret(
+            secret_name=test_secret_name
+        )
         print("Delete Response:", delete_response)
         assert delete_response is not None

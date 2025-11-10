@@ -80,7 +80,6 @@ def test_bedrock_application_inference_profile_url_encoding():
     ) as mock_send, patch.object(
         client.client, "build_request"
     ) as mock_build_request:
-
         # Mock logging object
         mock_logging_obj = MagicMock()
         mock_logging_obj.update_environment_variables = MagicMock()
@@ -134,7 +133,6 @@ def test_bedrock_non_application_inference_profile_no_encoding():
     ) as mock_send, patch.object(
         client.client, "build_request"
     ) as mock_build_request:
-
         # Mock logging object
         mock_logging_obj = MagicMock()
         mock_logging_obj.update_environment_variables = MagicMock()
@@ -470,7 +468,6 @@ def test_azure_with_custom_api_base_and_key():
     ) as mock_send, patch.object(
         client.client, "build_request"
     ) as mock_build_request:
-
         # Mock logging object
         mock_logging_obj = MagicMock()
         mock_logging_obj.update_environment_variables = MagicMock()

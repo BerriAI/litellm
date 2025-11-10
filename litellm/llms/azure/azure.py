@@ -1021,7 +1021,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         client=None,
         timeout=None,
     ) -> litellm.ImageResponse:
-
         response: Optional[dict] = None
         try:
             # response = await azure_client.images.generate(**data, timeout=timeout)
@@ -1132,7 +1131,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             # Azure image generation API doesn't support extra_body parameter
             extra_body = optional_params.pop("extra_body", {})
             flattened_params = {**optional_params, **extra_body}
-            
+
             data = {"model": model, "prompt": prompt, **flattened_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):

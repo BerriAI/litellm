@@ -21,13 +21,13 @@ XAI_API_BASE = "https://api.x.ai/v1"
 class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     """
     Configuration for XAI's Responses API.
-    
+
     Inherits from OpenAIResponsesAPIConfig since XAI's Responses API is largely
     compatible with OpenAI's, with a few differences:
     - Does not support the 'instructions' parameter
     - Requires code_interpreter tools to have 'container' field removed
     - Recommends store=false when sending images
-    
+
     Reference: https://docs.x.ai/docs/api-reference#create-new-response
     """
 
@@ -38,15 +38,15 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get supported parameters for XAI Responses API.
-        
+
         XAI supports most OpenAI Responses API params except 'instructions'.
         """
         supported_params = super().get_supported_openai_params(model)
-        
+
         # Remove 'instructions' as it's not supported by XAI
         if "instructions" in supported_params:
             supported_params.remove("instructions")
-        
+
         return supported_params
 
     def map_openai_params(
@@ -57,28 +57,28 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> Dict:
         """
         Map parameters for XAI Responses API.
-        
+
         Handles XAI-specific transformations:
         1. Drops 'instructions' parameter (not supported)
         2. Transforms code_interpreter tools to remove 'container' field
         3. Sets store=false when images are detected (recommended by XAI)
         """
         params = dict(response_api_optional_params)
-        
+
         # Drop instructions parameter (not supported by XAI)
         if "instructions" in params:
             verbose_logger.debug(
                 "XAI Responses API does not support 'instructions' parameter. Dropping it."
             )
             params.pop("instructions")
-        
+
         # Transform code_interpreter tools - remove container field
         if "tools" in params and params["tools"]:
             tools_list = params["tools"]
             # Ensure tools is a list for iteration
             if not isinstance(tools_list, list):
                 tools_list = [tools_list]
-            
+
             transformed_tools: List[Any] = []
             for tool in tools_list:
                 if isinstance(tool, dict) and tool.get("type") == "code_interpreter":
@@ -91,7 +91,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 else:
                     transformed_tools.append(tool)
             params["tools"] = transformed_tools
-        
+
         return params
 
     def validate_environment(
@@ -99,21 +99,19 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> dict:
         """
         Validate environment and set up headers for XAI API.
-        
+
         Uses XAI_API_KEY from environment or litellm_params.
         """
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = (
-            litellm_params.api_key
-            or litellm.api_key
-            or get_secret_str("XAI_API_KEY")
+            litellm_params.api_key or litellm.api_key or get_secret_str("XAI_API_KEY")
         )
-        
+
         if not api_key:
             raise ValueError(
                 "XAI API key is required. Set XAI_API_KEY environment variable or pass api_key parameter."
             )
-        
+
         headers.update(
             {
                 "Authorization": f"Bearer {api_key}",
@@ -128,7 +126,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> str:
         """
         Get the complete URL for XAI Responses API endpoint.
-        
+
         Returns:
             str: The full URL for the XAI /responses endpoint
         """
@@ -138,9 +136,8 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             or get_secret_str("XAI_API_BASE")
             or XAI_API_BASE
         )
-        
+
         # Remove trailing slashes
         api_base = api_base.rstrip("/")
-        
-        return f"{api_base}/responses"
 
+        return f"{api_base}/responses"

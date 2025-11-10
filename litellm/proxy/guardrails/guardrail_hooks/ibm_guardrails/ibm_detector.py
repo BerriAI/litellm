@@ -141,7 +141,6 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         try:
-
             response = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,

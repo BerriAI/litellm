@@ -60,7 +60,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             drop_params,
         )
 
-
     def transform_request(
         self,
         model: str,
@@ -76,12 +75,12 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             for k, v in optional_params.items()
             if k not in self.aws_authentication_params
         }
-        
+
         _anthropic_request = AnthropicConfig.transform_request(
             self,
             model=model,
             messages=messages,
-            optional_params=filtered_params, 
+            optional_params=filtered_params,
             litellm_params=litellm_params,
             headers=headers,
         )

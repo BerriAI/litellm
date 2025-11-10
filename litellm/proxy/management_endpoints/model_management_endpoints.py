@@ -375,7 +375,7 @@ async def _update_team_model_in_db(
 ) -> PrismaCompatibleUpdateDBModel:
     """
     Handle team model updates with proper alias management.
-    
+
     If patch_data contains a team_id:
     - Creates unique internal model_name and team alias
     - Adds model to team object
@@ -383,36 +383,37 @@ async def _update_team_model_in_db(
     """
     # Validate team_id if present in patch_data
     from litellm.proxy.proxy_server import premium_user
-    
+
     await ModelManagementAuthChecks.allow_team_model_action(
         model_params=patch_data,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
         premium_user=premium_user,
     )
-    
+
     patch_team_id = patch_data.model_info.team_id if patch_data.model_info else None
-    
+
     # No team_id in patch, proceed with standard update
     if patch_team_id is None:
         return update_db_model(db_model=db_model, updated_patch=patch_data)
-    
+
     # Determine public model name
     public_model_name = _get_public_model_name(
         patch_data=patch_data,
         db_model=db_model,
     )
-    
+
     # Ensure model_info exists and set team_public_model_name
     if patch_data.model_info is None:
         from litellm.types.router import ModelInfo
+
         patch_data.model_info = ModelInfo()
     patch_data.model_info.team_public_model_name = public_model_name
-    
+
     # Check if team assignment is new or changed
     db_team_id = db_model.model_info.team_id if db_model.model_info else None
     is_new_team_assignment = db_team_id != patch_team_id
-    
+
     if is_new_team_assignment:
         await _setup_new_team_model_assignment(
             team_id=patch_team_id,
@@ -428,7 +429,7 @@ async def _update_team_model_in_db(
             patch_data=patch_data,
             user_api_key_dict=user_api_key_dict,
         )
-    
+
     return update_db_model(db_model=db_model, updated_patch=patch_data)
 
 
@@ -439,10 +440,10 @@ def _get_public_model_name(
     """Determine the public model name from patch or existing model."""
     if patch_data.model_name:
         return patch_data.model_name
-    
+
     if db_model.model_info and db_model.model_info.team_public_model_name:
         return db_model.model_info.team_public_model_name
-    
+
     return db_model.model_name
 
 
@@ -455,7 +456,7 @@ async def _setup_new_team_model_assignment(
     """Set up a new team model with unique name, alias, and team membership."""
     unique_model_name = f"model_name_{team_id}_{uuid.uuid4()}"
     patch_data.model_name = unique_model_name
-    
+
     await update_team(
         data=UpdateTeamRequest(
             team_id=team_id,
@@ -464,7 +465,7 @@ async def _setup_new_team_model_assignment(
         user_api_key_dict=user_api_key_dict,
         http_request=Request(scope={"type": "http"}),
     )
-    
+
     await team_model_add(
         data=TeamModelAddRequest(
             team_id=team_id,
@@ -484,11 +485,9 @@ async def _update_existing_team_model_assignment(
 ) -> None:
     """Update an existing team model if the public name changed."""
     old_public_name = (
-        db_model.model_info.team_public_model_name
-        if db_model.model_info
-        else None
+        db_model.model_info.team_public_model_name if db_model.model_info else None
     )
-    
+
     # Update alias only if public name changed
     if old_public_name and public_model_name != old_public_name:
         await update_team(
@@ -499,7 +498,7 @@ async def _update_existing_team_model_assignment(
             user_api_key_dict=user_api_key_dict,
             http_request=Request(scope={"type": "http"}),
         )
-    
+
     # Keep existing unique model_name
     patch_data.model_name = None
 
@@ -1296,16 +1295,15 @@ async def clear_cache():
         )
         return
 
-
     try:
         # Only clear DB models, preserve config models
         verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
-        
+
         # Get current models and filter out DB models
         current_models = llm_router.model_list.copy()
         config_models = []
         db_model_ids = []
-        
+
         for model in current_models:
             model_info = model.get("model_info", {})
             if model_info.get("db_model", False):
@@ -1314,20 +1312,22 @@ async def clear_cache():
             else:
                 # This is a config model, preserve it
                 config_models.append(model)
-        
+
         # Clear only DB models
         for model_id in db_model_ids:
             llm_router.delete_deployment(id=model_id)
-        
+
         # Clear auto routers
         llm_router.auto_routers.clear()
-        
+
         # Reload only DB models
         await proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
         )
-        
-        verbose_proxy_logger.debug(f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models")
+
+        verbose_proxy_logger.debug(
+            f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models"
+        )
     except Exception as e:
         verbose_proxy_logger.exception(
             f"Failed to clear cache and reload models. Due to error - {str(e)}"

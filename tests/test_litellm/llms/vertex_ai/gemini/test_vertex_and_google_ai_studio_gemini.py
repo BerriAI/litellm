@@ -445,13 +445,17 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     optional_params = {}
-    tools = v._map_function(value=[{"code_execution": {}}], optional_params=optional_params)
+    tools = v._map_function(
+        value=[{"code_execution": {}}], optional_params=optional_params
+    )
     assert len(tools) == 1
     assert tools[0]["code_execution"] == {}
     print(tools)
 
     new_optional_params = {}
-    new_tools = v._map_function(value=[{"codeExecution": {}}], optional_params=new_optional_params)
+    new_tools = v._map_function(
+        value=[{"codeExecution": {}}], optional_params=new_optional_params
+    )
     assert len(new_tools) == 1
     print("new_tools", new_tools)
     assert new_tools[0]["code_execution"] == {}
@@ -961,7 +965,7 @@ def test_vertex_ai_process_candidates_with_grounding_metadata():
 def test_vertex_ai_tool_call_id_format():
     """
     Test that tool call IDs have the correct format and length.
-    
+
     The ID should be in format 'call_' + 28 hex characters (total 33 characters).
     This test verifies the fix for keeping the code line under 40 characters.
     """
@@ -978,12 +982,7 @@ def test_vertex_ai_tool_call_id_format():
                 "args": {"location": "San Francisco", "unit": "celsius"},
             }
         ),
-        HttpxPartType(
-            functionCall={
-                "name": "get_time", 
-                "args": {"timezone": "PST"}
-            }
-        ),
+        HttpxPartType(functionCall={"name": "get_time", "args": {"timezone": "PST"}}),
     ]
 
     function, tools, updated_idx = VertexGeminiConfig._transform_parts(
@@ -998,19 +997,27 @@ def test_vertex_ai_tool_call_id_format():
     # Test ID format for both tool calls
     for tool in tools:
         tool_id = tool["id"]
-        
+
         # Should start with 'call_'
-        assert tool_id.startswith("call_"), f"ID should start with 'call_', got: {tool_id}"
-        
+        assert tool_id.startswith(
+            "call_"
+        ), f"ID should start with 'call_', got: {tool_id}"
+
         # Should have exactly 33 total characters (call_ + 28 hex chars)
-        assert len(tool_id) == 33, f"ID should be 33 characters long, got {len(tool_id)}: {tool_id}"
-        
+        assert (
+            len(tool_id) == 33
+        ), f"ID should be 33 characters long, got {len(tool_id)}: {tool_id}"
+
         # The part after 'call_' should be 28 hex characters
         hex_part = tool_id[5:]  # Remove 'call_' prefix
-        assert len(hex_part) == 28, f"Hex part should be 28 characters, got {len(hex_part)}: {hex_part}"
-        
+        assert (
+            len(hex_part) == 28
+        ), f"Hex part should be 28 characters, got {len(hex_part)}: {hex_part}"
+
         # Should only contain valid hex characters
-        assert re.match(r'^[0-9a-f]{28}$', hex_part), f"Should contain only lowercase hex chars, got: {hex_part}"
+        assert re.match(
+            r"^[0-9a-f]{28}$", hex_part
+        ), f"Should contain only lowercase hex chars, got: {hex_part}"
 
     # Verify IDs are unique
     assert tools[0]["id"] != tools[1]["id"], "Tool call IDs should be unique"
@@ -1025,15 +1032,17 @@ def test_vertex_ai_tool_call_id_format():
         )
         if test_tools:
             ids_generated.add(test_tools[0]["id"])
-    
+
     # All generated IDs should be unique
-    assert len(ids_generated) == 10, f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
+    assert (
+        len(ids_generated) == 10
+    ), f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
 
 
 def test_vertex_ai_code_line_length():
     """
     Test that the specific code line generating tool call IDs is within character limit.
-    
+
     This is a meta-test to ensure the code change meets the 40-character requirement.
     """
     import inspect
@@ -1043,45 +1052,49 @@ def test_vertex_ai_code_line_length():
     )
 
     # Get the source code of the _transform_parts method
-    source_lines = inspect.getsource(VertexGeminiConfig._transform_parts).split('\n')
-    
+    source_lines = inspect.getsource(VertexGeminiConfig._transform_parts).split("\n")
+
     # Find the line that generates the ID
     id_line = None
     for line in source_lines:
         if 'id=f"call_{uuid.uuid4().hex' in line:
             id_line = line.strip()  # Remove indentation for length check
             break
-    
+
     assert id_line is not None, "Could not find the ID generation line in source code"
-    
+
     # Check that the line is 40 characters or less (excluding indentation)
     line_length = len(id_line)
-    assert line_length <= 40, f"ID generation line is {line_length} characters, should be ≤40: {id_line}"
-    
+    assert (
+        line_length <= 40
+    ), f"ID generation line is {line_length} characters, should be ≤40: {id_line}"
+
     # Verify it contains the expected UUID format
-    assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
+    assert (
+        "uuid.uuid4().hex[:28]" in id_line
+    ), f"Line should contain shortened UUID format: {id_line}"
 
 
 def test_vertex_ai_map_google_maps_tool_simple():
     """
     Test googleMaps tool transformation without location data.
-    
+
     Input:
         value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
         optional_params={}
-    
+
     Expected Output:
         tools=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
         optional_params={} (unchanged)
     """
     v = VertexGeminiConfig()
     optional_params = {}
-    
+
     tools = v._map_function(
         value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}],
-        optional_params=optional_params
+        optional_params=optional_params,
     )
-    
+
     assert len(tools) == 1
     assert "googleMaps" in tools[0]
     assert tools[0]["googleMaps"]["enableWidget"] == "ENABLE_WIDGET"
@@ -1092,7 +1105,7 @@ def test_vertex_ai_map_google_maps_tool_with_location():
     """
     Test googleMaps tool transformation with location data.
     Verifies latitude/longitude/languageCode are extracted to toolConfig.retrievalConfig.
-    
+
     Input:
         value=[{
             "googleMaps": {
@@ -1103,7 +1116,7 @@ def test_vertex_ai_map_google_maps_tool_with_location():
             }
         }]
         optional_params={}
-    
+
     Expected Output:
         tools=[{
             "googleMaps": {"enableWidget": "ENABLE_WIDGET"}
@@ -1122,40 +1135,43 @@ def test_vertex_ai_map_google_maps_tool_with_location():
     """
     v = VertexGeminiConfig()
     optional_params = {}
-    
+
     tools = v._map_function(
-        value=[{
-            "googleMaps": {
-                "enableWidget": "ENABLE_WIDGET",
-                "latitude": 37.7749,
-                "longitude": -122.4194,
-                "languageCode": "en_US"
+        value=[
+            {
+                "googleMaps": {
+                    "enableWidget": "ENABLE_WIDGET",
+                    "latitude": 37.7749,
+                    "longitude": -122.4194,
+                    "languageCode": "en_US",
+                }
             }
-        }],
-        optional_params=optional_params
+        ],
+        optional_params=optional_params,
     )
-    
+
     assert len(tools) == 1
     assert "googleMaps" in tools[0]
-    
+
     google_maps_tool = tools[0]["googleMaps"]
     assert google_maps_tool["enableWidget"] == "ENABLE_WIDGET"
     assert "latitude" not in google_maps_tool
     assert "longitude" not in google_maps_tool
     assert "languageCode" not in google_maps_tool
-    
+
     assert "toolConfig" in optional_params
     assert "retrievalConfig" in optional_params["toolConfig"]
-    
+
     retrieval_config = optional_params["toolConfig"]["retrievalConfig"]
     assert retrieval_config["latLng"]["latitude"] == 37.7749
     assert retrieval_config["latLng"]["longitude"] == -122.4194
     assert retrieval_config["languageCode"] == "en_US"
 
+
 def test_vertex_ai_penalty_parameters_validation():
     """
     Test that penalty parameters are properly validated for different Gemini models.
-    
+
     This test ensures that:
     1. Models that don't support penalty parameters (like preview models) filter them out
     2. Models that support penalty parameters include them in the request
@@ -1170,14 +1186,19 @@ def test_vertex_ai_penalty_parameters_validation():
 
     for model, should_support in test_cases:
         # Test _supports_penalty_parameters method
-        assert v._supports_penalty_parameters(model) == should_support, \
-            f"Model {model} penalty support should be {should_support}"
+        assert (
+            v._supports_penalty_parameters(model) == should_support
+        ), f"Model {model} penalty support should be {should_support}"
 
         # Test get_supported_openai_params method
         supported_params = v.get_supported_openai_params(model)
-        has_penalty_params = "frequency_penalty" in supported_params and "presence_penalty" in supported_params
-        assert has_penalty_params == should_support, \
-            f"Model {model} should {'include' if should_support else 'exclude'} penalty params in supported list"
+        has_penalty_params = (
+            "frequency_penalty" in supported_params
+            and "presence_penalty" in supported_params
+        )
+        assert (
+            has_penalty_params == should_support
+        ), f"Model {model} should {'include' if should_support else 'exclude'} penalty params in supported list"
 
     # Test parameter mapping for unsupported model
     model = "gemini-2.5-pro-preview-06-05"
@@ -1185,7 +1206,7 @@ def test_vertex_ai_penalty_parameters_validation():
         "temperature": 0.7,
         "frequency_penalty": 0.5,
         "presence_penalty": 0.3,
-        "max_tokens": 100
+        "max_tokens": 100,
     }
 
     optional_params = {}
@@ -1193,12 +1214,16 @@ def test_vertex_ai_penalty_parameters_validation():
         non_default_params=non_default_params,
         optional_params=optional_params,
         model=model,
-        drop_params=False
+        drop_params=False,
     )
 
     # Penalty parameters should be filtered out for unsupported models
-    assert "frequency_penalty" not in result, "frequency_penalty should be filtered out for unsupported model"
-    assert "presence_penalty" not in result, "presence_penalty should be filtered out for unsupported model"
+    assert (
+        "frequency_penalty" not in result
+    ), "frequency_penalty should be filtered out for unsupported model"
+    assert (
+        "presence_penalty" not in result
+    ), "presence_penalty should be filtered out for unsupported model"
 
     # Other parameters should still be included
     assert "temperature" in result, "temperature should still be included"
@@ -1210,7 +1235,7 @@ def test_vertex_ai_penalty_parameters_validation():
 def test_vertex_ai_annotation_streaming_events():
     """
     Test that annotation events are properly emitted during streaming for Vertex AI Gemini.
-    
+
     This test verifies:
     1. Grounding metadata is converted to annotations in streaming chunks
     2. Annotations are included in the delta of streaming chunks
@@ -1233,7 +1258,7 @@ def test_vertex_ai_annotation_streaming_events():
                 "groundingMetadata": {
                     "webSearchQueries": ["weather San Francisco today"],
                     "searchEntryPoint": {
-                        "renderedContent": '<div>Search results</div>'
+                        "renderedContent": "<div>Search results</div>"
                     },
                     "groundingChunks": [
                         {
@@ -1274,7 +1299,7 @@ def test_vertex_ai_annotation_streaming_events():
     # Verify the chunk was parsed correctly
     assert streaming_chunk.choices is not None
     assert len(streaming_chunk.choices) == 1
-    
+
     # Check that annotations are present in the delta
     delta = streaming_chunk.choices[0].delta
     assert hasattr(delta, "annotations")
@@ -1294,7 +1319,7 @@ def test_vertex_ai_annotation_streaming_events():
 def test_vertex_ai_annotation_conversion():
     """
     Test the conversion of Vertex AI grounding metadata to OpenAI annotations.
-    
+
     This test verifies the _convert_grounding_metadata_to_annotations method
     correctly transforms grounding metadata into the expected format.
     """
@@ -1305,9 +1330,7 @@ def test_vertex_ai_annotation_conversion():
     # Sample grounding metadata as returned by Vertex AI
     grounding_metadata = {
         "webSearchQueries": ["weather San Francisco", "current time San Francisco"],
-        "searchEntryPoint": {
-            "renderedContent": '<div>Search interface</div>'
-        },
+        "searchEntryPoint": {"renderedContent": "<div>Search interface</div>"},
         "groundingChunks": [
             {
                 "web": {
@@ -1322,7 +1345,7 @@ def test_vertex_ai_annotation_conversion():
                     "title": "Current time in San Francisco, CA",
                     "domain": "google.com",
                 }
-            }
+            },
         ],
         "groundingSupports": [
             {
@@ -1351,12 +1374,14 @@ def test_vertex_ai_annotation_conversion():
                 },
                 "groundingChunkIndices": [1],
                 "confidenceScores": [0.92],
-            }
+            },
         ],
     }
 
     # Convert grounding metadata to annotations
-    content_text = "The weather in San Francisco is currently 72°F and the time is 2:30 PM"
+    content_text = (
+        "The weather in San Francisco is currently 72°F and the time is 2:30 PM"
+    )
     annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
         [grounding_metadata], content_text
     )
@@ -1392,7 +1417,7 @@ def test_vertex_ai_annotation_conversion():
 def test_vertex_ai_annotation_empty_grounding_metadata():
     """
     Test handling of empty or missing grounding metadata.
-    
+
     This test ensures the annotation conversion handles edge cases gracefully.
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (

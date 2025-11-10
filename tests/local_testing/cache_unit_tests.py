@@ -26,7 +26,6 @@ from litellm import completion, embedding
 
 
 class LLMCachingUnitTests(ABC):
-
     @abstractmethod
     def get_cache_type(self) -> LiteLLMCacheType:
         pass

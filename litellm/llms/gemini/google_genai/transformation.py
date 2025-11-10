@@ -206,9 +206,11 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         """
         Sync version of get_auth_token_and_url.
         """
-        vertex_credentials, vertex_project, vertex_location = (
-            self._get_common_auth_components(litellm_params)
-        )
+        (
+            vertex_credentials,
+            vertex_project,
+            vertex_location,
+        ) = self._get_common_auth_components(litellm_params)
 
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -245,9 +247,11 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         Returns:
             Tuple of headers and API base
         """
-        vertex_credentials, vertex_project, vertex_location = (
-            self._get_common_auth_components(litellm_params)
-        )
+        (
+            vertex_credentials,
+            vertex_project,
+            vertex_location,
+        ) = self._get_common_auth_components(litellm_params)
 
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
@@ -328,9 +332,13 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         """
         if "candidates" in response:
             for candidate in response["candidates"]:
-                if "citationMetadata" in candidate and isinstance(candidate["citationMetadata"], dict):
+                if "citationMetadata" in candidate and isinstance(
+                    candidate["citationMetadata"], dict
+                ):
                     citation_metadata = candidate["citationMetadata"]
                     # Transform citationSources to citations to match expected schema
                     if "citationSources" in citation_metadata:
-                        citation_metadata["citations"] = citation_metadata.pop("citationSources")
+                        citation_metadata["citations"] = citation_metadata.pop(
+                            "citationSources"
+                        )
         return response

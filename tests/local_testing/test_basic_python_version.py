@@ -96,19 +96,21 @@ def test_litellm_proxy_server_config_no_general_settings():
     try:
         subprocess.run(["pip", "install", "-e", ".[proxy]"])
         subprocess.run(["pip", "install", "-e", ".[extra_proxy]"])
-        
+
         # Ensure Prisma client is generated
         try:
             # Get the project root directory (where schema.prisma is located)
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            project_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..")
+            )
             print(f"Running prisma generate from: {project_root}")
-            
+
             result = subprocess.run(
-                ["prisma", "generate"], 
-                capture_output=True, 
-                text=True, 
+                ["prisma", "generate"],
+                capture_output=True,
+                text=True,
                 check=True,
-                cwd=project_root
+                cwd=project_root,
             )
             print(f"Prisma generate stdout: {result.stdout}")
         except subprocess.CalledProcessError as e:

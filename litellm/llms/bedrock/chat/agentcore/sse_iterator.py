@@ -20,46 +20,46 @@ if TYPE_CHECKING:
 
 class AgentCoreSSEStreamIterator:
     """Iterator for AgentCore SSE streaming responses."""
-    
+
     def __init__(self, response: httpx.Response, model: str):
         self.response = response
         self.model = model
         self.finished = False
         self.line_iterator = self.response.iter_lines()
-        
+
     def __iter__(self):
         return self
-        
+
     def __next__(self) -> ModelResponse:
         """Parse SSE events and yield ModelResponse chunks."""
         try:
             for line in self.line_iterator:
                 line = line.strip()
-                
-                if not line or not line.startswith('data:'):
+
+                if not line or not line.startswith("data:"):
                     continue
-                
+
                 # Extract JSON from SSE line
                 json_str = line[5:].strip()
                 if not json_str:
                     continue
-                
+
                 try:
                     data = json.loads(json_str)
-                    
+
                     # Skip non-dict data
                     if not isinstance(data, dict):
                         continue
-                    
+
                     # Process content delta events
                     if "event" in data and isinstance(data["event"], dict):
                         event_payload = data["event"]
                         content_block_delta = event_payload.get("contentBlockDelta")
-                        
+
                         if content_block_delta:
                             delta = content_block_delta.get("delta", {})
                             text = delta.get("text", "")
-                            
+
                             if text:
                                 # Yield chunk with text
                                 chunk = ModelResponse(
@@ -68,7 +68,7 @@ class AgentCoreSSEStreamIterator:
                                     model=self.model,
                                     object="chat.completion.chunk",
                                 )
-                                
+
                                 chunk.choices = [
                                     StreamingChoices(
                                         finish_reason=None,
@@ -76,9 +76,9 @@ class AgentCoreSSEStreamIterator:
                                         delta=Delta(content=text, role="assistant"),
                                     )
                                 ]
-                                
+
                                 return chunk
-                        
+
                         # Check for metadata/usage
                         metadata = event_payload.get("metadata")
                         if metadata and "usage" in metadata:
@@ -89,7 +89,7 @@ class AgentCoreSSEStreamIterator:
                                 model=self.model,
                                 object="chat.completion.chunk",
                             )
-                            
+
                             chunk.choices = [
                                 StreamingChoices(
                                     finish_reason="stop",
@@ -97,17 +97,21 @@ class AgentCoreSSEStreamIterator:
                                     delta=Delta(),
                                 )
                             ]
-                            
+
                             usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
-                            setattr(chunk, "usage", Usage(
-                                prompt_tokens=usage_data.get("inputTokens", 0),
-                                completion_tokens=usage_data.get("outputTokens", 0),
-                                total_tokens=usage_data.get("totalTokens", 0),
-                            ))
-                            
+                            setattr(
+                                chunk,
+                                "usage",
+                                Usage(
+                                    prompt_tokens=usage_data.get("inputTokens", 0),
+                                    completion_tokens=usage_data.get("outputTokens", 0),
+                                    total_tokens=usage_data.get("totalTokens", 0),
+                                ),
+                            )
+
                             self.finished = True
                             return chunk
-                    
+
                     # Check for final message (alternative finish signal)
                     if "message" in data and isinstance(data["message"], dict):
                         if not self.finished:
@@ -117,7 +121,7 @@ class AgentCoreSSEStreamIterator:
                                 model=self.model,
                                 object="chat.completion.chunk",
                             )
-                            
+
                             chunk.choices = [
                                 StreamingChoices(
                                     finish_reason="stop",
@@ -125,17 +129,17 @@ class AgentCoreSSEStreamIterator:
                                     delta=Delta(),
                                 )
                             ]
-                            
+
                             self.finished = True
                             return chunk
-                
+
                 except json.JSONDecodeError:
                     verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
                     continue
-            
+
             # Stream ended naturally
             raise StopIteration
-            
+
         except StopIteration:
             raise
         except httpx.StreamConsumed:
@@ -147,4 +151,3 @@ class AgentCoreSSEStreamIterator:
         except Exception as e:
             verbose_logger.error(f"Error in AgentCore SSE stream: {str(e)}")
             raise StopIteration
-

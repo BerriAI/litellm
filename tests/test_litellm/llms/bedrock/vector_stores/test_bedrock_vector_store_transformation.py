@@ -6,7 +6,7 @@ from litellm.llms.bedrock.vector_stores.transformation import BedrockVectorStore
 def test_transform_search_request():
     """
     Test that BedrockVectorStoreConfig correctly transforms search vector store requests.
-    
+
     Verifies that the transformation creates the proper URL endpoint and request body
     with the expected retrievalQuery structure.
     """
@@ -24,4 +24,4 @@ def test_transform_search_request():
     )
 
     assert url.endswith("/kb123/retrieve")
-    assert body["retrievalQuery"].get("text") == "hello" 
+    assert body["retrievalQuery"].get("text") == "hello"

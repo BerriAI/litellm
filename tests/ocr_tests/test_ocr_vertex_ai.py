@@ -50,11 +50,12 @@ def load_vertex_ai_credentials():
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
+
 class TestVertexAIOCR(BaseOCRTest):
     """
     Test class for Vertex AI Mistral OCR functionality.
     Inherits from BaseOCRTest and provides Vertex AI-specific configuration.
-    
+
     Note: For Vertex AI, LiteLLM will automatically convert URLs to base64 data URIs before
     sending to the API, since Vertex AI OCR endpoint doesn't have internet access.
     """
@@ -68,4 +69,3 @@ class TestVertexAIOCR(BaseOCRTest):
             "model": "vertex_ai/mistral-ocr-2505",
             "vertex_location": "us-central1",
         }
-

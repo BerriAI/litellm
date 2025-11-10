@@ -76,12 +76,12 @@ if MCP_AVAILABLE:
             mcp_auth_header=server_auth_header,
             add_prefix=False,
         )
-        
+
         # Filter tools based on allowed_tools configuration
         # Only filter if allowed_tools is explicitly configured (not None and not empty)
         if server.allowed_tools is not None and len(server.allowed_tools) > 0:
             tools = filter_tools_by_allowed_tools(tools, server)
-        
+
         return _create_tool_response_objects(tools, server.mcp_info)
 
     ########################################################
@@ -212,7 +212,9 @@ if MCP_AVAILABLE:
 
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
 
         try:
             data = await request.json()
@@ -222,21 +224,27 @@ if MCP_AVAILABLE:
                 user_api_key_dict=user_api_key_dict,
                 proxy_config=proxy_config,
             )
-            
+
             # FIX: Extract MCP auth headers from request
             # The UI sends bearer token in x-mcp-auth header and server-specific headers,
             # but they weren't being extracted and passed to call_mcp_tool.
             # This fix ensures auth headers are properly extracted from the HTTP request
             # and passed through to the MCP server for authentication.
-            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(request.headers)
-            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(request.headers)
-            
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
+                request.headers
+            )
+            mcp_server_auth_headers = (
+                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                    request.headers
+                )
+            )
+
             # Add extracted headers to data dict to pass to call_mcp_tool
             if mcp_auth_header:
                 data["mcp_auth_header"] = mcp_auth_header
             if mcp_server_auth_headers:
                 data["mcp_server_auth_headers"] = mcp_server_auth_headers
-            
+
             result = await call_mcp_tool(**data)
             return result
         except BlockedPiiEntityError as e:

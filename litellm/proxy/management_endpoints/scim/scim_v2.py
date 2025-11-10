@@ -409,13 +409,13 @@ async def get_users(
                 where_conditions["user_email"] = email
 
         # Get users from database
-        users: List[LiteLLM_UserTable] = (
-            await prisma_client.db.litellm_usertable.find_many(
-                where=where_conditions,
-                skip=(startIndex - 1),
-                take=count,
-                order={"created_at": "desc"},
-            )
+        users: List[
+            LiteLLM_UserTable
+        ] = await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=(startIndex - 1),
+            take=count,
+            order={"created_at": "desc"},
         )
 
         # Get total count for pagination

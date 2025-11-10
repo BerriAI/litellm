@@ -14,7 +14,7 @@ async def test_async_realtime_uses_max_size_parameter():
     """
     Test that Azure's async_realtime method uses the REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
     constant for the max_size parameter to handle large base64 audio payloads.
-    
+
     This verifies the fix for: https://github.com/BerriAI/litellm/issues/15747
     """
     from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -33,14 +33,18 @@ async def test_async_realtime_uses_max_size_parameter():
     class DummyAsyncContextManager:
         def __init__(self, value):
             self.value = value
+
         async def __aenter__(self):
             return self.value
+
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-    with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
-         patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
-        
+    with patch(
+        "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
+    ) as mock_ws_connect, patch(
+        "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+    ) as mock_realtime_streaming:
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -57,7 +61,7 @@ async def test_async_realtime_uses_max_size_parameter():
         # Verify websockets.connect was called with the max_size parameter
         mock_ws_connect.assert_called_once()
         called_kwargs = mock_ws_connect.call_args[1]
-        
+
         # Verify max_size is set (default None for unlimited, matching OpenAI's SDK)
         assert "max_size" in called_kwargs
         assert called_kwargs["max_size"] is None
@@ -66,4 +70,3 @@ async def test_async_realtime_uses_max_size_parameter():
 
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
-

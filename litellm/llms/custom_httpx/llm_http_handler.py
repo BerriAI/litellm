@@ -1288,6 +1288,7 @@ class BaseLLMHTTPHandler:
         Returns: (headers, complete_url, data, files)
         """
         from litellm.llms.base_llm.ocr.transformation import OCRRequestData
+
         headers = provider_config.validate_environment(
             api_key=api_key,
             api_base=api_base,
@@ -3647,10 +3648,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
 
         Handles image edit requests.
@@ -3840,10 +3838,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -4059,10 +4054,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[
-        VideoObject,
-        Coroutine[Any, Any, VideoObject],
-    ]:
+    ) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
         """
         Handles video generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -4099,7 +4091,7 @@ class BaseLLMHTTPHandler:
             or {},
             model=model,
         )
-        
+
         if extra_headers:
             headers.update(extra_headers)
 
@@ -4109,7 +4101,11 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data, files, api_base = video_generation_provider_config.transform_video_create_request(
+        (
+            data,
+            files,
+            api_base,
+        ) = video_generation_provider_config.transform_video_create_request(
             model=model,
             prompt=prompt,
             video_create_optional_request_params=video_generation_optional_request_params,
@@ -4209,7 +4205,11 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data, files, api_base = video_generation_provider_config.transform_video_create_request(
+        (
+            data,
+            files,
+            api_base,
+        ) = video_generation_provider_config.transform_video_create_request(
             model=model,
             prompt=prompt,
             api_base=api_base,
@@ -4230,7 +4230,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            #Use JSON when no files, otherwise use form data with files
+            # Use JSON when no files, otherwise use form data with files
             if files is None or len(files) == 0:
                 response = await async_httpx_client.post(
                     url=api_base,
@@ -4875,7 +4875,10 @@ class BaseLLMHTTPHandler:
         )
 
         # Transform the request using the provider config
-        url, data = video_status_provider_config.transform_video_status_retrieve_request(
+        (
+            url,
+            data,
+        ) = video_status_provider_config.transform_video_status_retrieve_request(
             video_id=video_id,
             api_base=api_base,
             litellm_params=litellm_params,
@@ -4909,10 +4912,12 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                 )
 
-            return video_status_provider_config.transform_video_status_retrieve_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-                custom_llm_provider=custom_llm_provider,
+            return (
+                video_status_provider_config.transform_video_status_retrieve_response(
+                    raw_response=response,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                )
             )
 
         except Exception as e:
@@ -4961,7 +4966,10 @@ class BaseLLMHTTPHandler:
         )
 
         # Transform the request using the provider config
-        url, data = video_status_provider_config.transform_video_status_retrieve_request(
+        (
+            url,
+            data,
+        ) = video_status_provider_config.transform_video_status_retrieve_request(
             video_id=video_id,
             api_base=api_base,
             litellm_params=litellm_params,
@@ -4994,10 +5002,12 @@ class BaseLLMHTTPHandler:
                     url=url,
                     headers=headers,
                 )
-            return video_status_provider_config.transform_video_status_retrieve_response(
-                raw_response=response,
-                logging_obj=logging_obj,
-                custom_llm_provider=custom_llm_provider,
+            return (
+                video_status_provider_config.transform_video_status_retrieve_response(
+                    raw_response=response,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                )
             )
 
         except Exception as e:
@@ -5005,7 +5015,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=video_status_provider_config,
             )
-    
+
     ###### CONTAINER HANDLER ######
     def container_create_handler(
         self,
@@ -5045,7 +5055,7 @@ class BaseLLMHTTPHandler:
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
         )
-        
+
         # Add Content-Type header for JSON requests
         headers["Content-Type"] = "application/json"
 
@@ -5095,7 +5105,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     async def async_container_create_handler(
         self,
         name: str,
@@ -5121,7 +5131,7 @@ class BaseLLMHTTPHandler:
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
         )
-        
+
         # Add Content-Type header for JSON requests
         headers["Content-Type"] = "application/json"
 
@@ -5171,7 +5181,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     def container_list_handler(
         self,
         container_provider_config: "BaseContainerConfig",
@@ -5263,7 +5273,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     async def async_container_list_handler(
         self,
         container_provider_config: "BaseContainerConfig",
@@ -5340,7 +5350,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     def container_retrieve_handler(
         self,
         container_id: str,
@@ -5396,7 +5406,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -5430,7 +5440,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     async def async_container_retrieve_handler(
         self,
         container_id: str,
@@ -5473,7 +5483,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -5507,7 +5517,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     def container_delete_handler(
         self,
         container_id: str,
@@ -5563,7 +5573,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -5597,7 +5607,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     async def async_container_delete_handler(
         self,
         container_id: str,
@@ -5640,7 +5650,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -5746,7 +5756,6 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-
             response = await async_httpx_client.post(
                 url=url,
                 headers=headers,

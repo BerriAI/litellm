@@ -59,7 +59,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
     ) -> str:
         """
         Get the complete URL for volcengine embedding API calls.
-        
+
         Args:
             api_base: Optional custom API base URL
             api_key: API key (not used for URL construction)
@@ -67,7 +67,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
             optional_params: Optional parameters (not used for URL construction)
             litellm_params: LiteLLM parameters (not used for URL construction)
             stream: Stream parameter (not used for URL construction)
-            
+
         Returns:
             Complete URL for the embedding API endpoint
         """
@@ -116,8 +116,6 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
                 raise ValueError(f"Unsupported parameter for Volcengine: {param}")
 
         return optional_params
-
-
 
     def transform_embedding_request(
         self,
@@ -175,7 +173,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         # Add id if present
         if "id" in response_json:
             transformed_response["id"] = response_json["id"]
-        
+
         # Create EmbeddingResponse from transformed data
         return EmbeddingResponse(**transformed_response)
 
@@ -201,6 +199,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
     ) -> BaseLLMException:
         """Get error class for Volcengine errors"""
         from ..common_utils import VolcEngineError
+
         # Convert dict to httpx.Headers if needed
         if isinstance(headers, dict):
             headers = httpx.Headers(headers)

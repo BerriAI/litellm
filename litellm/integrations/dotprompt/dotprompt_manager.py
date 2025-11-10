@@ -115,7 +115,6 @@ class DotpromptManager(CustomPromptManagement):
         """
 
         try:
-
             # Get the prompt template
             template = self.prompt_manager.get_prompt(prompt_id)
             if template is None:
@@ -155,7 +154,6 @@ class DotpromptManager(CustomPromptManagement):
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
-
         from litellm.integrations.prompt_management_base import PromptManagementBase
 
         return PromptManagementBase.get_chat_completion_prompt(

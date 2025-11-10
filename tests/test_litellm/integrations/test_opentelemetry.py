@@ -40,7 +40,9 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         }
 
         # Create a kwargs dict with standard_logging_object containing guardrail information
-        kwargs = {"standard_logging_object": {"guardrail_information": [ guardrail_info ]}}
+        kwargs = {
+            "standard_logging_object": {"guardrail_information": [guardrail_info]}
+        }
 
         # Call the method
         otel._create_guardrail_span(kwargs=kwargs, context=None)
@@ -248,7 +250,9 @@ class TestOpenTelemetry(unittest.TestCase):
         }
 
         # Create a kwargs dict with standard_logging_object containing guardrail information
-        kwargs = {"standard_logging_object": {"guardrail_information": [ guardrail_info ]}}
+        kwargs = {
+            "standard_logging_object": {"guardrail_information": [guardrail_info]}
+        }
 
         # Call the method
         otel._create_guardrail_span(kwargs=kwargs, context=None)
@@ -617,8 +621,6 @@ class TestOpenTelemetry(unittest.TestCase):
         self.assertEqual(attributes.get("service.name"), "litellm-service")
         # But other attributes from OTEL_RESOURCE_ATTRIBUTES should still be present
         self.assertEqual(attributes.get("extra.attr"), "extra-value")
-
-
 
     def test_handle_success_spans_only(self):
         # make sure neither events nor metrics is on

@@ -97,9 +97,9 @@ class InMemoryPromptRegistry:
         Prompt id to Prompt object mapping
         """
 
-        self.prompt_id_to_custom_prompt: Dict[str, Optional[CustomPromptManagement]] = (
-            {}
-        )
+        self.prompt_id_to_custom_prompt: Dict[
+            str, Optional[CustomPromptManagement]
+        ] = {}
         """
         Guardrail id to CustomGuardrail object mapping
         """

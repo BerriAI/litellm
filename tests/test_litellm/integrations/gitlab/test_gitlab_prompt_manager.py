@@ -3,7 +3,9 @@ import sys
 from unittest.mock import MagicMock, patch
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
 
 from litellm.integrations.gitlab.gitlab_client import GitLabClient
 from litellm.integrations.gitlab.gitlab_prompt_manager import (
@@ -18,6 +20,7 @@ from litellm.integrations.gitlab.gitlab_prompt_manager import (
 # -----------------------
 # GitLabPromptTemplate
 # -----------------------
+
 
 def test_gitlab_prompt_template_creation():
     """Test GitLabPromptTemplate creation and metadata extraction."""
@@ -44,6 +47,7 @@ def test_gitlab_prompt_template_creation():
 # -----------------------
 # GitLabClient init & validation
 # -----------------------
+
 
 def test_gitlab_client_initialization_token_vs_oauth():
     """Test GitLabClient initialization with token and oauth auth methods."""
@@ -85,6 +89,7 @@ def test_gitlab_client_missing_required_fields():
 # -----------------------
 # GitLabClient: get_file_content
 # -----------------------
+
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
 def test_gitlab_client_get_file_content_raw_success(mock_get):
@@ -142,8 +147,10 @@ def test_gitlab_client_get_file_content_not_found(mock_get):
     resp_404 = MagicMock()
     resp_404.status_code = 404
     resp_404.raise_for_status.side_effect = Exception()
+
     def side_effect(url, headers):
         return resp_404
+
     mock_get.side_effect = side_effect
 
     client = GitLabClient({"project": "g/s/r", "access_token": "tok"})
@@ -155,6 +162,7 @@ def test_gitlab_client_get_file_content_not_found(mock_get):
 def test_gitlab_client_get_file_content_access_denied(mock_get):
     """403 raises a helpful message."""
     import httpx
+
     resp = MagicMock()
     resp.status_code = 403
     # raise_for_status inside client only called on non-404 success path;
@@ -171,6 +179,7 @@ def test_gitlab_client_get_file_content_access_denied(mock_get):
 def test_gitlab_client_get_file_content_auth_failed(mock_get):
     """401 raises auth error."""
     import httpx
+
     resp = MagicMock()
     resp.status_code = 401
     err = httpx.HTTPStatusError("401", request=MagicMock(), response=resp)
@@ -184,6 +193,7 @@ def test_gitlab_client_get_file_content_auth_failed(mock_get):
 # -----------------------
 # GitLabClient: list_files
 # -----------------------
+
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
 def test_gitlab_client_list_files_success(mock_get):
@@ -209,6 +219,7 @@ def test_gitlab_client_list_files_success(mock_get):
 # GitLabTemplateManager: parsing & rendering
 # -----------------------
 
+
 def test_gitlab_prompt_manager_parse_prompt_file():
     """Parse .prompt with YAML frontmatter."""
     prompt_content = """---
@@ -232,7 +243,10 @@ input:
     assert template.model == "gpt-4"
     assert template.temperature == 0.7
     assert template.max_tokens == 150
-    assert template.input_schema == {"user_message": "string", "system_context?": "string"}
+    assert template.input_schema == {
+        "user_message": "string",
+        "system_context?": "string",
+    }
     assert "{% if system_context %}" in template.content
 
 
@@ -240,7 +254,9 @@ def test_gitlab_prompt_manager_parse_prompt_file_no_frontmatter():
     """Parse .prompt without YAML frontmatter."""
     prompt_content = "Simple prompt: {{message}}"
     manager = GitLabPromptManager({"project": "g/s/r", "access_token": "tok"})
-    template = manager.prompt_manager._parse_prompt_file(prompt_content, "simple_prompt")
+    template = manager.prompt_manager._parse_prompt_file(
+        prompt_content, "simple_prompt"
+    )
     assert template.template_id == "simple_prompt"
     assert template.content == "Simple prompt: {{message}}"
     assert template.metadata == {}
@@ -257,7 +273,9 @@ def test_gitlab_prompt_manager_render_template_and_errors():
     )
     manager.prompt_manager.prompts["t1"] = tpl
 
-    rendered = manager.prompt_manager.render_template("t1", {"name": "World", "place": "Earth"})
+    rendered = manager.prompt_manager.render_template(
+        "t1", {"name": "World", "place": "Earth"}
+    )
     assert rendered == "Hello World! Welcome to Earth."
 
     with pytest.raises(ValueError, match="Template 'nope' not found"):
@@ -267,6 +285,7 @@ def test_gitlab_prompt_manager_render_template_and_errors():
 # -----------------------
 # GitLabPromptManager: integration & behavior
 # -----------------------
+
 
 @patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient")
 def test_gitlab_prompt_manager_integration(mock_client_class):
@@ -279,7 +298,9 @@ temperature: 0.7
 Hello {{name}}!"""
     mock_client_class.return_value = mock_client
 
-    mgr = GitLabPromptManager({"project": "g/s/r", "access_token": "tok"}, prompt_id="test_prompt")
+    mgr = GitLabPromptManager(
+        {"project": "g/s/r", "access_token": "tok"}, prompt_id="test_prompt"
+    )
     assert "test_prompt" in mgr.prompt_manager.prompts
 
     template = mgr.prompt_manager.prompts["test_prompt"]
@@ -325,7 +346,9 @@ System: You are helpful.
 User: {{q}}"""
     mock_client_class.return_value = mock_client
 
-    mgr = GitLabPromptManager({"project": "g/s/r", "access_token": "tok"}, prompt_id="p1")
+    mgr = GitLabPromptManager(
+        {"project": "g/s/r", "access_token": "tok"}, prompt_id="p1"
+    )
 
     original = [{"role": "user", "content": "ignored"}]
     msgs, params = mgr.pre_call_hook(
@@ -346,17 +369,21 @@ def test_gitlab_prompt_manager_pre_call_hook_no_prompt_id():
     """If no prompt_id provided, messages/params unchanged."""
     mgr = GitLabPromptManager({"project": "g/s/r", "access_token": "tok"})
     original = [{"role": "user", "content": "Hello"}]
-    msgs, params = mgr.pre_call_hook(user_id="u", messages=original, litellm_params={}, prompt_id=None)
+    msgs, params = mgr.pre_call_hook(
+        user_id="u", messages=original, litellm_params={}, prompt_id=None
+    )
     assert msgs == original and params == {}
 
 
 def test_gitlab_prompt_manager_get_available_prompts():
     """Return keys of stored templates."""
     mgr = GitLabPromptManager({"project": "g/s/r", "access_token": "tok"})
-    mgr.prompt_manager.prompts.update({
-        "p1": GitLabPromptTemplate("p1", "c1", {}),
-        "p2": GitLabPromptTemplate("p2", "c2", {}),
-    })
+    mgr.prompt_manager.prompts.update(
+        {
+            "p1": GitLabPromptTemplate("p1", "c1", {}),
+            "p2": GitLabPromptTemplate("p2", "c2", {}),
+        }
+    )
     assert set(mgr.get_available_prompts()) == {"p1", "p2"}
 
 
@@ -370,7 +397,9 @@ model: gpt-4
 Hello {{x}}"""
     mock_client_class.return_value = mock_client
 
-    mgr = GitLabPromptManager({"project": "g/s/r", "access_token": "tok"}, prompt_id="t0")
+    mgr = GitLabPromptManager(
+        {"project": "g/s/r", "access_token": "tok"}, prompt_id="t0"
+    )
     assert "t0" in mgr.prompt_manager.prompts
 
     # force reset
@@ -383,6 +412,7 @@ Hello {{x}}"""
 # -----------------------
 # YAML fallback parsing
 # -----------------------
+
 
 def test_gitlab_prompt_manager_yaml_parsing_fallback_and_types():
     mgr = GitLabPromptManager({"project": "g/s/r", "access_token": "tok"})
@@ -406,6 +436,7 @@ rate: 0.5"""
 # -----------------------
 # prompts_path handling + prompt_version (ref) precedence
 # -----------------------
+
 
 @patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient")
 def test_gitlab_prompt_manager_prompts_path_resolution_and_version(mock_client_class):
@@ -444,7 +475,9 @@ def test_gitlab_prompt_manager_version_precedence(mock_client_class):
     mock_client.get_file_content.return_value = "User: {{q}}"
     mock_client_class.return_value = mock_client
 
-    mgr = GitLabPromptManager({"project": "g/s/r", "access_token": "tok"}, ref="manager-default")
+    mgr = GitLabPromptManager(
+        {"project": "g/s/r", "access_token": "tok"}, ref="manager-default"
+    )
 
     # prompt_version wins over git_ref kwarg
     _msgs, _params = mgr.pre_call_hook(
@@ -480,17 +513,17 @@ def test_gitlab_prompt_manager_version_precedence(mock_client_class):
     mock_client.get_file_content.assert_any_call("pC.prompt", ref="manager-default")
 
 
-
-
 # ---------------------------------------------------------------------
 # ID Encoding/Decoding helpers
 # ---------------------------------------------------------------------
+
 
 def test_encode_decode_prompt_id_roundtrip():
     raw = "invoice/extract"
     encoded = encode_prompt_id(raw)
     assert encoded == "gitlab::invoice::extract"
     assert decode_prompt_id(encoded) == raw
+
 
 def test_encode_prompt_id_already_encoded():
     encoded = "gitlab::test::path"
@@ -500,6 +533,7 @@ def test_encode_prompt_id_already_encoded():
 # ---------------------------------------------------------------------
 # GitLabTemplateManager behavior
 # ---------------------------------------------------------------------
+
 
 @pytest.fixture
 def mock_gitlab_client():
@@ -569,9 +603,14 @@ def test_repo_path_conversion(manager):
 # GitLabPromptManager high-level integration
 # ---------------------------------------------------------------------
 
+
 @pytest.fixture
 def prompt_manager(mock_gitlab_client):
-    cfg = {"project": "group/repo", "access_token": "tkn", "prompts_path": "prompts/chat"}
+    cfg = {
+        "project": "group/repo",
+        "access_token": "tkn",
+        "prompts_path": "prompts/chat",
+    }
     return GitLabPromptManager(gitlab_config=cfg, gitlab_client=mock_gitlab_client)
 
 
@@ -606,9 +645,14 @@ def test_get_available_prompts_returns_sorted(prompt_manager):
 # GitLabPromptCache behavior
 # ---------------------------------------------------------------------
 
+
 @pytest.fixture
 def prompt_cache(mock_gitlab_client):
-    cfg = {"project": "group/repo", "access_token": "tkn", "prompts_path": "prompts/chat"}
+    cfg = {
+        "project": "group/repo",
+        "access_token": "tkn",
+        "prompts_path": "prompts/chat",
+    }
     return GitLabPromptCache(cfg, gitlab_client=mock_gitlab_client)
 
 
@@ -641,10 +685,12 @@ def test_cache_reload_resets_and_reloads(prompt_cache):
 # Test fakes / fixtures
 # -----------------------
 
+
 class FakeTemplateManager:
     """
     Minimal stand-in for GitLabTemplateManager that GitLabPromptCache expects.
     """
+
     def __init__(self, prompts_path="prompts"):
         # simulate a configured prompts folder (affects _id_to_repo_path)
         self.prompts_path = prompts_path.strip("/")
@@ -679,6 +725,7 @@ class FakePromptManagerWrapper:
     Minimal wrapper to mimic GitLabPromptManager(prompt_manager=<GitLabTemplateManager>).
     GitLabPromptCache.__init__ expects GitLabPromptManager(...).prompt_manager.
     """
+
     def __init__(self, fake_tm):
         self.prompt_manager = fake_tm
 
@@ -696,6 +743,7 @@ def fake_managers():
 # -----------------------
 # Tests
 # -----------------------
+
 
 @patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
 def test_cache_load_all_encodes_ids_and_populates_maps(mock_pm_cls, fake_managers):
@@ -772,10 +820,13 @@ def test_cache_reload_clears_then_reloads(mock_pm_cls, fake_managers):
 
 
 @patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
-def test_cache_skips_when_template_missing_even_after_reload_attempt(mock_pm_cls, fake_managers):
+def test_cache_skips_when_template_missing_even_after_reload_attempt(
+    mock_pm_cls, fake_managers
+):
     """
     If get_template(pid) returns None even after a retry load, the entry is skipped.
     """
+
     class MissingTemplateManager(FakeTemplateManager):
         def get_template(self, pid):
             # Always return None to trigger the continue path

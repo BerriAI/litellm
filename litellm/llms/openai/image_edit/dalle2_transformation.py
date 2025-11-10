@@ -22,7 +22,7 @@ else:
 class DallE2ImageEditConfig(OpenAIImageEditConfig):
     """
     DALL-E-2 specific configuration for image edit API.
-    
+
     DALL-E-2 only supports editing a single image (not an array).
     Uses "image" field name instead of "image[]".
     """
@@ -98,4 +98,3 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
 
         return data_without_files, files_list
-

@@ -519,7 +519,6 @@ async def test_openai_codex_stream(sync_mode):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_openai_codex(sync_mode):
-
     from litellm import Router
 
     router = Router(
@@ -755,7 +754,9 @@ async def test_openai_service_tier_parameter():
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
         # Verify service_tier is correctly sent to the API
-        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
+        assert (
+            request_body["service_tier"] == "priority"
+        ), "service_tier should be 'priority'"
 
 
 def test_openai_service_tier_parameter_sync():
@@ -784,7 +785,9 @@ def test_openai_service_tier_parameter_sync():
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
         # Verify service_tier is correctly sent to the API
-        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
+        assert (
+            request_body["service_tier"] == "priority"
+        ), "service_tier should be 'priority'"
 
 
 def test_gpt_5_reasoning_streaming():
@@ -1316,7 +1319,7 @@ async def test_streaming_tool_calls_with_n_greater_than_1(model):
     """
     Test that the index field in a choice object is correctly populated
     when using streaming mode with n>1 and tool calls.
-    
+
     Regression test for: https://github.com/BerriAI/litellm/issues/8977
     """
     tools = [
@@ -1344,7 +1347,7 @@ async def test_streaming_tool_calls_with_n_greater_than_1(model):
             },
         }
     ]
-    
+
     response = litellm.completion(
         model=model,
         messages=[
@@ -1357,20 +1360,30 @@ async def test_streaming_tool_calls_with_n_greater_than_1(model):
         stream=True,
         n=3,
     )
-    
+
     # Collect all chunks and their indices
     indices_seen = []
     for chunk in response:
-        assert len(chunk.choices) == 1, "Each streaming chunk should have exactly 1 choice"
-        assert hasattr(chunk.choices[0], "index"), "Choice should have an index attribute"
+        assert (
+            len(chunk.choices) == 1
+        ), "Each streaming chunk should have exactly 1 choice"
+        assert hasattr(
+            chunk.choices[0], "index"
+        ), "Choice should have an index attribute"
         index = chunk.choices[0].index
         indices_seen.append(index)
-    
+
     # Verify that we got chunks with different indices (0, 1, 2 for n=3)
     unique_indices = set(indices_seen)
-    assert unique_indices == {0, 1, 2}, f"Should have indices 0, 1, 2 for n=3, got {unique_indices}"
-    
-    print(f"✓ Test passed: streaming with n=3 and tool calls correctly populates index field")
+    assert unique_indices == {
+        0,
+        1,
+        2,
+    }, f"Should have indices 0, 1, 2 for n=3, got {unique_indices}"
+
+    print(
+        f"✓ Test passed: streaming with n=3 and tool calls correctly populates index field"
+    )
     print(f"  Indices seen: {indices_seen}")
     print(f"  Unique indices: {unique_indices}")
 
@@ -1394,19 +1407,28 @@ async def test_streaming_content_with_n_greater_than_1(model):
         n=2,
         max_tokens=10,
     )
-    
+
     # Collect all chunks and their indices
     indices_seen = []
     for chunk in response:
-        assert len(chunk.choices) == 1, "Each streaming chunk should have exactly 1 choice"
-        assert hasattr(chunk.choices[0], "index"), "Choice should have an index attribute"
+        assert (
+            len(chunk.choices) == 1
+        ), "Each streaming chunk should have exactly 1 choice"
+        assert hasattr(
+            chunk.choices[0], "index"
+        ), "Choice should have an index attribute"
         index = chunk.choices[0].index
         indices_seen.append(index)
-    
+
     # Verify that we got chunks with different indices (0, 1 for n=2)
     unique_indices = set(indices_seen)
-    assert unique_indices == {0, 1}, f"Should have indices 0, 1 for n=2, got {unique_indices}"
-    
-    print(f"✓ Test passed: streaming with n=2 and regular content correctly populates index field")
+    assert unique_indices == {
+        0,
+        1,
+    }, f"Should have indices 0, 1 for n=2, got {unique_indices}"
+
+    print(
+        f"✓ Test passed: streaming with n=2 and regular content correctly populates index field"
+    )
     print(f"  Indices seen: {indices_seen}")
     print(f"  Unique indices: {unique_indices}")
