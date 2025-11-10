@@ -352,9 +352,11 @@ async def end_user_info(
         )
 
         if user_info is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "End User Id={} does not exist in db".format(end_user_id)},
+            raise ProxyException(
+                message="End User Id={} does not exist in db".format(end_user_id),
+                type="not_found",
+                code=404,
+                param="end_user_id",
             )
         return user_info.model_dump(exclude_none=True)
     
@@ -435,11 +437,11 @@ async def update_end_user(
         )
 
         if end_user_table_data is None:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "End User Id={} does not exist in db".format(data.user_id)
-                },
+            raise ProxyException(
+                message="End User Id={} does not exist in db".format(data.user_id),
+                type="not_found",
+                code=404,
+                param="user_id",
             )
 
         end_user_table_data_typed = LiteLLM_EndUserTable(
@@ -566,17 +568,29 @@ async def delete_end_user(
             and isinstance(data.user_ids, list)
             and len(data.user_ids) > 0
         ):
+            # First check if all users exist
+            existing_users = await prisma_client.db.litellm_endusertable.find_many(
+                where={"user_id": {"in": data.user_ids}}
+            )
+            existing_user_ids = {user.user_id for user in existing_users}
+            missing_user_ids = [
+                user_id for user_id in data.user_ids if user_id not in existing_user_ids
+            ]
+
+            if missing_user_ids:
+                raise ProxyException(
+                    message="End User Id(s)={} do not exist in db".format(
+                        ", ".join(missing_user_ids)
+                    ),
+                    type="not_found",
+                    code=404,
+                    param="user_ids",
+                )
+
+            # All users exist, proceed with deletion
             response = await prisma_client.db.litellm_endusertable.delete_many(
                 where={"user_id": {"in": data.user_ids}}
             )
-            if response is None:
-                raise ValueError(
-                    f"Failed deleting customer data. User ID does not exist passed user_id={data.user_ids}"
-                )
-            if response != len(data.user_ids):
-                raise ValueError(
-                    f"Failed deleting all customer data. User ID does not exist passed user_id={data.user_ids}. Deleted {response} customers, passed {len(data.user_ids)} customers"
-                )
             verbose_proxy_logger.debug(
                 f"received response from updating prisma client. response={response}"
             )
