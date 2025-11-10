@@ -40,7 +40,7 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         }
 
         # Create a kwargs dict with standard_logging_object containing guardrail information
-        kwargs = {"standard_logging_object": {"guardrail_information": guardrail_info}}
+        kwargs = {"standard_logging_object": {"guardrail_information": [ guardrail_info ]}}
 
         # Call the method
         otel._create_guardrail_span(kwargs=kwargs, context=None)
@@ -77,6 +77,98 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
 
         # Verify that start_span was never called
         otel.tracer.start_span.assert_not_called()
+
+
+class TestOpenTelemetryCostBreakdown(unittest.TestCase):
+    def test_cost_breakdown_emitted_to_otel_span(self):
+        """
+        Test that cost breakdown from StandardLoggingPayload is emitted to OpenTelemetry span attributes.
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        cost_breakdown = {
+            "input_cost": 0.001,
+            "output_cost": 0.002,
+            "total_cost": 0.003,
+            "tool_usage_cost": 0.0001,
+            "original_cost": 0.004,
+            "discount_percent": 0.25,
+            "discount_amount": 0.001,
+        }
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "cost_breakdown": cost_breakdown,
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.input_cost", 0.001)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.output_cost", 0.002)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.total_cost", 0.003)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.tool_usage_cost", 0.0001)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.original_cost", 0.004)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.discount_percent", 0.25)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.discount_amount", 0.001)
+
+    def test_cost_breakdown_with_partial_fields(self):
+        """
+        Test that cost breakdown works correctly when only some fields are present.
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        cost_breakdown = {
+            "input_cost": 0.001,
+            "output_cost": 0.002,
+            "total_cost": 0.003,
+        }
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "cost_breakdown": cost_breakdown,
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.input_cost", 0.001)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.output_cost", 0.002)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.total_cost", 0.003)
+
+        call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
+        assert ("gen_ai.cost.tool_usage_cost", 0.0001) not in call_args_list
+        assert ("gen_ai.cost.original_cost", 0.004) not in call_args_list
 
 
 class TestOpenTelemetry(unittest.TestCase):
@@ -156,7 +248,7 @@ class TestOpenTelemetry(unittest.TestCase):
         }
 
         # Create a kwargs dict with standard_logging_object containing guardrail information
-        kwargs = {"standard_logging_object": {"guardrail_information": guardrail_info}}
+        kwargs = {"standard_logging_object": {"guardrail_information": [ guardrail_info ]}}
 
         # Call the method
         otel._create_guardrail_span(kwargs=kwargs, context=None)

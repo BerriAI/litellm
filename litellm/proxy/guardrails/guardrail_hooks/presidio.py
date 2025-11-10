@@ -702,6 +702,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         text: str,
         language: Optional[str] = None,
         entities: Optional[List[PiiEntityType]] = None,
+        request_data: Optional[dict] = None,
     ) -> str:
         """
         UI will call this function to check:
@@ -712,7 +713,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             text=text,
             output_parse_pii=self.output_parse_pii,
             presidio_config=None,
-            request_data={},
+            request_data=request_data or {},
         )
         return text
 

@@ -121,6 +121,80 @@ async def test_make_multipart_http_request():
 
 
 @pytest.mark.asyncio
+async def test_make_multipart_http_request_removes_content_type_header():
+    """
+    Test that make_multipart_http_request removes the content-type header
+    to prevent boundary mismatch errors.
+
+    When forwarding multipart requests, the original content-type header contains
+    a boundary that doesn't match the new boundary httpx generates. This test
+    verifies that the content-type header is removed so httpx can set it correctly.
+    """
+    # Mock request with form data
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+
+    # Mock form data with both file and regular field
+    file_content = b"test file content"
+    file = BytesIO(file_content)
+    headers = Headers({"content-type": "text/plain"})
+    upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
+    upload_file.read = AsyncMock(return_value=file_content)
+
+    form_data = {"file": upload_file, "key": "value"}
+    request.form = AsyncMock(return_value=form_data)
+
+    # Mock httpx client
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+
+    async_client = MagicMock()
+    async_client.request = AsyncMock(return_value=mock_response)
+
+    # Headers with content-type containing old boundary (this is what causes the issue)
+    original_headers = {
+        "content-type": "multipart/form-data; boundary=--------------------------416423083260054165225918",
+        "user-agent": "PostmanRuntime/7.49.0",
+        "Authorization": "bearer sk-1234",
+    }
+
+    # Test the function
+    response = await HttpPassThroughEndpointHelpers.make_multipart_http_request(
+        request=request,
+        async_client=async_client,
+        url=httpx.URL("http://test.com"),
+        headers=original_headers,
+        requested_query_params={"param": "value"},
+    )
+
+    # Verify the response
+    assert response == mock_response
+
+    # Verify the client call
+    async_client.request.assert_called_once()
+    call_args = async_client.request.call_args[1]
+
+    # CRITICAL ASSERTION: content-type header should be removed
+    assert "content-type" not in call_args["headers"]
+
+    # Other headers should be preserved
+    assert call_args["headers"]["user-agent"] == "PostmanRuntime/7.49.0"
+    assert call_args["headers"]["Authorization"] == "bearer sk-1234"
+
+    # Verify other parameters are correct
+    assert call_args["method"] == "POST"
+    assert str(call_args["url"]) == "http://test.com"
+    assert isinstance(call_args["files"], dict)
+    assert isinstance(call_args["data"], dict)
+    assert call_args["data"]["key"] == "value"
+    assert call_args["params"] == {"param": "value"}
+
+    # Verify the original headers dict was not modified (copy was used)
+    assert "content-type" in original_headers
+
+
+@pytest.mark.asyncio
 async def test_pass_through_request_failure_handler():
     """
     Test that the failure handler is called when pass_through_request fails
@@ -1420,7 +1494,7 @@ async def test_pass_through_with_httpbin_redirect():
         assert response.status_code == 200
 
         # The response should be from the /get endpoint
-        response_content = response.body.decode("utf-8")
+        response_content = bytes(response.body).decode("utf-8")
 
         # httpbin.org/get returns JSON with info about the request
         assert '"url": "https://httpbin.org/get"' in response_content
@@ -1699,11 +1773,11 @@ async def test_filter_endpoints_by_team_allowed_routes_partial_match():
 async def test_bedrock_router_passthrough_metadata_initialization():
     """
     Test that bedrock router passthrough properly initializes metadata for hooks.
-    
-    This test verifies the fix for issue #15826 where metadata.headers and 
+
+    This test verifies the fix for issue #15826 where metadata.headers and
     litellm_params.proxy_server_request were missing for /bedrock passthrough
     requests with router models.
-    
+
     The fix ensures router bedrock models use the same common processing path
     as non-router models, which properly initializes all metadata structures.
     """
@@ -1718,46 +1792,50 @@ async def test_bedrock_router_passthrough_metadata_initialization():
         # Setup mock instance
         mock_processor = MagicMock()
         mock_processing_class.return_value = mock_processor
-        
+
         # Mock successful response
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.aread = AsyncMock(return_value=b'{"content": [{"text": "Hello"}]}')
+        mock_response.aread = AsyncMock(
+            return_value=b'{"content": [{"text": "Hello"}]}'
+        )
         mock_processor.base_passthrough_process_llm_request = AsyncMock(
             return_value=mock_response
         )
-        
+
         # Create mock request with headers
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
         mock_request.url = "http://localhost:4000/bedrock/model/my-model/invoke"
-        mock_request.headers = Headers({
-            "content-type": "application/json",
-            "authorization": "Bearer sk-test-key",
-            "x-custom-header": "test-value"
-        })
+        mock_request.headers = Headers(
+            {
+                "content-type": "application/json",
+                "authorization": "Bearer sk-test-key",
+                "x-custom-header": "test-value",
+            }
+        )
         mock_request.query_params = QueryParams({})
-        
+
         # Create mock user API key dict with all required fields
         mock_user_api_key_dict = MagicMock()
         mock_user_api_key_dict.api_key = "sk-test-key"
         mock_user_api_key_dict.key_alias = "test-alias"
         mock_user_api_key_dict.user_id = "user-123"
         mock_user_api_key_dict.team_id = "team-123"
-        
+
         # Mock other required dependencies
         mock_router = MagicMock()
         mock_proxy_logging = MagicMock()
         mock_general_settings = {}
         mock_proxy_config = MagicMock()
         mock_select_data_generator = MagicMock()
-        
+
         request_body = {
             "max_tokens": 100,
             "messages": [{"role": "user", "content": "Hello"}],
-            "anthropic_version": "bedrock-2023-05-31"
+            "anthropic_version": "bedrock-2023-05-31",
         }
-        
+
         # Call the function
         result = await handle_bedrock_passthrough_router_model(
             model="my-bedrock-model",
@@ -1777,24 +1855,32 @@ async def test_bedrock_router_passthrough_metadata_initialization():
             user_api_base=None,
             version="1.0",
         )
-        
+
         # Verify that ProxyBaseLLMRequestProcessing was instantiated
         # This is the KEY assertion - router models now use the common processing path
         mock_processing_class.assert_called_once()
-        
+
         # Verify that base_passthrough_process_llm_request was called
         # This proves we're using the common processing path that initializes metadata
         mock_processor.base_passthrough_process_llm_request.assert_called_once()
-        
+
         # Verify the call included all required parameters for proper metadata initialization
         call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args[1]
-        
+
         # These are the critical parameters that ensure metadata is properly initialized:
-        assert call_kwargs["request"] == mock_request, "Request must be passed for header extraction"
-        assert call_kwargs["user_api_key_dict"] == mock_user_api_key_dict, "User API key dict needed for metadata"
-        assert call_kwargs["proxy_logging_obj"] == mock_proxy_logging, "Logging obj needed for hooks"
-        assert call_kwargs["llm_router"] == mock_router, "Router needed for model routing"
+        assert (
+            call_kwargs["request"] == mock_request
+        ), "Request must be passed for header extraction"
+        assert (
+            call_kwargs["user_api_key_dict"] == mock_user_api_key_dict
+        ), "User API key dict needed for metadata"
+        assert (
+            call_kwargs["proxy_logging_obj"] == mock_proxy_logging
+        ), "Logging obj needed for hooks"
+        assert (
+            call_kwargs["llm_router"] == mock_router
+        ), "Router needed for model routing"
         assert call_kwargs["model"] == "my-bedrock-model", "Model name must be passed"
-        
+
         # Verify response was returned
         assert result == mock_response
