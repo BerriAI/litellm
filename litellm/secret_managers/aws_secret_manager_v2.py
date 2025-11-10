@@ -15,7 +15,7 @@ Requires:
 
 import json
 import os
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import httpx
 
@@ -221,7 +221,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         """
         from litellm._uuid import uuid
 
-        data = {
+        data: Dict[str, Any] = {
             "Name": secret_name,
             "SecretString": secret_value,
             "ClientRequestToken": str(uuid.uuid4()),
@@ -238,7 +238,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 tags_list = tags
             else:
                 raise ValueError("Tags must be a dict or list of {Key, Value} pairs")
-            data["Tags"] = tags_list
+            data["Tags"] = tags_list  # type: ignore[assignment]
 
         endpoint_url, headers, body = self._prepare_request(
             action="CreateSecret",

@@ -4952,8 +4952,14 @@ def _get_model_info_helper(  # noqa: PLR0915
                 cache_creation_input_token_cost=_model_info.get(
                     "cache_creation_input_token_cost", None
                 ),
+                cache_creation_input_token_cost_above_200k_tokens=_model_info.get(
+                    "cache_creation_input_token_cost_above_200k_tokens", None
+                ),
                 cache_read_input_token_cost=_model_info.get(
                     "cache_read_input_token_cost", None
+                ),
+                cache_read_input_token_cost_above_200k_tokens=_model_info.get(
+                    "cache_read_input_token_cost_above_200k_tokens", None
                 ),
                 cache_read_input_token_cost_flex=_model_info.get(
                     "cache_read_input_token_cost_flex", None
@@ -7288,6 +7294,8 @@ class ProviderConfigManager:
             return litellm.InfinityRerankConfig()
         elif litellm.LlmProviders.JINA_AI == provider:
             return litellm.JinaAIRerankConfig()
+        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+            return litellm.HostedVLLMRerankConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
             return litellm.HuggingFaceRerankConfig()
         elif litellm.LlmProviders.DEEPINFRA == provider:
@@ -7357,10 +7365,17 @@ class ProviderConfigManager:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
             # Check if it's an O-series model
-            if model and ("o_series" in model.lower() or supports_reasoning(model)):
+            # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
+            # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
+            is_gpt_model = model and "gpt" in model.lower()
+            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt_model))
+            
+            if is_o_series:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
                 return litellm.AzureOpenAIResponsesAPIConfig()
+        elif litellm.LlmProviders.XAI == provider:
+            return litellm.XAIResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
         return None
@@ -7635,6 +7650,16 @@ class ProviderConfigManager:
             from litellm.llms.azure.videos.transformation import AzureVideoConfig
 
             return AzureVideoConfig()
+        elif LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
+
+            return GeminiVideoConfig()
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.videos.transformation import (
+                VertexAIVideoConfig,
+            )
+
+            return VertexAIVideoConfig()
         return None
 
     @staticmethod

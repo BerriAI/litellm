@@ -577,7 +577,11 @@ async def test_presidio_sets_guardrail_information_in_request_data():
     assert "metadata" in request_data
     assert "standard_logging_guardrail_information" in request_data["metadata"]
     
-    guardrail_info = request_data["metadata"]["standard_logging_guardrail_information"]
+    guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert isinstance(guardrail_info_list, list)
+    assert len(guardrail_info_list) > 0
+    
+    guardrail_info = guardrail_info_list[0]
     assert "masked_entity_count" in guardrail_info
     assert guardrail_info["masked_entity_count"]["EMAIL_ADDRESS"] == 1
     assert guardrail_info["masked_entity_count"]["PERSON"] == 1

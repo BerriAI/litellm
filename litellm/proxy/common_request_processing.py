@@ -746,6 +746,7 @@ class ProxyBaseLLMRequestProcessing:
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                provider_specific_fields=getattr(e, "provider_specific_fields", None),
                 headers=headers,
             )
         elif isinstance(e, httpx.HTTPStatusError):
@@ -765,6 +766,7 @@ class ProxyBaseLLMRequestProcessing:
             param=getattr(e, "param", "None"),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )
 

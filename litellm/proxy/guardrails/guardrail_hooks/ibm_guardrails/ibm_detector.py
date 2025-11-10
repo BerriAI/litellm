@@ -7,7 +7,7 @@
 
 import os
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 from urllib.parse import urlencode
 
 import httpx
@@ -26,7 +26,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMDetectorDetection,
     IBMDetectorResponseOrchestrator,
 )
-from litellm.types.utils import GuardrailStatus, ModelResponseStream
+from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponseStream
 
 GUARDRAIL_NAME = "ibm_guardrails"
 
@@ -47,7 +47,7 @@ class IBMGuardrailDetector(CustomGuardrail):
     ):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
-            params={"ssl_verify": verify_ssl}
+            params={"ssl_verify": verify_ssl},
         )
 
         # Set API configuration
@@ -436,18 +436,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         """
         Runs before the LLM API call
@@ -533,16 +522,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ):
         """
         Runs in parallel to LLM API call

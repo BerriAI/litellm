@@ -28,9 +28,10 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "[Beta] Guardrails",
+      label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/test_playground",
         ...[
           "adding_provider/adding_guardrail_support",
           "proxy/guardrails/aim_security",
@@ -41,6 +42,7 @@ const sidebars = {
           "proxy/guardrails/ibm_guardrails",
           "proxy/guardrails/grayswan",
           "proxy/guardrails/lasso_security",
+          "proxy/guardrails/litellm_content_filter",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
@@ -173,7 +175,6 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
   "proxy/enterprise",
-  "proxy/management_cli",
         {
           type: "category",
           label: "Authentication",
@@ -185,17 +186,7 @@ const sidebars = {
             "proxy/cli_sso",
             "proxy/custom_auth",
             "proxy/ip_address",
-            "proxy/email",
             "proxy/multiple_admins",
-          ],
-        },
-        {
-          type: "category",
-          label: "Spend Tracking",
-          items: [
-            "proxy/cost_tracking",
-            "proxy/custom_pricing",
-            "proxy/billing",
           ],
         },
         {
@@ -221,6 +212,7 @@ const sidebars = {
             "proxy/rules",
           ]
         },
+        "proxy/management_cli",
         {
           type: "link",
           label: "Load Balancing, Routing, Fallbacks",
@@ -233,7 +225,8 @@ const sidebars = {
             "proxy/dynamic_logging",
             "proxy/logging",
             "proxy/logging_spec",
-            "proxy/team_logging"
+            "proxy/team_logging",
+            "proxy/email",
           ],
         },
         {
@@ -260,9 +253,26 @@ const sidebars = {
           type: "category",
           label: "Secret Managers",
           items: [
-            "secret",
+            "secret_managers/overview",
+            "secret_managers/aws_secret_manager",
+            "secret_managers/aws_kms",
+            "secret_managers/azure_key_vault",
+            "secret_managers/cyberark",
+            "secret_managers/google_secret_manager",
+            "secret_managers/google_kms",
+            "secret_managers/hashicorp_vault",
+            "secret_managers/custom_secret_manager",
             "oidc"
           ]
+        },
+        {
+          type: "category",
+          label: "Spend Tracking",
+          items: [
+            "proxy/cost_tracking",
+            "proxy/custom_pricing",
+            "proxy/billing",
+          ],
         },
       ]
     },
@@ -469,6 +479,7 @@ const sidebars = {
           label: "Vertex AI",
           items: [
             "providers/vertex",
+            "providers/vertex_ai/videos",
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
             "providers/vertex_image",
@@ -481,6 +492,7 @@ const sidebars = {
           label: "Google AI Studio",
           items: [
             "providers/gemini",
+            "providers/gemini/videos",
             "providers/google_ai_studio/files",
             "providers/google_ai_studio/image_gen",
             "providers/google_ai_studio/realtime",

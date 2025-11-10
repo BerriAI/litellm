@@ -1105,6 +1105,11 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "azure/container": {
+        "code_interpreter_cost_per_session": 0.03,
+        "litellm_provider": "azure",
+        "mode": "chat"
+    },
     "azure/eu/gpt-4o-2024-08-06": {
         "deprecation_date": "2026-02-27",
         "cache_read_input_token_cost": 1.375e-06,
@@ -2355,6 +2360,35 @@
         ],
         "supports_function_calling": true,
         "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "azure/gpt-5-pro": {
+        "input_cost_per_token": 1.5e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 400000,
+        "mode": "responses",
+        "output_cost_per_token": 0.00012,
+        "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/concepts/models-sold-directly-by-azure?pivots=azure-openai&tabs=global-standard-aoai%2Cstandard-chat-completions%2Cglobal-standard#gpt-5",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -3670,7 +3704,6 @@
         "output_cost_per_token": 2.75e-05,
         "source": "https://azure.microsoft.com/en-us/blog/grok-4-is-now-available-in-azure-ai-foundry-unlock-frontier-intelligence-and-business-ready-capabilities/",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_web_search": true
@@ -3698,7 +3731,6 @@
         "mode": "chat",
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/announcing-the-grok-4-fast-models-from-xai-now-available-in-azure-ai-foundry/4456701",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_web_search": true
@@ -5714,6 +5746,16 @@
     "cohere.embed-v4:0": {
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "bedrock",
+        "max_input_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1536,
+        "supports_embedding_image_input": true
+    },
+    "cohere/embed-v4.0": {
+        "input_cost_per_token": 1.2e-07,
+        "litellm_provider": "cohere",
         "max_input_tokens": 128000,
         "max_tokens": 128000,
         "mode": "embedding",
@@ -10308,6 +10350,7 @@
         "mode": "chat",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
+        "rpm": 100000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -10334,7 +10377,8 @@
         "supports_tool_choice": true,
         "supports_url_context": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "tpm": 8000000
     },
     "gemini-2.5-flash-lite-preview-06-17": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -11573,7 +11617,7 @@
         "tpm": 1000000
     },
     "gemini/gemini-2.5-flash": {
-        "cache_read_input_token_cost": 7.5e-08,
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "gemini",
@@ -12624,6 +12668,34 @@
             "video"
         ]
     },
+    "gemini/veo-3.1-fast-generate-preview": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "gemini/veo-3.1-generate-preview": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.40,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "google_pse/search": {
         "input_cost_per_query": 0.005,
         "litellm_provider": "google_pse",
@@ -12690,19 +12762,21 @@
         "tool_use_system_prompt_tokens": 159
     },
     "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
-        "cache_creation_input_token_cost": 1.25e-06,
-        "cache_read_input_token_cost": 1e-07,
-        "input_cost_per_token": 1e-06,
+        "cache_creation_input_token_cost": 1.375e-06,
+        "cache_read_input_token_cost": 1.1e-07,
+        "input_cost_per_token": 1.1e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 5e-06,
+        "output_cost_per_token": 5.5e-06,
+        "source": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -23062,6 +23136,18 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
         "supports_tool_choice": true
     },
+    "vertex_ai/minimaxai/minimax-m2-maas": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-minimax_models",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 196608,
+        "max_tokens": 196608,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
     "vertex_ai/mistral-medium-3": {
         "input_cost_per_token": 4e-07,
         "litellm_provider": "vertex_ai-mistral_models",
@@ -23309,6 +23395,34 @@
         "mode": "video_generation",
         "output_cost_per_second": 0.75,
         "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "vertex_ai/veo-3.1-generate-preview": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "vertex_ai/veo-3.1-fast-generate-preview": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
         "supported_modalities": [
             "text"
         ],
@@ -24198,7 +24312,6 @@
         "output_cost_per_token": 1.5e-05,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -24215,7 +24328,6 @@
         "cache_read_input_token_cost": 0.05e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -24247,7 +24359,6 @@
         "output_cost_per_token_above_128k_tokens": 30e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -24263,7 +24374,6 @@
         "output_cost_per_token_above_128k_tokens": 30e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -24340,6 +24450,11 @@
         "input_cost_per_query": 1.5e-03,
         "litellm_provider": "vertex_ai",
         "mode": "vector_store"
+    },
+    "openai/container": {
+        "code_interpreter_cost_per_session": 0.03,
+        "litellm_provider": "openai",
+        "mode": "chat"
     },
     "openai/sora-2": {
         "litellm_provider": "openai",
