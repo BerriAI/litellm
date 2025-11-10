@@ -104,7 +104,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         if generation_config:
             request_body["generationConfig"] = generation_config
 
-        return request_body, None
+        empty_files = cast(RequestFiles, [])
+        return request_body, empty_files
 
     def transform_image_edit_response(
         self,
