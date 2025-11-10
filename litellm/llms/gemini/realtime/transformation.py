@@ -58,7 +58,7 @@ from ..common_utils import encode_unserializable_types, get_api_key_from_env
 
 MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[str, OpenAIRealtimeEventTypes] = {
     "setupComplete": OpenAIRealtimeEventTypes.SESSION_CREATED,
-    "serverContent.generationComplete": OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
+    "serverContent.generationComplete": OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_TEXT_DONE,
     "serverContent.turnComplete": OpenAIRealtimeEventTypes.RESPONSE_DONE,
     "serverContent.interrupted": OpenAIRealtimeEventTypes.RESPONSE_DONE,
 }
@@ -94,8 +94,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         Map the model turn event to the OpenAI realtime events.
 
         Returns either:
-        - response.text.delta - model_turn: {"parts": [{"text": "..."}]}
-        - response.audio.delta - model_turn: {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "..."}}]}
+        - response.output_text.delta - model_turn: {"parts": [{"text": "..."}]}
+        - response.output_audio.delta - model_turn: {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "..."}}]}
 
         Assumes parts is a single element list.
         """
@@ -107,9 +107,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
             part = parts[0]
             if "text" in part:
-                return OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
+                return OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_TEXT_DELTA
             elif "inlineData" in part:
-                return OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA
+                return OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DELTA
             else:
                 raise ValueError(f"Unexpected part type: {part}")
         raise ValueError(f"Unexpected model turn event, no 'parts' key: {model_turn}")
@@ -118,9 +118,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self, delta_type: Optional[ALL_DELTA_TYPES]
     ) -> OpenAIRealtimeEventTypes:
         if delta_type == "text":
-            return OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE
+            return OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_TEXT_DONE
         elif delta_type == "audio":
-            return OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE
+            return OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DONE
         else:
             raise ValueError(f"Unexpected delta type: {delta_type}")
 
@@ -229,8 +229,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         ## HANDLE SESSION UPDATE ##
         messages: List[str] = []
         if "type" in json_message and json_message["type"] == "session.update":
+            session_params = json_message["session"].copy() if "session" in json_message else {}
+            # GA API requires session type field
+            if "type" not in session_params:
+                session_params["type"] = "realtime"
+            
             client_session_configuration_request = self.map_openai_params(
-                optional_params={}, non_default_params=json_message["session"]
+                optional_params={}, non_default_params=session_params
             )
             client_session_configuration_request["model"] = f"models/{model}"
 
@@ -407,12 +412,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             item_id=output_item_id,
             part=(
                 {
-                    "type": "text",
+                    "type": "output_text",
                     "text": "",
                 }
                 if delta_type == "text"
                 else {
-                    "type": "audio",
+                    "type": "output_audio",
                     "transcript": "",
                 }
             ),
@@ -443,9 +448,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         return OpenAIRealtimeResponseDelta(
             type=(
-                "response.text.delta"
+                "response.output_text.delta"
                 if delta_type == "text"
-                else "response.audio.delta"
+                else "response.output_audio.delta"
             ),
             content_index=0,
             event_id="event_{}".format(uuid.uuid4()),
@@ -472,7 +477,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
         if delta_type == "text":
             return OpenAIRealtimeResponseTextDone(
-                type="response.text.done",
+                type="response.output_text.done",
                 content_index=0,
                 event_id="event_{}".format(uuid.uuid4()),
                 item_id=current_output_item_id,
@@ -482,7 +487,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
         elif delta_type == "audio":
             return OpenAIRealtimeResponseAudioDone(
-                type="response.audio.done",
+                type="response.output_audio.done",
                 content_index=0,
                 event_id="event_{}".format(uuid.uuid4()),
                 item_id=current_output_item_id,
@@ -518,10 +523,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             item_id=current_output_item_id,
             output_index=0,
             part=(
-                {"type": "text", "text": delta_done_event_text}
+                {"type": "output_text", "text": delta_done_event_text}
                 if delta_done_event_text and delta_type == "text"
                 else {
-                    "type": "audio",
+                    "type": "output_audio",
                     "transcript": "",  # gemini doesn't return transcript for audio
                 }
             ),
@@ -542,10 +547,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "role": "assistant",
                 "content": [
                     (
-                        {"type": "text", "text": delta_done_event_text}
+                        {"type": "output_text", "text": delta_done_event_text}
                         if delta_done_event_text and delta_type == "text"
                         else {
-                            "type": "audio",
+                            "type": "output_audio",
                             "transcript": "",
                         }
                     )
@@ -576,7 +581,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 current_delta_chunks = []
                 any_delta_chunk = False
                 for event in transformed_message:
-                    if event["type"] == "response.text.delta":
+                    if event["type"] in ("response.output_text.delta", "response.text.delta"):
                         current_delta_chunks.append(
                             cast(OpenAIRealtimeResponseDelta, event)
                         )
@@ -586,8 +591,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         None  # reset current_delta_chunks if no delta chunks
                     )
             else:
-                if (
-                    transformed_message["type"] == "response.text.delta"
+                if transformed_message["type"] in (
+                    "response.output_text.delta",
+                    "response.text.delta",
                 ):  # ONLY ACCUMULATE TEXT DELTA CHUNKS - AUDIO WILL CAUSE SERVER MEMORY ISSUES
                     if current_delta_chunks is None:
                         current_delta_chunks = []
@@ -719,9 +725,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         ]
 
         returned_message: List[OpenAIRealtimeEvents] = []
-        if (
-            openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
-            or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA
+        if openai_event in (
+            OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_TEXT_DELTA,
+            OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DELTA,
+            OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA,
+            OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA,
         ):
             current_response_id = current_response_id or "resp_{}".format(uuid.uuid4())
             if not current_output_item_id:
@@ -746,9 +754,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 delta_type=delta_type,
             )
             returned_message.append(transformed_message)
-        elif (
-            openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE
-            or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE
+        elif openai_event in (
+            OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_TEXT_DONE,
+            OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DONE,
+            OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
+            OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE,
         ):
             transformed_content_done_event = self.transform_content_done_event(
                 current_output_item_id=current_output_item_id,
@@ -869,11 +879,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     output_items=None,
                 )
                 returned_message.append(transformed_response_done_event)
-            elif (
-                openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
-                or openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE
-                or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA
-                or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE
+            elif openai_event in (
+                OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_TEXT_DELTA,
+                OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_TEXT_DONE,
+                OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DELTA,
+                OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DONE,
+                OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA,
+                OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
+                OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA,
+                OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE,
             ):
                 _returned_message = self.handle_openai_modality_event(
                     openai_event,

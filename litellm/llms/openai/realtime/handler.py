@@ -30,6 +30,18 @@ class OpenAIRealtime(OpenAIChatCompletion):
         if query_params:
             url = url.copy_with(params=query_params)
         return str(url)
+    
+    def _build_extra_headers(self, headers: Optional[dict] = None) -> dict:
+        """
+        Build extra headers for the realtime API.
+        """
+        extra_headers = {
+            "Authorization": f"Bearer {api_key}",  # type: ignore
+        }
+        # Backward compatibility: if client sends OpenAI-Beta header, preserve it for beta API
+        if headers and "OpenAI-Beta" in headers:
+            extra_headers["OpenAI-Beta"] = headers["OpenAI-Beta"]
+        return extra_headers
 
     async def async_realtime(
         self,
@@ -41,6 +53,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
         query_params: Optional[RealtimeQueryParams] = None,
+        headers: Optional[dict] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -57,10 +70,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         try:
             async with websockets.connect(  # type: ignore
                 url,
-                extra_headers={
-                    "Authorization": f"Bearer {api_key}",  # type: ignore
-                    "OpenAI-Beta": "realtime=v1",
-                },
+                extra_headers=self._build_extra_headers(headers=headers),
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(

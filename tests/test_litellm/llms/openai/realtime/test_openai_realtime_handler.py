@@ -194,7 +194,8 @@ async def test_async_realtime_url_contains_model():
         assert "extra_headers" in called_kwargs
         extra_headers = called_kwargs["extra_headers"]
         assert extra_headers["Authorization"] == f"Bearer {api_key}"
-        assert extra_headers["OpenAI-Beta"] == "realtime=v1"
+        # GA API: OpenAI-Beta header has been removed
+        assert "OpenAI-Beta" not in extra_headers
         
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
