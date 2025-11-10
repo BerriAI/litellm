@@ -18,6 +18,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _user_has_admin_view,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -1749,6 +1753,35 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 where_conditions["spend"]["gte"] = min_spend
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
+        try:
+            is_admin_view = _user_has_admin_view(user_api_key_dict=user_api_key_dict)
+        except Exception:
+            is_admin_view = False
+        if not is_admin_view:
+            if team_id is not None:
+                team_obj = await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
+                if team_obj is None or not _is_user_team_admin(
+                    user_api_key_dict=user_api_key_dict, team_obj=team_obj
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "error": "Not authorized to view team spend for team_id={}".format(
+                                team_id
+                            )
+                        },
+                    )
+                where_conditions["team_id"] = team_id
+            else:
+                if getattr(user_api_key_dict, "user_role", None) in (
+                    LitellmUserRoles.INTERNAL_USER,
+                    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+                ):
+                    if getattr(user_api_key_dict, "user_id", None) is not None:
+                        where_conditions["user"] = user_api_key_dict.user_id
+                        where_conditions.pop("team_id", None)
         # Calculate skip value for pagination
         skip = (page - 1) * page_size
 
