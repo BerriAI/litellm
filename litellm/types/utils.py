@@ -1,16 +1,7 @@
 import json
 import time
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -299,7 +290,7 @@ class CallTypes(str, Enum):
     avideo_retrieve_job = "avideo_retrieve_job"
     video_delete = "video_delete"
     avideo_delete = "avideo_delete"
-    
+
     #########################################################
     # Container Call Types
     #########################################################
@@ -311,7 +302,7 @@ class CallTypes(str, Enum):
     aretrieve_container = "aretrieve_container"
     delete_container = "delete_container"
     adelete_container = "adelete_container"
-    
+
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
     alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
@@ -374,6 +365,7 @@ CallTypesLiteral = Literal[
     "aocr",
     "avector_store_search",
     "vector_store_search",
+    "call_mcp_tool",
 ]
 
 
@@ -1775,6 +1767,10 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             total_tokens=0,
         )
         super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
+
+        self.quality = kwargs.get("quality", None)
+        self.output_format = kwargs.get("output_format", None)
+        self.size = kwargs.get("size", None)
         self._hidden_params = hidden_params or {}
 
     def __contains__(self, key):
@@ -1801,8 +1797,29 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             return self.dict()
 
 
+class TranscriptionUsageDurationObject(BaseModel):
+    type: Literal["duration"]
+    seconds: int
+
+
+class TranscriptionUsageInputTokenDetailsObject(BaseModel):
+    audio_tokens: int
+    text_tokens: int
+
+
+class TranscriptionUsageTokensObject(BaseModel):
+    type: Literal["tokens"]
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    input_token_details: TranscriptionUsageInputTokenDetailsObject
+
+
 class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
+    usage: Optional[
+        Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject]
+    ] = None
 
     _hidden_params: dict = {}
     _response_headers: Optional[dict] = None

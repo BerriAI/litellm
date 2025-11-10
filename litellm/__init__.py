@@ -7,7 +7,7 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 warnings.filterwarnings(
     "ignore", message=".*Accessing the.*attribute on the instance is deprecated.*"
 )
-### INIT VARIABLES ######################
+### INIT VARIABLES #######################
 import threading
 import os
 from typing import (
@@ -34,7 +34,7 @@ from litellm.types.utils import (
     all_litellm_params as _litellm_completion_params,
     CredentialItem,
     PriorityReservationDict,
-)  # maintain backwards compatibility for root param
+)  # maintain backwards compatibility for root param.
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -1230,6 +1230,7 @@ from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from .llms.azure.responses.o_series_transformation import (
     AzureOpenAIOSeriesResponsesAPIConfig,
 )
+from .llms.xai.responses.transformation import XAIResponsesAPIConfig
 from .llms.litellm_proxy.responses.transformation import (
     LiteLLMProxyResponsesAPIConfig,
 )

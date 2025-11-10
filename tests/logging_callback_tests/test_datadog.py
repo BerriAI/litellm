@@ -612,7 +612,7 @@ async def test_datadog_message_redaction():
         
         # Apply redaction using the inherited method
         redacted_details = dd_logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
-        redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
+        redacted_str = "redacted-by-litellm"
         
         # Verify that messages are redacted
         redacted_standard_obj = redacted_details["standard_logging_object"]
