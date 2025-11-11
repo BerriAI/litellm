@@ -127,6 +127,33 @@ def _get_bearer_token(
     return api_key
 
 
+def _apply_budget_limits_to_end_user_params(
+    end_user_params: dict,
+    budget_info: LiteLLM_BudgetTable,
+    end_user_id: str,
+) -> None:
+    """
+    Helper function to apply budget limits to end user parameters.
+    
+    Args:
+        end_user_params: Dictionary to update with budget parameters
+        budget_info: Budget table object containing limits
+        end_user_id: ID of the end user for logging
+    """
+    if budget_info.tpm_limit is not None:
+        end_user_params["end_user_tpm_limit"] = budget_info.tpm_limit
+    
+    if budget_info.rpm_limit is not None:
+        end_user_params["end_user_rpm_limit"] = budget_info.rpm_limit
+    
+    if budget_info.max_budget is not None:
+        end_user_params["end_user_max_budget"] = budget_info.max_budget
+    
+    verbose_proxy_logger.debug(
+        f"Applied budget limits to end user {end_user_id}"
+    )
+
+
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
@@ -643,19 +670,28 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         _end_user_object.allowed_model_region
                     )
                     if _end_user_object.litellm_budget_table is not None:
-                        budget_info = _end_user_object.litellm_budget_table
-                        if budget_info.tpm_limit is not None:
-                            end_user_params["end_user_tpm_limit"] = (
-                                budget_info.tpm_limit
-                            )
-                        if budget_info.rpm_limit is not None:
-                            end_user_params["end_user_rpm_limit"] = (
-                                budget_info.rpm_limit
-                            )
-                        if budget_info.max_budget is not None:
-                            end_user_params["end_user_max_budget"] = (
-                                budget_info.max_budget
-                            )
+                        _apply_budget_limits_to_end_user_params(
+                            end_user_params=end_user_params,
+                            budget_info=_end_user_object.litellm_budget_table,
+                            end_user_id=end_user_id,
+                        )
+                elif litellm.max_end_user_budget_id is not None:
+                    # End user doesn't exist yet, but apply default budget limits if configured
+                    from litellm.proxy.auth.auth_checks import (
+                        get_default_end_user_budget,
+                    )
+
+                    default_budget = await get_default_end_user_budget(
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                    )
+                    if default_budget is not None:
+                        _apply_budget_limits_to_end_user_params(
+                            end_user_params=end_user_params,
+                            budget_info=default_budget,
+                            end_user_id=end_user_id,
+                        )
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
