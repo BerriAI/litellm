@@ -1,9 +1,8 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
 from litellm.proxy._types import CommonProxyErrors
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -15,7 +14,6 @@ router = APIRouter()
 @router.get(
     "/public/model_hub",
     tags=["public", "model management"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=List[ModelGroupInfoProxy],
 )
 async def public_model_hub():

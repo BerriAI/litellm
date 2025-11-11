@@ -8227,8 +8227,8 @@ async def fallback_login(request: Request):
     """
     from litellm.proxy.proxy_server import ui_link
 
-    # get url from request
-    redirect_url = get_custom_url(str(request.base_url))
+    # get url from request - pass Request object to enable X-Forwarded-* header detection
+    redirect_url = get_custom_url(str(request.base_url), request=request)
     ui_username = os.getenv("UI_USERNAME")
     if redirect_url.endswith("/"):
         redirect_url += "sso/callback"
@@ -8352,7 +8352,7 @@ async def login(request: Request):  # noqa: PLR0915
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         key = response["token"]  # type: ignore
-        litellm_dashboard_ui = get_custom_url(str(request.base_url))
+        litellm_dashboard_ui = get_custom_url(str(request.base_url), request=request)
         if litellm_dashboard_ui.endswith("/"):
             litellm_dashboard_ui += "ui/"
         else:
@@ -8456,7 +8456,7 @@ async def login(request: Request):  # noqa: PLR0915
                     code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
             key = response["token"]  # type: ignore
-            litellm_dashboard_ui = get_custom_url(str(request.base_url))
+            litellm_dashboard_ui = get_custom_url(str(request.base_url), request=request)
             if litellm_dashboard_ui.endswith("/"):
                 litellm_dashboard_ui += "ui/"
             else:
@@ -8587,7 +8587,7 @@ async def onboarding(invite_link: str, request: Request):
     )
     key = response["token"]  # type: ignore
 
-    litellm_dashboard_ui = get_custom_url(str(request.base_url))
+    litellm_dashboard_ui = get_custom_url(str(request.base_url), request=request)
     if litellm_dashboard_ui.endswith("/"):
         litellm_dashboard_ui += "ui/onboarding"
     else:
