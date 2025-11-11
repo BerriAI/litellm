@@ -2409,7 +2409,7 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
     Test that /get/config/callbacks returns all three callback types:
     - success_callback with type="success"
     - failure_callback with type="failure"  
-    - callbacks (generic) with type="generic"
+    - callbacks (success_and_failure) with type="success_and_failure"
     """
     from litellm.proxy.proxy_server import ProxyConfig
     
@@ -2437,7 +2437,7 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
     with patch.object(
         proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
     ), patch(
-        "litellm.proxy.proxy_server.decrypt_value_helper",
+        "litellm.proxy.common_utils.callback_utils.decrypt_value_helper",
         side_effect=lambda value, key=None: value
     ):
         response = client_no_auth.get("/get/config/callbacks")
@@ -2452,20 +2452,20 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
         
         callbacks = result["callbacks"]
         
-        # Verify we have all 5 callbacks (2 success + 1 failure + 2 generic)
+        # Verify we have all 5 callbacks (2 success + 1 failure + 2 success_and_failure)
         assert len(callbacks) == 5
         
         # Group callbacks by type
         success_callbacks = [cb for cb in callbacks if cb.get("type") == "success"]
         failure_callbacks = [cb for cb in callbacks if cb.get("type") == "failure"]
-        generic_callbacks = [cb for cb in callbacks if cb.get("type") == "generic"]
+        success_and_failure_callbacks = [cb for cb in callbacks if cb.get("type") == "success_and_failure"]
         
         # Verify all callbacks have required fields
         for callback in callbacks:
             assert "name" in callback
             assert "variables" in callback
             assert "type" in callback
-            assert callback["type"] in ["success", "failure", "generic"]
+            assert callback["type"] in ["success", "failure", "success_and_failure"]
         
         # Verify success callbacks
         assert len(success_callbacks) == 2
@@ -2477,11 +2477,11 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
         assert len(failure_callbacks) == 1
         assert failure_callbacks[0]["name"] == "sentry"
         
-        # Verify generic callbacks
-        assert len(generic_callbacks) == 2
-        generic_names = [cb["name"] for cb in generic_callbacks]
-        assert "otel" in generic_names
-        assert "langsmith" in generic_names
+        # Verify success_and_failure callbacks
+        assert len(success_and_failure_callbacks) == 2
+        success_and_failure_names = [cb["name"] for cb in success_and_failure_callbacks]
+        assert "otel" in success_and_failure_names
+        assert "langsmith" in success_and_failure_names
 
 
 @pytest.mark.asyncio
@@ -2521,7 +2521,7 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
     with patch.object(
         proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
     ), patch(
-        "litellm.proxy.proxy_server.decrypt_value_helper",
+        "litellm.proxy.common_utils.callback_utils.decrypt_value_helper",
         side_effect=mock_decrypt
     ):
         response = client_no_auth.get("/get/config/callbacks")
@@ -2548,12 +2548,12 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert "LANGFUSE_HOST" in langfuse_vars
         assert langfuse_vars["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
         
-        # Find otel callback (generic type)
+        # Find otel callback (success_and_failure type)
         otel_callback = next(
             (cb for cb in callbacks if cb["name"] == "otel"), None
         )
         assert otel_callback is not None
-        assert otel_callback["type"] == "generic"
+        assert otel_callback["type"] == "success_and_failure"
         assert "variables" in otel_callback
         
         # Verify otel env vars are present

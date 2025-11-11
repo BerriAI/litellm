@@ -3,8 +3,12 @@ from typing import Any, Dict, List, Literal, Optional
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.types_utils.utils import get_instance_fn
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+)
 
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
@@ -382,3 +386,25 @@ def get_metadata_variable_name_from_kwargs(
         - LiteLLM is now moving to using `litellm_metadata` for our metadata
         """
         return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+
+def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict:
+    """Process a single callback and return its data with environment variables"""
+    env_vars = CustomLogger.get_callback_env_vars(_callback)
+
+    env_vars_dict: dict[str, str | None] = {}
+    for _var in env_vars:
+        env_variable = environment_variables.get(_var, None)
+        if env_variable is None:
+            env_vars_dict[_var] = None
+        else:
+            # decode + decrypt the value
+            decrypted_value = decrypt_value_helper(
+                value=env_variable, key=_var
+            )
+            env_vars_dict[_var] = decrypted_value
+
+    return {
+        "name": _callback,
+        "variables": env_vars_dict,
+        "type": callback_type
+    }
