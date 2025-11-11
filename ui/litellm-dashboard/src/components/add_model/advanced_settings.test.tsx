@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdvancedSettings from "./advanced_settings";
 
@@ -41,6 +41,9 @@ describe("AdvancedSettings", () => {
         tagsList={{}}
       />,
     );
+    act(() => {
+      fireEvent.click(getByText("Advanced Settings"));
+    });
     await waitFor(() => {
       expect(getByText("LiteLLM Params")).toBeInTheDocument();
     });
