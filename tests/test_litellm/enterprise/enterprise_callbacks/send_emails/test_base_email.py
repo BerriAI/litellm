@@ -7,11 +7,18 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+# Add enterprise directory to path before importing
+_workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
+_enterprise_path = os.path.join(_workspace_root, "enterprise")
+if _enterprise_path not in sys.path:
+    sys.path.insert(0, _enterprise_path)
+
+sys.path.insert(0, os.path.abspath("../../.."))
+
 from enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
     BaseEmailLogger,
 )
 
-sys.path.insert(0, os.path.abspath("../../.."))
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
     SendKeyCreatedEmailEvent,

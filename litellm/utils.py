@@ -795,7 +795,7 @@ def function_setup(  # noqa: PLR0915
                             audio_file=_file_obj
                         )
                     )
-                except (ValueError, Exception) as e:
+                except (ValueError, Exception):
                     # Fallback to filename or a default value if hash calculation fails
                     # This can happen in tests or when file processing fails
                     try:
