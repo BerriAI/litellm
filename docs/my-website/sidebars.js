@@ -575,6 +575,13 @@ const sidebars = {
         "providers/nlp_cloud",
         "providers/recraft",
         "providers/replicate",
+        {
+          type: "category",
+          label: "RunwayML",
+          items: [
+            "providers/runwayml/videos",
+          ]
+        },
         "providers/togetherai",
         "providers/v0",
         "providers/vercel_ai_gateway",
