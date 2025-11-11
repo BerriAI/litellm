@@ -956,9 +956,12 @@ class TestSSOHandlerIntegration:
         """Test the redirect URL generation for SSO"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        # Mock request object
-        mock_request = MagicMock()
+        # Mock request object with headers
+        mock_request = MagicMock(spec=Request)
         mock_request.base_url = "https://test.litellm.ai/"
+        # Configure headers.get() to return None (no X-Forwarded-* headers)
+        # This will make get_custom_url fall back to request.base_url
+        mock_request.headers.get = lambda key, default=None: default
 
         # Test redirect URL generation
         redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
