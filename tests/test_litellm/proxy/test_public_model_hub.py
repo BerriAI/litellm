@@ -33,15 +33,14 @@ def test_public_model_hub_no_auth_required():
     client = TestClient(app)
 
     # Mock litellm.public_model_groups and llm_router
-    # Note: llm_router is imported inside the function, so we patch it at the source module
+    # Note: litellm and llm_router are imported inside the function, so we patch them at the source modules
     mock_router_obj = MagicMock()
-    with patch("litellm.proxy.public_endpoints.public_endpoints.litellm") as mock_litellm, patch(
+    with patch("litellm.public_model_groups", ["gpt-4", "claude-3"]), patch(
         "litellm.proxy.proxy_server._get_model_group_info"
     ) as mock_get_info, patch(
         "litellm.proxy.proxy_server.llm_router", mock_router_obj, create=True
     ):
         # Set up mocks
-        mock_litellm.public_model_groups = ["gpt-4", "claude-3"]
         mock_get_info.return_value = [
             {
                 "model_group": "gpt-4",
