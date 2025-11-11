@@ -10,11 +10,10 @@ All /customer management endpoints
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
-import traceback
 from typing import List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger

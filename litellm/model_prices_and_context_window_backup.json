@@ -16624,6 +16624,20 @@
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_vision": true
     },
+    "moonshot/kimi-k2-thinking": {
+        "cache_read_input_token_cost": 1.5e-7,
+        "input_cost_per_token": 6e-7,
+        "litellm_provider": "moonshot",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-6,
+        "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
     "moonshot/moonshot-v1-128k": {
         "input_cost_per_token": 2e-06,
         "litellm_provider": "moonshot",

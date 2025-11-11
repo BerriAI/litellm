@@ -2479,6 +2479,7 @@ jobs:
           command: |
             sudo apt-get update
             sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            sudo systemctl restart docker
       - run:
           name: Install Python 3.9
           command: |
