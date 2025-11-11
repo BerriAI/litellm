@@ -997,7 +997,7 @@ class DBSpendUpdateWriter:
                             # should sort by the table first.
                             key=lambda x: (
                                 x[1]["date"],
-                                x[1].get(entity_id_field),
+                                x[1].get(entity_id_field) or "",
                                 x[1]["api_key"],
                                 x[1]["model"],
                                 x[1]["custom_llm_provider"],

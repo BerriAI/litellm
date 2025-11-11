@@ -1,17 +1,7 @@
 import json
 import time
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -129,6 +119,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
+    cache_creation_input_token_cost_above_200k_tokens: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[
@@ -137,6 +128,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_above_200k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -280,7 +272,7 @@ class CallTypes(str, Enum):
     file_content = "file_content"
     create_fine_tuning_job = "create_fine_tuning_job"
     acreate_fine_tuning_job = "acreate_fine_tuning_job"
-    
+
     #########################################################
     # Video Generation Call Types
     #########################################################
@@ -298,6 +290,19 @@ class CallTypes(str, Enum):
     avideo_retrieve_job = "avideo_retrieve_job"
     video_delete = "video_delete"
     avideo_delete = "avideo_delete"
+
+    #########################################################
+    # Container Call Types
+    #########################################################
+    create_container = "create_container"
+    acreate_container = "acreate_container"
+    list_containers = "list_containers"
+    alist_containers = "alist_containers"
+    retrieve_container = "retrieve_container"
+    aretrieve_container = "aretrieve_container"
+    delete_container = "delete_container"
+    adelete_container = "adelete_container"
+
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
     alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
@@ -360,6 +365,7 @@ CallTypesLiteral = Literal[
     "aocr",
     "avector_store_search",
     "vector_store_search",
+    "call_mcp_tool",
 ]
 
 
@@ -807,6 +813,8 @@ class Delta(OpenAIObject):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
                         current_index += 1
+                    if tool_call.get("type", None) is None:
+                        tool_call["type"] = "function"
                     self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
                 elif isinstance(tool_call, ChatCompletionDeltaToolCall):
                     self.tool_calls.append(tool_call)
@@ -1179,8 +1187,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-
-
 class ModelResponseBase(OpenAIObject):
     id: str
     """A unique identifier for the completion."""
@@ -1282,7 +1288,7 @@ class ModelResponse(ModelResponseBase):
     choices: List[Union[Choices, StreamingChoices]]
     """The list of completion choices the model generated for the input prompt."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         id=None,
         choices=None,
@@ -1761,6 +1767,10 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             total_tokens=0,
         )
         super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
+
+        self.quality = kwargs.get("quality", None)
+        self.output_format = kwargs.get("output_format", None)
+        self.size = kwargs.get("size", None)
         self._hidden_params = hidden_params or {}
 
     def __contains__(self, key):
@@ -1787,8 +1797,29 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             return self.dict()
 
 
+class TranscriptionUsageDurationObject(BaseModel):
+    type: Literal["duration"]
+    seconds: int
+
+
+class TranscriptionUsageInputTokenDetailsObject(BaseModel):
+    audio_tokens: int
+    text_tokens: int
+
+
+class TranscriptionUsageTokensObject(BaseModel):
+    type: Literal["tokens"]
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    input_token_details: TranscriptionUsageInputTokenDetailsObject
+
+
 class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
+    usage: Optional[
+        Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject]
+    ] = None
 
     _hidden_params: dict = {}
     _response_headers: Optional[dict] = None
@@ -2190,7 +2221,7 @@ class StandardLoggingPayload(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
-    guardrail_information: Optional[StandardLoggingGuardrailInformation]
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 
@@ -2501,6 +2532,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
     MISTRAL = "mistral"
+    MILVUS = "milvus"
     GROQ = "groq"
     NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
@@ -2576,12 +2608,15 @@ class SearchProviders(str, Enum):
     Enum for search provider types.
     Separate from LlmProviders for semantic clarity.
     """
+
     PERPLEXITY = "perplexity"
     TAVILY = "tavily"
     PARALLEL_AI = "parallel_ai"
     EXA_AI = "exa_ai"
     GOOGLE_PSE = "google_pse"
     DATAFORSEO = "dataforseo"
+    FIRECRAWL = "firecrawl"
+    SEARXNG = "searxng"
 
 
 # Create a set of all search provider values for quick lookup
@@ -2770,6 +2805,10 @@ class SpecialEnums(Enum):
 
     LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR = "litellm_proxy;model_id:{};generic_response_id:{}"  # generic implementation of 'managed batches' - used for finetuning and any future work.
 
+    LITELLM_MANAGED_VIDEO_COMPLETE_STR = (
+        "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
+    )
+
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
@@ -2822,13 +2861,13 @@ CostResponseTypes = Union[
 class PriorityReservationDict(TypedDict, total=False):
     """
     Dictionary format for priority reservation values.
-    
+
     Used in litellm.priority_reservation to specify how much capacity to reserve
     for each priority level. Supports three formats:
     1. Percentage-based: {"type": "percent", "value": 0.9} -> 90% of capacity
     2. RPM-based: {"type": "rpm", "value": 900} -> 900 requests per minute
     3. TPM-based: {"type": "tpm", "value": 900000} -> 900,000 tokens per minute
-    
+
     Attributes:
         type: The type of value - "percent", "rpm", or "tpm". Defaults to "percent".
         value: The numeric value. For percent (0.0-1.0), for rpm/tpm (absolute value).

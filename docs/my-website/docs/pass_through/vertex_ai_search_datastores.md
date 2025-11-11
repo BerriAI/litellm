@@ -50,7 +50,7 @@ Register your datastore once. Reference it by ID.
 vector_store_registry:
   - vector_store_name: "vertex-ai-litellm-website-knowledgebase"
     litellm_params:
-      vector_store_id: "litellm-docs_1761094140318"
+      vector_store_id: "my-datastore"
       custom_llm_provider: "vertex_ai/search_api"
       vertex_app_id: "test-litellm-app_1761094730750"
       vertex_project: "test-vector-store-db"
@@ -120,3 +120,20 @@ for result in response.json().get("results", []):
     print(f"{data['title']}: {data['link']}")
 ```
 
+### Use with Chat Completion
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -d '{
+    "model": "claude-3-5-sonnet",
+    "messages": [{"role": "user", "content": "What is litellm?"}],
+    "tools": [
+        {
+            "type": "file_search",
+            "vector_store_ids": ["my-datastore"]
+        }
+    ]
+  }'
+```

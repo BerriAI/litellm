@@ -132,11 +132,15 @@ print(response)
 
 ## Streaming ([Docs](https://docs.litellm.ai/docs/completion/stream))
 
-liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
+LiteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 Streaming is supported for all models (Bedrock, Huggingface, TogetherAI, Azure, OpenAI, etc.)
 
 ```python
 from litellm import completion
+
+messages = [{"content": "Hello, how are you?", "role": "user"}]
+
+# gpt-4o
 response = completion(model="openai/gpt-4o", messages=messages, stream=True)
 for part in response:
     print(part.choices[0].delta.content or "")
@@ -301,8 +305,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 }
 ```
 
-## Supported Providers ([Docs](https://docs.litellm.ai/docs/providers))
-
+## Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
 
 | Provider                                                                            | `/chat/completions` | `/messages` | `/responses` | `/embeddings` | `/image/generations` | `/audio/transcriptions` | `/audio/speech` | `/moderations` | `/batches` | `/rerank` |
 |-------------------------------------------------------------------------------------|---------------------|-------------|--------------|---------------|----------------------|-------------------------|-----------------|----------------|-----------|-----------|
