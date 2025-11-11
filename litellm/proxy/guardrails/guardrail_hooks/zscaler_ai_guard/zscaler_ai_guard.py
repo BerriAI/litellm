@@ -4,7 +4,7 @@
 #
 # +-------------------------------------------------------------+
 import os
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union, List
 from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
@@ -12,6 +12,10 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.types.guardrails import (
+    PiiEntityType,
+)
+
 from litellm.types.utils import (
     TextCompletionResponse,
     ModelResponse,
@@ -67,6 +71,44 @@ class ZscalerAIGuard(CustomGuardrail):
         super().__init__(default_on=True)
 
         verbose_proxy_logger.debug("ZscalerAIGuard Initializing ...")
+    
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+        request_data: Optional[dict] = None,
+    ) -> str:
+        """
+        UI will call this function to check:
+            1. If the connection to the guardrail is working
+            2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
+        """
+    
+        try:
+            verbose_proxy_logger.debug("ZscalerAIGuard: Applying guardrail for testing.")
+            zscaler_ai_guard_result = await self.make_zscaler_ai_guard_api_call(
+                zscaler_ai_guard_url=self.zscaler_ai_guard_url,
+                api_key=self.api_key,
+                policy_id=self.policy_id,
+                direction="IN",
+                content=text,
+                **(request_data or {}),
+            )
+
+            if zscaler_ai_guard_result and zscaler_ai_guard_result.get("action") == "BLOCK":
+                blocking_info = zscaler_ai_guard_result.get("zscaler_ai_guard_response")
+                error_message = f"Content blocked by Zscaler AI Guard: {self.extract_blocking_info(blocking_info)}"
+                raise Exception(error_message)
+
+            verbose_proxy_logger.debug("ZscalerAIGuard: Successfully applied guardrail.")
+            return text
+
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "ZscalerAIGuard: Failed to apply guardrail: %s", str(e)
+            )
+            raise Exception(f"Zscaler AI Guard failed: {str(e)}")
 
     def extract_blocking_info(self, response):
         """
