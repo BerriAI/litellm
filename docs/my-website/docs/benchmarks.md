@@ -122,6 +122,48 @@ class MyUser(HttpUser):
 ```
 
 
+## LiteLLM vs Portkey Performance Comparison
+
+**Test Configuration**: 4 CPUs, 8 GB RAM per instance | Load: 1k concurrent users, 500 ramp-up
+
+### Multi-Instance (4×) Performance
+
+| Metric              | Portkey (no DB) | LiteLLM (with DB) |
+| ------------------- | --------------- | ----------------- |
+| **Total Requests**  | 293,796         | 312,405           |
+| **Failed Requests** | 0               | 0                 |
+| **Median Latency**  | 100 ms          | 100 ms            |
+| **p95 Latency**     | 230 ms          | 150 ms            |
+| **p99 Latency**     | 500 ms          | 240 ms            |
+| **Average Latency** | 123 ms          | 111 ms            |
+| **Current RPS**     | 1,170.9         | 1,170             |
+
+### Technical Insights
+
+**Portkey**
+
+**Pros**
+
+* Low memory footprint
+* Stable latency with minimal spikes
+
+**Cons**
+
+* CPU utilization capped around ~40%, indicating underutilization of available compute resources
+* Experienced three I/O timeout outages
+
+**LiteLLM**
+
+**Pros**
+
+* Fully utilizes available CPU capacity
+* Strong connection handling and low latency after initial warm-up spikes
+
+**Cons**
+
+* High memory usage during initialization and per request
+
+
 
 ## Logging Callbacks
 

@@ -1342,8 +1342,10 @@ def test_add_update_server_with_alias():
     mock_mcp_server.url = "https://test-server.com/mcp"
     mock_mcp_server.transport = MCPTransport.http
     mock_mcp_server.auth_type = None
+    mock_mcp_server.credentials = {}
     mock_mcp_server.description = "Test server description"
     mock_mcp_server.mcp_info = {}
+    mock_mcp_server.static_headers = {}
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
@@ -1379,8 +1381,10 @@ def test_add_update_server_without_alias():
     mock_mcp_server.url = "https://test-server.com/mcp"
     mock_mcp_server.transport = MCPTransport.http
     mock_mcp_server.auth_type = None
+    mock_mcp_server.credentials = {}
     mock_mcp_server.description = "Test server description"
     mock_mcp_server.mcp_info = {}
+    mock_mcp_server.static_headers = {}
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
@@ -1416,8 +1420,10 @@ def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.url = "https://test-server.com/mcp"
     mock_mcp_server.transport = MCPTransport.http
     mock_mcp_server.auth_type = None
+    mock_mcp_server.credentials = {}
     mock_mcp_server.description = "Test server description"
     mock_mcp_server.mcp_info = {}
+    mock_mcp_server.static_headers = {}
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None

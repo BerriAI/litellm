@@ -38,34 +38,33 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+)
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
 
-def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
+def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
     """
-    Helper function to deserialize environment dictionary from database storage.
-    Handles both JSON string and dictionary formats.
+    Deserialize optional JSON mappings stored in the database.
 
-    Args:
-        env_data: The environment data from database (could be JSON string or dict)
-
-    Returns:
-        Dict[str, str] or None: Deserialized environment dictionary
+    Accepts values kept as JSON strings or materialized dictionaries and
+    returns None when the input is empty or cannot be decoded.
     """
-    if not env_data:
+    if not data:
         return None
 
-    if isinstance(env_data, str):
+    if isinstance(data, str):
         try:
-            return json.loads(env_data)
+            return json.loads(data)
         except (json.JSONDecodeError, TypeError):
             # If it's not valid JSON, return as-is (shouldn't happen but safety)
             return None
     else:
         # Already a dictionary
-        return env_data
+        return data
 
 
 class MCPServerManager:
@@ -398,10 +397,26 @@ class MCPServerManager:
         try:
             if mcp_server.server_id not in self.get_registry():
                 _mcp_info: MCPInfo = mcp_server.mcp_info or {}
-                # Use helper to deserialize environment dictionary
+                # Use helper to deserialize dictionary
                 # Safely access env field which may not exist on Prisma model objects
-                env_data = getattr(mcp_server, "env", None)
-                env_dict = _deserialize_env_dict(env_data)
+                env_dict = _deserialize_json_dict(getattr(mcp_server, "env", None))
+                static_headers_dict = _deserialize_json_dict(
+                    getattr(mcp_server, "static_headers", None)
+                )
+                credentials_dict = _deserialize_json_dict(
+                    getattr(mcp_server, "credentials", None)
+                )
+
+                encrypted_auth_value: Optional[str] = None
+                if credentials_dict:
+                    encrypted_auth_value = credentials_dict.get("auth_value")
+
+                auth_value: Optional[str] = None
+                if encrypted_auth_value:
+                    auth_value = decrypt_value_helper(
+                        value=encrypted_auth_value,
+                        key="auth_value",
+                    )
                 # Use alias for name if present, else server_name
                 name_for_prefix = (
                     mcp_server.alias or mcp_server.server_name or mcp_server.server_id
@@ -424,8 +439,10 @@ class MCPServerManager:
                     url=mcp_server.url,
                     transport=cast(MCPTransportType, mcp_server.transport),
                     auth_type=cast(MCPAuthType, mcp_server.auth_type),
+                    authentication_token=auth_value,
                     mcp_info=mcp_info,
                     extra_headers=getattr(mcp_server, "extra_headers", None),
+                    static_headers=static_headers_dict,
                     # oauth specific fields
                     client_id=getattr(mcp_server, "client_id", None),
                     client_secret=getattr(mcp_server, "client_secret", None),

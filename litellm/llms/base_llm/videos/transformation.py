@@ -92,10 +92,11 @@ class BaseVideoConfig(ABC):
         self,
         model: str,
         prompt: str,
+        api_base: str,
         video_create_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
+    ) -> Tuple[Dict, RequestFiles, str]:
         pass
 
     @abstractmethod
@@ -104,6 +105,8 @@ class BaseVideoConfig(ABC):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
     ) -> VideoObject:
         pass
 
@@ -111,7 +114,6 @@ class BaseVideoConfig(ABC):
     def transform_video_content_request(
         self,
         video_id: str,
-        model: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -127,7 +129,6 @@ class BaseVideoConfig(ABC):
     @abstractmethod
     def transform_video_content_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
@@ -138,7 +139,6 @@ class BaseVideoConfig(ABC):
         self,
         video_id: str,
         prompt: str,
-        model: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -155,16 +155,15 @@ class BaseVideoConfig(ABC):
     @abstractmethod
     def transform_video_remix_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
         pass
 
     @abstractmethod
     def transform_video_list_request(
         self,
-        model: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -184,9 +183,9 @@ class BaseVideoConfig(ABC):
     @abstractmethod
     def transform_video_list_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> Dict[str,str]:
         pass
 
@@ -194,7 +193,6 @@ class BaseVideoConfig(ABC):
     def transform_video_delete_request(
         self,
         video_id: str,
-        model: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -210,7 +208,6 @@ class BaseVideoConfig(ABC):
     @abstractmethod
     def transform_video_delete_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> VideoObject:
@@ -220,7 +217,6 @@ class BaseVideoConfig(ABC):
     def transform_video_status_retrieve_request(
         self,
         video_id: str,
-        model: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -236,9 +232,9 @@ class BaseVideoConfig(ABC):
     @abstractmethod
     def transform_video_status_retrieve_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
         pass
 

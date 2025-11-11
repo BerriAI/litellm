@@ -7,6 +7,7 @@ Provides real-time threat detection, DLP, URL filtering, content masking, and po
 
 import os
 from litellm._uuid import uuid
+from litellm.caching import DualCache
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type
 
 from fastapi import HTTPException
@@ -38,7 +39,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         guardrail_name: Name of the guardrail instance
         api_key: PANW Prisma AIRS API key
         api_base: PANW Prisma AIRS API endpoint (default: https://service.api.aisecurity.paloaltonetworks.com)
-        profile_name: PANW security profile name
+        profile_name: PANW security profile name (optional if API key has linked profile)
+        app_name: Application name for tracking in Prisma AIRS analytics (default: "LiteLLM")
         mask_request_content: Apply masking to prompts (default: False)
         mask_response_content: Apply masking to responses (default: False)
         mask_on_block: Backwards compatible flag that enables both request and response masking
@@ -47,13 +49,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str,
-        profile_name: str,
+        profile_name: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         default_on: bool = True,
         mask_on_block: bool = False,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
+        app_name: Optional[str] = None,
         **kwargs,
     ):
         """Initialize PANW Prisma AIRS guardrail handler."""
@@ -69,7 +72,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             default_on=default_on,
             mask_request_content=_mask_request_content,
             mask_response_content=_mask_response_content,
-            **kwargs
+            **kwargs,
         )
 
         # Store configuration with env var fallbacks
@@ -80,7 +83,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             or "https://service.api.aisecurity.paloaltonetworks.com"
         )
         self.profile_name = profile_name
-        
+
+        # Handle app_name: Default to "LiteLLM", or prefix user's app_name with "LiteLLM-"
+        if app_name:
+            self.app_name = f"LiteLLM-{app_name}"
+        else:
+            self.app_name = "LiteLLM"
+
         # Validate required configuration
         if not self.api_key:
             raise ValueError(
@@ -88,9 +97,19 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 "Set it via config or PANW_PRISMA_AIRS_API_KEY environment variable."
             )
 
+        # Warn if no profile is configured (user must have API key with linked profile)
+        if not self.profile_name:
+            verbose_proxy_logger.warning(
+                f"PANW Prisma AIRS Guardrail '{guardrail_name}': No profile_name configured. "
+                f"Ensure your API key has a linked profile in Strata Cloud Manager, "
+                f"or provide 'profile_name'/'profile_id' via config or per-request metadata. "
+                f"Requests will fail if the API key is not linked to a profile."
+            )
+
         verbose_proxy_logger.info(
             f"Initialized PANW Prisma AIRS Guardrail: {guardrail_name} "
-            f"(mask_request={self.mask_request_content}, mask_response={self.mask_response_content})"
+            f"(profile={self.profile_name or 'API-key-linked'}, "
+            f"mask_request={self.mask_request_content}, mask_response={self.mask_response_content})"
         )
 
     def _extract_text_from_messages(self, messages: List[Dict[str, Any]]) -> str:
@@ -136,27 +155,37 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         """
         try:
             from litellm.types.utils import Choices
-            
+
             text_parts = []
-            
+
             if hasattr(response, "choices") and response.choices:
                 for choice in response.choices:
                     if isinstance(choice, Choices):
                         # Extract message content
                         if choice.message.content:
                             text_parts.append(str(choice.message.content))
-                        
+
                         # Extract tool call arguments
-                        if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
+                        if (
+                            hasattr(choice.message, "tool_calls")
+                            and choice.message.tool_calls
+                        ):
                             for tool_call in choice.message.tool_calls:
-                                if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
+                                if hasattr(tool_call, "function") and hasattr(
+                                    tool_call.function, "arguments"
+                                ):
                                     text_parts.append(str(tool_call.function.arguments))
-                        
+
                         # Extract function call arguments (legacy)
-                        if hasattr(choice.message, "function_call") and choice.message.function_call:
+                        if (
+                            hasattr(choice.message, "function_call")
+                            and choice.message.function_call
+                        ):
                             if hasattr(choice.message.function_call, "arguments"):
-                                text_parts.append(str(choice.message.function_call.arguments))
-            
+                                text_parts.append(
+                                    str(choice.message.function_call.arguments)
+                                )
+
             return " ".join(text_parts) if text_parts else ""
         except (AttributeError, IndexError) as e:
             verbose_proxy_logger.error(
@@ -164,37 +193,77 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
         return ""
 
-    async def _call_panw_api(
+    async def _call_panw_api(  # noqa: PLR0915
         self,
         content: str,
         is_response: bool = False,
         metadata: Optional[Dict[str, Any]] = None,
+        call_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Call PANW Prisma AIRS API to scan content."""
 
         if not content.strip():
             return {"action": "allow", "category": "empty"}
 
-        # Build request payload
-        transaction_id = (
-            f"litellm-{'resp' if is_response else 'req'}-{uuid.uuid4().hex[:8]}"
-        )
+        # Use litellm_trace_id as Prisma AIRS AI Session ID for session grouping
+        transaction_id = metadata.get("litellm_trace_id") if metadata else None
+        if not transaction_id:
+            transaction_id = call_id or str(uuid.uuid4())
+
+        # Build Prisma AIRS API metadata
+        # Handle app_name: LiteLLM by default, or LiteLLM-{user_app_name} if user provides one
+        user_app_name = metadata.get("app_name") if metadata else None
+        if user_app_name:
+            app_name_value = f"LiteLLM-{user_app_name}"
+        else:
+            app_name_value = self.app_name  # Defaults to "LiteLLM"
+
+        panw_metadata = {
+            "app_user": (
+                metadata.get("user", "litellm_user") if metadata else "litellm_user"
+            ),
+            "ai_model": metadata.get("model", "unknown") if metadata else "unknown",
+            "app_name": app_name_value,
+            "source": "litellm_builtin_guardrail",
+        }
+
+        # Include user_ip if available (from LiteLLM metadata or request)
+        if metadata and metadata.get("user_ip"):
+            panw_metadata["user_ip"] = metadata["user_ip"]
+        elif metadata and metadata.get("requester_ip_address"):
+            panw_metadata["user_ip"] = metadata["requester_ip_address"]
 
         payload = {
             "tr_id": transaction_id,
-            "ai_profile": {"profile_name": self.profile_name},
-            "metadata": {
-                "app_user": (
-                    metadata.get("user", "litellm_user") if metadata else "litellm_user"
-                ),
-                "ai_model": metadata.get("model", "unknown") if metadata else "unknown",
-                "source": "litellm_builtin_guardrail",
-            },
+            "metadata": panw_metadata,
             "contents": [{"response" if is_response else "prompt": content}],
         }
 
+        # Build ai_profile object per PANW API schema
+        # Priority: per-request profile_id > per-request profile_name > config profile_name
+        # Note: If both are provided, PANW API uses profile_id (profile_id takes precedence)
+        profile_name = None
+        profile_id = None
+
+        if metadata:
+            profile_id = metadata.get("profile_id")
+            profile_name = metadata.get("profile_name", self.profile_name)
+        else:
+            profile_name = self.profile_name
+
+        # Add ai_profile to payload if profile is specified
+        # If neither profile_name nor profile_id is provided, PANW API will use the
+        # profile linked to the API key (if configured in Strata Cloud Manager)
+        if profile_name or profile_id:
+            ai_profile = {}
+            if profile_id:
+                ai_profile["profile_id"] = profile_id
+            if profile_name:
+                ai_profile["profile_name"] = profile_name
+            payload["ai_profile"] = ai_profile
+
         if is_response:
-            payload["metadata"]["is_response"] = True  # type: ignore[index]
+            payload["metadata"]["is_response"] = True  # type: ignore[call-overload, index]
 
         headers = {
             "Content-Type": "application/json",
@@ -205,7 +274,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         try:
             # Use LiteLLM's async HTTP client
             async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.LoggingCallback
+                llm_provider=httpxSpecialProvider.GuardrailCallback
             )
 
             response = await async_client.post(
@@ -225,16 +294,51 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 return {"action": "block", "category": "api_error"}
 
+            # Check for profile-related errors from PANW API
+            if result.get("action") == "block" and "error" in result:
+                error_msg = str(result.get("error", "")).lower()
+                if "profile" in error_msg and (
+                    "not found" in error_msg
+                    or "required" in error_msg
+                    or "invalid" in error_msg
+                ):
+                    verbose_proxy_logger.error(
+                        f"PANW Prisma AIRS: Profile configuration error. "
+                        f"Ensure your API key has a linked profile in Strata Cloud Manager, "
+                        f"or provide 'profile_name' or 'profile_id' in config/metadata. "
+                        f"PANW API response: {result}"
+                    )
+
             verbose_proxy_logger.debug(
                 f"PANW Prisma AIRS: Scan result - Action: {result.get('action')}, Category: {result.get('category', 'unknown')}"
             )
             return result
 
         except Exception as e:
-            verbose_proxy_logger.error(f"PANW Prisma AIRS: API call failed: {str(e)}")
+            error_msg = str(e).lower()
+
+            # Check for profile-related errors in HTTP error responses
+            if "profile" in error_msg and (
+                "not found" in error_msg
+                or "required" in error_msg
+                or "invalid" in error_msg
+            ):
+                verbose_proxy_logger.error(
+                    f"PANW Prisma AIRS: Profile configuration error - {str(e)}. "
+                    f"Your API key may not be linked to a profile. "
+                    f"Either link your API key to a profile in Strata Cloud Manager, "
+                    f"or provide 'profile_name'/'profile_id' in your guardrail config or request metadata."
+                )
+            else:
+                verbose_proxy_logger.error(
+                    f"PANW Prisma AIRS: API call failed: {str(e)}"
+                )
+
             return {"action": "block", "category": "api_error"}
 
-    def _get_masked_text(self, scan_result: Dict[str, Any], is_response: bool = False) -> Optional[str]:
+    def _get_masked_text(
+        self, scan_result: Dict[str, Any], is_response: bool = False
+    ) -> Optional[str]:
         """Extract masked text from PANW scan result."""
         masked_key = "response_masked_data" if is_response else "prompt_masked_data"
         masked_data = scan_result.get(masked_key)
@@ -243,9 +347,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return None
 
     def _apply_masking_to_messages(
-        self,
-        messages: List[Dict[str, Any]],
-        masked_text: str
+        self, messages: List[Dict[str, Any]], masked_text: str
     ) -> List[Dict[str, Any]]:
         """Apply masked text to the last user message."""
         if not messages:
@@ -255,7 +357,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if message.get("role") == "user":
                 new_message = message.copy()
                 content = message.get("content")
-                
+
                 if isinstance(content, str):
                     new_message["content"] = masked_text
                 elif isinstance(content, list):
@@ -266,16 +368,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         else:
                             new_content.append(part)
                     new_message["content"] = new_content
-                
+
                 idx = len(messages) - i - 1
-                return messages[:idx] + [new_message] + messages[idx+1:]
-        
+                return messages[:idx] + [new_message] + messages[idx + 1 :]
+
         return messages
 
     def _apply_masking_to_response(
-        self, 
-        response: ModelResponse,
-        masked_text: str
+        self, response: ModelResponse, masked_text: str
     ) -> None:
         """
         Apply masked text to all content in response in-place.
@@ -283,10 +383,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         Preserves list-based content structure (e.g., multimodal messages).
         """
         from litellm.types.utils import Choices
-        
+
         if not hasattr(response, "choices") or not response.choices:
             return
-        
+
         for choice in response.choices:
             if isinstance(choice, Choices):
                 # Mask message content - handle both string and list formats
@@ -299,20 +399,27 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         new_content = []
                         for part in content:  # type: ignore
                             if isinstance(part, dict) and part.get("type") == "text":
-                                new_content.append({"type": "text", "text": masked_text})
+                                new_content.append(
+                                    {"type": "text", "text": masked_text}
+                                )
                             else:
                                 # Preserve non-text parts (images, etc.)
                                 new_content.append(part)
                         choice.message.content = new_content  # type: ignore
-                
+
                 # Mask tool call arguments
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
-                        if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
+                        if hasattr(tool_call, "function") and hasattr(
+                            tool_call.function, "arguments"
+                        ):
                             tool_call.function.arguments = masked_text
-                
+
                 # Mask function call arguments (legacy)
-                if hasattr(choice.message, "function_call") and choice.message.function_call:
+                if (
+                    hasattr(choice.message, "function_call")
+                    and choice.message.function_call
+                ):
                     if hasattr(choice.message.function_call, "arguments"):
                         choice.message.function_call.arguments = masked_text
 
@@ -355,11 +462,107 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return error_detail
 
+    def _prepare_metadata_from_request(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract and prepare metadata from request data for PANW API call.
+
+        Supported metadata fields (from request.metadata):
+        - profile_name: AI security profile name (PANW API field)
+        - profile_id: AI security profile ID (PANW API field, takes precedence)
+        - user_ip: User IP address for tracking
+        - app_name: Application identifier (will be prefixed with "LiteLLM-")
+
+        Note: If neither profile_name nor profile_id is provided, PANW API will use
+        the profile linked to the API key (configured in Strata Cloud Manager).
+        If both are provided, PANW API uses profile_id (profile_id takes precedence).
+        """
+        user_metadata = data.get("metadata", {}) or {}
+        metadata = {
+            "user": data.get("user") or "litellm_user",
+            "model": data.get("model") or "unknown",
+        }
+
+        # Pass through PANW API fields
+        if "profile_name" in user_metadata:
+            metadata["profile_name"] = user_metadata["profile_name"]
+
+        if "profile_id" in user_metadata:
+            metadata["profile_id"] = user_metadata["profile_id"]
+
+        if "user_ip" in user_metadata:
+            metadata["user_ip"] = user_metadata["user_ip"]
+
+        if "app_name" in user_metadata:
+            metadata["app_name"] = user_metadata["app_name"]
+
+        # Include litellm_trace_id for session tracking
+        if data.get("litellm_trace_id"):
+            metadata["litellm_trace_id"] = data["litellm_trace_id"]
+
+        return metadata
+
+    def _check_and_mark_scanned(self, data: dict, scan_type: str) -> bool:
+        """
+        Check if request has already been scanned and mark it as scanned.
+
+        Args:
+            data: Request data dictionary
+            scan_type: Type of scan ('pre', 'post', 'streaming')
+
+        Returns:
+            True if already scanned (should skip), False if needs scanning
+        """
+        call_id = data.get("litellm_call_id")
+        if not call_id:
+            call_id = str(uuid.uuid4())
+            data["litellm_call_id"] = call_id
+
+        scan_key = f"_panw_{scan_type}_scanned_{call_id}"
+        litellm_metadata = data.setdefault("litellm_metadata", {})
+
+        if litellm_metadata.get(scan_key):
+            verbose_proxy_logger.debug(
+                f"PANW Prisma AIRS: Skipping duplicate {scan_type}-call scan"
+            )
+            return True  # Already scanned
+
+        litellm_metadata[scan_key] = True
+        return False  # Needs scanning
+
+    def _extract_prompt_from_request(self, data: dict) -> str:
+        """
+        Extract prompt text from request data.
+
+        Handles both chat completion (messages) and text completion (prompt) formats.
+
+        Args:
+            data: Request data dictionary
+
+        Returns:
+            Extracted prompt text, or empty string if not found
+        """
+        # Extract from messages (chat completion)
+        messages = data.get("messages", [])
+        prompt_text = self._extract_text_from_messages(messages)
+
+        # Fallback to prompt field for text completion requests
+        if not prompt_text:
+            prompt_value = data.get("prompt")
+            if isinstance(prompt_value, str):
+                prompt_text = prompt_value
+            elif isinstance(prompt_value, list):
+                # Handle list of prompts (batch text completion)
+                prompt_text = " ".join(str(p) for p in prompt_value if p)
+            else:
+                prompt_text = ""
+
+        return prompt_text
+
     @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: Any,
+        cache: DualCache,
         data: Dict[str, Any],
         call_type: Literal[
             "completion",
@@ -371,6 +574,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Dict[str, Any]]:
         """
@@ -390,21 +594,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
+        # Prevent duplicate scans by checking if already processed
+        if self._check_and_mark_scanned(data, "pre"):
+            return data
+
         try:
-            # Extract prompt text from messages (chat completion) or prompt (text completion)
-            messages = data.get("messages", [])
-            prompt_text = self._extract_text_from_messages(messages)
-            
-            # Fallback to prompt field for text completion requests
-            if not prompt_text:
-                prompt_value = data.get("prompt")
-                if isinstance(prompt_value, str):
-                    prompt_text = prompt_value
-                elif isinstance(prompt_value, list):
-                    # Handle list of prompts (batch text completion)
-                    prompt_text = " ".join(str(p) for p in prompt_value if p)
-                else:
-                    prompt_text = ""
+            # Extract prompt text from request
+            prompt_text = self._extract_prompt_from_request(data)
+            messages = data.get("messages", [])  # Keep for masking operations
 
             if not prompt_text:
                 verbose_proxy_logger.warning(
@@ -412,15 +609,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 return None
 
-            # Prepare metadata
-            metadata = {
-                "user": data.get("user") or "litellm_user",
-                "model": data.get("model") or "unknown",
-            }
+            # Prepare metadata - include user's metadata for profile override
+            metadata = self._prepare_metadata_from_request(data)
 
             # Scan prompt with PANW Prisma AIRS
             scan_result = await self._call_panw_api(
-                content=prompt_text, is_response=False, metadata=metadata
+                content=prompt_text,
+                is_response=False,
+                metadata=metadata,
+                call_id=data.get("litellm_call_id"),
             )
 
             action = scan_result.get("action", "block")
@@ -431,7 +628,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if action == "allow":
                 if masked_text:
                     if messages:
-                        data["messages"] = self._apply_masking_to_messages(messages, masked_text)
+                        data["messages"] = self._apply_masking_to_messages(
+                            messages, masked_text
+                        )
                     elif "prompt" in data:
                         data["prompt"] = masked_text
                     verbose_proxy_logger.info(
@@ -449,7 +648,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             # Action is "block" - check if we should mask instead of blocking
             if masked_text and self.mask_request_content:
                 if messages:
-                    data["messages"] = self._apply_masking_to_messages(messages, masked_text)
+                    data["messages"] = self._apply_masking_to_messages(
+                        messages, masked_text
+                    )
                 elif "prompt" in data:
                     data["prompt"] = masked_text
                 verbose_proxy_logger.warning(
@@ -475,13 +676,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 status_code=500,
                 detail={
                     "error": {
-                            "message": "Security scan failed - request blocked for safety",
-                            "type": "guardrail_scan_error",
-                            "code": "panw_prisma_airs_scan_failed",
-                            "guardrail": self.guardrail_name,
-                        }
+                        "message": "Security scan failed - request blocked for safety",
+                        "type": "guardrail_scan_error",
+                        "code": "panw_prisma_airs_scan_failed",
+                        "guardrail": self.guardrail_name,
                     }
-                )
+                },
+            )
 
     @log_guardrail_information
     async def async_post_call_success_hook(
@@ -511,6 +712,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return response
 
+        # Prevent duplicate scans by checking if already processed
+        if self._check_and_mark_scanned(data, "post"):
+            return response
+
         try:
             # Extract response text
             response_text = self._extract_response_text(response)
@@ -521,15 +726,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 return response
 
-            # Prepare metadata
-            metadata = {
-                "user": data.get("user") or "litellm_user",
-                "model": data.get("model") or "unknown",
-            }
+            # Prepare metadata - include user's metadata for profile override
+            metadata = self._prepare_metadata_from_request(data)
 
             # Scan response with PANW Prisma AIRS
             scan_result = await self._call_panw_api(
-                content=response_text, is_response=True, metadata=metadata
+                content=response_text,
+                is_response=True,
+                metadata=metadata,
+                call_id=data.get("litellm_call_id"),
             )
 
             action = scan_result.get("action", "block")
@@ -583,7 +788,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         "code": "panw_prisma_airs_scan_failed",
                         "guardrail": self.guardrail_name,
                     }
-                }
+                },
             )
 
     async def _scan_and_process_streaming_response(
@@ -597,25 +802,27 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         """
         content_was_modified = False
         response_text = self._extract_response_text(assembled_model_response)
-        
+
         if not response_text or not response_text.strip():
-            verbose_proxy_logger.info("PANW Prisma AIRS: No content to scan in streaming response")
+            verbose_proxy_logger.info(
+                "PANW Prisma AIRS: No content to scan in streaming response"
+            )
             return content_was_modified, assembled_model_response
-        
-        # Prepare metadata and scan
-        metadata = {
-            "user": request_data.get("user") or "litellm_user",
-            "model": request_data.get("model") or "unknown",
-        }
-        
+
+        # Prepare metadata - include user's metadata for profile override
+        metadata = self._prepare_metadata_from_request(request_data)
+
         scan_result = await self._call_panw_api(
-            content=response_text, is_response=True, metadata=metadata
+            content=response_text,
+            is_response=True,
+            metadata=metadata,
+            call_id=request_data.get("litellm_call_id"),
         )
-        
+
         action = scan_result.get("action", "block")
         category = scan_result.get("category", "unknown")
         masked_text = self._get_masked_text(scan_result, is_response=True)
-        
+
         # Handle scan results
         if action == "allow":
             if masked_text:
@@ -640,7 +847,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 f"PANW Prisma AIRS: {error_detail['error']['message']}"
             )
             raise HTTPException(status_code=400, detail=error_detail)
-        
+
         return content_was_modified, assembled_model_response
 
     @log_guardrail_information
@@ -658,45 +865,56 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
-        
+
         # Check if guardrail should run for this request
         from litellm.types.guardrails import GuardrailEventHooks as EventHooks
-        
+
         if not self.should_run_guardrail(
             data=request_data, event_type=EventHooks.post_call
         ):
             async for chunk in response:
                 yield chunk
             return
-        
+
+        # Prevent duplicate scans by checking if already processed
+        if self._check_and_mark_scanned(request_data, "streaming"):
+            async for chunk in response:
+                yield chunk
+            return
+
         verbose_proxy_logger.info("PANW Prisma AIRS: Running post-call streaming scan")
-        
+
         all_chunks = []
         content_was_modified = False
-        
+
         try:
             # Collect all chunks
             async for chunk in response:
                 all_chunks.append(chunk)
-            
+
             # Assemble complete response from chunks
             assembled_model_response = stream_chunk_builder(chunks=all_chunks)
-            
+
             if isinstance(assembled_model_response, ModelResponse):
                 # Scan and process the assembled response
-                content_was_modified, assembled_model_response = await self._scan_and_process_streaming_response(
+                (
+                    content_was_modified,
+                    assembled_model_response,
+                ) = await self._scan_and_process_streaming_response(
                     assembled_model_response, request_data
                 )
-                
+
                 # Add guardrail to applied guardrails header for observability
                 add_guardrail_to_applied_guardrails_header(
                     request_data=request_data, guardrail_name=self.guardrail_name
                 )
-                
+
                 # Only use MockResponseIterator if content was modified
                 # Otherwise, yield original chunks to preserve streaming behavior
                 if content_was_modified:
-                    mock_response = MockResponseIterator(model_response=assembled_model_response)
+                    mock_response = MockResponseIterator(
+                        model_response=assembled_model_response
+                    )
                     async for chunk in mock_response:
                         yield chunk
                 else:
@@ -706,7 +924,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 # If not a ModelResponse, just yield original chunks
                 for chunk in all_chunks:
                     yield chunk
-                    
+
         except HTTPException:
             raise
         except Exception as e:
@@ -720,7 +938,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         "code": "panw_prisma_airs_scan_failed",
                         "guardrail": self.guardrail_name,
                     }
-                }
+                },
             )
 
     @staticmethod

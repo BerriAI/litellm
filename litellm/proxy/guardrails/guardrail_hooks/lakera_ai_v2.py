@@ -1,7 +1,7 @@
 import copy
 import os
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from fastapi import HTTPException
 
@@ -20,7 +20,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIRequest,
     LakeraAIResponse,
 )
-from litellm.types.utils import GuardrailStatus
+from litellm.types.utils import CallTypesLiteral, GuardrailStatus
 
 
 class LakeraAIGuardrail(CustomGuardrail):
@@ -183,18 +183,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
         data: Dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, Dict]]:
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -257,16 +246,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -333,7 +313,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         breakdown = lakera_response.get("breakdown", []) or []
         if not breakdown:
             return False
-        
+
         has_violations = False
         for item in breakdown:
             if item.get("detected", False):
@@ -341,7 +321,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                 detector_type = item.get("detector_type", "") or ""
                 if not detector_type.startswith("pii/"):
                     return False
-        
+
         # Return True only if there are violations and they are all PII
         return has_violations
 

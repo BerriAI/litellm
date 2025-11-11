@@ -1,5 +1,5 @@
 ---
-title: "[Pre-Release] v1.79.0-stable - Search APIs"
+title: "v1.79.0-stable - Search APIs"
 slug: "v1-79-0"
 date: 2025-10-26T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.79.0.rc.1
+ghcr.io/berriai/litellm:v1.79.0-stable
 ```
 
 </TabItem>
