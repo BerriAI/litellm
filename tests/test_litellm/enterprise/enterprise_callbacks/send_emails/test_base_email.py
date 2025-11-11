@@ -10,6 +10,12 @@ from fastapi.testclient import TestClient
 # Add enterprise directory to path before importing
 _workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 _enterprise_path = os.path.join(_workspace_root, "enterprise")
+_enterprise_litellm_path = os.path.join(_enterprise_path, "litellm_enterprise")
+
+# Add both enterprise and enterprise/litellm_enterprise to path
+# This allows imports like "from litellm_enterprise.types..." to work
+if _enterprise_litellm_path not in sys.path:
+    sys.path.insert(0, _enterprise_litellm_path)
 if _enterprise_path not in sys.path:
     sys.path.insert(0, _enterprise_path)
 
