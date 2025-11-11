@@ -656,6 +656,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             end_user_params["end_user_max_budget"] = (
                                 budget_info.max_budget
                             )
+                        elif litellm.max_end_user_budget is not None:
+                            # propagate default end-user budget into token for alerts/limits
+                            end_user_params["end_user_max_budget"] = (
+                                litellm.max_end_user_budget
+                            )
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
