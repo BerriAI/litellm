@@ -38,6 +38,9 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+)
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
@@ -400,6 +403,20 @@ class MCPServerManager:
                 static_headers_dict = _deserialize_json_dict(
                     getattr(mcp_server, "static_headers", None)
                 )
+                credentials_dict = _deserialize_json_dict(
+                    getattr(mcp_server, "credentials", None)
+                )
+
+                encrypted_auth_value: Optional[str] = None
+                if credentials_dict:
+                    encrypted_auth_value = credentials_dict.get("auth_value")
+
+                auth_value: Optional[str] = None
+                if encrypted_auth_value:
+                    auth_value = decrypt_value_helper(
+                        value=encrypted_auth_value,
+                        key="auth_value",
+                    )
                 # Use alias for name if present, else server_name
                 name_for_prefix = (
                     mcp_server.alias or mcp_server.server_name or mcp_server.server_id
@@ -422,6 +439,7 @@ class MCPServerManager:
                     url=mcp_server.url,
                     transport=cast(MCPTransportType, mcp_server.transport),
                     auth_type=cast(MCPAuthType, mcp_server.auth_type),
+                    authentication_token=auth_value,
                     mcp_info=mcp_info,
                     extra_headers=getattr(mcp_server, "extra_headers", None),
                     static_headers=static_headers_dict,

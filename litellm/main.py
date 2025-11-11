@@ -65,7 +65,10 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_for_health_check
+from litellm.litellm_core_utils.audio_utils.utils import (
+    calculate_request_duration,
+    get_audio_file_for_health_check,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -2033,36 +2036,11 @@ def completion(  # type: ignore # noqa: PLR0915
             logging.post_call(
                 input=messages, api_key=api_key, original_response=response
             )
-        elif custom_llm_provider == "perplexity":
-            response = base_llm_http_handler.completion(
-                model=model,
-                messages=messages,
-                headers=headers,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=api_base,
-                acompletion=acompletion,
-                logging_obj=logging,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                shared_session=shared_session,
-                timeout=timeout,
-                client=client,
-                custom_llm_provider=custom_llm_provider,
-                encoding=encoding,
-                stream=stream,
-                provider_config=provider_config,
-            )
-
-            ## LOGGING - Call after response has been processed by transform_response
-            logging.post_call(
-                input=messages, api_key=api_key, original_response=response
-            )
-            
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "perplexity"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "baseten"
@@ -5431,6 +5409,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["atranscription"] = True
+    file = kwargs.get("file", None)
     custom_llm_provider = None
     try:
         # Use a partial function to pass your keyword arguments
@@ -5459,6 +5438,20 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
             raise ValueError(
                 f"Invalid response from transcription provider, expected TranscriptionResponse, but got {type(response)}"
             )
+
+        # Calculate and add duration if response is missing it
+        if (
+            response is not None
+            and not isinstance(response, Coroutine)
+            and file is not None
+        ):
+            # Check if response is missing duration
+            existing_duration = getattr(response, "duration", None)
+            if existing_duration is None:
+                calculated_duration = calculate_request_duration(file)
+                if calculated_duration is not None:
+                    setattr(response, "duration", calculated_duration)
+
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -5669,6 +5662,16 @@ def transcription(
             headers={},
             provider_config=provider_config,
         )
+
+    # Calculate and add duration if response is missing it
+    if response is not None and not isinstance(response, Coroutine):
+        # Check if response is missing duration
+        existing_duration = getattr(response, "duration", None)
+        if existing_duration is None:
+            calculated_duration = calculate_request_duration(file)
+            if calculated_duration is not None:
+                setattr(response, "duration", calculated_duration)
+
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
@@ -6026,6 +6029,7 @@ async def ahealth_check(
             "audio_speech",
             "audio_transcription",
             "image_generation",
+            "video_generation",
             "batch",
             "rerank",
             "realtime",

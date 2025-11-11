@@ -646,9 +646,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               size="large"
               className="w-full"
               showSearch
-              filterOption={(input, option) =>
-                (option?.children?.toString() ?? "").toLowerCase().includes(input.toLowerCase())
-              }
+              filterOption={(input, option) => {
+                return (option?.value?.toString() ?? "").toLowerCase().includes(input.toLowerCase());
+              }}
               onChange={(value) => {
                 handleSelectedCallbackChange(value);
               }}

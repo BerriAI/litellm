@@ -953,7 +953,7 @@ except Exception as e:
 
 s/o @[Shekhar Patnaik](https://www.linkedin.com/in/patnaikshekhar) for requesting this!
 
-### Anthropic Hosted Tools (Computer, Text Editor, Web Search)
+### Anthropic Hosted Tools (Computer, Text Editor, Web Search, Memory)
 
 
 <Tabs>
@@ -1183,6 +1183,72 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </Tabs>
 
 </TabItem>
+
+<TabItem value="memory" label="Memory">
+
+:::info
+The Anthropic Memory tool is currently in beta.
+:::
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+tools = [{
+    "type": "memory_20250818",
+    "name": "memory"
+}]
+
+model = "claude-sonnet-4-5-20250929" 
+messages = [{"role": "user", "content": "Please remember that my favorite color is blue."}]
+
+response = completion(
+    model=model,
+    messages=messages,
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-memory-model
+    litellm_params:
+        model: anthropic/claude-sonnet-4-5-20250929
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $LITELLM_KEY" \
+    -d '{
+    "model": "claude-memory-model",
+    "messages": [{"role": "user", "content": "Please remember that my favorite color is blue."}],
+    "tools": [{"type": "memory_20250818", "name": "memory"}]
+    }'
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+
 </Tabs>
 
 

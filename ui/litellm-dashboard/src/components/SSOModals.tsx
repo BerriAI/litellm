@@ -3,6 +3,7 @@ import { Modal, Form, Input, Button as Button2, Select } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
+import { parseErrorMessage } from "./shared/errorUtils";
 
 interface SSOModalsProps {
   isAddSSOModalVisible: boolean;
@@ -182,9 +183,8 @@ const SSOModals: React.FC<SSOModalsProps> = ({
 
       // Continue with the original flow (show instructions)
       handleShowInstructions(formValues);
-    } catch (error) {
-      console.error("Failed to save SSO settings:", error);
-      NotificationsManager.fromBackend("Failed to save SSO settings");
+    } catch (error: unknown) {
+      NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
     }
   };
 
@@ -309,7 +309,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
             <Form.Item
               label="PROXY BASE URL"
               name="proxy_base_url"
-              normalize={(value) => value?.trim().replace(/\/+$/, "")}
+              normalize={(value) => value?.trim()}
               rules={[
                 { required: true, message: "Please enter the proxy base url" },
                 {
@@ -317,8 +317,13 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                   message: "URL must start with http:// or https://",
                 },
                 {
-                  pattern: /^https?:\/\/[^\s]+[^\/]$/,
-                  message: "URL must not end with a trailing slash",
+                  validator: (_, value) => {
+                    // Only check for trailing slash if the URL starts with http:// or https://
+                    if (value && /^https?:\/\/.+/.test(value) && value.endsWith("/")) {
+                      return Promise.reject("URL must not end with a trailing slash");
+                    }
+                    return Promise.resolve();
+                  },
                 },
               ]}
             >
