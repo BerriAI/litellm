@@ -599,9 +599,25 @@ class BaseAzureLLM(BaseOpenAILLM):
         # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
         # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
 
-        azure_client_params = select_azure_base_url_or_endpoint(
-            azure_client_params=azure_client_params
-        )
+        # Handle Azure v1 API (OpenAI-compatible format)
+        # v1 API uses /openai/v1/ endpoint without deployments in the path
+        # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle
+        if self._is_azure_v1_api_version(api_version):
+            # v1 API format: https://{endpoint}/openai/v1/chat/completions
+            # Does NOT use /deployments/ in the URL
+            # Note: We keep api_version because Azure SDK requires it, but when using base_url
+            # the SDK doesn't add /deployments/ to the path
+            azure_client_params["base_url"] = f"{api_base}/openai/{api_version}"
+            azure_client_params.pop("azure_endpoint", None)
+            # Keep api_version - Azure SDK needs it even with base_url
+            verbose_logger.debug(
+                f"Using Azure v1 API format with base_url: {azure_client_params['base_url']}"
+            )
+        else:
+            # Traditional Azure format: https://{endpoint}/openai/deployments/{model}/chat/completions?api-version=...
+            azure_client_params = select_azure_base_url_or_endpoint(
+                azure_client_params=azure_client_params
+            )
 
         return azure_client_params
 
