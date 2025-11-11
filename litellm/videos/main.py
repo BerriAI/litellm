@@ -19,6 +19,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.videos.utils import decode_video_id_with_provider
 
 #################### Initialize provider clients ####################
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
@@ -303,13 +304,10 @@ def video_content(
         ```python
         import litellm
 
-        # Download video content
         video_bytes = litellm.video_content(
-            video_id="video_123",
-            custom_llm_provider="openai"
+            video_id="video_123"
         )
 
-        # Save to file
         with open("video.mp4", "wb") as f:
             f.write(video_bytes)
         ```
@@ -320,9 +318,10 @@ def video_content(
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("async_call", False) is True
 
-        # Ensure custom_llm_provider is not None - default to openai if not provided
+        # Try to decode provider from video_id if not explicitly provided
         if custom_llm_provider is None:
-            custom_llm_provider = "openai"
+            decoded = decode_video_id_with_provider(video_id)
+            custom_llm_provider = decoded.get("custom_llm_provider") or "openai"
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -594,9 +593,10 @@ def video_remix(  # noqa: PLR0915
             response = VideoObject(**mock_response)
             return response
 
-        # Ensure custom_llm_provider is not None - default to openai if not provided
+        # Try to decode provider from video_id if not explicitly provided
         if custom_llm_provider is None:
-            custom_llm_provider = "openai"
+            decoded = decode_video_id_with_provider(video_id)
+            custom_llm_provider = decoded.get("custom_llm_provider") or "openai"
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -907,7 +907,7 @@ async def avideo_status(
 
     Returns:
     - `response` (VideoObject): The response returned by the `video_status` function.
-"""
+    """
     local_vars = locals()
     try:
         loop = asyncio.get_event_loop()
@@ -1015,8 +1015,7 @@ def video_status(  # noqa: PLR0915
 
         # Get video status
         video_status = litellm.video_status(
-            video_id="video_123",
-            custom_llm_provider="openai"
+            video_id="video_123"
         )
 
         print(f"Video status: {video_status.status}")
@@ -1038,9 +1037,10 @@ def video_status(  # noqa: PLR0915
             response = VideoObject(**mock_response)
             return response
 
-        # Ensure custom_llm_provider is not None - default to openai if not provided
+        # Try to decode provider from video_id if not explicitly provided
         if custom_llm_provider is None:
-            custom_llm_provider = "openai"
+            decoded = decode_video_id_with_provider(video_id)
+            custom_llm_provider = decoded.get("custom_llm_provider") or "openai"
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)

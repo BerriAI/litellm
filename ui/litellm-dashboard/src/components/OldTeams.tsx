@@ -1,18 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Typography } from "antd";
-import {
-  teamDeleteCall,
-  Organization,
-  fetchMCPAccessGroups,
-} from "./networking";
+import { teamDeleteCall, Organization, fetchMCPAccessGroups } from "./networking";
 import { fetchTeams } from "./common_components/fetch_teams";
-import {
-  PencilAltIcon,
-  RefreshIcon,
-  TrashIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-} from "@heroicons/react/outline";
+import { PencilAltIcon, RefreshIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { Button as Button2, Modal, Form, Input, Select as Select2, Tooltip } from "antd";
 import NumericalInput from "./shared/numerical_input";
 import {
@@ -87,11 +77,7 @@ interface EditTeamModalProps {
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
-import {
-  teamCreateCall,
-  Member,
-  v2TeamListCall,
-} from "./networking";
+import { teamCreateCall, Member, v2TeamListCall } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
 
 interface TeamInfo {
@@ -125,7 +111,7 @@ const getOrganizationModels = (organization: Organization | null, userModels: st
 const canCreateOrManageTeams = (
   userRole: string | null,
   userID: string | null,
-  organizations: Organization[] | null
+  organizations: Organization[] | null,
 ): boolean => {
   // Admin role always has permission
   if (userRole === "Admin") {
@@ -135,7 +121,7 @@ const canCreateOrManageTeams = (
   // Check if user is an org_admin in any organization
   if (organizations && userID) {
     return organizations.some((org) =>
-      org.members?.some((member) => member.user_id === userID && member.user_role === "org_admin")
+      org.members?.some((member) => member.user_id === userID && member.user_role === "org_admin"),
     );
   }
 
@@ -145,7 +131,7 @@ const canCreateOrManageTeams = (
 const getAdminOrganizations = (
   userRole: string | null,
   userID: string | null,
-  organizations: Organization[] | null
+  organizations: Organization[] | null,
 ): Organization[] => {
   // Global Admin can see all organizations
   if (userRole === "Admin") {
@@ -155,7 +141,7 @@ const getAdminOrganizations = (
   // Org Admin can only see organizations they're an admin for
   if (organizations && userID) {
     return organizations.filter((org) =>
-      org.members?.some((member) => member.user_id === userID && member.user_role === "org_admin")
+      org.members?.some((member) => member.user_id === userID && member.user_role === "org_admin"),
     );
   }
 
@@ -235,7 +221,7 @@ const Teams: React.FC<TeamProps> = ({
   useEffect(() => {
     if (isTeamModalVisible) {
       const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
-      
+
       // If there's exactly one organization the user is admin for, preselect it
       if (adminOrgs.length === 1) {
         const org = adminOrgs[0];
@@ -347,7 +333,7 @@ const Teams: React.FC<TeamProps> = ({
     try {
       await teamDeleteCall(accessToken, teamToDelete);
       // Successfully completed the deletion. Update the state to trigger a rerender.
-      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+      await fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
     } catch (error) {
       console.error("Error deleting the team:", error);
       // Handle any error situations, such as displaying an error message to the user.
@@ -356,12 +342,14 @@ const Teams: React.FC<TeamProps> = ({
     // Close the confirmation modal and reset the teamToDelete
     setIsDeleteModalOpen(false);
     setTeamToDelete(null);
+    setDeleteConfirmInput("");
   };
 
   const cancelDelete = () => {
     // Close the confirmation modal and reset the teamToDelete
     setIsDeleteModalOpen(false);
     setTeamToDelete(null);
+    setDeleteConfirmInput("");
   };
 
   useEffect(() => {
@@ -961,6 +949,7 @@ const Teams: React.FC<TeamProps> = ({
                                               onClick={() => handleDelete(team.team_id)}
                                               icon={TrashIcon}
                                               size="sm"
+                                              data-testid="delete-team-button"
                                             />
                                           </>
                                         ) : null}
@@ -1155,15 +1144,11 @@ const Teams: React.FC<TeamProps> = ({
                             showSearch
                             allowClear={!isOrgAdmin}
                             disabled={isSingleOrg}
-                            placeholder={
-                              hasNoOrgs
-                                ? "No organizations available"
-                                : "Search or select an Organization"
-                            }
+                            placeholder={hasNoOrgs ? "No organizations available" : "Search or select an Organization"}
                             onChange={(value) => {
                               form.setFieldValue("organization_id", value);
                               setCurrentOrgForCreateTeam(
-                                adminOrgs?.find((org) => org.organization_id === value) || null
+                                adminOrgs?.find((org) => org.organization_id === value) || null,
                               );
                             }}
                             filterOption={(input, option) => {

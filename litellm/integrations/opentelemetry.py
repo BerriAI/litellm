@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
+    CostBreakdown,
     Function,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
@@ -1076,6 +1077,16 @@ class OpenTelemetry(CustomLogger):
                 self.safe_set_attribute(
                     span=span, key="hidden_params", value=safe_dumps(hidden_params)
                 )
+            # Cost breakdown tracking
+            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get("cost_breakdown")
+            if cost_breakdown:
+                for key, value in cost_breakdown.items():
+                    if value is not None:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=f"gen_ai.cost.{key}",
+                            value=value,
+                        )
             #############################################
             ########## LLM Request Attributes ###########
             #############################################

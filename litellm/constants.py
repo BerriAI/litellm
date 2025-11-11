@@ -1,6 +1,7 @@
 import os
 from typing import List, Literal
 
+DEFAULT_HEALTH_CHECK_PROMPT = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(
     os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview")
 )
@@ -219,7 +220,7 @@ REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
 REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
-DEFAULT_REDIS_MAJOR_VERSION = 7
+DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
 NON_LLM_CONNECTION_TIMEOUT = int(
     os.getenv("NON_LLM_CONNECTION_TIMEOUT", 15)
 )  # timeout for adjacent services (e.g. jwt auth)
@@ -278,6 +279,8 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
 }
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 DEFAULT_VIDEO_ENDPOINT_MODEL = "sora-2"
+
+DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS = int(os.getenv("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8))
 
 ### DATAFORSEO CONSTANTS ###
 DEFAULT_DATAFORSEO_LOCATION_CODE = int(

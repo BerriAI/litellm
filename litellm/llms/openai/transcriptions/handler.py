@@ -213,6 +213,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             # Extract the actual model from data instead of hardcoding "whisper-1"
             actual_model = data.get("model", "whisper-1")
             hidden_params = {"model": actual_model, "custom_llm_provider": "openai"}
+
             return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         except Exception as e:
             ## LOGGING

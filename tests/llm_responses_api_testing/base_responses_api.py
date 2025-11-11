@@ -189,12 +189,12 @@ class BaseResponsesAPITest(ABC):
             response_completed_event.response.usage,
         )
         assert (
-            response_completed_event.response.usage.prompt_tokens > 0
-            and response_completed_event.response.usage.prompt_tokens < 100
+            response_completed_event.response.usage.input_tokens > 0
+            and response_completed_event.response.usage.input_tokens < 100
         )
         assert (
-            response_completed_event.response.usage.completion_tokens > 0
-            and response_completed_event.response.usage.completion_tokens < 2000
+            response_completed_event.response.usage.output_tokens > 0
+            and response_completed_event.response.usage.output_tokens < 2000
         )
         assert (
             response_completed_event.response.usage.total_tokens > 0
@@ -204,8 +204,8 @@ class BaseResponsesAPITest(ABC):
         # total tokens should be the sum of input and output tokens
         assert (
             response_completed_event.response.usage.total_tokens
-            == response_completed_event.response.usage.prompt_tokens
-            + response_completed_event.response.usage.completion_tokens
+            == response_completed_event.response.usage.input_tokens
+            + response_completed_event.response.usage.output_tokens
         )
 
         # assert the response completed event includes cost when include_cost_in_streaming_usage is True

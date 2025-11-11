@@ -1,6 +1,5 @@
 import NotificationManager from "@/components/molecules/notifications_manager";
 import { getProxyBaseUrl } from "@/components/networking";
-import openai from "openai";
 
 export async function makeOpenAIEmbeddingsRequest(
   input: string,
@@ -26,20 +25,36 @@ export async function makeOpenAIEmbeddingsRequest(
     headers["x-litellm-tags"] = tags.join(",");
   }
 
-  const client = new openai.OpenAI({
-    apiKey: accessToken,
-    baseURL: proxyBaseUrl,
-    dangerouslyAllowBrowser: true,
-    defaultHeaders: headers,
-  });
-
   try {
-    const response = await client.embeddings.create({
-      model: selectedModel,
-      input: input,
+    const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
+    const requestUrl = `${normalizedBaseUrl}/embeddings`;
+
+    const response = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        ...headers,
+      },
+      body: JSON.stringify({
+        model: selectedModel,
+        input,
+      }),
     });
 
-    updateEmbeddingsUI(JSON.stringify(response.data[0].embedding), selectedModel);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || `Request failed with status ${response.status}`);
+    }
+
+    const responseData = await response.json();
+    const embedding = responseData?.data?.[0]?.embedding;
+
+    if (!embedding) {
+      throw new Error("No embedding returned from server");
+    }
+
+    updateEmbeddingsUI(JSON.stringify(embedding), responseData?.model ?? selectedModel);
   } catch (error: unknown) {
     NotificationManager.fromBackend(
       `Error occurred while making embeddings request. Please try again. Error: ${error}`,

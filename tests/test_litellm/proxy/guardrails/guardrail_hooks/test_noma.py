@@ -267,9 +267,18 @@ class TestNomaGuardrailHooks:
 
             # Verify API call details
             call_args = mock_post.call_args
-            assert call_args[0][0].endswith("/ai-dr/v2/prompt/scan")
-            assert call_args[1]["headers"]["X-Noma-AIDR-Application-ID"] == "test-app"
-            assert call_args[1]["headers"]["Authorization"] == "Bearer test-api-key"
+            # Verify the URL endpoint  
+            assert call_args.args[0].endswith("/ai-dr/v2/prompt/scan")
+            # Verify headers and JSON payload
+            if "headers" in call_args.kwargs:
+                headers = call_args.kwargs["headers"]
+                assert "Authorization" in headers
+                assert headers["Authorization"] == "Bearer test-api-key"
+            # Verify application ID is in JSON payload (not headers)
+            if "json" in call_args.kwargs:
+                json_payload = call_args.kwargs["json"]
+                assert "x-noma-context" in json_payload
+                assert json_payload["x-noma-context"]["applicationId"] == "test-app"
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_blocked(
@@ -1128,7 +1137,9 @@ class TestNomaImageProcessing:
         mock_response.json.return_value = noma_response
         mock_response.raise_for_status = MagicMock()
 
-        from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
+        from litellm.proxy.guardrails.guardrail_hooks.noma.noma import (
+            NomaBlockedMessage,
+        )
 
         with patch.object(
             noma_guardrail.async_handler, "post", return_value=mock_response

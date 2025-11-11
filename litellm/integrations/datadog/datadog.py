@@ -17,7 +17,6 @@ import asyncio
 import datetime
 import os
 import traceback
-from litellm._uuid import uuid
 from datetime import datetime as datetimeObj
 from typing import Any, Dict, List, Optional, Union
 
@@ -26,6 +25,7 @@ from httpx import Response
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -60,17 +60,19 @@ class DataDogLogger(
         """
         Initializes the datadog logger, checks if the correct env variables are set
 
-        Required environment variables:
+        Required environment variables (Direct API):
         `DD_API_KEY` - your datadog api key
         `DD_SITE` - your datadog site, example = `"us5.datadoghq.com"`
+
+        Optional environment variables (DataDog Agent):
+        `DD_AGENT_HOST` - hostname or IP of DataDog agent, example = `"localhost"`
+        `DD_AGENT_PORT` - port of DataDog agent (default: 10518 for logs)
+        
+        Note: If DD_AGENT_HOST is set, logs will be sent to the agent instead of directly to DataDog API.
+        In this case, DD_API_KEY and DD_SITE are not required (agent handles authentication).
         """
         try:
             verbose_logger.debug("Datadog: in init datadog logger")
-            # check if the correct env variables are set
-            if os.getenv("DD_API_KEY", None) is None:
-                raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
-            if os.getenv("DD_SITE", None) is None:
-                raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
             
             #########################################################
             # Handle datadog_params set as litellm.datadog_params
@@ -81,21 +83,16 @@ class DataDogLogger(
             self.async_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
             )
-            self.DD_API_KEY = os.getenv("DD_API_KEY")
-            self.intake_url = (
-                f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
-            )
-
-            ###################################
-            # OPTIONAL -only used for testing
-            dd_base_url: Optional[str] = (
-                os.getenv("_DATADOG_BASE_URL")
-                or os.getenv("DATADOG_BASE_URL")
-                or os.getenv("DD_BASE_URL")
-            )
-            if dd_base_url is not None:
-                self.intake_url = f"{dd_base_url}/api/v2/logs"
-            ###################################
+            
+            # Configure DataDog endpoint (Agent or Direct API)
+            dd_agent_host = os.getenv("DD_AGENT_HOST")
+            if dd_agent_host:
+                self._configure_dd_agent(dd_agent_host=dd_agent_host)
+            else:
+                self._configure_dd_direct_api()
+            
+            # Optional override for testing
+            self._apply_dd_base_url_override()
             self.sync_client = _get_httpx_client()
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
@@ -122,6 +119,47 @@ class DataDogLogger(
                 # only allow params that are of DatadogInitParams
                 dict_datadog_params = DatadogInitParams(**litellm.datadog_params).model_dump()
         return dict_datadog_params
+
+    def _configure_dd_agent(self, dd_agent_host: str) -> None:
+        """
+        Configure DataDog Agent for log forwarding
+        
+        Args:
+            dd_agent_host: Hostname or IP of DataDog agent
+        """
+        dd_agent_port = os.getenv("DD_AGENT_PORT", "10518")  # default port for logs
+        self.intake_url = f"http://{dd_agent_host}:{dd_agent_port}/api/v2/logs"
+        self.DD_API_KEY = os.getenv("DD_API_KEY")  # Optional when using agent
+        verbose_logger.debug(f"Datadog: Using DD Agent at {self.intake_url}")
+
+    def _configure_dd_direct_api(self) -> None:
+        """
+        Configure direct DataDog API connection
+        
+        Raises:
+            Exception: If required environment variables are not set
+        """
+        if os.getenv("DD_API_KEY", None) is None:
+            raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
+        if os.getenv("DD_SITE", None) is None:
+            raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
+        
+        self.DD_API_KEY = os.getenv("DD_API_KEY")
+        self.intake_url = (
+            f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
+        )
+
+    def _apply_dd_base_url_override(self) -> None:
+        """
+        Apply base URL override for testing purposes
+        """
+        dd_base_url: Optional[str] = (
+            os.getenv("_DATADOG_BASE_URL")
+            or os.getenv("DATADOG_BASE_URL")
+            or os.getenv("DD_BASE_URL")
+        )
+        if dd_base_url is not None:
+            self.intake_url = f"{dd_base_url}/api/v2/logs"
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -226,12 +264,16 @@ class DataDogLogger(
                     end_time=end_time,
                 )
 
+            # Build headers
+            headers = {}
+            # Add API key if available (required for direct API, optional for agent)
+            if self.DD_API_KEY:
+                headers["DD-API-KEY"] = self.DD_API_KEY
+            
             response = self.sync_client.post(
                 url=self.intake_url,
                 json=dd_payload,  # type: ignore
-                headers={
-                    "DD-API-KEY": self.DD_API_KEY,
-                },
+                headers=headers,
             )
 
             response.raise_for_status()
@@ -342,14 +384,21 @@ class DataDogLogger(
 
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
         compressed_data = gzip.compress(safe_dumps(data).encode("utf-8"))
+        
+        # Build headers
+        headers = {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+        }
+        
+        # Add API key if available (required for direct API, optional for agent)
+        if self.DD_API_KEY:
+            headers["DD-API-KEY"] = self.DD_API_KEY
+        
         response = await self.async_client.post(
             url=self.intake_url,
             data=compressed_data,  # type: ignore
-            headers={
-                "DD-API-KEY": self.DD_API_KEY,
-                "Content-Encoding": "gzip",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
         return response
 

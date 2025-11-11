@@ -18,7 +18,9 @@ def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_sec
         return "cost_per_token"
 
 
-def cost_per_token(model: str, usage: Usage, service_tier: Optional[str] = None) -> Tuple[float, float]:
+def cost_per_token(
+    model: str, usage: Usage, service_tier: Optional[str] = None
+) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -31,7 +33,10 @@ def cost_per_token(model: str, usage: Usage, service_tier: Optional[str] = None)
     """
     ## CALCULATE INPUT COST
     return generic_cost_per_token(
-        model=model, usage=usage, custom_llm_provider="openai", service_tier=service_tier
+        model=model,
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=service_tier,
     )
     # ### Non-cached text tokens
     # non_cached_text_tokens = usage.prompt_tokens
@@ -92,6 +97,7 @@ def cost_per_second(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
+
     ## GET MODEL INFO
     model_info = get_model_info(
         model=model, custom_llm_provider=custom_llm_provider or "openai"
@@ -123,18 +129,16 @@ def cost_per_second(
 
 
 def video_generation_cost(
-    model: str, 
-    duration_seconds: float, 
-    custom_llm_provider: Optional[str] = None
+    model: str, duration_seconds: float, custom_llm_provider: Optional[str] = None
 ) -> float:
     """
     Calculates the cost for video generation based on duration in seconds.
-    
+
     Input:
         - model: str, the model name without provider prefix
         - duration_seconds: float, the duration of the generated video in seconds
         - custom_llm_provider: str, the custom llm provider
-        
+
     Returns:
         float - total_cost_in_usd
     """
@@ -142,7 +146,7 @@ def video_generation_cost(
     model_info = get_model_info(
         model=model, custom_llm_provider=custom_llm_provider or "openai"
     )
-    
+
     # Check for video-specific cost per second
     video_cost_per_second = model_info.get("output_cost_per_video_per_second")
     if video_cost_per_second is not None:
@@ -150,7 +154,7 @@ def video_generation_cost(
             f"For model={model} - output_cost_per_video_per_second: {video_cost_per_second}; duration: {duration_seconds}"
         )
         return video_cost_per_second * duration_seconds
-    
+
     # Fallback to general output cost per second
     output_cost_per_second = model_info.get("output_cost_per_second")
     if output_cost_per_second is not None:
@@ -158,7 +162,7 @@ def video_generation_cost(
             f"For model={model} - output_cost_per_second: {output_cost_per_second}; duration: {duration_seconds}"
         )
         return output_cost_per_second * duration_seconds
-    
+
     # If no cost information found, return 0
     verbose_logger.warning(
         f"No cost information found for video model {model}. Please add pricing to model_prices_and_context_window.json"

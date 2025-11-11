@@ -532,7 +532,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/router_unit_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/router_unit_tests --cov=litellm --cov-report=xml -x -s --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1164,7 +1164,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
+            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1396,7 +1396,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/image_gen_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/image_gen_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files

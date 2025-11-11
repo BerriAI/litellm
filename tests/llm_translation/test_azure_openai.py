@@ -649,3 +649,60 @@ def test_completion_azure_deployment_id():
     )
     # Add any assertions here to check the response
     print(response)
+def test_azure_with_content_safety_error():
+    """
+    Verify user can access innererror from the Azure OpenAI exception
+    """
+    from litellm import completion
+    from litellm.exceptions import ContentPolicyViolationError
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from unittest.mock import MagicMock
+    
+    mock_exception = Exception("The response was filtered due to the prompt triggering Azure OpenAI's content management policy")
+    mock_exception.body = {
+        "innererror": {
+            "code": "ResponsibleAIPolicyViolation",
+            "content_filter_result": {
+                "hate": {
+                    "filtered": False,
+                    "severity": "safe"
+                },
+                "jailbreak": {
+                    "filtered": False,
+                    "detected": False
+                },
+                "self_harm": {
+                    "filtered": False,
+                    "severity": "safe"
+                },
+                "sexual": {
+                    "filtered": False,
+                    "severity": "safe"
+                },
+                "violence": {
+                    "filtered": True,
+                    "severity": "high"
+                }
+            }
+        }
+    }
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 400
+    mock_exception.response = mock_response
+    
+    with pytest.raises(ContentPolicyViolationError) as exc_info:
+        exception_type(
+            model="azure/gpt-4o-new-test",
+            original_exception=mock_exception,
+            custom_llm_provider="azure"
+        )
+    
+    e = exc_info.value
+    print("got exception=", e)
+    assert e.provider_specific_fields is not None
+    print("got provider_specific_fields=", e.provider_specific_fields)
+    assert e.provider_specific_fields.get("innererror") is not None
+    assert e.provider_specific_fields["innererror"]["code"] == "ResponsibleAIPolicyViolation"
+    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["filtered"] is True
+    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["severity"] == "high"

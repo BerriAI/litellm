@@ -93,7 +93,7 @@ class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
     def get_base_audio_transcription_call_args(self) -> dict:
         return {
             "model": "fireworks_ai/whisper-v3",
-            "api_base": "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1",
+            "api_base": "https://audio-prod.api.fireworks.ai/v1",
         }
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:

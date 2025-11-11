@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Card,
   Title,
@@ -25,6 +25,7 @@ import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_inf
 import PiiConfiguration from "./pii_configuration";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
+import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -69,8 +70,31 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       entities: string[];
     }>;
     supported_modes: string[];
+    content_filter_settings?: {
+      prebuilt_patterns: Array<{
+        name: string;
+        display_name: string;
+        category: string;
+        description: string;
+      }>;
+      pattern_categories: string[];
+      supported_actions: string[];
+    };
   } | null>(null);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [hasUnsavedContentFilterChanges, setHasUnsavedContentFilterChanges] = useState(false);
+
+  // Content Filter data ref (managed by ContentFilterManager)
+  const contentFilterDataRef = React.useRef<{ patterns: any[]; blockedWords: any[] }>({
+    patterns: [],
+    blockedWords: [],
+  });
+
+  // Memoize onDataChange callback to prevent unnecessary re-renders
+  const handleContentFilterDataChange = useCallback((patterns: any[], blockedWords: any[]) => {
+    contentFilterDataRef.current = { patterns, blockedWords };
+  }, []);
+
   const fetchGuardrailInfo = async () => {
     try {
       setLoading(true);
@@ -212,6 +236,25 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
         updateData.litellm_params.pii_entities_config = newPiiEntitiesConfig;
       }
 
+      // Only add Content Filter patterns if there are changes
+      if (guardrailData.litellm_params?.guardrail === "litellm_content_filter") {
+        const originalPatterns = guardrailData.litellm_params?.patterns || [];
+        const originalBlockedWords = guardrailData.litellm_params?.blocked_words || [];
+
+        const formattedData = formatContentFilterDataForAPI(
+          contentFilterDataRef.current.patterns,
+          contentFilterDataRef.current.blockedWords,
+        );
+
+        if (JSON.stringify(originalPatterns) !== JSON.stringify(formattedData.patterns)) {
+          updateData.litellm_params.patterns = formattedData.patterns;
+        }
+
+        if (JSON.stringify(originalBlockedWords) !== JSON.stringify(formattedData.blocked_words)) {
+          updateData.litellm_params.blocked_words = formattedData.blocked_words;
+        }
+      }
+
       /******************************
        * Add provider-specific params (reusing logic from add_guardrail_form.tsx)
        * ----------------------------------
@@ -293,6 +336,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
       await updateGuardrailCall(accessToken, guardrailId, updateData);
       NotificationsManager.success("Guardrail updated successfully");
+      setHasUnsavedContentFilterChanges(false);
       fetchGuardrailInfo();
       setIsEditing(false);
     } catch (error) {
@@ -443,6 +487,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                   </div>
                 </Card>
               )}
+
+            {/* Content Filter Configuration Display */}
+            <ContentFilterManager
+              guardrailData={guardrailData}
+              guardrailSettings={guardrailSettings}
+              isEditing={false}
+              accessToken={accessToken}
+            />
           </TabPanel>
 
           {/* Settings Panel (only for admins) */}
@@ -512,6 +564,15 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                       </>
                     )}
 
+                    <ContentFilterManager
+                      guardrailData={guardrailData}
+                      guardrailSettings={guardrailSettings}
+                      isEditing={true}
+                      accessToken={accessToken}
+                      onDataChange={handleContentFilterDataChange}
+                      onUnsavedChanges={setHasUnsavedContentFilterChanges}
+                    />
+
                     <Divider orientation="left">Provider Settings</Divider>
 
                     {/* Provider-specific fields */}
@@ -554,7 +615,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     </Form.Item>
 
                     <div className="flex justify-end gap-2 mt-6">
-                      <Button onClick={() => setIsEditing(false)}>Cancel</Button>
+                      <Button
+                        onClick={() => {
+                          setIsEditing(false);
+                          setHasUnsavedContentFilterChanges(false);
+                        }}
+                      >
+                        Cancel
+                      </Button>
                       <TremorButton>Save Changes</TremorButton>
                     </div>
                   </Form>

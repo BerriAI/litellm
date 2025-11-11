@@ -564,8 +564,7 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
         guardrail_name = result.get("guardrail_name", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
-                guardrail_id=guardrail_id,
+            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
             )
             verbose_proxy_logger.info(
@@ -693,7 +692,13 @@ async def get_guardrail_ui_settings():
     - Supported entities for guardrails
     - Supported modes for guardrails
     - PII entity categories for UI organization
+    - Content filter settings (patterns and categories)
     """
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
+        PATTERN_CATEGORIES,
+        get_pattern_metadata,
+    )
+
     # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
     category_maps = []
     for category, entities in PII_ENTITY_CATEGORIES_MAP.items():
@@ -707,7 +712,109 @@ async def get_guardrail_ui_settings():
         supported_actions=[action.value for action in PiiAction],
         supported_modes=[mode.value for mode in GuardrailEventHooks],
         pii_entity_categories=category_maps,
+        content_filter_settings={
+            "prebuilt_patterns": get_pattern_metadata(),
+            "pattern_categories": list(PATTERN_CATEGORIES.keys()),
+            "supported_actions": ["BLOCK", "MASK"],
+        },
     )
+
+
+@router.post(
+    "/guardrails/validate_blocked_words_file",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def validate_blocked_words_file(request: Dict[str, str]):
+    """
+    Validate a blocked_words YAML file content.
+    
+    Args:
+        request: Dictionary with 'file_content' key containing the YAML string
+    
+    Returns:
+        Dictionary with 'valid' boolean and either 'message'/'errors' depending on result
+    
+    Example Request:
+    ```json
+    {
+        "file_content": "blocked_words:\\n  - keyword: \\"test\\"\\n    action: \\"BLOCK\\""
+    }
+    ```
+    
+    Example Success Response:
+    ```json
+    {
+        "valid": true,
+        "message": "Valid YAML file with 2 blocked words"
+    }
+    ```
+    
+    Example Error Response:
+    ```json
+    {
+        "valid": false,
+        "errors": ["Entry 0: missing 'action' field"]
+    }
+    ```
+    """
+    import yaml
+    
+    try:
+        file_content = request.get("file_content", "")
+        if not file_content:
+            return {
+                "valid": False,
+                "error": "No file content provided"
+            }
+        
+        data = yaml.safe_load(file_content)
+        
+        if not isinstance(data, dict) or "blocked_words" not in data:
+            return {
+                "valid": False,
+                "error": "Invalid format: file must contain 'blocked_words' key with a list"
+            }
+        
+        blocked_words_list = data["blocked_words"]
+        if not isinstance(blocked_words_list, list):
+            return {
+                "valid": False,
+                "error": "'blocked_words' must be a list"
+            }
+        
+        # Validate each entry
+        errors = []
+        for idx, word_data in enumerate(blocked_words_list):
+            if not isinstance(word_data, dict):
+                errors.append(f"Entry {idx}: must be an object")
+                continue
+            
+            if "keyword" not in word_data:
+                errors.append(f"Entry {idx}: missing 'keyword' field")
+            elif not isinstance(word_data["keyword"], str):
+                errors.append(f"Entry {idx}: 'keyword' must be a string")
+                
+            if "action" not in word_data:
+                errors.append(f"Entry {idx}: missing 'action' field")
+            elif word_data["action"] not in ["BLOCK", "MASK"]:
+                errors.append(f"Entry {idx}: action must be 'BLOCK' or 'MASK', got '{word_data['action']}'")
+            
+            if "description" in word_data and not isinstance(word_data["description"], str):
+                errors.append(f"Entry {idx}: 'description' must be a string")
+        
+        if errors:
+            return {"valid": False, "errors": errors}
+        
+        return {
+            "valid": True,
+            "message": f"Valid YAML file with {len(blocked_words_list)} blocked word(s)"
+        }
+    except yaml.YAMLError as e:
+        return {"valid": False, "error": f"Invalid YAML syntax: {str(e)}"}
+    except Exception as e:
+        verbose_proxy_logger.exception("Error validating blocked words file")
+        return {"valid": False, "error": f"Validation error: {str(e)}"}
 
 
 def _get_field_type_from_annotation(field_annotation: Any) -> str:

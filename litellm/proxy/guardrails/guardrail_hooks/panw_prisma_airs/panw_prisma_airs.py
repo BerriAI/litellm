@@ -205,11 +205,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if not content.strip():
             return {"action": "allow", "category": "empty"}
 
-        # Use litellm_call_id if provided, fallback to generating UUID
-        litellm_call_id = call_id or str(uuid.uuid4())
-
-        # Build transaction ID with prompt/response prefix + full call_id for correlation
-        transaction_id = f"litellm-{'resp' if is_response else 'req'}-{litellm_call_id}"
+        # Use litellm_trace_id as Prisma AIRS AI Session ID for session grouping
+        transaction_id = metadata.get("litellm_trace_id") if metadata else None
+        if not transaction_id:
+            transaction_id = call_id or str(uuid.uuid4())
 
         # Build Prisma AIRS API metadata
         # Handle app_name: LiteLLM by default, or LiteLLM-{user_app_name} if user provides one
@@ -264,7 +263,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             payload["ai_profile"] = ai_profile
 
         if is_response:
-            payload["metadata"]["is_response"] = True  # type: ignore[index]
+            payload["metadata"]["is_response"] = True  # type: ignore[call-overload, index]
 
         headers = {
             "Content-Type": "application/json",
@@ -275,7 +274,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         try:
             # Use LiteLLM's async HTTP client
             async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.LoggingCallback
+                llm_provider=httpxSpecialProvider.GuardrailCallback
             )
 
             response = await async_client.post(
@@ -496,7 +495,68 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if "app_name" in user_metadata:
             metadata["app_name"] = user_metadata["app_name"]
 
+        # Include litellm_trace_id for session tracking
+        if data.get("litellm_trace_id"):
+            metadata["litellm_trace_id"] = data["litellm_trace_id"]
+
         return metadata
+
+    def _check_and_mark_scanned(self, data: dict, scan_type: str) -> bool:
+        """
+        Check if request has already been scanned and mark it as scanned.
+
+        Args:
+            data: Request data dictionary
+            scan_type: Type of scan ('pre', 'post', 'streaming')
+
+        Returns:
+            True if already scanned (should skip), False if needs scanning
+        """
+        call_id = data.get("litellm_call_id")
+        if not call_id:
+            call_id = str(uuid.uuid4())
+            data["litellm_call_id"] = call_id
+
+        scan_key = f"_panw_{scan_type}_scanned_{call_id}"
+        litellm_metadata = data.setdefault("litellm_metadata", {})
+
+        if litellm_metadata.get(scan_key):
+            verbose_proxy_logger.debug(
+                f"PANW Prisma AIRS: Skipping duplicate {scan_type}-call scan"
+            )
+            return True  # Already scanned
+
+        litellm_metadata[scan_key] = True
+        return False  # Needs scanning
+
+    def _extract_prompt_from_request(self, data: dict) -> str:
+        """
+        Extract prompt text from request data.
+
+        Handles both chat completion (messages) and text completion (prompt) formats.
+
+        Args:
+            data: Request data dictionary
+
+        Returns:
+            Extracted prompt text, or empty string if not found
+        """
+        # Extract from messages (chat completion)
+        messages = data.get("messages", [])
+        prompt_text = self._extract_text_from_messages(messages)
+
+        # Fallback to prompt field for text completion requests
+        if not prompt_text:
+            prompt_value = data.get("prompt")
+            if isinstance(prompt_value, str):
+                prompt_text = prompt_value
+            elif isinstance(prompt_value, list):
+                # Handle list of prompts (batch text completion)
+                prompt_text = " ".join(str(p) for p in prompt_value if p)
+            else:
+                prompt_text = ""
+
+        return prompt_text
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -534,21 +594,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        try:
-            # Extract prompt text from messages (chat completion) or prompt (text completion)
-            messages = data.get("messages", [])
-            prompt_text = self._extract_text_from_messages(messages)
+        # Prevent duplicate scans by checking if already processed
+        if self._check_and_mark_scanned(data, "pre"):
+            return data
 
-            # Fallback to prompt field for text completion requests
-            if not prompt_text:
-                prompt_value = data.get("prompt")
-                if isinstance(prompt_value, str):
-                    prompt_text = prompt_value
-                elif isinstance(prompt_value, list):
-                    # Handle list of prompts (batch text completion)
-                    prompt_text = " ".join(str(p) for p in prompt_value if p)
-                else:
-                    prompt_text = ""
+        try:
+            # Extract prompt text from request
+            prompt_text = self._extract_prompt_from_request(data)
+            messages = data.get("messages", [])  # Keep for masking operations
 
             if not prompt_text:
                 verbose_proxy_logger.warning(
@@ -657,6 +710,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # Check if guardrail should run for this request
         event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return response
+
+        # Prevent duplicate scans by checking if already processed
+        if self._check_and_mark_scanned(data, "post"):
             return response
 
         try:
@@ -815,6 +872,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if not self.should_run_guardrail(
             data=request_data, event_type=EventHooks.post_call
         ):
+            async for chunk in response:
+                yield chunk
+            return
+
+        # Prevent duplicate scans by checking if already processed
+        if self._check_and_mark_scanned(request_data, "streaming"):
             async for chunk in response:
                 yield chunk
             return

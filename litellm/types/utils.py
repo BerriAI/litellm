@@ -1,16 +1,7 @@
 import json
 import time
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -128,6 +119,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
+    cache_creation_input_token_cost_above_200k_tokens: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[
@@ -136,6 +128,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_above_200k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -297,7 +290,7 @@ class CallTypes(str, Enum):
     avideo_retrieve_job = "avideo_retrieve_job"
     video_delete = "video_delete"
     avideo_delete = "avideo_delete"
-    
+
     #########################################################
     # Container Call Types
     #########################################################
@@ -309,7 +302,7 @@ class CallTypes(str, Enum):
     aretrieve_container = "aretrieve_container"
     delete_container = "delete_container"
     adelete_container = "adelete_container"
-    
+
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
     alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
@@ -372,6 +365,7 @@ CallTypesLiteral = Literal[
     "aocr",
     "avector_store_search",
     "vector_store_search",
+    "call_mcp_tool",
 ]
 
 
@@ -819,6 +813,8 @@ class Delta(OpenAIObject):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
                         current_index += 1
+                    if tool_call.get("type", None) is None:
+                        tool_call["type"] = "function"
                     self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
                 elif isinstance(tool_call, ChatCompletionDeltaToolCall):
                     self.tool_calls.append(tool_call)
@@ -1771,6 +1767,10 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             total_tokens=0,
         )
         super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
+
+        self.quality = kwargs.get("quality", None)
+        self.output_format = kwargs.get("output_format", None)
+        self.size = kwargs.get("size", None)
         self._hidden_params = hidden_params or {}
 
     def __contains__(self, key):
@@ -1797,8 +1797,29 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             return self.dict()
 
 
+class TranscriptionUsageDurationObject(BaseModel):
+    type: Literal["duration"]
+    seconds: int
+
+
+class TranscriptionUsageInputTokenDetailsObject(BaseModel):
+    audio_tokens: int
+    text_tokens: int
+
+
+class TranscriptionUsageTokensObject(BaseModel):
+    type: Literal["tokens"]
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    input_token_details: TranscriptionUsageInputTokenDetailsObject
+
+
 class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
+    usage: Optional[
+        Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject]
+    ] = None
 
     _hidden_params: dict = {}
     _response_headers: Optional[dict] = None
@@ -2783,6 +2804,10 @@ class SpecialEnums(Enum):
     )
 
     LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR = "litellm_proxy;model_id:{};generic_response_id:{}"  # generic implementation of 'managed batches' - used for finetuning and any future work.
+
+    LITELLM_MANAGED_VIDEO_COMPLETE_STR = (
+        "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
+    )
 
 
 class ServiceTier(Enum):
