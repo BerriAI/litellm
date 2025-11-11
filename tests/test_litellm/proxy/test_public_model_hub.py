@@ -33,13 +33,15 @@ def test_public_model_hub_no_auth_required():
     client = TestClient(app)
 
     # Mock litellm.public_model_groups and llm_router
+    # Note: llm_router is imported inside the function, so we patch it at the source module
+    mock_router_obj = MagicMock()
     with patch("litellm.proxy.public_endpoints.public_endpoints.litellm") as mock_litellm, patch(
-        "litellm.proxy.public_endpoints.public_endpoints._get_model_group_info"
+        "litellm.proxy.proxy_server._get_model_group_info"
     ) as mock_get_info, patch(
-        "litellm.proxy.public_endpoints.public_endpoints.llm_router"
-    ) as mock_router:
+        "litellm.proxy.proxy_server.llm_router", mock_router_obj, create=True
+    ):
+        # Set up mocks
         mock_litellm.public_model_groups = ["gpt-4", "claude-3"]
-        mock_router.is_not_none = True
         mock_get_info.return_value = [
             {
                 "model_group": "gpt-4",
@@ -53,7 +55,8 @@ def test_public_model_hub_no_auth_required():
         response = client.get("/public/model_hub")
 
         # Should return 200, not 401 or 403
-        assert response.status_code in [200, 400]  # 400 if llm_router is None, 200 if mocked
+        # Note: 400 is returned if llm_router is None, 200 if mocked correctly
+        assert response.status_code in [200, 400]
         if response.status_code == 200:
             data = response.json()
             assert isinstance(data, list)
