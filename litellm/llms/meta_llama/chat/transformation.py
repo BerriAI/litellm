@@ -6,11 +6,6 @@ Calls done in OpenAI/openai.py as Llama API is openai-compatible.
 Docs: https://llama.developer.meta.com/docs/features/compatibility/
 """
 
-import warnings
-
-# Suppress Pydantic serialization warnings for Meta Llama responses
-warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
-
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
