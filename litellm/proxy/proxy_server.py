@@ -47,6 +47,7 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 from litellm.utils import load_credentials_from_list
+from litellm.proxy.common_utils.callback_utils import process_callback
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -9582,29 +9583,6 @@ async def get_config():  # noqa: PLR0915
         _general_settings = config_data.get("general_settings", {})
         environment_variables = config_data.get("environment_variables", {})
 
-        # Helper function to process callbacks and get environment variables
-        def process_callback(_callback: str, callback_type: str) -> dict:
-            """Process a single callback and return its data with environment variables"""
-            env_vars = CustomLogger.get_callback_env_vars(_callback)
-
-            env_vars_dict: dict[str, str | None] = {}
-            for _var in env_vars:
-                env_variable = environment_variables.get(_var, None)
-                if env_variable is None:
-                    env_vars_dict[_var] = None
-                else:
-                    # decode + decrypt the value
-                    decrypted_value = decrypt_value_helper(
-                        value=env_variable, key=_var
-                    )
-                    env_vars_dict[_var] = decrypted_value
-
-            return {
-                "name": _callback,
-                "variables": env_vars_dict,
-                "type": callback_type
-            }
-
         _success_callbacks = _litellm_settings.get("success_callback", [])
         _failure_callbacks = _litellm_settings.get("failure_callback", [])
         _success_and_failure_callbacks = _litellm_settings.get("callbacks", [])
@@ -9626,13 +9604,13 @@ async def get_config():  # noqa: PLR0915
         """
         
         for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success"))
+            _data_to_return.append(process_callback(_callback, "success", environment_variables))
         
         for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure"))
+            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
         
         for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure"))
+            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
