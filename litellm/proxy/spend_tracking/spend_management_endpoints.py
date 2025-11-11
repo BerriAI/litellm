@@ -1928,13 +1928,21 @@ async def view_spend_logs(  # noqa: PLR0915
             and isinstance(end_date, str)
         ):
             # Convert the date strings to datetime objects
-            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+
+            # Convert to ISO format strings for Prisma
+            start_date_iso = start_date_obj.isoformat()
+            end_date_iso = end_date_obj.isoformat()
 
             filter_query = {
                 "startTime": {
-                    "gte": start_date_obj,  # Greater than or equal to Start Date
-                    "lte": end_date_obj,  # Less than or equal to End Date
+                    "gte": start_date_iso,  # Greater than or equal to Start Date
+                    "lte": end_date_iso,  # Less than or equal to End Date
                 }
             }
 
