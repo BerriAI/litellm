@@ -144,6 +144,7 @@ litellm_settings:
   drop_params: True
   # max_budget: 100 
   # budget_duration: 30d
+  store_audit_logs: true
   num_retries: 5
   request_timeout: 600
   telemetry: False
