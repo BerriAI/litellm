@@ -10,11 +10,11 @@ All /customer management endpoints
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
-import traceback
 from typing import List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -616,7 +616,7 @@ async def delete_end_user(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
+        verbose_proxy_logger.exception("Exception details:")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
