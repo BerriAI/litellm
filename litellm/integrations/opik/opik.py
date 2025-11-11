@@ -28,7 +28,7 @@ def _should_skip_event(kwargs: Dict[str, Any]) -> bool:
     """Check if event should be skipped due to missing standard_logging_object."""
     if kwargs.get("standard_logging_object") is None:
         verbose_logger.debug(
-            "OpikLogger skipping event; no standard_logging_object found"
+            "OpikLogger: skipping event; no standard_logging_object found"
         )
         return True
     return False
@@ -173,7 +173,7 @@ class OpikLogger(CustomBatchLogger):
             self.periodic_started = True
         except Exception:
             verbose_logger.exception(
-                "OpikLogger - Asynchronous processing not initialized as we are not running in an asyncio context. "
+                "OpikLogger: Asynchronous processing not initialized as we are not running in an asyncio context. "
                 "If you are using LiteLLM's async mode, please initialize the OpikLogger within the asyncio context."
             )
             self.periodic_failed = True
@@ -194,7 +194,7 @@ class OpikLogger(CustomBatchLogger):
             )
         except Exception as e:
             verbose_logger.exception(
-                f"OpikLogger failed to asynchronously log success event - {str(e)}\n{traceback.format_exc()}"
+                f"OpikLogger: failed to asynchronously log success event - {str(e)}\n{traceback.format_exc()}"
             )
 
     def _sync_send(
@@ -207,11 +207,11 @@ class OpikLogger(CustomBatchLogger):
             response.raise_for_status()
             if response.status_code != 204:
                 raise Exception(
-                    f"Response from opik API status_code: {response.status_code}, text: {response.text}"
+                    f"Response from OPIK API status_code: {response.status_code}, text: {response.text}"
                 )
         except Exception as e:
             verbose_logger.exception(
-                f"OpikLogger failed to send batch - {str(e)}\n{traceback.format_exc()}"
+                f"OpikLogger: failed to send batch - {str(e)}\n{traceback.format_exc()}"
             )
 
     def log_success_event(
@@ -258,7 +258,7 @@ class OpikLogger(CustomBatchLogger):
             )
         except Exception as e:
             verbose_logger.exception(
-                f"OpikLogger failed to log success event - {str(e)}\n{traceback.format_exc()}"
+                f"OpikLogger: failed to log success event - {str(e)}\n{traceback.format_exc()}"
             )
 
     async def _submit_batch(
@@ -272,14 +272,23 @@ class OpikLogger(CustomBatchLogger):
 
             if response.status_code >= 300:
                 verbose_logger.error(
-                    f"OpikLogger - Error: {response.status_code} - {response.text}"
+                    f"OpikLogger: Error: {response.status_code} - {response.text}"
                 )
             else:
-                verbose_logger.info(
-                    f"OpikLogger - successfully sent a batch of {len(batch)} Opik events"
-                )
+                if "traces" in batch:
+                    verbose_logger.info(
+                        f"OpikLogger: Successfully sent a batch of {len(batch['traces'])} Opik traces"
+                    )
+                elif "spans" in batch:
+                    verbose_logger.info(
+                        f"OpikLogger: Successfully sent a batch of {len(batch['spans'])} Opik spans"
+                    )
+                else:
+                    verbose_logger.info(
+                        f"OpikLogger: successfully sent {len(batch)} Opik event(s)"
+                    )
         except Exception as e:
-            verbose_logger.exception(f"OpikLogger failed to send batch - {str(e)}")
+            verbose_logger.exception(f"OpikLogger: failed to send batch - {str(e)}")
 
     def _create_opik_headers(self) -> Dict[str, str]:
         headers: Dict[str, str] = {}
@@ -306,11 +315,11 @@ class OpikLogger(CustomBatchLogger):
             )
         except Exception as e:
             verbose_logger.exception(
-                f"OpikLogger failed to asynchronously log failure event - {str(e)}\n{traceback.format_exc()}"
+                f"OpikLogger: failed to asynchronously log failure event - {str(e)}\n{traceback.format_exc()}"
             )
 
     async def async_send_batch(self) -> None:
-        verbose_logger.info("OpikLogger Calling async_send_batch")
+        verbose_logger.info("OpikLogger: Calling async_send_batch")
         if not self.log_queue:
             return
 
@@ -318,13 +327,13 @@ class OpikLogger(CustomBatchLogger):
         traces, spans = utils.get_traces_and_spans_from_payload(self.log_queue)
 
         if len(traces) > 0:
-            verbose_logger.info(f"OpikLogger Attempting to send batch of {len(traces)} traces")
+            verbose_logger.info(f"OpikLogger: Attempting to send batch of {len(traces)} traces")
             await self._submit_batch(
                 url=self.trace_url, headers=self.headers, batch={"traces": traces}
             )
 
         if len(spans) > 0:
-            verbose_logger.info(f"OpikLogger Attempting to send batch of {len(spans)} spans")
+            verbose_logger.info(f"OpikLogger: Attempting to send batch of {len(spans)} spans")
             await self._submit_batch(
                 url=self.span_url, headers=self.headers, batch={"spans": spans}
             )
@@ -365,11 +374,11 @@ class OpikLogger(CustomBatchLogger):
         self.log_queue.append(span_payload.__dict__)
 
         verbose_logger.debug(
-            f"OpikLogger added event to log_queue - Will flush in {self.flush_interval} seconds..."
+            f"OpikLogger: added event to log_queue - Will flush in {self.flush_interval} seconds..."
         )
 
         if len(self.log_queue) >= self.batch_size:
-            verbose_logger.debug("OpikLogger - Flushing batch")
+            verbose_logger.debug("OpikLogger: Flushing batch")
             await self.flush_queue()
 
     def _send_via_opik_native_client(
