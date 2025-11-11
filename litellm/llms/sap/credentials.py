@@ -11,6 +11,7 @@ import tempfile
 import httpx
 
 from litellm import sap_service_key
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
 
@@ -276,18 +277,19 @@ def get_token_creator(
         if client_secret:
             data["client_secret"] = client_secret
 
-        with httpx.Client(cert=cert_pair, timeout=timeout) as client:
-            resp = client.post(auth_url, data=data)
-            try:
-                resp.raise_for_status()
-                payload = resp.json()
-                access_token = payload["access_token"]
-                expires_in = int(payload.get("expires_in", 3600))
-                expiry_date = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-                return f"Bearer {access_token}", expiry_date
-            except Exception as e:
-                msg = getattr(resp, "text", str(e))
-                raise RuntimeError(f"Token request failed: {msg}") from e
+        client = _get_httpx_client()
+        # with httpx.Client(cert=cert_pair, timeout=timeout) as client:
+        resp = client.post(auth_url, data=data)
+        try:
+            resp.raise_for_status()
+            payload = resp.json()
+            access_token = payload["access_token"]
+            expires_in = int(payload.get("expires_in", 3600))
+            expiry_date = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            return f"Bearer {access_token}", expiry_date
+        except Exception as e:
+            msg = getattr(resp, "text", str(e))
+            raise RuntimeError(f"Token request failed: {msg}") from e
 
     def _fetch_token() -> tuple[str, datetime]:
         # Case 1: secret-based auth

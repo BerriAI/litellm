@@ -301,21 +301,22 @@ class GenAIHubOrchestration(BaseLLM):
     @cached_property
     def deployment_url(self) -> str:
         # Keep a short, tight client lifecycle here to avoid fd leaks
-        with httpx.Client(timeout=30) as client:
-            deployments = client.get(
-                f"{self.base_url}/lm/deployments", headers=self.headers
-            ).json()
-            valid: List[Tuple[str, str]] = []
-            for dep in deployments.get("resources", []):
-                if dep.get("scenarioId") == "orchestration":
-                    cfg = client.get(
-                        f'{self.base_url}/lm/configurations/{dep["configurationId"]}',
-                        headers=self.headers,
-                    ).json()
-                    if cfg.get("executableId") == "orchestration":
-                        valid.append((dep["deploymentUrl"], dep["createdAt"]))
+        client = litellm.module_level_client
+        # with httpx.Client(timeout=30) as client:
+        deployments = client.get(
+            f"{self.base_url}/lm/deployments", headers=self.headers
+        ).json()
+        valid: List[Tuple[str, str]] = []
+        for dep in deployments.get("resources", []):
+            if dep.get("scenarioId") == "orchestration":
+                cfg = client.get(
+                    f'{self.base_url}/lm/configurations/{dep["configurationId"]}',
+                    headers=self.headers,
+                ).json()
+                if cfg.get("executableId") == "orchestration":
+                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
             # newest first
-            return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+        return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
 
     def validate_environment(
         self, endpoint_type: Literal["chat_completions", "embeddings"]
