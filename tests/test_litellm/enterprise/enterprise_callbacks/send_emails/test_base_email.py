@@ -12,6 +12,14 @@ _workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..
 _enterprise_path = os.path.join(_workspace_root, "enterprise")
 _enterprise_litellm_path = os.path.join(_enterprise_path, "litellm_enterprise")
 
+# Remove installed litellm_enterprise from sys.modules to force use of local code
+# This is necessary because the installed package may not have the latest types
+if "litellm_enterprise" in sys.modules:
+    # Remove all litellm_enterprise submodules
+    modules_to_remove = [k for k in sys.modules.keys() if k.startswith("litellm_enterprise")]
+    for module_name in modules_to_remove:
+        del sys.modules[module_name]
+
 # Add both enterprise and enterprise/litellm_enterprise to path
 # This allows imports like "from litellm_enterprise.types..." to work
 if _enterprise_litellm_path not in sys.path:
@@ -383,17 +391,17 @@ async def test_get_invitation_link_creates_new_when_none_exist(base_email_logger
     """Test that _get_invitation_link creates a new invitation when none exist"""
     # Mock prisma client with no existing invitation rows
     mock_prisma = mock.MagicMock()
-    
+
     # Mock find_many to return empty list (no existing invitations)
     async def mock_find_many_empty(*args, **kwargs):
         return []
-    
+
     mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_empty
-    
+
     # Mock the create_invitation_for_user function
     mock_created_invitation = mock.MagicMock()
     mock_created_invitation.id = "new-invitation-id"
-    
+
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with mock.patch(
             "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user",
@@ -403,13 +411,13 @@ async def test_get_invitation_link_creates_new_when_none_exist(base_email_logger
             result = await base_email_logger._get_invitation_link(
                 user_id="test-user", base_url="http://test.com"
             )
-            
+
             # Verify that create_invitation_for_user was called
             mock_create_invitation.assert_called_once()
             call_args = mock_create_invitation.call_args[1]
             assert call_args["data"].user_id == "test-user"
             assert call_args["user_api_key_dict"].user_id == "test-user"
-            
+
             # Verify the returned link uses the new invitation ID
             assert result == "http://test.com/ui?invitation_id=new-invitation-id"
 
@@ -420,15 +428,15 @@ async def test_get_invitation_link_uses_existing_when_available(base_email_logge
     # Mock prisma client with existing invitation row
     mock_invitation_row = mock.MagicMock()
     mock_invitation_row.id = "existing-invitation-id"
-    
+
     mock_prisma = mock.MagicMock()
-    
+
     # Mock find_many to return existing invitation
     async def mock_find_many_existing(*args, **kwargs):
         return [mock_invitation_row]
-    
+
     mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_existing
-    
+
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with mock.patch(
             "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user"
@@ -437,10 +445,10 @@ async def test_get_invitation_link_uses_existing_when_available(base_email_logge
             result = await base_email_logger._get_invitation_link(
                 user_id="test-user", base_url="http://test.com"
             )
-            
+
             # Verify that create_invitation_for_user was NOT called
             mock_create_invitation.assert_not_called()
-            
+
             # Verify the returned link uses the existing invitation ID
             assert result == "http://test.com/ui?invitation_id=existing-invitation-id"
 
@@ -450,17 +458,17 @@ async def test_get_invitation_link_creates_new_when_list_is_none(base_email_logg
     """Test that _get_invitation_link creates a new invitation when invitation_rows is None"""
     # Mock prisma client to return None
     mock_prisma = mock.MagicMock()
-    
+
     # Mock find_many to return None
     async def mock_find_many_none(*args, **kwargs):
         return None
-    
+
     mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_none
-    
+
     # Mock the create_invitation_for_user function
     mock_created_invitation = mock.MagicMock()
     mock_created_invitation.id = "new-invitation-from-none"
-    
+
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with mock.patch(
             "litellm.proxy.management_helpers.user_invitation.create_invitation_for_user",
@@ -470,13 +478,13 @@ async def test_get_invitation_link_creates_new_when_list_is_none(base_email_logg
             result = await base_email_logger._get_invitation_link(
                 user_id="test-user", base_url="http://test.com"
             )
-            
+
             # Verify that create_invitation_for_user was called
             mock_create_invitation.assert_called_once()
             call_args = mock_create_invitation.call_args[1]
             assert call_args["data"].user_id == "test-user"
             assert call_args["user_api_key_dict"].user_id == "test-user"
-            
+
             # Verify the returned link uses the new invitation ID
             assert result == "http://test.com/ui?invitation_id=new-invitation-from-none"
 
@@ -531,7 +539,7 @@ async def test_get_email_params_custom_templates_premium_user(mock_env_vars):
     # Mock premium_user as True
     with patch("litellm.proxy.proxy_server.premium_user", True):
         email_logger = BaseEmailLogger()
-        
+
         # Test invitation email params
         invitation_params = await email_logger._get_email_params(
             email_event=EmailEvent.new_user_invitation,
@@ -539,13 +547,13 @@ async def test_get_email_params_custom_templates_premium_user(mock_env_vars):
             user_email="test@example.com",
             event_message="New User Invitation"
         )
-        
+
         assert invitation_params.subject == "Welcome to Test Company!"
         assert invitation_params.signature == "Best regards,\nTest Company Team"
         assert invitation_params.logo_url == "https://test-company.com/logo.png"
         assert invitation_params.support_contact == "support@test-company.com"
         assert invitation_params.base_url == "http://test.com"
-        
+
         # Test key created email params
         key_params = await email_logger._get_email_params(
             email_event=EmailEvent.virtual_key_created,
@@ -553,7 +561,7 @@ async def test_get_email_params_custom_templates_premium_user(mock_env_vars):
             user_email="test@example.com",
             event_message="API Key Created"
         )
-        
+
         assert key_params.subject == "Your Test Company API Key"
         assert key_params.signature == "Best regards,\nTest Company Team"
 
@@ -563,28 +571,28 @@ async def test_get_email_params_non_premium_user(mock_env_vars):
     # Mock premium_user as False
     with patch("litellm.proxy.proxy_server.premium_user", False):
         email_logger = BaseEmailLogger()
-        
+
         # Test invitation email params
         email_params = await email_logger._get_email_params(
             email_event=EmailEvent.new_user_invitation,
             user_email="test@example.com",
             event_message="New User Invitation"
         )
-        
+
         # Should use default values even though custom values are set in env
         assert email_params.subject == "LiteLLM: New User Invitation"
         assert email_params.signature == EMAIL_FOOTER
         assert email_params.logo_url == "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
         assert email_params.support_contact == "support@berri.ai"
 
-        
+
         # Test key created email params
         key_params = await email_logger._get_email_params(
             email_event=EmailEvent.virtual_key_created,
             user_email="test@example.com",
             event_message="API Key Created"
         )
-        
+
         assert key_params.subject == "LiteLLM: API Key Created"
         assert key_params.signature == EMAIL_FOOTER
 
@@ -595,27 +603,27 @@ async def test_get_email_params_default_templates(monkeypatch):
     monkeypatch.delenv("EMAIL_SUBJECT_INVITATION", raising=False)
     monkeypatch.delenv("EMAIL_SUBJECT_KEY_CREATED", raising=False)
     monkeypatch.delenv("EMAIL_SIGNATURE", raising=False)
-    
+
     # Mock premium_user as True (shouldn't matter since no custom values are set)
     with patch("litellm.proxy.proxy_server.premium_user", True):
         email_logger = BaseEmailLogger()
-        
+
         # Test invitation email params with default template
         invitation_params = await email_logger._get_email_params(
             email_event=EmailEvent.new_user_invitation,
             user_email="test@example.com",
             event_message="New User Invitation"
         )
-        
+
         assert invitation_params.subject == "LiteLLM: New User Invitation"
         assert invitation_params.signature == EMAIL_FOOTER
-        
+
         # Test key created email params with default template
         key_params = await email_logger._get_email_params(
             email_event=EmailEvent.virtual_key_created,
             user_email="test@example.com",
             event_message="API Key Created"
         )
-        
+
         assert key_params.subject == "LiteLLM: API Key Created"
         assert key_params.signature == EMAIL_FOOTER 
