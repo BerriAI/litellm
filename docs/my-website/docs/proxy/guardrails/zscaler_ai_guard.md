@@ -1,41 +1,40 @@
 # Zscaler AI Guard
 
 ## Overview
-Zscaler AI guard enforces security policies for all traffic towards AI sites, models and applications. The AI guard is part of the Zero Trust Exchange and provides a comprehensive platform for visibility, control and deep packet inspection of AI prompts.
+Zscaler AI Guard enforces security policies for all traffic to AI sites, models, and applications. As part of the Zero Trust Exchange, it provides a comprehensive platform for visibility, control, and deep packet inspection of AI prompts.
 
-## 1. Setup guardrails policy on Zscaler AI Guard
-Setup guardrails policy on Zscaler AI Guard, and get your ZSCALER_AI_GUARD_API_KEY, ZSCALER_AI_GUARD_POLICY_ID
+## 1. Set Up Zscaler AI Guard Policy
+First, set up your guardrail policy in the Zscaler AI Guard dashboard to obtain your `ZSCALER_AI_GUARD_API_KEY` and `ZSCALER_AI_GUARD_POLICY_ID`.
 
 ## 2. Define Zscaler AI Guard in `config.yaml`
 
 You can define Zscaler AI Guard settings directly in your LiteLLM `config.yaml` file.
 
-### Example Configuration: 
-
+### Example Configuration
 
 ```yaml
 guardrails:
   - guardrail_name: "zscaler-ai-guard-during-guard"
     litellm_params:
       guardrail: zscaler_ai_guard
-      mode: "during_call"                  
-      api_key: os.environ/ZSCALER_AI_GUARD_API_KEY  # your zscaler_ai_guard api key
-      policy_id: os.environ/ZSCALER_AI_GUARD_POLICY_ID # your zscaler_ai_guard policy id
-      api_base: os.environ/ZSCALER_AI_GUARD_URL (optional) # zscaler_ai_guard base_url, default is https://api.us1.zseclipse.net/v1/detection/execute-policy
-      send_user_api_key_alias: os.environ/SEND_USER_API_KEY_ALIAS (optional)
-      send_user_api_key_user_id: os.environ/SEND_USER_API_KEY_USER_ID (optional)
-      send_user_api_key_team_id: os.environ/SEND_USER_API_KEY_TEAM_ID (optional)
+      mode: "during_call"
+      api_key: os.environ/ZSCALER_AI_GUARD_API_KEY      # Your Zscaler AI Guard API key
+      policy_id: os.environ/ZSCALER_AI_GUARD_POLICY_ID  # Your Zscaler AI Guard policy ID
+      api_base: os.environ/ZSCALER_AI_GUARD_URL         # Optional: Zscaler AI Guard base URL. Defaults to https://api.us1.zseclipse.net/v1/detection/execute-policy
+      send_user_api_key_alias: os.environ/SEND_USER_API_KEY_ALIAS # Optional
+      send_user_api_key_user_id: os.environ/SEND_USER_API_KEY_USER_ID # Optional
+      send_user_api_key_team_id: os.environ/SEND_USER_API_KEY_TEAM_ID # Optional
 
   - guardrail_name: "zscaler-ai-guard-post-guard"
     litellm_params:
       guardrail: zscaler_ai_guard
-      mode: "post_call"                   
+      mode: "post_call"
       api_key: os.environ/ZSCALER_AI_GUARD_API_KEY
       policy_id: os.environ/ZSCALER_AI_GUARD_POLICY_ID
-      api_base: os.environ/ZSCALER_AI_GUARD_URL (optional)
-      send_user_api_key_alias: os.environ/SEND_USER_API_KEY_ALIAS (optional)
-      send_user_api_key_user_id: os.environ/SEND_USER_API_KEY_USER_ID (optional)
-      send_user_api_key_team_id: os.environ/SEND_USER_API_KEY_TEAM_ID (optional)
+      api_base: os.environ/ZSCALER_AI_GUARD_URL # Optional
+      send_user_api_key_alias: os.environ/SEND_USER_API_KEY_ALIAS # Optional
+      send_user_api_key_user_id: os.environ/SEND_USER_API_KEY_USER_ID # Optional
+      send_user_api_key_team_id: os.environ/SEND_USER_API_KEY_TEAM_ID # Optional
 ```
 
 ## 3. Test request 
@@ -57,75 +56,48 @@ curl -i http://localhost:4000/v1/chat/completions \
 ## 4. Behavior on Violations
 
 ### Prompt is Blocked
-When input violates Zscaler AI Guard policies, it returns:
-- **HTTP Status**: 400
-- **Error Type**: `Guardrail Policy Violation`
-- **blocking_info**: 
-   - `transactionId`: Zscaler AI Guard transactionId for debugging
-   - `message`: Prompt or LLM response is blocked
-   - `blockingDetectors`: the list of Zscaler AI Guard detectors that block the request
-
-#### Example Response
+When input violates Zscaler AI Guard policies, return example as below:
 ```json
 {
-   "error": {
-      "error_type": "Guardrail Policy Violation",
-      "blocking_info": {
-         "transactionId": "1234abcd-5678-efgh-9101-ijklmnopqr",
-         "message": "Prompt violates Zscaler AI Guard policy.",
-         "blockingDetectors": ["toxicity"]
-      }
-   },
-   "type": "None",
-   "param": "None",
-   "code": "400"
+   "error":{
+      "message": "Content blocked by Zscaler AI Guard: {'transactionId': '46de33f1-8f6d-4914-866c-3fde7a89a82f', 'blockingDetectors': ['toxicity']}",
+      "type":"None",
+      "param":"None",
+      "code":"500"
+   }
 }
 ```
+- `transactionId`: Zscaler AI Guard transactionId for debugging
+- `blockingDetectors`: the list of Zscaler AI Guard detectors that block the request
+
 
 ### LLM response Blocked
-When output violates Zscaler AI Guard policies, it returns:
-- **HTTP Status**: 400
-- **Error Type**: `Guardrail Policy Violation`
-- **blocking_info**: 
-   - `transactionId`: Zscaler AI Guard transactionId for debugging
-   - `message`: Prompt or LLM response is blocked
-   - `blockingDetectors`: the list of Zscaler AI Guard detectors that block the request
-
-#### Example Response
+When output violates Zscaler AI Guard policies, return example as below:
 ```json
 {
-   "error": {
-      "error_type": "Guardrail Policy Violation",
-      "blocking_info": {
-         "transactionId": "5678abcd-9101-efgh-1234-ijklmnopqr",
-         "message": "LLM response violates Zscaler AI Guard policy.",
-         "blockingDetectors": ["toxicity"]
-      }
-   },
-   "type": "None",
-   "param": "None",
-   "code": "400"
+   "error":{
+      "message": "Content blocked by Zscaler AI Guard: {'transactionId': '46de33f1-8f6d-4914-866c-3fde7a89a82f', 'blockingDetectors': ['toxicity']}",
+      "type":"None",
+      "param":"None",
+      "code":"500"
+   }
 }
 ```
+- `transactionId`: Zscaler AI Guard transactionId for debugging
+- `blockingDetectors`: the list of Zscaler AI Guard detectors that block the request
 
 
-## 5. Error Handling for Service Issues
+## 5. Error Handling
 
-In cases where Zscaler AI Guard encounters operational issues, it returns:
-- **HTTP Status**: 500
-- **Error Type**: `Guardrail Service Operational Issue`
-- **reason**: the detailed reason 
-
-#### Example Response
+In cases where encounter other errors when apply Zscaler AI Guard, return example as below:
 ```json
 {
-   "error": {
-      "error_type": "Zscaler AI Guard Service Operational Issue",
-      "reason": "Action field in response is None, expecting 'ALLOW', 'BLOCK' or 'DETECT."
-   },
-   "type": "None",
-   "param": "None",
-   "code": "500"
+   "error":{
+      "message":"{'error_type': 'Zscaler AI Guard Error', 'reason': 'Cannot connect to host api.us1.zseclipse.net:443 ssl:default [nodename nor servname provided, or not known])'}",
+      "type":"None",
+      "param":"None",
+      "code":"500"
+   }
 }
 ```
 ## 6. Sending User Information to Zscaler AI Guard for Analysis (Optional)
