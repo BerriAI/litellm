@@ -273,6 +273,9 @@ from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.vector_store_files.transformation import (
+    BaseVectorStoreFilesConfig,
+)
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 
 from ._logging import _is_debugging_on, verbose_logger
@@ -7568,6 +7571,18 @@ class ProviderConfigManager:
             )
 
             return MilvusVectorStoreConfig()
+        return None
+
+    @staticmethod
+    def get_provider_vector_store_files_config(
+        provider: LlmProviders,
+    ) -> Optional[BaseVectorStoreFilesConfig]:
+        if litellm.LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.vector_store_files.transformation import (
+                OpenAIVectorStoreFilesConfig,
+            )
+
+            return OpenAIVectorStoreFilesConfig()
         return None
 
     @staticmethod
