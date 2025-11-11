@@ -163,9 +163,6 @@ def _get_response_headers(original_exception: Exception) -> Optional[httpx.Heade
     return _response_headers
 
 
-import re
-
-
 def extract_and_raise_litellm_exception(
     response: Optional[Any],
     error_str: str,
