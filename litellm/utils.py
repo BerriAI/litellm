@@ -784,9 +784,10 @@ def function_setup(  # noqa: PLR0915
             or call_type == CallTypes.transcription.value
         ):
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
+            # Calculate hash of file content for cache key, not just filename
             file_checksum = (
-                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_name(
-                    file_obj=_file_obj
+                litellm.litellm_core_utils.audio_utils.utils.calculate_audio_file_hash(
+                    audio_file=_file_obj
                 )
             )
             if "metadata" in kwargs:

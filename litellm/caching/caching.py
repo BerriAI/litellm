@@ -349,15 +349,47 @@ class Cache:
     def _get_file_param_value(self, kwargs: dict) -> str:
         """
         Handles getting the value for the 'file' param from kwargs. Used for `transcription` requests
+        
+        Priority order:
+        1. file_checksum from metadata (hash of file content - preferred)
+        2. Calculate hash of file content if file is available (fallback)
+        3. file name from file object
+        4. file_name from metadata
+        5. file_name from litellm_params
         """
         file = kwargs.get("file")
         metadata = kwargs.get("metadata", {})
         litellm_params = kwargs.get("litellm_params", {})
+        
+        # First check if file_checksum is already in metadata
+        file_checksum = metadata.get("file_checksum")
+        if file_checksum:
+            return file_checksum
+        
+        # If file is available and no checksum exists, calculate hash as fallback
+        if file is not None:
+            try:
+                from litellm.litellm_core_utils.audio_utils.utils import (
+                    calculate_audio_file_hash,
+                )
+                
+                file_checksum = calculate_audio_file_hash(audio_file=file)
+                # Store in metadata for future use
+                if "metadata" in kwargs:
+                    kwargs["metadata"]["file_checksum"] = file_checksum
+                else:
+                    kwargs["metadata"] = {"file_checksum": file_checksum}
+                return file_checksum
+            except (ValueError, Exception):
+                # If hash calculation fails, fall back to filename-based approach
+                pass
+        
+        # Fallback to filename-based approach
         return (
-            metadata.get("file_checksum")
-            or getattr(file, "name", None)
+            getattr(file, "name", None)
             or metadata.get("file_name")
             or litellm_params.get("file_name")
+            or "unknown_file"
         )
 
     def _get_preset_cache_key_from_kwargs(self, **kwargs) -> Optional[str]:

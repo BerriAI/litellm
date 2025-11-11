@@ -2,6 +2,7 @@
 Utils used for litellm.transcription() and litellm.atranscription()
 """
 
+import hashlib
 import os
 from dataclasses import dataclass
 from typing import Optional
@@ -125,6 +126,38 @@ def get_audio_file_name(file_obj: FileTypes) -> str:
         return str(file_obj)
     else:
         return repr(file_obj)
+
+
+def calculate_audio_file_hash(audio_file: FileTypes) -> str:
+    """
+    Calculate SHA256 hash of the audio file content.
+    
+    This function is used to generate a unique cache key based on the actual
+    content of the audio file, not just its name. This ensures that different
+    files with the same name or files without names get different cache keys.
+
+    Args:
+        audio_file: The audio file input in various formats (FileTypes)
+
+    Returns:
+        str: SHA256 hash of the file content as hexadecimal string
+
+    Raises:
+        ValueError: If audio_file type is unsupported or content cannot be extracted
+    """
+    try:
+        # Use process_audio_file to handle all input types consistently
+        processed = process_audio_file(audio_file)
+        file_content = processed.file_content
+        
+        # Calculate SHA256 hash
+        hash_object = hashlib.sha256(file_content)
+        hash_hex = hash_object.hexdigest()
+        
+        return hash_hex
+    except Exception as e:
+        # If processing fails, raise a clear error
+        raise ValueError(f"Could not calculate hash for audio file: {str(e)}")
 
 
 def get_audio_file_for_health_check() -> FileTypes:
