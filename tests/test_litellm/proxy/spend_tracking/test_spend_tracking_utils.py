@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_vector_store_request_for_spend_logs_payload,
     _sanitize_request_body_for_spend_logs_payload,
+    get_logging_payload,
 )
 
 
@@ -305,3 +306,75 @@ def test_safe_dumps_complex_metadata_like_object():
     parsed = json.loads(result)
     assert parsed["user_api_key"] == "test-key"
     assert parsed["model"] == "gpt-4"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_api_key_preserved_when_standard_logging_payload_is_none():
+    """
+    Critical - Product incident was caused by this bug.
+    
+    Test that api_key is NOT set to empty string when standard_logging_payload is None.
+    
+    This is a regression test for a bug where:
+    - On failed requests (bad request errors), standard_logging_payload is None
+    - The else block was incorrectly setting api_key = ""
+    - This caused empty api_key in DailyUserSpend table despite SpendLogs having the correct key
+    
+    Expected behavior:
+    - api_key from metadata should be extracted and hashed
+    - Even when standard_logging_payload is None, the api_key should be preserved
+    - The returned payload should have the hashed api_key, not empty string
+    """
+    # Setup: Simulate a failed request scenario
+    test_api_key = "sk-WLi4iRn4JmbVlTaYw12IOA"
+    
+    # Create kwargs similar to what's passed during a bad request error
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": test_api_key,  # This is the key that should be preserved
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+            }
+        },
+        # Note: No 'standard_logging_object' in kwargs - simulating failure case
+    }
+    
+    # Create a mock error response (bad request)
+    response_obj = Exception("BadRequestError: Invalid parameter 'usersss'")
+    
+    # Create timestamps
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+    
+    # Call get_logging_payload
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time
+    )
+    
+    # CRITICAL ASSERTION: api_key should NOT be empty string
+    assert payload["api_key"] != "", \
+        "BUG: api_key is empty! When standard_logging_payload is None, " \
+        "the api_key from metadata should be preserved and hashed."
+    
+    # The api_key should be hashed (not the raw key)
+    assert payload["api_key"] != test_api_key, \
+        "api_key should be hashed, not the raw key"
+    
+    # The api_key should be a valid hash (64 character hex string for SHA256)
+    assert len(payload["api_key"]) == 64, \
+        f"Expected 64 character hash, got {len(payload['api_key'])} characters"
+    
+    # Verify other fields are set correctly
+    assert payload["model"] == "openai/gpt-4.1"
+    assert payload["user"] == "test_user"
+    
+    print(f"✅ Test passed! api_key preserved: {payload['api_key']}")
+
