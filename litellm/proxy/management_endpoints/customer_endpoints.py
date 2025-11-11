@@ -612,6 +612,11 @@ async def delete_end_user(
 
         # update based on remaining passed in values
     except Exception as e:
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.delete_end_user(): Exception occured - {}".format(
+                str(e)
+            )
+        )
         raise handle_exception_on_proxy(e)
 
 
