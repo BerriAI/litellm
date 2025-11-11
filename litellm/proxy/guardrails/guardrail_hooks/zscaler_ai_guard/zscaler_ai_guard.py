@@ -70,7 +70,7 @@ class ZscalerAIGuard(CustomGuardrail):
         try:
             verbose_proxy_logger.debug("Inside apply_guardrail.")
  
-            custom_policy_id = request_data.get("metadata", {}).get("zguard_policy_id", self.policy_id)
+            custom_policy_id = (request_data or {}).get("metadata", {}).get("zguard_policy_id", self.policy_id)
             verbose_proxy_logger.debug(
                 f"custom_policy_id: {custom_policy_id}")
             
