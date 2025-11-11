@@ -783,7 +783,7 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.atranscription.value
             or call_type == CallTypes.transcription.value
         ):
-            _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs.get("file")
+            _file_obj: Optional[FileTypes] = args[1] if len(args) > 1 else kwargs.get("file")
             if _file_obj is None:
                 messages = "default-message-value"
             else:
