@@ -3047,8 +3047,6 @@ jobs:
             twine upload --verbose dist/*
 
   e2e_ui_testing:
-    docker:
-      - image: cimg/base:stable
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
@@ -3076,10 +3074,11 @@ jobs:
             # Now source the build script
             source ./build_ui.sh
       - run:
-          name: Install Docker CLI (In case it's not already installed)
+          name: Upgrade Docker to v24.x (API 1.44+)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
       - run:
           name: Install Python 3.9
           command: |
