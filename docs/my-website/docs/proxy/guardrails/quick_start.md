@@ -547,7 +547,7 @@ guardrails:
 curl -X POST 'http://0.0.0.0:4000/team/update' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--D '{
+-d '{
     "team_id": "4198d93c-d375-4c83-8d5a-71e7c5473e50",
     "metadata": {"guardrails": {"modify_guardrails": false}}
 }'
