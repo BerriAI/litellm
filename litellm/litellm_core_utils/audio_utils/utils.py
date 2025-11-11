@@ -157,7 +157,9 @@ def calculate_audio_file_hash(audio_file: FileTypes) -> str:
         return hash_hex
     except Exception as e:
         # If processing fails, raise a clear error
-        raise ValueError(f"Could not calculate hash for audio file: {str(e)}")
+        # Wrap in ValueError to maintain API contract
+        error_msg = str(e) if e else "Unknown error"
+        raise ValueError(f"Could not calculate hash for audio file: {error_msg}") from e
 
 
 def get_audio_file_for_health_check() -> FileTypes:

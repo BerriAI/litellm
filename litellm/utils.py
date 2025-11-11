@@ -783,27 +783,35 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.atranscription.value
             or call_type == CallTypes.transcription.value
         ):
-            _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
-            # Calculate hash of file content for cache key, not just filename
-            # If hash calculation fails (e.g., with MagicMock in tests), fallback to filename
-            try:
-                file_checksum = (
-                    litellm.litellm_core_utils.audio_utils.utils.calculate_audio_file_hash(
-                        audio_file=_file_obj
-                    )
-                )
-            except (ValueError, Exception):
-                # Fallback to filename or a default value if hash calculation fails
-                file_checksum = (
-                    getattr(_file_obj, "name", None)
-                    or kwargs.get("metadata", {}).get("file_name")
-                    or str(_file_obj)
-                )
-            if "metadata" in kwargs:
-                kwargs["metadata"]["file_checksum"] = file_checksum
+            _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs.get("file")
+            if _file_obj is None:
+                messages = "default-message-value"
             else:
-                kwargs["metadata"] = {"file_checksum": file_checksum}
-            messages = file_checksum
+                # Calculate hash of file content for cache key, not just filename
+                # If hash calculation fails (e.g., with MagicMock in tests), fallback to filename
+                try:
+                    file_checksum = (
+                        litellm.litellm_core_utils.audio_utils.utils.calculate_audio_file_hash(
+                            audio_file=_file_obj
+                        )
+                    )
+                except (ValueError, Exception) as e:
+                    # Fallback to filename or a default value if hash calculation fails
+                    # This can happen in tests or when file processing fails
+                    try:
+                        file_checksum = (
+                            getattr(_file_obj, "name", None)
+                            or kwargs.get("metadata", {}).get("file_name")
+                            or str(_file_obj)
+                        )
+                    except Exception:
+                        # Ultimate fallback if even string conversion fails
+                        file_checksum = "unknown_file"
+                if "metadata" in kwargs:
+                    kwargs["metadata"]["file_checksum"] = file_checksum
+                else:
+                    kwargs["metadata"] = {"file_checksum": file_checksum}
+                messages = file_checksum
         elif (
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
