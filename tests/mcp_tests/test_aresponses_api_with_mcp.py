@@ -512,7 +512,7 @@ async def test_streaming_mcp_events_validation():
          patch.object(LiteLLM_Proxy_MCP_Handler, '_execute_tool_calls', new_callable=AsyncMock) as mock_execute_tools:
         
         # Setup MCP mocks
-        mock_get_tools.return_value = mock_mcp_tools
+        mock_get_tools.return_value = (mock_mcp_tools, ["test_server"])
         
         def mock_execute_tool_calls_side_effect(tool_calls, user_api_key_auth):
             """Mock tool execution with realistic results"""
@@ -697,7 +697,7 @@ async def test_streaming_responses_api_with_mcp_tools():
          patch.object(LiteLLM_Proxy_MCP_Handler, '_execute_tool_calls', new_callable=AsyncMock) as mock_execute_tools:
         
         # Setup MCP mocks only
-        mock_get_tools.return_value = mock_mcp_tools
+        mock_get_tools.return_value = (mock_mcp_tools, ["litellm_proxy"])
         
         # Create a dynamic mock that will match the actual tool call ID from the LLM response
         def mock_execute_tool_calls_side_effect(tool_calls, user_api_key_auth):
