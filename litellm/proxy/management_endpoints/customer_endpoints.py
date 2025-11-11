@@ -14,7 +14,6 @@ from typing import List, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi import status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
