@@ -20,6 +20,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
 
@@ -611,28 +612,7 @@ async def delete_end_user(
 
         # update based on remaining passed in values
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.delete_end_user(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        verbose_proxy_logger.exception("Exception details:")
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
-                type="internal_error",
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Internal Server Error, " + str(e),
-            type="internal_error",
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-    pass
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
