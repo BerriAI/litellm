@@ -31,4 +31,18 @@ describe("AdvancedSettings", () => {
       expect(getByText("Tags")).toBeInTheDocument();
     });
   });
+
+  it("should render the litellm params", async () => {
+    const { getByText } = render(
+      <AdvancedSettings
+        showAdvancedSettings={true}
+        setShowAdvancedSettings={() => {}}
+        guardrailsList={[]}
+        tagsList={{}}
+      />,
+    );
+    await waitFor(() => {
+      expect(getByText("LiteLLM Params")).toBeInTheDocument();
+    });
+  });
 });
