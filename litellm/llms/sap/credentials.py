@@ -8,8 +8,6 @@ import json
 import os
 import tempfile
 
-import httpx
-
 from litellm import sap_service_key
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
