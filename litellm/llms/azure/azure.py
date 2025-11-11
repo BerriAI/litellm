@@ -7,6 +7,7 @@ import httpx  # type: ignore
 from openai import (
     APITimeoutError,
     AsyncAzureOpenAI,
+    AsyncOpenAI,
     AzureOpenAI,
     OpenAI,
 )
@@ -133,7 +134,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     def make_sync_azure_openai_chat_completion_request(
         self,
-        azure_client: AzureOpenAI,
+        azure_client: Union[AzureOpenAI, OpenAI],
         data: dict,
         timeout: Union[float, httpx.Timeout],
     ):
@@ -156,7 +157,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     @track_llm_api_timing()
     async def make_azure_openai_chat_completion_request(
         self,
-        azure_client: AsyncAzureOpenAI,
+        azure_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
         data: dict,
         timeout: Union[float, httpx.Timeout],
         logging_obj: LiteLLMLoggingObj,

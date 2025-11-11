@@ -481,7 +481,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                     v1_params["max_retries"] = azure_client_params["max_retries"]
 
                 if _is_async is True:
-                    openai_client = AsyncOpenAI(**v1_params)
+                    openai_client = AsyncOpenAI(**v1_params)  # type: ignore
                 else:
                     openai_client = OpenAI(**v1_params)  # type: ignore
             else:
