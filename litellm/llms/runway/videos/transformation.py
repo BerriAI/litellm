@@ -7,6 +7,12 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm.constants import RUNWAYML_DEFAULT_API_VERSION
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    _get_httpx_client,
+    get_async_httpx_client,
+)
 from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import CreateVideoRequest
@@ -324,15 +330,89 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         
         return url, params
 
+    def _extract_video_url_from_response(self, response_data: Dict[str, Any]) -> str:
+        """
+        Helper method to extract video URL from RunwayML response.
+        Shared between sync and async transforms.
+        """
+        # Extract video URL from the output field
+        video_url = None
+        if "output" in response_data and response_data["output"]:
+            output = response_data["output"]
+            video_url = output[0] if isinstance(output, list) else output
+        
+        if not video_url:
+            # Check if the video generation failed or is still processing
+            status = response_data.get("status", "UNKNOWN")
+            if status in ["PENDING", "RUNNING", "THROTTLED"]:
+                raise ValueError(f"Video is still processing (status: {status}). Please wait and try again.")
+            elif status == "FAILED":
+                failure_reason = response_data.get("failure", "Unknown error")
+                raise ValueError(f"Video generation failed: {failure_reason}")
+            else:
+                raise ValueError("Video URL not found in response. Video may not be ready yet.")
+        
+        return video_url
+
     def transform_video_content_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
-        """Transform the RunwayML video content download response."""
-        # For RunwayML, this would typically be the actual video bytes
-        # if downloading from the output URL
-        return raw_response.content
+        """
+        Transform the RunwayML video content download response (synchronous).
+        
+        RunwayML's task endpoint returns JSON with a video URL in the output field.
+        We need to extract the URL and download the video.
+        
+        Example response:
+        {
+            "id":"63fd0f13-f29d-4e58-99d3-1cb9efa14a5b",
+            "createdAt":"2025-11-11T21:48:50.448Z",
+            "status":"SUCCEEDED",
+            "output":["https://dnznrvs05pmza.cloudfront.net/.../video.mp4?_jwt=..."]
+        }
+        """
+        response_data = raw_response.json()
+        video_url = self._extract_video_url_from_response(response_data)
+        
+        # Download the video from the CloudFront URL synchronously
+        httpx_client: HTTPHandler = _get_httpx_client()
+        video_response = httpx_client.get(video_url)
+        video_response.raise_for_status()
+        
+        return video_response.content
+
+    async def async_transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> bytes:
+        """
+        Transform the RunwayML video content download response (asynchronous).
+        
+        RunwayML's task endpoint returns JSON with a video URL in the output field.
+        We need to extract the URL and download the video asynchronously.
+        
+        Example response:
+        {
+            "id":"63fd0f13-f29d-4e58-99d3-1cb9efa14a5b",
+            "createdAt":"2025-11-11T21:48:50.448Z",
+            "status":"SUCCEEDED",
+            "output":["https://dnznrvs05pmza.cloudfront.net/.../video.mp4?_jwt=..."]
+        }
+        """
+        response_data = raw_response.json()
+        video_url = self._extract_video_url_from_response(response_data)
+        
+        # Download the video from the CloudFront URL asynchronously
+        async_httpx_client: AsyncHTTPHandler = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.RUNWAYML,
+        )
+        video_response = await async_httpx_client.get(video_url)
+        video_response.raise_for_status()
+        
+        return video_response.content
 
     def transform_video_remix_request(
         self,
