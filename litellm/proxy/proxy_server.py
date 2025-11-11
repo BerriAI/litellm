@@ -9066,9 +9066,13 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 if isinstance(
                     config["litellm_settings"]["success_callback"], list
                 ) and isinstance(updated_litellm_settings["success_callback"], list):
+                    updated_success_callbacks_normalized = [
+                        c.lower() if isinstance(c, str) else c
+                        for c in updated_litellm_settings["success_callback"]
+                    ]
                     combined_success_callback = (
                         config["litellm_settings"]["success_callback"]
-                        + updated_litellm_settings["success_callback"]
+                        + updated_success_callbacks_normalized
                     )
                     combined_success_callback = list(set(combined_success_callback))
                     config["litellm_settings"][
