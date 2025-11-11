@@ -25,6 +25,166 @@ from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, Member
 from litellm.proxy.spend_tracking import spend_management_endpoints
 import litellm.proxy.proxy_server as ps
 
+@pytest.mark.asyncio
+async def test_is_admin_view_safe_true(monkeypatch):
+    # Force underlying check to return True
+    monkeypatch.setattr(
+        spend_management_endpoints, "_user_has_admin_view", lambda user_api_key_dict: True
+    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
+    assert spend_management_endpoints._is_admin_view_safe(auth) is True
+
+
+@pytest.mark.asyncio
+async def test_is_admin_view_safe_false(monkeypatch):
+    # Force underlying check to return False
+    monkeypatch.setattr(
+        spend_management_endpoints, "_user_has_admin_view", lambda user_api_key_dict: False
+    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    assert spend_management_endpoints._is_admin_view_safe(auth) is False
+
+
+@pytest.mark.asyncio
+async def test_is_admin_view_safe_exception(monkeypatch):
+    # Ensure exceptions are swallowed and return False
+    def raise_err(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(spend_management_endpoints, "_user_has_admin_view", raise_err)
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    assert spend_management_endpoints._is_admin_view_safe(auth) is False
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_none_team_id():
+    # team_id=None should immediately return False
+    class MockPrisma:
+        class DB:
+            class TeamTable:
+                async def find_unique(self, where: dict):
+                    return None
+
+            def __init__(self):
+                self.litellm_teamtable = self.TeamTable()
+
+        def __init__(self):
+            self.db = self.DB()
+
+    prisma = MockPrisma()
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    allowed = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, None
+    )
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_team_not_found(monkeypatch):
+    # Non-existent team should return False
+    class MockPrisma:
+        class DB:
+            class TeamTable:
+                async def find_unique(self, where: dict):
+                    return None
+
+            def __init__(self):
+                self.litellm_teamtable = self.TeamTable()
+
+        def __init__(self):
+            self.db = self.DB()
+
+    prisma = MockPrisma()
+    # Even if admin check would return True, no team means False
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: True
+    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    allowed = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_x"
+    )
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_not_admin(monkeypatch):
+    # Existing team but caller is not a team admin -> False
+    class MockTeam:
+        pass
+
+    class MockPrisma:
+        class DB:
+            class TeamTable:
+                async def find_unique(self, where: dict):
+                    return MockTeam()
+
+            def __init__(self):
+                self.litellm_teamtable = self.TeamTable()
+
+        def __init__(self):
+            self.db = self.DB()
+
+    prisma = MockPrisma()
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: False
+    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    allowed = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_x"
+    )
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_admin(monkeypatch):
+    # Existing team and caller is team admin -> True
+    class MockTeam:
+        pass
+
+    class MockPrisma:
+        class DB:
+            class TeamTable:
+                async def find_unique(self, where: dict):
+                    return MockTeam()
+
+            def __init__(self):
+                self.litellm_teamtable = self.TeamTable()
+
+        def __init__(self):
+            self.db = self.DB()
+
+    prisma = MockPrisma()
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: True
+    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    allowed = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_x"
+    )
+    assert allowed is True
+
+
+def test_can_user_view_spend_log_true_for_internal_user():
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="u1")
+    assert spend_management_endpoints._can_user_view_spend_log(auth) is True
+
+
+def test_can_user_view_spend_log_true_for_internal_view_only():
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, user_id="u1"
+    )
+    assert spend_management_endpoints._can_user_view_spend_log(auth) is True
+
+
+def test_can_user_view_spend_log_false_without_user_id():
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id=None)
+    assert spend_management_endpoints._can_user_view_spend_log(auth) is False
+
+
+def test_can_user_view_spend_log_false_for_other_roles():
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    assert spend_management_endpoints._can_user_view_spend_log(auth) is False
+
 ignored_keys = [
     "request_id",
     "session_id",

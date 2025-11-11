@@ -1753,18 +1753,15 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 where_conditions["spend"]["gte"] = min_spend
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
-        try:
-            is_admin_view = _user_has_admin_view(user_api_key_dict=user_api_key_dict)
-        except Exception:
-            is_admin_view = False
+        is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         if not is_admin_view:
             if team_id is not None:
-                team_obj = await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
+                can_view_team = await _can_team_member_view_log(
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    team_id=team_id,
                 )
-                if team_obj is None or not _is_user_team_admin(
-                    user_api_key_dict=user_api_key_dict, team_obj=team_obj
-                ):
+                if not can_view_team:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail={
@@ -1775,13 +1772,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                     )
                 where_conditions["team_id"] = team_id
             else:
-                if getattr(user_api_key_dict, "user_role", None) in (
-                    LitellmUserRoles.INTERNAL_USER,
-                    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-                ):
-                    if getattr(user_api_key_dict, "user_id", None) is not None:
-                        where_conditions["user"] = user_api_key_dict.user_id
-                        where_conditions.pop("team_id", None)
+                if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
+                    where_conditions["user"] = user_api_key_dict.user_id
+                    where_conditions.pop("team_id", None)
         # Calculate skip value for pagination
         skip = (page - 1) * page_size
 
@@ -3015,3 +3008,45 @@ def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, An
         return {"OR": [{"status": {"equals": "success"}}, {"status": None}]}
     else:
         return {"status": {"equals": status_filter}}
+
+
+def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """
+    Safely determine if the current user has admin view permissions.
+    Wraps the underlying check and defaults to False on any exception.
+    """
+    try:
+        return _user_has_admin_view(user_api_key_dict=user_api_key_dict)
+    except Exception:
+        return False
+
+
+async def _can_team_member_view_log(
+    prisma_client,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_id: Optional[str],
+) -> bool:
+    """
+    Check if the requesting user can view spend logs for the given team.
+    Returns True only if the team exists and the user is a team admin.
+    """
+    if team_id is None:
+        return False
+    team_obj = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id}
+    )
+    if team_obj is None:
+        return False
+    return _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+
+
+def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """
+    Check if the requesting user can view their own spend logs.
+    """
+    user_role = user_api_key_dict.user_role
+    user_id = user_api_key_dict.user_id
+    return user_role in (
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    ) and user_id is not None
