@@ -306,22 +306,7 @@ async def new_end_user(
                 code=400,
                 param="user_id",
             )
-
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
-                type="internal_error",
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Internal Server Error, " + str(e),
-            type="internal_error",
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -353,25 +338,35 @@ async def end_user_info(
         -H 'Authorization: Bearer sk-1234'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    try:
+        from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        user_info = await prisma_client.db.litellm_endusertable.find_first(
+            where={"user_id": end_user_id}, include={"litellm_budget_table": True}
         )
 
-    user_info = await prisma_client.db.litellm_endusertable.find_first(
-        where={"user_id": end_user_id}, include={"litellm_budget_table": True}
-    )
-
-    if user_info is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "End User Id={} does not exist in db".format(end_user_id)},
+        if user_info is None:
+            raise ProxyException(
+                message="End User Id={} does not exist in db".format(end_user_id),
+                type="not_found",
+                code=404,
+                param="end_user_id",
+            )
+        return user_info.model_dump(exclude_none=True)
+    
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.management_endpoints.customer_endpoints.end_user_info(): Exception occured - {}".format(
+                str(e)
+            )
         )
-    return user_info.model_dump(exclude_none=True)
-
+        raise handle_exception_on_proxy(e)
 
 @router.post(
     "/customer/update",
@@ -442,11 +437,11 @@ async def update_end_user(
         )
 
         if end_user_table_data is None:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "End User Id={} does not exist in db".format(data.user_id)
-                },
+            raise ProxyException(
+                message="End User Id={} does not exist in db".format(data.user_id),
+                type="not_found",
+                code=404,
+                param="user_id",
             )
 
         end_user_table_data_typed = LiteLLM_EndUserTable(
@@ -525,22 +520,7 @@ async def update_end_user(
                 str(e)
             )
         )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
-                type="internal_error",
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Internal Server Error, " + str(e),
-            type="internal_error",
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-    pass
+        raise handle_exception_on_proxy(e)
 
 
 @router.post(
@@ -588,17 +568,29 @@ async def delete_end_user(
             and isinstance(data.user_ids, list)
             and len(data.user_ids) > 0
         ):
+            # First check if all users exist
+            existing_users = await prisma_client.db.litellm_endusertable.find_many(
+                where={"user_id": {"in": data.user_ids}}
+            )
+            existing_user_ids = {user.user_id for user in existing_users}
+            missing_user_ids = [
+                user_id for user_id in data.user_ids if user_id not in existing_user_ids
+            ]
+
+            if missing_user_ids:
+                raise ProxyException(
+                    message="End User Id(s)={} do not exist in db".format(
+                        ", ".join(missing_user_ids)
+                    ),
+                    type="not_found",
+                    code=404,
+                    param="user_ids",
+                )
+
+            # All users exist, proceed with deletion
             response = await prisma_client.db.litellm_endusertable.delete_many(
                 where={"user_id": {"in": data.user_ids}}
             )
-            if response is None:
-                raise ValueError(
-                    f"Failed deleting customer data. User ID does not exist passed user_id={data.user_ids}"
-                )
-            if response != len(data.user_ids):
-                raise ValueError(
-                    f"Failed deleting all customer data. User ID does not exist passed user_id={data.user_ids}. Deleted {response} customers, passed {len(data.user_ids)} customers"
-                )
             verbose_proxy_logger.debug(
                 f"received response from updating prisma client. response={response}"
             )
@@ -646,32 +638,41 @@ async def list_end_user(
     ```
 
     """
-    from litellm.proxy.proxy_server import prisma_client
+    try:
+        from litellm.proxy.proxy_server import prisma_client
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "Admin-only endpoint. Your user role={}".format(
-                    user_api_key_dict.user_role
-                )
-            },
+        if (
+            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "Admin-only endpoint. Your user role={}".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        response = await prisma_client.db.litellm_endusertable.find_many(
+            include={"litellm_budget_table": True}
         )
 
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        returned_response: List[LiteLLM_EndUserTable] = []
+        for item in response:
+            returned_response.append(LiteLLM_EndUserTable(**item.model_dump()))
+        return returned_response
+    
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - {}".format(
+                str(e)
+            )
         )
-
-    response = await prisma_client.db.litellm_endusertable.find_many(
-        include={"litellm_budget_table": True}
-    )
-
-    returned_response: List[LiteLLM_EndUserTable] = []
-    for item in response:
-        returned_response.append(LiteLLM_EndUserTable(**item.model_dump()))
-    return returned_response
+        raise handle_exception_on_proxy(e)
