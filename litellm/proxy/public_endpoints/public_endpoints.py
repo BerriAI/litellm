@@ -8,6 +8,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     ModelGroupInfoProxy,
 )
 from litellm.types.proxy.public_endpoints.public_endpoints import PublicModelHubInfo
+from litellm.types.utils import LlmProviders
 
 router = APIRouter()
 
@@ -60,3 +61,16 @@ async def public_model_hub_info():
         litellm_version=version,
         useful_links=litellm.public_model_groups_links,
     )
+
+
+@router.get(
+    "/public/providers",
+    tags=["public", "providers"],
+    response_model=List[str],
+)
+async def get_supported_providers() -> List[str]:
+    """
+    Return a sorted list of all providers supported by LiteLLM.
+    """
+
+    return sorted(provider.value for provider in LlmProviders)
