@@ -1,3 +1,4 @@
+from datetime import datetime
 from io import BufferedReader
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -147,12 +148,13 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         litellm_params: dict,
     ) -> str:
         """
-        Get the complete URL for RunwayML video generation.
+        Get the base URL for RunwayML API.
+        The specific endpoint path will be added in the transform methods.
         """
         if api_base is None:
             api_base = "https://api.dev.runwayml.com/v1"
         
-        return f"{api_base.rstrip('/')}/image_to_video"
+        return api_base.rstrip('/')
 
     def transform_video_create_request(
         self,
@@ -187,7 +189,10 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         # RunwayML uses JSON body, no files multipart
         files_list: List[Tuple[str, Any]] = []
         
-        return request_data, files_list, api_base
+        # Append the specific endpoint for video generation
+        full_api_base = f"{api_base}/image_to_video"
+        
+        return request_data, files_list, full_api_base
 
     def transform_video_create_response(
         self,
@@ -216,7 +221,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             "id": response_data.get("id", ""),
             "object": "video",
             "status": self._map_runway_status(response_data.get("status", "pending")),
-            "created_at": response_data.get("createdAt", 0),
+            "created_at": self._parse_runway_timestamp(response_data.get("createdAt")),
         }
         
         # Add optional fields if present
@@ -225,7 +230,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             video_data["output_url"] = response_data["output"][0] if isinstance(response_data["output"], list) else response_data["output"]
         
         if "completedAt" in response_data:
-            video_data["completed_at"] = response_data["completedAt"]
+            video_data["completed_at"] = self._parse_runway_timestamp(response_data.get("completedAt"))
         
         if "failureCode" in response_data or "failure" in response_data:
             video_data["error"] = {
@@ -277,6 +282,24 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             "THROTTLED": "queued",
         }
         return status_map.get(runway_status.upper(), "queued")
+    
+    def _parse_runway_timestamp(self, timestamp_str: Optional[str]) -> int:
+        """
+        Convert RunwayML ISO 8601 timestamp to Unix timestamp.
+        
+        RunwayML returns timestamps like: "2025-11-11T21:48:50.448Z"
+        We need to convert to Unix timestamp (seconds since epoch).
+        """
+        if not timestamp_str:
+            return 0
+        
+        try:
+            # Parse ISO 8601 timestamp
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            # Convert to Unix timestamp
+            return int(dt.timestamp())
+        except (ValueError, AttributeError):
+            return 0
 
     def transform_video_content_request(
         self,
@@ -295,7 +318,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         original_video_id = extract_original_video_id(video_id)
         
         # Get task status to retrieve video URL
-        url = f"{api_base.rstrip('/')}/tasks/{original_video_id}"
+        url = f"{api_base}/tasks/{original_video_id}"
         
         params: Dict[str, Any] = {}
         
@@ -378,7 +401,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         original_video_id = extract_original_video_id(video_id)
         
         # Construct the URL for task cancellation
-        url = f"{api_base.rstrip('/')}/tasks/{original_video_id}/cancel"
+        url = f"{api_base}/tasks/{original_video_id}/cancel"
         
         data: Dict[str, Any] = {}
         
@@ -396,7 +419,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             id=response_data.get("id", ""),
             object="video",
             status="cancelled",
-            created_at=response_data.get("createdAt", 0),
+            created_at=self._parse_runway_timestamp(response_data.get("createdAt")),
         )  # type: ignore[arg-type]
 
         return video_obj
@@ -415,8 +438,10 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         """
         original_video_id = extract_original_video_id(video_id)
         
-        url = f"{api_base.rstrip('/')}/tasks/{original_video_id}"
+        # Construct the full URL for task status retrieval
+        url = f"{api_base}/tasks/{original_video_id}"
         
+        # Empty dict for GET request (no body)
         data: Dict[str, Any] = {}
         
         return url, data
@@ -437,7 +462,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             "id": response_data.get("id", ""),
             "object": "video",
             "status": self._map_runway_status(response_data.get("status", "pending")),
-            "created_at": response_data.get("createdAt", 0),
+            "created_at": self._parse_runway_timestamp(response_data.get("createdAt")),
         }
         
         # Add optional fields if present
@@ -445,7 +470,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             video_data["output_url"] = response_data["output"][0] if isinstance(response_data["output"], list) else response_data["output"]
         
         if "completedAt" in response_data:
-            video_data["completed_at"] = response_data["completedAt"]
+            video_data["completed_at"] = self._parse_runway_timestamp(response_data.get("completedAt"))
         
         if "progress" in response_data:
             video_data["progress"] = response_data["progress"]
