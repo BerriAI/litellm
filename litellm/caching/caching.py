@@ -358,7 +358,7 @@ class Cache:
         5. file_name from litellm_params
         """
         file = kwargs.get("file")
-        metadata = kwargs.get("metadata", {})
+        metadata = kwargs.get("metadata") or {}
         litellm_params = kwargs.get("litellm_params", {})
         
         # First check if file_checksum is already in metadata
@@ -375,10 +375,8 @@ class Cache:
                 
                 file_checksum = calculate_audio_file_hash(audio_file=file)
                 # Store in metadata for future use
-                if "metadata" in kwargs:
-                    kwargs["metadata"]["file_checksum"] = file_checksum
-                else:
-                    kwargs["metadata"] = {"file_checksum": file_checksum}
+                metadata["file_checksum"] = file_checksum
+                kwargs["metadata"] = metadata
                 return file_checksum
             except (ValueError, Exception):
                 # If hash calculation fails, fall back to filename-based approach
