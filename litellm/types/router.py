@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
@@ -572,10 +572,40 @@ class DynamicRateLimitPolicy(BaseModel):
     - For OpenAI: enforce rate limits if > 3 BadRequestErrors occur per minute
     - For Bedrock: enforce rate limits if > 4 ContentPolicyViolationErrors occur per minute
     
+    All provider names must be valid LiteLLM providers from LlmProviders enum.
+    
     https://docs.litellm.ai/docs/exception_mapping
     """
 
     model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_provider_names(cls, data: Any) -> Any:
+        """
+        Validate that all provider names are known LiteLLM providers.
+        
+        Raises:
+            ValueError: If any provider name is not in LlmProvidersSet
+        """
+        from litellm.types.utils import LlmProvidersSet
+        
+        if not isinstance(data, dict):
+            return data
+            
+        invalid_providers = []
+        for provider_name in data.keys():
+            if provider_name not in LlmProvidersSet:
+                invalid_providers.append(provider_name)
+        
+        if invalid_providers:
+            raise ValueError(
+                f"Invalid provider names in dynamic_rate_limit_policy: {invalid_providers}. "
+                f"Must be one of the known LiteLLM providers. "
+                f"See LlmProviders enum in litellm.types.utils for valid values."
+            )
+        
+        return data
 
     def get_threshold_for_provider(
         self,
