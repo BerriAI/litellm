@@ -844,7 +844,7 @@ curl --location 'http://localhost:4000/user/new' \
 -H 'Authorization: Bearer <your-master-key>' \
 -H 'Content-Type: application/json' \
 -d '{"models": ["beta-models"], # 👈 Model Access Group
-			"max_budget": 0}'
+			"max_budget": 10}'
 ```
 
 
@@ -857,19 +857,6 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "user_id": "krrish@berri.ai"}'
-```
-
-
-## API Specification 
-
-### `GenericBudgetInfo`
-
-A Pydantic model that defines budget information with a time period and limit.
-
-```python
-class GenericBudgetInfo(BaseModel):
-    budget_limit: float  # The maximum budget amount in USD
-    time_period: str    # Duration string like "1d", "30d", etc.
 ```
 
 #### Fields:

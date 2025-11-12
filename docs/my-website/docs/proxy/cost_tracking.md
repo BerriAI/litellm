@@ -276,16 +276,22 @@ This means if you need to track user spend, and are giving end users API keys, y
 
 ## Daily Spend Breakdown API
 
-Retrieve granular daily usage data for a user (by model, provider, and API key) with a single endpoint.
+Retrieve granular daily usage data for users / tags / teams (by model, provider, and API key) with a single endpoint.
 
-Example Request:
+<Tabs>
 
-```shell title="Daily Spend Breakdown API" showLineNumbers
-curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&end_date=2025-03-27' \
+<TabItem value="team" label="Team">
+
+#### Example Request
+
+```shell title="Team Daily Spend Breakdown" showLineNumbers
+curl -L -X GET 'http://localhost:4000/team/daily/activity?team_id=f2044fde-2293-482f-bf35-a8dab4e85c5f&start_date=2025-03-20&end_date=2025-03-27' \
 -H 'Authorization: Bearer sk-...'
 ```
 
-```json title="Daily Spend Breakdown API Response" showLineNumbers
+#### Example Response
+
+```json title="Team Daily Activity Response" showLineNumbers
 {
     "results": [
         {
@@ -305,6 +311,7 @@ curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&
                         "completion_tokens": 9,
                         "total_tokens": 46,
                         "api_requests": 1
+                    }
                 },
                 "providers": { "openai": { ... }, "azure_ai": { ... } },
                 "api_keys": { "3126b6eaf1...": { ... } }
@@ -320,9 +327,111 @@ curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&
 }
 ```
 
+</TabItem>
+
+<TabItem value="user" label="User">
+
+#### Example Request
+
+```shell title="User Daily Spend Breakdown" showLineNumbers
+curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&end_date=2025-03-27' \
+-H 'Authorization: Bearer sk-...'
+```
+
+#### Example Response
+
+```json title="User Daily Activity Response" showLineNumbers
+{
+    "results": [
+        {
+            "date": "2025-03-27",
+            "metrics": {
+                "spend": 0.0177072,
+                "prompt_tokens": 111,
+                "completion_tokens": 1711,
+                "total_tokens": 1822,
+                "api_requests": 11
+            },
+            "breakdown": {
+                "models": {
+                    "gpt-4o-mini": {
+                        "spend": 1.095e-05,
+                        "prompt_tokens": 37,
+                        "completion_tokens": 9,
+                        "total_tokens": 46,
+                        "api_requests": 1
+                    }
+                },
+                "providers": { "openai": { ... }, "azure_ai": { ... } },
+                "api_keys": { "3126b6eaf1...": { ... } }
+            }
+        }
+    ],
+    "metadata": {
+        "total_spend": 0.7274667,
+        "total_prompt_tokens": 280990,
+        "total_completion_tokens": 376674,
+        "total_api_requests": 14
+    }
+}
+```
+
+</TabItem>
+
+<TabItem value="tags" label="Tags">
+
+#### Example Request
+
+```shell title="Tags Daily Spend Breakdown" showLineNumbers
+curl -L -X GET 'http://localhost:4000/tag/daily/activity?tags=tag1&start_date=2025-03-20&end_date=2025-03-27' \
+-H 'Authorization: Bearer sk-...'
+```
+
+#### Example Response
+
+```json title="Tags Daily Activity Response" showLineNumbers
+{
+    "results": [
+        {
+            "date": "2025-03-27",
+            "metrics": {
+                "spend": 0.0177072,
+                "prompt_tokens": 111,
+                "completion_tokens": 1711,
+                "total_tokens": 1822,
+                "api_requests": 11
+            },
+            "breakdown": {
+                "models": {
+                    "gpt-4o-mini": {
+                        "spend": 1.095e-05,
+                        "prompt_tokens": 37,
+                        "completion_tokens": 9,
+                        "total_tokens": 46,
+                        "api_requests": 1
+                    }
+                },
+                "providers": { "openai": { ... }, "azure_ai": { ... } },
+                "api_keys": { "3126b6eaf1...": { ... } }
+            }
+        }
+    ],
+    "metadata": {
+        "total_spend": 0.7274667,
+        "total_prompt_tokens": 280990,
+        "total_completion_tokens": 376674,
+        "total_api_requests": 14
+    }
+}
+```
+
+</TabItem>
+
+</Tabs>
+
 ### API Reference
 
-See our [Swagger API](https://litellm-api.up.railway.app/#/Budget%20%26%20Spend%20Tracking/get_user_daily_activity_user_daily_activity_get) for more details on the `/user/daily/activity` endpoint
+See our [Swagger API](https://litellm-api.up.railway.app/#/Budget%20%26%20Spend%20Tracking/get_user_daily_activity_user_daily_activity_get) for more details on the daily activity endpoints
 
 ## Custom Tags
 
