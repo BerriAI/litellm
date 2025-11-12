@@ -4,6 +4,10 @@ import TabItem from '@theme/TabItem';
 # OpenAI
 LiteLLM supports OpenAI Chat + Embedding calls.
 
+:::tip
+**We recommend using `litellm.responses()` / Responses API** for the latest OpenAI models (GPT-5, gpt-5-codex, o3-mini, etc.)
+:::
+
 ### Required API Keys
 
 ```python
@@ -837,3 +841,9 @@ response = completion(
     messages=[{"role": "user", "content": "Solve this complex reasoning problem..."}]
 )
 ```
+
+## Video Generation
+
+LiteLLM supports OpenAI's video generation models including Sora.
+
+For detailed documentation on video generation, see [OpenAI Video Generation →](./openai/video_generation.md)

@@ -36,6 +36,7 @@ from litellm.types.llms.openai import (
     OpenAIFilesPurpose,
 )
 from litellm.types.utils import (
+    CallTypesLiteral,
     LiteLLMBatch,
     LiteLLMFineTuningJob,
     LLMResponseTypes,
@@ -152,7 +153,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "status": file_object.status,
                 },
                 "update": {},  # don't do anything if it already exists
-            }
+            },
         )
 
     async def get_unified_file_id(
@@ -224,9 +225,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 where={"unified_object_id": unified_object_id}
             )
         )
+
         if managed_object:
             return managed_object.created_by == user_id
-        return False
+        return True  # don't raise error if managed object is not found
 
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
@@ -271,28 +273,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: Dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "acreate_batch",
-            "aretrieve_batch",
-            "acreate_file",
-            "afile_list",
-            "afile_delete",
-            "afile_content",
-            "acreate_fine_tuning_job",
-            "aretrieve_fine_tuning_job",
-            "alist_fine_tuning_jobs",
-            "acancel_fine_tuning_job",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, Dict, None]:
         """
         - Detect litellm_proxy/ file_id

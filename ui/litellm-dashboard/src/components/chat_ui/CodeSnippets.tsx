@@ -17,6 +17,7 @@ interface GenerateCodeParams {
   selectedVectorStores: string[];
   selectedGuardrails: string[];
   selectedMCPTools: string[];
+  selectedVoice?: string;
   endpointType: string;
   selectedModel: string | undefined;
   selectedSdk: "openai" | "azure";
@@ -33,6 +34,7 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
     selectedVectorStores,
     selectedGuardrails,
     selectedMCPTools,
+    selectedVoice,
     endpointType,
     selectedModel,
     selectedSdk,
@@ -492,6 +494,56 @@ else:
 	print(response)
 `;
       }
+      break;
+    case EndpointType.EMBEDDINGS:
+      endpointSpecificCode = `
+response = client.embeddings.create(
+	input="${inputMessage || "Your string here"}",
+	model="${modelNameForCode}",
+	encoding_format="base64" # or "float"
+)
+
+print(response.data[0].embedding)
+`;
+      break;
+    case EndpointType.TRANSCRIPTION:
+      endpointSpecificCode = `
+# Open the audio file
+audio_file = open("path/to/your/audio/file.mp3", "rb")
+
+# Make the transcription request
+response = client.audio.transcriptions.create(
+	model="${modelNameForCode}",
+	file=audio_file${inputMessage ? `,\n	prompt="${inputMessage.replace(/"/g, '\\"')}"` : ""}
+)
+
+print(response.text)
+`;
+      break;
+    case EndpointType.SPEECH:
+      endpointSpecificCode = `
+# Make the text-to-speech request
+response = client.audio.speech.create(
+	model="${modelNameForCode}",
+	input="${inputMessage || "Your text to convert to speech here"}",
+	voice="${selectedVoice}"  # Options: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer
+)
+
+# Save the audio to a file
+output_filename = "output_speech.mp3"
+response.stream_to_file(output_filename)
+print(f"Audio saved to {output_filename}")
+
+# Optional: Customize response format and speed
+# response = client.audio.speech.create(
+#     model="${modelNameForCode}",
+#     input="${inputMessage || "Your text to convert to speech here"}",
+#     voice="alloy",
+#     response_format="mp3",  # Options: mp3, opus, aac, flac, wav, pcm
+#     speed=1.0  # Range: 0.25 to 4.0
+# )
+# response.stream_to_file("output_speech.mp3")
+`;
       break;
     default:
       endpointSpecificCode = "\n# Code generation for this endpoint is not implemented yet.";

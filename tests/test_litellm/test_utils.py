@@ -353,7 +353,7 @@ def test_anthropic_web_search_in_model_info():
 
     supported_models = [
         "anthropic/claude-3-7-sonnet-20250219",
-        "anthropic/claude-3-5-sonnet-latest",
+        "anthropic/claude-sonnet-4-5-20250929",
         "anthropic/claude-3-5-sonnet-20241022",
         "anthropic/claude-3-5-haiku-20241022",
         "anthropic/claude-3-5-haiku-latest",
@@ -548,6 +548,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_dbu_cost_per_token": {"type": "number"},
                 "annotation_cost_per_page": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
+                "code_interpreter_cost_per_session": {"type": "number"},
                 "litellm_provider": {"type": "string"},
                 "max_audio_length_hours": {"type": "number"},
                 "max_audio_per_prompt": {"type": "number"},
@@ -569,6 +570,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "audio_transcription",
                         "chat",
                         "completion",
+                        "container",
                         "embedding",
                         "image_generation",
                         "video_generation",
@@ -576,6 +578,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "rerank",
                         "responses",
                         "ocr",
+                        "search",
+                        "vector_store",
                     ],
                 },
                 "output_cost_per_audio_token": {"type": "number"},
@@ -588,8 +592,18 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
+                "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
+                "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
+                    "type": "number"
+                },
+                "output_cost_per_image_above_512_and_512_pixels": {"type": "number"},
+                "output_cost_per_image_above_512_and_512_pixels_and_premium_image": {
+                    "type": "number"
+                },
+                "output_cost_per_image_premium_image": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
                 "output_cost_per_reasoning_token": {"type": "number"},
+                "output_cost_per_video_per_second": {"type": "number"},
                 "output_db_cost_per_token": {"type": "number"},
                 "output_dbu_cost_per_token": {"type": "number"},
                 "output_vector_size": {"type": "number"},
@@ -666,6 +680,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "enum": ["text", "image", "audio", "code", "video"],
                     },
                 },
+                "supported_resolutions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                    },
+                },
                 "supports_native_streaming": {"type": "boolean"},
                 "tiered_pricing": {
                     "type": "array",
@@ -682,8 +702,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "output_cost_per_token": {"type": "number"},
                             "cache_read_input_token_cost": {"type": "number"},
                             "output_cost_per_reasoning_token": {"type": "number"},
+                            "max_results_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                            },
+                            "input_cost_per_query": {"type": "number"},
                         },
-                        "required": ["range"],
                         "additionalProperties": False,
                     },
                 },
@@ -819,6 +845,16 @@ def test_check_provider_match():
     model_info = {"litellm_provider": "bedrock"}
     assert litellm.utils._check_provider_match(model_info, "openai") is False
 
+def test_get_provider_rerank_config():
+    """
+    Test the get_provider_rerank_config function for various providers
+    """
+    from litellm import HostedVLLMRerankConfig
+    from litellm.utils import LlmProviders, ProviderConfigManager
+
+    # Test for hosted_vllm provider
+    config = ProviderConfigManager.get_provider_rerank_config("my_model", LlmProviders.HOSTED_VLLM, 'http://localhost', [])
+    assert isinstance(config, HostedVLLMRerankConfig)
 
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
@@ -1160,7 +1196,7 @@ class TestProxyFunctionCalling:
         ), "Custom model names return False without proxy config context"
 
         # Case 2: Model name that can be resolved (matches pattern)
-        resolvable_model = "litellm_proxy/claude-3-5-sonnet-latest"
+        resolvable_model = "litellm_proxy/claude-sonnet-4-5-20250929"
         result = supports_function_calling(resolvable_model)
         assert result is True, "Resolvable model names work with fallback logic"
 
@@ -1171,7 +1207,7 @@ class TestProxyFunctionCalling:
         
         ✅ WORKS (with current fallback logic):
            - litellm_proxy/gpt-4
-           - litellm_proxy/claude-3-5-sonnet-latest
+           - litellm_proxy/claude-sonnet-4-5-20250929
            - litellm_proxy/anthropic/claude-3-haiku-20240307
            
         ❌ DOESN'T WORK (requires proxy server config):
@@ -2430,7 +2466,7 @@ class TestGetValidModelsWithCLI:
 
     def test_get_valid_models_with_cli_pattern(self):
         """Test get_valid_models with litellm_proxy provider and CLI token pattern"""
-        
+
         # Mock the HTTP request that get_valid_models makes to the proxy
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -2439,19 +2475,21 @@ class TestGetValidModelsWithCLI:
                 {"id": "gpt-3.5-turbo", "object": "model"},
                 {"id": "gpt-4", "object": "model"},
                 {"id": "litellm_proxy/gemini/gemini-2.5-flash", "object": "model"},
-                {"id": "claude-3-sonnet", "object": "model"}
+                {"id": "claude-3-sonnet", "object": "model"},
             ]
         }
 
-        with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
+        with patch.object(
+            litellm.module_level_client, "get", return_value=mock_response
+        ) as mock_get:
             # Test the exact pattern used in cli_token_usage.py
             result = litellm.get_valid_models(
                 check_provider_endpoint=True,
                 custom_llm_provider="litellm_proxy",
                 api_key="sk-test-cli-key-123",
-                api_base="http://localhost:4000/"
+                api_base="http://localhost:4000/",
             )
-            
+
             # Verify the function returns a list of model names
             assert isinstance(result, list)
             assert len(result) == 4
@@ -2461,7 +2499,7 @@ class TestGetValidModelsWithCLI:
             # Note: This model already had the prefix, so it gets double-prefixed
             assert "litellm_proxy/litellm_proxy/gemini/gemini-2.5-flash" in result
             assert "litellm_proxy/claude-3-sonnet" in result
-            
+
             # Verify the HTTP request was made with correct parameters
             mock_get.assert_called_once()
             _, call_kwargs = mock_get.call_args

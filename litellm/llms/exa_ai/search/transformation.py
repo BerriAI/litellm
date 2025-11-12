@@ -46,6 +46,10 @@ class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
 class ExaAISearchConfig(BaseSearchConfig):
     EXA_AI_API_BASE = "https://api.exa.ai"
     
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Exa AI"
+    
     def validate_environment(
         self,
         headers: Dict,

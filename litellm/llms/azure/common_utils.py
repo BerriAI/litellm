@@ -754,7 +754,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     def _is_azure_v1_api_version(api_version: Optional[str]) -> bool:
         if api_version is None:
             return False
-        return api_version == "preview" or api_version == "latest"
+        return api_version in {"preview", "latest", "v1"}
 
     def _resolve_env_var(self, litellm_params: Dict[str, Any], param_key: str, env_var_key: str) -> Optional[str]:
         """Resolve the environment variable for a given parameter key.
@@ -767,3 +767,4 @@ class BaseAzureLLM(BaseOpenAILLM):
         if param_value is not None:
             return param_value
         return os.getenv(env_var_key)
+

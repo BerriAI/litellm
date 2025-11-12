@@ -39,7 +39,7 @@ encoded_string = base64.b64encode(wav_data).decode('utf-8')
 file = create_file(
     file=wav_data,
     purpose="user_data",
-    extra_body={"custom_llm_provider": "gemini"},
+    extra_headers={"custom-llm-provider": "gemini"},
     api_key=os.getenv("GEMINI_API_KEY"),
 )
 

@@ -71,6 +71,14 @@ def disable_budget_sync(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def reset_router_callbacks():
+    """Ensure router budget callbacks from previous tests do not leak state."""
+    litellm.logging_callback_manager._reset_all_callbacks()
+    yield
+    litellm.logging_callback_manager._reset_all_callbacks()
+
+
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     # Mock data for the test
@@ -1268,40 +1276,32 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
 @pytest.mark.asyncio
 async def test_view_spend_tags(client, monkeypatch):
     """Test the /spend/tags endpoint"""
-    
+
     # Mock the prisma client and get_spend_by_tags function
     mock_prisma_client = MagicMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    
+
     # Mock response data
     mock_response = [
-        {
-            "individual_request_tag": "tag1",
-            "log_count": 10,
-            "total_spend": 0.15
-        },
-        {
-            "individual_request_tag": "tag2", 
-            "log_count": 5,
-            "total_spend": 0.08
-        }
+        {"individual_request_tag": "tag1", "log_count": 10, "total_spend": 0.15},
+        {"individual_request_tag": "tag2", "log_count": 5, "total_spend": 0.08},
     ]
-    
+
     # Mock the get_spend_by_tags function
     async def mock_get_spend_by_tags(prisma_client, start_date=None, end_date=None):
         return mock_response
-    
+
     monkeypatch.setattr(
         "litellm.proxy.spend_tracking.spend_management_endpoints.get_spend_by_tags",
-        mock_get_spend_by_tags
+        mock_get_spend_by_tags,
     )
-    
+
     # Test without date filters
     response = client.get(
         "/spend/tags",
         headers={"Authorization": "Bearer sk-test"},
     )
-    
+
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -1309,11 +1309,11 @@ async def test_view_spend_tags(client, monkeypatch):
     assert data[0]["individual_request_tag"] == "tag1"
     assert data[0]["log_count"] == 10
     assert data[0]["total_spend"] == 0.15
-    
+
     # Test with date filters
     start_date = "2024-01-01"
     end_date = "2024-01-31"
-    
+
     response = client.get(
         "/spend/tags",
         params={
@@ -1322,25 +1322,25 @@ async def test_view_spend_tags(client, monkeypatch):
         },
         headers={"Authorization": "Bearer sk-test"},
     )
-    
+
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
     assert len(data) == 2
 
 
-@pytest.mark.asyncio 
+@pytest.mark.asyncio
 async def test_view_spend_tags_no_database(client, monkeypatch):
     """Test /spend/tags endpoint when database is not connected"""
-    
+
     # Mock prisma_client as None
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    
+
     response = client.get(
         "/spend/tags",
         headers={"Authorization": "Bearer sk-test"},
     )
-    
+
     assert response.status_code == 500
     data = response.json()
     # Check the actual error message structure
@@ -1413,3 +1413,80 @@ async def test_provider_budget_provider_budgets(disable_budget_sync):
         provider_budget_response = response.providers[provider]
         assert provider_budget_response.budget_limit == max_budget
         assert provider_budget_response.time_period == budget_duration
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
+    """
+    Tests the /spend/logs endpoint with both start_date and end_date,
+    ensuring it returns summarized data and not an empty list.
+    This test specifically validates the fix for dates being passed as ISO strings.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    # This simulates the summarized data that Prisma's `group_by` would return.
+    mock_summarized_response = [
+        {
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "model": "gpt-4",
+            "startTime": (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+            "_sum": {"spend": 0.15},
+        }
+    ]
+
+    # This mock class will replace the real Prisma client.
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = self
+
+        async def group_by(self, *args, **kwargs):
+            # We assert that the `gte` and `lte` values are strings in ISO format.
+            # If they were datetime objects, this test would fail.
+            where_clause = kwargs.get("where", {})
+            start_time_filter = where_clause.get("startTime", {})
+
+            assert "gte" in start_time_filter
+            assert "lte" in start_time_filter
+            assert isinstance(start_time_filter["gte"], str)
+            assert isinstance(start_time_filter["lte"], str)
+            assert "T" in start_time_filter["gte"]  # Check for ISO format 'T' separator
+
+            # If the assertions pass, return the mock response.
+            return mock_summarized_response
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    # Apply the monkeypatch to replace the real prisma_client with our mock.
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    # Define a date range for the test.
+    start_date = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Call the endpoint with both start and end dates.
+    # We don't need `summarize=true` as it's the default.
+    response = client.get(
+        "/spend/logs",
+        params={
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    # ASSERTIONS
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check that the response is not empty and has the summarized structure.
+    assert isinstance(data, list)
+    assert len(data) > 0
+    assert "startTime" in data[0]
+    assert "spend" in data[0]
+    assert "users" in data[0]
+    assert "models" in data[0]

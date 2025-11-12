@@ -1,18 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Typography } from "antd";
-import {
-  teamDeleteCall,
-  Organization,
-  fetchMCPAccessGroups,
-} from "./networking";
+import { teamDeleteCall, Organization, fetchMCPAccessGroups } from "./networking";
 import { fetchTeams } from "./common_components/fetch_teams";
-import {
-  PencilAltIcon,
-  RefreshIcon,
-  TrashIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-} from "@heroicons/react/outline";
+import { PencilAltIcon, RefreshIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { Button as Button2, Modal, Form, Input, Select as Select2, Tooltip } from "antd";
 import NumericalInput from "./shared/numerical_input";
 import {
@@ -87,11 +77,7 @@ interface EditTeamModalProps {
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
-import {
-  teamCreateCall,
-  Member,
-  v2TeamListCall,
-} from "./networking";
+import { teamCreateCall, Member, v2TeamListCall } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
 
 interface TeamInfo {
@@ -122,6 +108,46 @@ const getOrganizationModels = (organization: Organization | null, userModels: st
   return unfurlWildcardModelsInList(tempModelsToPick, userModels);
 };
 
+const canCreateOrManageTeams = (
+  userRole: string | null,
+  userID: string | null,
+  organizations: Organization[] | null,
+): boolean => {
+  // Admin role always has permission
+  if (userRole === "Admin") {
+    return true;
+  }
+
+  // Check if user is an org_admin in any organization
+  if (organizations && userID) {
+    return organizations.some((org) =>
+      org.members?.some((member) => member.user_id === userID && member.user_role === "org_admin"),
+    );
+  }
+
+  return false;
+};
+
+const getAdminOrganizations = (
+  userRole: string | null,
+  userID: string | null,
+  organizations: Organization[] | null,
+): Organization[] => {
+  // Global Admin can see all organizations
+  if (userRole === "Admin") {
+    return organizations || [];
+  }
+
+  // Org Admin can only see organizations they're an admin for
+  if (organizations && userID) {
+    return organizations.filter((org) =>
+      org.members?.some((member) => member.user_id === userID && member.user_role === "org_admin"),
+    );
+  }
+
+  return [];
+};
+
 // @deprecated
 const Teams: React.FC<TeamProps> = ({
   teams,
@@ -133,6 +159,7 @@ const Teams: React.FC<TeamProps> = ({
   organizations,
   premiumUser = false,
 }) => {
+  console.log(`organizations: ${JSON.stringify(organizations)}`);
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
@@ -189,6 +216,24 @@ const Teams: React.FC<TeamProps> = ({
     setModelsToPick(models);
     form.setFieldValue("models", []);
   }, [currentOrgForCreateTeam, userModels]);
+
+  // Handle organization preselection when modal opens
+  useEffect(() => {
+    if (isTeamModalVisible) {
+      const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
+
+      // If there's exactly one organization the user is admin for, preselect it
+      if (adminOrgs.length === 1) {
+        const org = adminOrgs[0];
+        form.setFieldValue("organization_id", org.organization_id);
+        setCurrentOrgForCreateTeam(org);
+      } else {
+        // Reset the organization selection for multiple orgs
+        form.setFieldValue("organization_id", currentOrg?.organization_id || null);
+        setCurrentOrgForCreateTeam(currentOrg);
+      }
+    }
+  }, [isTeamModalVisible, userRole, userID, organizations, currentOrg]);
 
   // Add this useEffect to fetch guardrails
   useEffect(() => {
@@ -288,7 +333,7 @@ const Teams: React.FC<TeamProps> = ({
     try {
       await teamDeleteCall(accessToken, teamToDelete);
       // Successfully completed the deletion. Update the state to trigger a rerender.
-      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+      await fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
     } catch (error) {
       console.error("Error deleting the team:", error);
       // Handle any error situations, such as displaying an error message to the user.
@@ -297,12 +342,14 @@ const Teams: React.FC<TeamProps> = ({
     // Close the confirmation modal and reset the teamToDelete
     setIsDeleteModalOpen(false);
     setTeamToDelete(null);
+    setDeleteConfirmInput("");
   };
 
   const cancelDelete = () => {
     // Close the confirmation modal and reset the teamToDelete
     setIsDeleteModalOpen(false);
     setTeamToDelete(null);
+    setDeleteConfirmInput("");
   };
 
   useEffect(() => {
@@ -525,7 +572,7 @@ const Teams: React.FC<TeamProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          {(userRole == "Admin" || userRole == "Org Admin") && (
+          {canCreateOrManageTeams(userRole, userID, organizations) && (
             <Button className="w-fit" onClick={() => setIsTeamModalVisible(true)}>
               + Create New Team
             </Button>
@@ -902,6 +949,7 @@ const Teams: React.FC<TeamProps> = ({
                                               onClick={() => handleDelete(team.team_id)}
                                               icon={TrashIcon}
                                               size="sm"
+                                              data-testid="delete-team-button"
                                             />
                                           </>
                                         ) : null}
@@ -1007,7 +1055,7 @@ const Teams: React.FC<TeamProps> = ({
               </TabPanels>
             </TabGroup>
           )}
-          {(userRole == "Admin" || userRole == "Org Admin") && (
+          {canCreateOrManageTeams(userRole, userID, organizations) && (
             <Modal
               title="Create Team"
               visible={isTeamModalVisible}
@@ -1036,60 +1084,101 @@ const Teams: React.FC<TeamProps> = ({
                   >
                     <TextInput placeholder="" />
                   </Form.Item>
-                  <Form.Item
-                    label={
-                      <span>
-                        Organization{" "}
-                        <Tooltip
-                          title={
+                  {(() => {
+                    const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
+                    const isOrgAdmin = userRole !== "Admin";
+                    const isSingleOrg = adminOrgs.length === 1;
+                    const hasNoOrgs = adminOrgs.length === 0;
+
+                    return (
+                      <>
+                        <Form.Item
+                          label={
                             <span>
-                              Organizations can have multiple teams. Learn more about{" "}
-                              <a
-                                href="https://docs.litellm.ai/docs/proxy/user_management_heirarchy"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{
-                                  color: "#1890ff",
-                                  textDecoration: "underline",
-                                }}
-                                onClick={(e) => e.stopPropagation()}
+                              Organization{" "}
+                              <Tooltip
+                                title={
+                                  <span>
+                                    Organizations can have multiple teams. Learn more about{" "}
+                                    <a
+                                      href="https://docs.litellm.ai/docs/proxy/user_management_heirarchy"
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      style={{
+                                        color: "#1890ff",
+                                        textDecoration: "underline",
+                                      }}
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      user management hierarchy
+                                    </a>
+                                  </span>
+                                }
                               >
-                                user management hierarchy
-                              </a>
+                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              </Tooltip>
                             </span>
                           }
+                          name="organization_id"
+                          initialValue={currentOrg ? currentOrg.organization_id : null}
+                          className="mt-8"
+                          rules={
+                            isOrgAdmin
+                              ? [
+                                  {
+                                    required: true,
+                                    message: "Please select an organization",
+                                  },
+                                ]
+                              : []
+                          }
+                          help={
+                            isSingleOrg
+                              ? "You can only create teams within this organization"
+                              : isOrgAdmin
+                                ? "required"
+                                : ""
+                          }
                         >
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                        </Tooltip>
-                      </span>
-                    }
-                    name="organization_id"
-                    initialValue={currentOrg ? currentOrg.organization_id : null}
-                    className="mt-8"
-                  >
-                    <Select2
-                      showSearch
-                      allowClear
-                      placeholder="Search or select an Organization"
-                      onChange={(value) => {
-                        form.setFieldValue("organization_id", value);
-                        setCurrentOrgForCreateTeam(organizations?.find((org) => org.organization_id === value) || null);
-                      }}
-                      filterOption={(input, option) => {
-                        if (!option) return false;
-                        const optionValue = option.children?.toString() || "";
-                        return optionValue.toLowerCase().includes(input.toLowerCase());
-                      }}
-                      optionFilterProp="children"
-                    >
-                      {organizations?.map((org) => (
-                        <Select2.Option key={org.organization_id} value={org.organization_id}>
-                          <span className="font-medium">{org.organization_alias}</span>{" "}
-                          <span className="text-gray-500">({org.organization_id})</span>
-                        </Select2.Option>
-                      ))}
-                    </Select2>
-                  </Form.Item>
+                          <Select2
+                            showSearch
+                            allowClear={!isOrgAdmin}
+                            disabled={isSingleOrg}
+                            placeholder={hasNoOrgs ? "No organizations available" : "Search or select an Organization"}
+                            onChange={(value) => {
+                              form.setFieldValue("organization_id", value);
+                              setCurrentOrgForCreateTeam(
+                                adminOrgs?.find((org) => org.organization_id === value) || null,
+                              );
+                            }}
+                            filterOption={(input, option) => {
+                              if (!option) return false;
+                              const optionValue = option.children?.toString() || "";
+                              return optionValue.toLowerCase().includes(input.toLowerCase());
+                            }}
+                            optionFilterProp="children"
+                          >
+                            {adminOrgs?.map((org) => (
+                              <Select2.Option key={org.organization_id} value={org.organization_id}>
+                                <span className="font-medium">{org.organization_alias}</span>{" "}
+                                <span className="text-gray-500">({org.organization_id})</span>
+                              </Select2.Option>
+                            ))}
+                          </Select2>
+                        </Form.Item>
+
+                        {/* Show message when org admin needs to select organization */}
+                        {isOrgAdmin && !isSingleOrg && adminOrgs.length > 1 && (
+                          <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
+                            <Text className="text-blue-800 text-sm">
+                              Please select an organization to create a team for. You can only create teams within
+                              organizations where you are an admin.
+                            </Text>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                   <Form.Item
                     label={
                       <span>

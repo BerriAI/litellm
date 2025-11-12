@@ -8,7 +8,7 @@ from typing import List, Optional
 import litellm
 
 logger = logging.getLogger(__name__)
-from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS, DEFAULT_HEALTH_CHECK_PROMPT
 
 ILLEGAL_DISPLAY_PARAMS = [
     "messages",
@@ -99,7 +99,7 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
             litellm.ahealth_check(
                 model["litellm_params"],
                 mode=mode,
-                prompt="test from litellm",
+                prompt=DEFAULT_HEALTH_CHECK_PROMPT,
                 input=["test from litellm"],
             ),
             timeout,
@@ -138,7 +138,7 @@ def _update_litellm_params_for_health_check(
     - gets a short `messages` param for health check
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
-    - updates the `model` param with the Bedrock base model name if it is a Bedrock model
+    - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
     """
     litellm_params["messages"] = _get_random_llm_message()
     _health_check_model = model_info.get("health_check_model", None)
@@ -146,9 +146,42 @@ def _update_litellm_params_for_health_check(
         litellm_params["model"] = _health_check_model
     if model_info.get("mode", None) == "audio_speech":
         litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
-    if "bedrock" in litellm_params["model"]:
+
+    # Handle Bedrock region routing format: bedrock/region/model
+    # This is needed because health checks bypass get_llm_provider() for the model param
+    # Issue #15807: Without this, health checks send "region/model" as the model ID to AWS
+    # which causes: "bedrock-runtime.../model/us-west-2/mistral.../invoke" (region in model ID)
+    #
+    # However, we must preserve cross-region inference profile prefixes like "us.", "eu.", etc.
+    # Issue: Stripping these breaks AWS requirement for inference profile IDs
+    #
+    # Must also preserve route prefixes (converse/, invoke/) and handlers (llama/, deepseek_r1/, etc.)
+    if litellm_params["model"].startswith("bedrock/"):
         from litellm.llms.bedrock.common_utils import BedrockModelInfo
-        litellm_params["model"] = BedrockModelInfo.get_base_model(litellm_params["model"])
+
+        model = litellm_params["model"]
+        # Strip only the bedrock/ prefix (preserve routes like converse/, invoke/)
+        if model.startswith("bedrock/"):
+            model = model[8:]  # len("bedrock/") = 8
+
+        # Now check for region routing and strip it if present
+        # Need to handle formats like:
+        # - "us-west-2/model" → "model"
+        # - "converse/us-west-2/model" → "converse/model"
+        # - "llama/arn:..." → "llama/arn:..." (preserve handler)
+        #
+        # Strategy: Check each path segment, remove regions, preserve everything else
+        parts = model.split("/")
+        filtered_parts = []
+
+        for part in parts:
+            # Skip AWS regions, keep everything else
+            if part not in BedrockModelInfo.all_global_regions:
+                filtered_parts.append(part)
+
+        model = "/".join(filtered_parts)
+        litellm_params["model"] = model
+
     return litellm_params
 
 

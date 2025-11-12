@@ -45,6 +45,10 @@ class TavilySearchRequest(_TavilySearchRequestRequired, total=False):
 class TavilySearchConfig(BaseSearchConfig):
     TAVILY_API_BASE = "https://api.tavily.com"
     
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Tavily"
+    
     def validate_environment(
         self,
         headers: Dict,

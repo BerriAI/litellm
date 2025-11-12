@@ -1371,6 +1371,9 @@ def test_models_by_provider():
             or v["litellm_provider"] == "bedrock_converse"
         ):
             continue
+        elif v.get("mode") == "search":
+            # Skip search providers as they don't have traditional models
+            continue
         else:
             providers.add(v["litellm_provider"])
 
@@ -1474,7 +1477,7 @@ def test_is_prompt_caching_enabled_error_handling():
             messages=[{"role": "user", "content": "test"}],
             tools=None,
             custom_llm_provider="anthropic",
-            model="anthropic/claude-3-5-sonnet-20240620",
+            model="anthropic/claude-sonnet-4-5-20250929",
         )
 
         assert result is False  # Should return False when an error occurs
@@ -2351,7 +2354,7 @@ def test_get_whitelisted_models():
     """
     whitelisted_models = []
     for model, info in litellm.model_cost.items():
-        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat":
+        if info.get("litellm_provider") == "bedrock" and info.get("mode") == "chat":
             whitelisted_models.append(model)
 
         # Write to a local file

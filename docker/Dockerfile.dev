@@ -57,6 +57,9 @@ USER root
 # Install only runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
+    libatomic1 \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

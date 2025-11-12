@@ -4442,6 +4442,120 @@ export const getGeneralSettingsCall = async (accessToken: string) => {
   }
 };
 
+export const getRouterSettingsCall = async (accessToken: string) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/router/settings` : `/router/settings`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get router settings:", error);
+    throw error;
+  }
+};
+
+export const getCacheSettingsCall = async (accessToken: string) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings` : `/cache/settings`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get cache settings:", error);
+    throw error;
+  }
+};
+
+export const testCacheConnectionCall = async (accessToken: string, cacheSettings: Record<string, any>) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings/test` : `/cache/settings/test`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        cache_settings: cacheSettings,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to test cache connection:", error);
+    throw error;
+  }
+};
+
+export const updateCacheSettingsCall = async (accessToken: string, cacheSettings: Record<string, any>) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings` : `/cache/settings`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        cache_settings: cacheSettings,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update cache settings:", error);
+    throw error;
+  }
+};
+
 export const getPassThroughEndpointsCall = async (accessToken: string, teamId?: string | null) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
@@ -5421,7 +5535,222 @@ export const deleteMCPServer = async (accessToken: string, serverId: string) => 
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string, authValue?: string, serverAlias?: string) => {
+// Search Tools API calls
+export const fetchSearchTools = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/list` : `/search_tools/list`;
+    console.log("Fetching search tools from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched search tools:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch search tools:", error);
+    throw error;
+  }
+};
+
+export const fetchSearchToolById = async (accessToken: string, searchToolId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/${searchToolId}` : `/search_tools/${searchToolId}`;
+    console.log("Fetching search tool by ID from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched search tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch search tool:", error);
+    throw error;
+  }
+};
+
+export const createSearchTool = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    console.log("Creating search tool with values:", formValues);
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools` : `/search_tools`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.POST,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        search_tool: formValues,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Created search tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create search tool:", error);
+    throw error;
+  }
+};
+
+export const updateSearchTool = async (accessToken: string, searchToolId: string, formValues: Record<string, any>) => {
+  try {
+    console.log("Updating search tool with ID:", searchToolId, "values:", formValues);
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/${searchToolId}` : `/search_tools/${searchToolId}`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        search_tool: formValues,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Updated search tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update search tool:", error);
+    throw error;
+  }
+};
+
+export const deleteSearchTool = async (accessToken: string, searchToolId: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/search_tools/${searchToolId}`;
+    console.log("Deleting search tool:", searchToolId);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.DELETE,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Deleted search tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete search tool:", error);
+    throw error;
+  }
+};
+
+export const fetchAvailableSearchProviders = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/search_tools/ui/available_providers`
+      : `/search_tools/ui/available_providers`;
+    console.log("Fetching available search providers from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched available search providers:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch available search providers:", error);
+    throw error;
+  }
+};
+
+export const testSearchToolConnection = async (accessToken: string, litellmParams: Record<string, any>) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/test_connection` : `/search_tools/test_connection`;
+    console.log("Testing search tool connection:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.POST,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        litellm_params: litellmParams,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Test connection response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to test search tool connection:", error);
+    throw error;
+  }
+};
+
+export const listMCPTools = async (accessToken: string, serverId: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl
@@ -5434,14 +5763,6 @@ export const listMCPTools = async (accessToken: string, serverId: string, authVa
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     };
-
-    // Use new server-specific auth header format if serverAlias is provided
-    if (serverAlias && authValue) {
-      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
-    } else if (authValue) {
-      // Fall back to deprecated x-mcp-auth header for backward compatibility
-      headers[MCP_AUTH_HEADER] = authValue;
-    }
 
     const response = await fetch(url, {
       method: "GET",
@@ -5476,9 +5797,7 @@ export const listMCPTools = async (accessToken: string, serverId: string, authVa
 export const callMCPTool = async (
   accessToken: string,
   toolName: string,
-  toolArguments: Record<string, any>,
-  authValue: string,
-  serverAlias?: string,
+  toolArguments: Record<string, any>
 ) => {
   try {
     // Construct base URL
@@ -5490,14 +5809,6 @@ export const callMCPTool = async (
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     };
-
-    // Use new server-specific auth header format if serverAlias is provided
-    if (serverAlias) {
-      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
-    } else {
-      // Fall back to deprecated x-mcp-auth header for backward compatibility
-      headers[MCP_AUTH_HEADER] = authValue;
-    }
 
     const response = await fetch(url, {
       method: "POST",
@@ -6210,6 +6521,98 @@ export const updateGuardrailCall = async (
   }
 };
 
+export const applyGuardrail = async (
+  accessToken: string,
+  guardrailName: string,
+  text: string,
+  language?: string | null,
+  entities?: string[] | null,
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/apply_guardrail` : `/guardrails/apply_guardrail`;
+
+    const requestBody: Record<string, any> = {
+      guardrail_name: guardrailName,
+      text: text,
+    };
+
+    if (language) {
+      requestBody.language = language;
+    }
+
+    if (entities && entities.length > 0) {
+      requestBody.entities = entities;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      let errorMessage = "Failed to apply guardrail";
+
+      try {
+        const errorJson = JSON.parse(errorData);
+        if (errorJson.error?.message) {
+          errorMessage = errorJson.error.message;
+        } else if (errorJson.detail) {
+          errorMessage = errorJson.detail;
+        } else if (errorJson.message) {
+          errorMessage = errorJson.message;
+        }
+      } catch (e) {
+        errorMessage = errorData || errorMessage;
+      }
+
+      handleError(errorData);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Apply guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to apply guardrail:", error);
+    throw error;
+  }
+};
+
+export const validateBlockedWordsFile = async (accessToken: string, fileContent: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/validate_blocked_words_file`
+      : `/guardrails/validate_blocked_words_file`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ file_content: fileContent }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to validate blocked words file");
+    }
+
+    const data = await response.json();
+    console.log("Validate blocked words file response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to validate blocked words file:", error);
+    throw error;
+  }
+};
+
 export const getSSOSettings = async (accessToken: string) => {
   try {
     // Construct base URL
@@ -6259,9 +6662,22 @@ export const updateSSOSettings = async (accessToken: string, settings: Record<st
 
     if (!response.ok) {
       const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
+      const detailMessage =
+        typeof errorData?.detail === "object"
+          ? errorData.detail?.error || errorData.detail?.message
+          : errorData?.detail;
+      const errorMessage =
+        typeof detailMessage === "string" && detailMessage.length > 0 ? detailMessage : deriveErrorMessage(errorData);
+
       handleError(errorMessage);
-      throw new Error(errorMessage);
+
+      const enhancedError = new Error(errorMessage);
+      if (errorData?.detail !== undefined) {
+        (enhancedError as any).detail = errorData.detail;
+      }
+      (enhancedError as any).rawError = errorData;
+
+      throw enhancedError;
     }
 
     const data = await response.json();
@@ -6605,6 +7021,40 @@ export const vectorStoreSearchCall = async (
     return data;
   } catch (error) {
     console.error("Error testing vector store search:", error);
+    throw error;
+  }
+};
+
+export const searchToolQueryCall = async (
+  accessToken: string,
+  searchToolName: string,
+  query: string,
+  maxResults?: number,
+): Promise<any> => {
+  try {
+    const url = `${getProxyBaseUrl()}/v1/search/${searchToolName}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: query,
+        max_results: maxResults || 5,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return null;
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error querying search tool:", error);
     throw error;
   }
 };

@@ -15,6 +15,8 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import (
     GenerateKeyRequest,
+    LiteLLM_BudgetTable,
+    LiteLLM_OrganizationTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_VerificationToken,
     LitellmUserRoles,
@@ -23,9 +25,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _check_org_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
     _list_key_helper,
+    check_org_key_model_specific_limits,
     check_team_key_model_specific_limits,
     generate_key_helper_fn,
     prepare_key_update_data,
@@ -2059,3 +2063,553 @@ async def test_generate_key_with_object_permission():
 
     # Verify object_permission dict is NOT in the key data
     assert "object_permission" not in key_data
+
+
+# ============================================
+# Organization Key Limit Tests
+# ============================================
+
+
+@pytest.mark.asyncio
+async def test_check_org_key_limits_no_existing_keys():
+    """
+    Test _check_org_key_limits when organization has no existing keys.
+    Should allow any TPM/RPM limits within organization bounds.
+    """
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+
+    # Create organization table with limits in budget table
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-123",
+        organization_alias="test-org",
+        budget_id="budget-123",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-123",
+            tpm_limit=20000,
+            rpm_limit=2000,
+        ),
+    )
+
+    # Create request with limits within organization bounds
+    data = GenerateKeyRequest(
+        tpm_limit=10000,
+        rpm_limit=1000,
+        tpm_limit_type="guaranteed_throughput",
+        rpm_limit_type="guaranteed_throughput",
+    )
+
+    # Should not raise any exception
+    await _check_org_key_limits(
+        org_table=org_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+    # Verify database was queried
+    mock_prisma_client.db.litellm_verificationtoken.find_many.assert_called_once_with(
+        where={"organization_id": "test-org-123"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_org_key_limits_with_existing_keys_within_bounds():
+    """
+    Test _check_org_key_limits when organization has existing keys but total allocation
+    is still within organization limits.
+    """
+    # Create mock existing keys
+    existing_key1 = MagicMock()
+    existing_key1.tpm_limit = 5000
+    existing_key1.rpm_limit = 400
+    existing_key1.metadata = {}
+
+    existing_key2 = MagicMock()
+    existing_key2.tpm_limit = 3000
+    existing_key2.rpm_limit = 500
+    existing_key2.metadata = {}
+
+    existing_key3 = MagicMock()
+    existing_key3.tpm_limit = None  # Should be ignored in calculation
+    existing_key3.rpm_limit = None  # Should be ignored in calculation
+    existing_key3.metadata = {}
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key1, existing_key2, existing_key3]
+    )
+
+    # Create organization table with limits
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-456",
+        organization_alias="test-org",
+        budget_id="budget-456",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-456",
+            tpm_limit=20000,  # Total: 5000 + 3000 + 8000 (new) = 16000 < 20000 ✓
+            rpm_limit=2000,  # Total: 400 + 500 + 800 (new) = 1700 < 2000 ✓
+        ),
+    )
+
+    # Create request that would still be within bounds
+    data = GenerateKeyRequest(
+        tpm_limit=8000,
+        rpm_limit=800,
+        tpm_limit_type="guaranteed_throughput",
+        rpm_limit_type="guaranteed_throughput",
+    )
+
+    # Should not raise any exception
+    await _check_org_key_limits(
+        org_table=org_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_org_key_limits_tpm_overallocation():
+    """
+    Test _check_org_key_limits when new key would cause TPM overallocation.
+    Should raise HTTPException with appropriate error message.
+    """
+    # Create mock existing keys with high TPM usage
+    existing_key1 = MagicMock()
+    existing_key1.tpm_limit = 12000
+    existing_key1.rpm_limit = 500
+    existing_key1.metadata = {}
+
+    existing_key2 = MagicMock()
+    existing_key2.tpm_limit = 6000
+    existing_key2.rpm_limit = 400
+    existing_key2.metadata = {}
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key1, existing_key2]
+    )
+
+    # Create organization table with limits
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-789",
+        organization_alias="test-org",
+        budget_id="budget-789",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-789",
+            tpm_limit=20000,  # Allocated: 12000 + 6000 = 18000, New: 3000, Total: 21000 > 20000 ✗
+            rpm_limit=2000,
+        ),
+    )
+
+    # Create request that would exceed TPM limits
+    data = GenerateKeyRequest(
+        tpm_limit=3000,
+        rpm_limit=500,
+        tpm_limit_type="guaranteed_throughput",
+    )
+
+    # Should raise HTTPException for TPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_org_key_limits(
+            org_table=org_table,
+            data=data,
+            prisma_client=mock_prisma_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated TPM limit=18000 + Key TPM limit=3000 is greater than organization TPM limit=20000"
+        in str(exc_info.value.detail)
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_org_key_limits_rpm_overallocation():
+    """
+    Test _check_org_key_limits when new key would cause RPM overallocation.
+    Should raise HTTPException with appropriate error message.
+    """
+    # Create mock existing keys with high RPM usage
+    existing_key1 = MagicMock()
+    existing_key1.tpm_limit = 5000
+    existing_key1.rpm_limit = 1200
+    existing_key1.metadata = {}
+
+    existing_key2 = MagicMock()
+    existing_key2.tpm_limit = 3000
+    existing_key2.rpm_limit = 600
+    existing_key2.metadata = {}
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key1, existing_key2]
+    )
+
+    # Create organization table with limits
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-101",
+        organization_alias="test-org",
+        budget_id="budget-101",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-101",
+            tpm_limit=20000,
+            rpm_limit=2000,  # Allocated: 1200 + 600 = 1800, New: 300, Total: 2100 > 2000 ✗
+        ),
+    )
+
+    # Create request that would exceed RPM limits
+    data = GenerateKeyRequest(
+        tpm_limit=5000,
+        rpm_limit=300,
+        rpm_limit_type="guaranteed_throughput",
+    )
+
+    # Should raise HTTPException for RPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_org_key_limits(
+            org_table=org_table,
+            data=data,
+            prisma_client=mock_prisma_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated RPM limit=1800 + Key RPM limit=300 is greater than organization RPM limit=2000"
+        in str(exc_info.value.detail)
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_org_key_limits_no_org_limits():
+    """
+    Test _check_org_key_limits when organization has no TPM/RPM limits set.
+    Should allow any key limits since there are no organization constraints.
+    """
+    # Create mock existing keys
+    existing_key = MagicMock()
+    existing_key.tpm_limit = 10000
+    existing_key.rpm_limit = 1000
+    existing_key.metadata = {}
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key]
+    )
+
+    # Create organization table with no limits
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-202",
+        organization_alias="test-org",
+        budget_id="budget-202",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-202",
+            tpm_limit=None,  # No organization limit
+            rpm_limit=None,  # No organization limit
+        ),
+    )
+
+    # Create request with any limits
+    data = GenerateKeyRequest(
+        tpm_limit=50000,  # High limit should be allowed
+        rpm_limit=5000,  # High limit should be allowed
+        tpm_limit_type="guaranteed_throughput",
+    )
+
+    # Should not raise any exception
+    await _check_org_key_limits(
+        org_table=org_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+
+def test_check_org_key_model_specific_limits_no_limits():
+    """
+    Test check_org_key_model_specific_limits when no model-specific limits are set.
+    Should return without raising any exceptions.
+    """
+    # Create existing key with no model-specific limits
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token-1",
+        user_id="test-user",
+        organization_id="test-org-123",
+        metadata={},
+    )
+
+    keys = [existing_key]
+
+    # Create organization table
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-123",
+        organization_alias="test-org",
+        budget_id="budget-123",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        metadata={},
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-123",
+            tpm_limit=20000,
+            rpm_limit=2000,
+        ),
+    )
+
+    # Create request with no model-specific limits
+    data = GenerateKeyRequest(
+        model_rpm_limit=None,
+        model_tpm_limit=None,
+    )
+
+    # Should not raise any exception
+    check_org_key_model_specific_limits(
+        keys=keys,
+        org_table=org_table,
+        data=data,
+    )
+
+
+def test_check_org_key_model_specific_limits_rpm_overallocation():
+    """
+    Test check_org_key_model_specific_limits when model-specific RPM would cause overallocation.
+    Should raise HTTPException with appropriate error message.
+    """
+    # Create existing keys with model-specific RPM limits
+    existing_key1 = LiteLLM_VerificationToken(
+        token="test-token-1",
+        user_id="test-user-1",
+        organization_id="test-org-456",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 800,
+                "gpt-3.5-turbo": 500,
+            }
+        },
+    )
+
+    existing_key2 = LiteLLM_VerificationToken(
+        token="test-token-2",
+        user_id="test-user-2",
+        organization_id="test-org-456",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 600,
+            }
+        },
+    )
+
+    keys = [existing_key1, existing_key2]
+
+    # Create organization table with RPM limit
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-456",
+        organization_alias="test-org",
+        budget_id="budget-456",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        metadata={},
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-456",
+            tpm_limit=20000,
+            rpm_limit=2000,  # Total organization RPM limit
+        ),
+    )
+
+    # Create request that would exceed model-specific RPM limits
+    # Existing gpt-4: 800 + 600 = 1400, New: 700, Total: 2100 > 2000 (org limit)
+    data = GenerateKeyRequest(
+        model_rpm_limit={
+            "gpt-4": 700,  # This would cause overallocation
+        },
+        model_tpm_limit=None,
+    )
+
+    # Should raise HTTPException for model-specific RPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        check_org_key_model_specific_limits(
+            keys=keys,
+            org_table=org_table,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated RPM limit=1400 + Key RPM limit=700 is greater than organization RPM limit=2000"
+        in str(exc_info.value.detail)
+    )
+
+
+def test_check_org_key_model_specific_limits_org_model_rpm_overallocation():
+    """
+    Test check_org_key_model_specific_limits when organization has model-specific RPM limits
+    in metadata and key allocation would exceed those limits.
+
+    This tests the scenario where org_table.metadata["model_rpm_limit"] is set
+    with per-model limits, not just a global organization RPM limit.
+    """
+    # Create existing keys with model-specific RPM limits
+    existing_key1 = LiteLLM_VerificationToken(
+        token="test-token-1",
+        user_id="test-user-1",
+        organization_id="test-org-789",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 600,
+                "gpt-3.5-turbo": 400,
+            }
+        },
+    )
+
+    existing_key2 = LiteLLM_VerificationToken(
+        token="test-token-2",
+        user_id="test-user-2",
+        organization_id="test-org-789",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 500,
+            }
+        },
+    )
+
+    keys = [existing_key1, existing_key2]
+
+    # Create organization table with model-specific RPM limits in metadata
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-789",
+        organization_alias="test-org",
+        budget_id="budget-789",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 1400,  # Organization-level model-specific limit for gpt-4
+                "gpt-3.5-turbo": 1000,
+            }
+        },
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-789",
+            tpm_limit=None,
+            rpm_limit=None,
+        ),
+    )
+
+    # Create request that would exceed organization's model-specific RPM limits
+    # Existing gpt-4: 600 + 500 = 1100, New: 400, Total: 1500 > 1400 (org model-specific limit)
+    data = GenerateKeyRequest(
+        model_rpm_limit={
+            "gpt-4": 400,  # This would cause overallocation against org model-specific limit
+        },
+        model_tpm_limit=None,
+    )
+
+    # Should raise HTTPException for organization model-specific RPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        check_org_key_model_specific_limits(
+            keys=keys,
+            org_table=org_table,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated RPM limit=1100 + Key RPM limit=400 is greater than organization RPM limit=1400"
+        in str(exc_info.value.detail)
+    )
+
+
+def test_check_org_key_model_specific_limits_org_model_tpm_overallocation():
+    """
+    Test check_org_key_model_specific_limits when organization has model-specific TPM limits
+    in metadata and key allocation would exceed those limits.
+
+    This tests the scenario where org_table.metadata["model_tpm_limit"] is set
+    with per-model limits, not just a global organization TPM limit.
+    """
+    # Create existing keys with model-specific TPM limits
+    existing_key1 = LiteLLM_VerificationToken(
+        token="test-token-1",
+        user_id="test-user-1",
+        organization_id="test-org-101",
+        metadata={
+            "model_tpm_limit": {
+                "gpt-4": 10000,
+                "claude-3": 6000,
+            }
+        },
+    )
+
+    existing_key2 = LiteLLM_VerificationToken(
+        token="test-token-2",
+        user_id="test-user-2",
+        organization_id="test-org-101",
+        metadata={
+            "model_tpm_limit": {
+                "gpt-4": 7000,
+            }
+        },
+    )
+
+    keys = [existing_key1, existing_key2]
+
+    # Create organization table with model-specific TPM limits in metadata
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-101",
+        organization_alias="test-org",
+        budget_id="budget-101",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        metadata={
+            "model_tpm_limit": {
+                "gpt-4": 20000,  # Organization-level model-specific limit for gpt-4
+                "claude-3": 15000,
+            }
+        },
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-101",
+            tpm_limit=None,
+            rpm_limit=None,
+        ),
+    )
+
+    # Create request that would exceed organization's model-specific TPM limits
+    # Existing gpt-4: 10000 + 7000 = 17000, New: 4000, Total: 21000 > 20000 (org model-specific limit)
+    data = GenerateKeyRequest(
+        model_rpm_limit=None,
+        model_tpm_limit={
+            "gpt-4": 4000,  # This would cause overallocation against org model-specific limit
+        },
+    )
+
+    # Should raise HTTPException for organization model-specific TPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        check_org_key_model_specific_limits(
+            keys=keys,
+            org_table=org_table,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated TPM limit=17000 + Key TPM limit=4000 is greater than organization TPM limit=20000"
+        in str(exc_info.value.detail)
+    )

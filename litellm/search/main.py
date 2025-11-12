@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.utils import SearchProviders
-from litellm.utils import ProviderConfigManager, client
+from litellm.utils import ProviderConfigManager, client, filter_out_litellm_params
 
 ####### ENVIRONMENT VARIABLES ###################
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -263,13 +263,12 @@ def search(
             country=country,
         )
         
-        # Internal LiteLLM parameters that should not be passed to providers
-        litellm_internal_params = {"litellm_call_id", "litellm_logging_obj", "litellm_params"}
+        # Filter out internal LiteLLM parameters from kwargs
+        filtered_kwargs = filter_out_litellm_params(kwargs=kwargs)
         
         # Add remaining kwargs to optional_params (for provider-specific params)
-        # Filter out internal LiteLLM parameters
-        for key, value in kwargs.items():
-            if key not in optional_params and key not in litellm_internal_params:
+        for key, value in filtered_kwargs.items():
+            if key not in optional_params:
                 optional_params[key] = value
         
         verbose_logger.debug(f"Search optional_params: {optional_params}")

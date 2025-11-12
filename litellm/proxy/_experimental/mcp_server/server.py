@@ -238,7 +238,7 @@ if MCP_AVAILABLE:
         (
             user_api_key_auth,
             mcp_auth_header,
-            _,
+            mcp_servers,
             mcp_server_auth_headers,
             oauth2_headers,
             raw_headers,
@@ -272,6 +272,7 @@ if MCP_AVAILABLE:
             response = await call_mcp_tool(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
@@ -312,31 +313,32 @@ if MCP_AVAILABLE:
 
     async def _get_allowed_mcp_servers_from_mcp_server_names(
         mcp_servers: Optional[List[str]],
-        allowed_mcp_servers: List[str],
-    ) -> List[str]:
+        allowed_mcp_servers: List[MCPServer],
+    ) -> List[MCPServer]:
         """
         Get the filtered MCP servers from the MCP server names
         """
-        from typing import Set
 
-        filtered_server_ids: Set[str] = set()
+        filtered_server: dict[str, MCPServer] = {}
         # Filter servers based on mcp_servers parameter if provided
         if mcp_servers is not None:
             for server_or_group in mcp_servers:
                 server_name_matched = False
 
-                for server_id in allowed_mcp_servers:
-                    server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-
+                for server in allowed_mcp_servers:
                     if server:
                         match_list = [
                             s.lower()
-                            for s in [server.alias, server.server_name, server_id]
+                            for s in [
+                                server.alias,
+                                server.server_name,
+                                server.server_id,
+                            ]
                             if s is not None
                         ]
 
                         if server_or_group.lower() in match_list:
-                            filtered_server_ids.add(server_id)
+                            filtered_server[server.server_id] = server
                             server_name_matched = True
                             break
 
@@ -349,15 +351,16 @@ if MCP_AVAILABLE:
                         )
                         # Only include servers that the user has access to
                         for server_id in access_group_server_ids:
-                            if server_id in allowed_mcp_servers:
-                                filtered_server_ids.add(server_id)
+                            for server in allowed_mcp_servers:
+                                if server_id == server.server_id:
+                                    filtered_server[server.server_id] = server
                     except Exception as e:
                         verbose_logger.debug(
                             f"Could not resolve '{server_or_group}' as access group: {e}"
                         )
 
-        if filtered_server_ids:
-            allowed_mcp_servers = list(filtered_server_ids)
+        if filtered_server:
+            return list(filtered_server.values())
 
         return allowed_mcp_servers
 
@@ -450,8 +453,11 @@ if MCP_AVAILABLE:
             return []
 
         # Get allowed MCP servers based on user permissions
-        allowed_mcp_servers = await global_mcp_server_manager.get_allowed_mcp_servers(
-            user_api_key_auth
+        allowed_mcp_server_ids = (
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+        )
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(
+            allowed_mcp_server_ids
         )
 
         if mcp_servers is not None:
@@ -465,8 +471,7 @@ if MCP_AVAILABLE:
 
         # Get tools from each allowed server
         all_tools = []
-        for server_id in allowed_mcp_servers:
-            server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        for server in allowed_mcp_servers:
             if server is None:
                 continue
 
@@ -504,7 +509,7 @@ if MCP_AVAILABLE:
 
                 filtered_tools = await filter_tools_by_key_team_permissions(
                     tools=filtered_tools,
-                    server_id=server_id,
+                    server_id=server.server_id,
                     user_api_key_auth=user_api_key_auth,
                 )
 
@@ -607,6 +612,7 @@ if MCP_AVAILABLE:
         arguments: Optional[Dict[str, Any]] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
+        mcp_servers: Optional[List[str]] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
@@ -621,25 +627,31 @@ if MCP_AVAILABLE:
                 status_code=400, detail="Request arguments are required"
             )
 
-        # Remove prefix from tool name for logging and processing
-        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(
-            name
-        )
-
         ## CHECK IF USER IS ALLOWED TO CALL THIS TOOL
         allowed_mcp_server_ids = await MCPRequestHandler.get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
         )
 
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_server_names_from_ids(
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(
             allowed_mcp_server_ids
         )
 
-        if not MCPRequestHandler.is_tool_allowed(
+        allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
+            mcp_servers=mcp_servers,
             allowed_mcp_servers=allowed_mcp_servers,
-            server_name=server_name_from_prefix,
-        ):
+        )
 
+        server_name: Optional[str]
+        if len(allowed_mcp_servers) == 1:
+            original_tool_name, server_name = name, allowed_mcp_servers[0].server_name
+        else:
+            # Remove prefix from tool name for logging and processing
+            original_tool_name, server_name = get_server_name_prefix_tool_mcp(name)
+
+        if not server_name or not MCPRequestHandler.is_tool_allowed(
+            allowed_mcp_servers=[server.name for server in allowed_mcp_servers],
+            server_name=server_name,
+        ):
             raise HTTPException(
                 status_code=403,
                 detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
@@ -649,16 +661,16 @@ if MCP_AVAILABLE:
             _get_standard_logging_mcp_tool_call(
                 name=original_tool_name,  # Use original name for logging
                 arguments=arguments,
-                server_name=server_name_from_prefix,
+                server_name=server_name,
             )
         )
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
-                standard_logging_mcp_tool_call
-            )
+            litellm_logging_obj.model_call_details[
+                "mcp_tool_call_metadata"
+            ] = standard_logging_mcp_tool_call
             litellm_logging_obj.model = f"MCP: {name}"
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
@@ -672,15 +684,16 @@ if MCP_AVAILABLE:
         # Primary and recommended way to use external MCP servers
         #########################################################
         else:
-            mcp_server: Optional[MCPServer] = (
-                global_mcp_server_manager._get_mcp_server_from_tool_name(name)
-            )
+            mcp_server: Optional[
+                MCPServer
+            ] = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
             if mcp_server:
                 standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
                     mcp_server.mcp_info or {}
                 ).get("mcp_server_cost_info")
                 response = await _handle_managed_mcp_tool(
-                    name=name,  # Pass the full name (potentially prefixed)
+                    server_name=server_name,
+                    name=original_tool_name,  # Pass the full name (potentially prefixed)
                     arguments=arguments,
                     user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=mcp_auth_header,
@@ -734,6 +747,7 @@ if MCP_AVAILABLE:
             )
 
     async def _handle_managed_mcp_tool(
+        server_name: str,
         name: str,
         arguments: Dict[str, Any],
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -748,6 +762,7 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         call_tool_result = await global_mcp_server_manager.call_tool(
+            server_name=server_name,
             name=name,
             arguments=arguments,
             user_api_key_auth=user_api_key_auth,
@@ -884,6 +899,26 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
+            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
+            for server_name in mcp_servers or []:
+                server = global_mcp_server_manager.get_mcp_server_by_name(server_name)
+                if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
+                    from starlette.requests import Request
+
+                    request = Request(scope)
+                    base_url = str(request.base_url).rstrip("/")
+
+                    authorization_uri = (
+                        f"Bearer authorization_uri="
+                        f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                    )
+
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": authorization_uri},
+                    )
+
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
@@ -1030,14 +1065,16 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> Tuple[
-        Optional[UserAPIKeyAuth],
-        Optional[str],
-        Optional[List[str]],
-        Optional[Dict[str, Dict[str, str]]],
-        Optional[Dict[str, str]],
-        Optional[Dict[str, str]],
-    ]:
+    def get_auth_context() -> (
+        Tuple[
+            Optional[UserAPIKeyAuth],
+            Optional[str],
+            Optional[List[str]],
+            Optional[Dict[str, Dict[str, str]]],
+            Optional[Dict[str, str]],
+            Optional[Dict[str, str]],
+        ]
+    ):
         """
         Get the UserAPIKeyAuth from the auth context variable.
 

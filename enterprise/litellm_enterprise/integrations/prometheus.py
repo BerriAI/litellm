@@ -298,6 +298,13 @@ class PrometheusLogger(CustomLogger):
                 self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
             )
 
+            # Callback Logging Failure Metrics
+            self.litellm_callback_logging_failures_metric = self._counter_factory(
+                name="litellm_callback_logging_failures_metric",
+                documentation="Total number of failures when emitting logs to callbacks (e.g. s3_v2, langfuse, etc)",
+                labelnames=["callback_name"],
+            )
+
             self.litellm_llm_api_failed_requests_metric = self._counter_factory(
                 name="litellm_llm_api_failed_requests_metric",
                 documentation="deprecated - use litellm_proxy_failed_requests_metric",
@@ -1226,8 +1233,8 @@ class PrometheusLogger(CustomLogger):
 
         try:
             _tags = StandardLoggingPayloadSetup._get_request_tags(
-                request_data.get("metadata", {}),
-                request_data.get("proxy_server_request", {}),
+                litellm_params=request_data,
+                proxy_server_request=request_data.get("proxy_server_request", {}),
             )
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
@@ -1289,7 +1296,8 @@ class PrometheusLogger(CustomLogger):
                 status_code="200",
                 route=user_api_key_dict.request_route,
                 tags=StandardLoggingPayloadSetup._get_request_tags(
-                    data.get("metadata", {}), data.get("proxy_server_request", {})
+                    litellm_params=data,
+                    proxy_server_request=data.get("proxy_server_request", {}),
                 ),
             )
             _labels = prometheus_label_factory(
@@ -1720,6 +1728,17 @@ class PrometheusLogger(CustomLogger):
         """
         self.litellm_deployment_cooled_down.labels(
             litellm_model_name, model_id, api_base, api_provider, exception_status
+        ).inc()
+
+    def increment_callback_logging_failure(
+        self,
+        callback_name: str,
+    ):
+        """
+        Increment metric when logging to a callback fails (e.g., s3_v2, langfuse, etc.)
+        """
+        self.litellm_callback_logging_failures_metric.labels(
+            callback_name=callback_name
         ).inc()
 
     def track_provider_remaining_budget(
@@ -2188,6 +2207,9 @@ class PrometheusLogger(CustomLogger):
                 prometheus_logger.initialize_remaining_budget_metrics,
                 "interval",
                 minutes=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+                # REMOVED jitter parameter - major cause of memory leak
+                id="prometheus_budget_metrics_job",
+                replace_existing=True,
             )
 
     @staticmethod
@@ -2212,8 +2234,9 @@ class PrometheusLogger(CustomLogger):
             )
 
         # Create metrics ASGI app
-        if 'PROMETHEUS_MULTIPROC_DIR' in os.environ:
+        if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
             from prometheus_client import CollectorRegistry, multiprocess
+
             registry = CollectorRegistry()
             multiprocess.MultiProcessCollector(registry)
             metrics_app = make_asgi_app(registry)
