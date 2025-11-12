@@ -14,6 +14,10 @@ model_list:
       model: bedrock/*
       custom_llm_provider: bedrock
       aws_region_name: us-west-2
+  - model_name: runwayml/*
+    litellm_params:
+      model: runwayml/*
+
     
 
 # like MCPs/vector stores
