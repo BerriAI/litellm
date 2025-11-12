@@ -152,6 +152,7 @@ async def new_project(
     # Parameters
 
     - project_alias: *Optional[str]* - The name of the project.
+    - description: *Optional[str]* - Description of the project's purpose and use case.
     - team_id: *str* - The team id that this project belongs to. Required.
     - models: *List* - The models the project has access to.
     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the project.
@@ -161,13 +162,15 @@ async def new_project(
     - rpm_limit: *Optional[int]* - Max rpm limit for project
     - max_parallel_requests: *Optional[int]* - Max parallel requests for project
     - soft_budget: *Optional[float]* - Get a slack alert when this soft budget is reached. Don't block requests.
-    - model_max_budget: *Optional[dict]* - Max budget for a specific model
+    - model_max_budget: *Optional[dict]* - Max budget for a specific model. Example: {"gpt-4": 100.0, "gpt-3.5-turbo": 50.0}
+    - model_rpm_limit: *Optional[dict]* - RPM limits per model. Example: {"gpt-4": 1000, "gpt-3.5-turbo": 5000}
+    - model_tpm_limit: *Optional[dict]* - TPM limits per model. Example: {"gpt-4": 50000, "gpt-3.5-turbo": 100000}
     - budget_duration: *Optional[str]* - Frequency of reseting project budget
     - metadata: *Optional[dict]* - Metadata for project, store information for project. Example metadata - {"use_case_id": "SNOW-12345", "responsible_ai_id": "RAI-67890"}
     - blocked: *bool* - Flag indicating if the project is blocked or not - will stop all calls from keys with this project_id.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - project-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
 
-    Example 1: Create new project **without** a budget_id
+    Example 1: Create new project **without** a budget_id, with model-specific limits
 
     ```bash
     curl --location 'http://0.0.0.0:4000/project/new' \\
@@ -175,9 +178,18 @@ async def new_project(
     --header 'Content-Type: application/json' \\
     --data '{
         "project_alias": "flight-search-assistant",
+        "description": "AI-powered flight search and booking assistant",
         "team_id": "team-123",
         "models": ["gpt-4", "gpt-3.5-turbo"],
         "max_budget": 100,
+        "model_rpm_limit": {
+            "gpt-4": 1000,
+            "gpt-3.5-turbo": 5000
+        },
+        "model_tpm_limit": {
+            "gpt-4": 50000,
+            "gpt-3.5-turbo": 100000
+        },
         "metadata": {
             "use_case_id": "SNOW-12345",
             "responsible_ai_id": "RAI-67890"
@@ -193,9 +205,13 @@ async def new_project(
     --header 'Content-Type: application/json' \\
     --data '{
         "project_alias": "hotel-recommendations",
+        "description": "Personalized hotel recommendation engine",
         "team_id": "team-123",
         "models": ["claude-3-sonnet"],
-        "budget_id": "428eeaa8-f3ac-4e85-a8fb-7dc8d7aa8689"
+        "budget_id": "428eeaa8-f3ac-4e85-a8fb-7dc8d7aa8689",
+        "metadata": {
+            "use_case_id": "SNOW-54321"
+        }
     }'
     ```
     """
@@ -317,6 +333,7 @@ async def update_project(
     Parameters:
     - project_id: *str* - The project id to update. Required.
     - project_alias: *Optional[str]* - Updated name for the project
+    - description: *Optional[str]* - Updated description for the project
     - team_id: *Optional[str]* - Updated team_id for the project
     - metadata: *Optional[dict]* - Updated metadata for project
     - models: *Optional[list]* - Updated list of models for the project
@@ -324,6 +341,8 @@ async def update_project(
     - max_budget: *Optional[float]* - Updated max budget
     - tpm_limit: *Optional[int]* - Updated tpm limit
     - rpm_limit: *Optional[int]* - Updated rpm limit
+    - model_rpm_limit: *Optional[dict]* - Updated RPM limits per model
+    - model_tpm_limit: *Optional[dict]* - Updated TPM limits per model
     - budget_duration: *Optional[str]* - Updated budget duration
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Updated object permission
 
@@ -334,7 +353,12 @@ async def update_project(
     --header 'Content-Type: application/json' \\
     --data '{
         "project_id": "project-123",
+        "description": "Updated flight search system with enhanced capabilities",
         "max_budget": 200,
+        "model_rpm_limit": {
+            "gpt-4": 2000,
+            "gpt-3.5-turbo": 10000
+        },
         "metadata": {
             "use_case_id": "SNOW-12345",
             "status": "active"
