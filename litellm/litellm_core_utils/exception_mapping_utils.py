@@ -74,6 +74,21 @@ class ExceptionCheckers:
             if substring in _error_str_lowercase:
                 return True
         return False
+
+    @staticmethod
+    def is_azure_context_window_exceeded_error(error_str: str) -> bool:
+        """
+        Check if an error string indicates a context window exceeded error.
+        """
+        known_exception_substrings = [
+            "input tokens exceed the configured limit",
+            "this model's maximum context length is",
+            "please reduce the length of the messages",
+        ]
+        for substring in known_exception_substrings:
+            if substring in error_str.lower():
+                return True
+        return False
     
     @staticmethod
     def is_azure_content_policy_violation_error(error_str: str) -> bool:
@@ -2020,7 +2035,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                         response=getattr(original_exception, "response", None),
                     )
-                elif "This model's maximum context length is" in error_str:
+                elif ExceptionCheckers.is_azure_context_window_exceeded_error(error_str):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"AzureException ContextWindowExceededError - {message}",
