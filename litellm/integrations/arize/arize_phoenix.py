@@ -41,7 +41,7 @@ class ArizePhoenixLogger:
         """
         api_key = os.environ.get("PHOENIX_API_KEY", None)
 
-        collector_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", None)
+        collector_endpoint = os.environ.get("PHOENIX_COLLECTOR_HTTP_ENDPOINT", None)
 
         if not collector_endpoint:
             grpc_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", None)
