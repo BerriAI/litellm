@@ -19,11 +19,12 @@ import {
   Tab,
   SelectItem,
   Icon,
+  Badge,
 } from "@tremor/react";
 
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 
-import { Modal, Typography, Form, Input, Select, Button as Button2 } from "antd";
+import { Modal, Typography, Form, Input, Select, Button as Button2, Tooltip } from "antd";
 import NotificationsManager from "./molecules/notifications_manager";
 import EmailSettings from "./email_settings";
 
@@ -57,6 +58,7 @@ interface AlertingVariables {
 
 interface AlertingObject {
   name: string;
+  type?: "success" | "failure" | "success_and_failure";
   variables: AlertingVariables;
 }
 
@@ -413,54 +415,101 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               <Title level={4}>Active Logging Callbacks</Title>
 
               <Grid numItems={2}>
-                <Card className="max-h-[50vh]">
+                <Card className="h-[calc(100vh-300px)] overflow-auto">
                   <Table>
                     <TableHead>
                       <TableRow>
                         <TableHeaderCell>Callback Name</TableHeaderCell>
-                        {/* <TableHeaderCell>Callback Env Vars</TableHeaderCell> */}
+                        <TableHeaderCell>Callback Type</TableHeaderCell>
+                        <TableHeaderCell>Actions</TableHeaderCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {callbacks.map((callback, index) => (
-                        <TableRow key={index} className="flex justify-between">
-                          <TableCell>
-                            <Text>{callback.name}</Text>
-                          </TableCell>
-                          <TableCell>
-                            <Grid numItems={2} className="flex justify-between">
-                              <Icon
-                                icon={PencilAltIcon}
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedEditCallback(callback);
-                                  setShowEditCallback(true);
-                                }}
-                              />
-                              <Icon
-                                icon={TrashIcon}
-                                size="sm"
-                                onClick={() => handleDeleteCallback(callback.name)}
-                                className="text-red-500 hover:text-red-700 cursor-pointer"
-                              />
-                              <Button
-                                onClick={async () => {
-                                  try {
-                                    await serviceHealthCheck(accessToken, callback.name);
-                                    NotificationsManager.success("Health check triggered");
-                                  } catch (error) {
-                                    NotificationsManager.fromBackend(parseErrorMessage(error));
-                                  }
-                                }}
-                                className="ml-2"
-                                variant="secondary"
-                              >
-                                Test Callback
-                              </Button>
-                            </Grid>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {callbacks.map((callback, index) => {
+                        const canEdit = !callback.type || callback.type === "success";
+                        const tooltipMessage =
+                          callback.type === "failure"
+                            ? "Modifications and deletion of failure type callbacks are not yet supported in the UI"
+                            : callback.type === "success_and_failure"
+                              ? "Modifications and deletion of success and failure type callbacks are not yet supported in the UI"
+                              : "";
+
+                        const getBadgeColor = (type?: string) => {
+                          if (type === "success") return "green";
+                          if (type === "failure") return "red";
+                          if (type === "success_and_failure") return "blue";
+                          return "gray";
+                        };
+
+                        const getBadgeLabel = (type?: string) => {
+                          if (type === "success") return "Success Only";
+                          if (type === "failure") return "Failure Only";
+                          if (type === "success_and_failure") return "Success & Failure";
+                          return "Unknown";
+                        };
+
+                        return (
+                          <TableRow key={index}>
+                            <TableCell>
+                              <Text>{callback.name}</Text>
+                            </TableCell>
+                            <TableCell>
+                              {callback.type ? (
+                                <Badge color={getBadgeColor(callback.type)}>{getBadgeLabel(callback.type)}</Badge>
+                              ) : (
+                                <Badge color="gray">Unknown</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Tooltip title={tooltipMessage}>
+                                  <Icon
+                                    icon={PencilAltIcon}
+                                    size="sm"
+                                    onClick={() => {
+                                      if (canEdit) {
+                                        setSelectedEditCallback(callback);
+                                        setShowEditCallback(true);
+                                      }
+                                    }}
+                                    className={canEdit ? "cursor-pointer" : "opacity-40 cursor-not-allowed"}
+                                  />
+                                </Tooltip>
+                                <Tooltip title={tooltipMessage}>
+                                  <Icon
+                                    icon={TrashIcon}
+                                    size="sm"
+                                    onClick={() => {
+                                      if (canEdit) {
+                                        handleDeleteCallback(callback.name);
+                                      }
+                                    }}
+                                    className={
+                                      canEdit
+                                        ? "text-red-500 hover:text-red-700 cursor-pointer"
+                                        : "text-red-300 opacity-40 cursor-not-allowed"
+                                    }
+                                  />
+                                </Tooltip>
+                                <Button
+                                  onClick={async () => {
+                                    try {
+                                      await serviceHealthCheck(accessToken, callback.name);
+                                      NotificationsManager.success("Health check triggered");
+                                    } catch (error) {
+                                      NotificationsManager.fromBackend(parseErrorMessage(error));
+                                    }
+                                  }}
+                                  variant="secondary"
+                                  size="xs"
+                                >
+                                  Test Callback
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </Card>

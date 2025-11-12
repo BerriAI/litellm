@@ -2544,6 +2544,14 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="Lago Billing",
     )
 
+    traceloop: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="traceloop",
+        litellm_callback_params=[
+            "TRACELOOP_API_KEY",
+        ],
+        ui_callback_name="Traceloop",
+    )   
+
 
 class SpendLogsMetadata(TypedDict):
     """
