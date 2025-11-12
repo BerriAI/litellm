@@ -413,6 +413,9 @@ allowed_fails: int = 3
 num_retries_per_request: Optional[
     int
 ] = None  # for the request overall (incl. fallbacks + model retries)
+
+#### DYNAMIC RATE LIMITING ####
+dynamic_rate_limit_policy: Optional[Dict] = None  # Provider and error-type specific thresholds for dynamic rate limiting
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[
     Any
