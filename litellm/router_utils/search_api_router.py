@@ -158,42 +158,50 @@ class SearchAPIRouter:
         """
         Helper function for search API calls - selects a search tool and calls the original function.
         Called by async_function_with_fallbacks for each retry attempt.
-        
+
         Args:
             router_instance: The Router instance
             model: The search tool name (passed as model for compatibility)
             original_generic_function: The original litellm.asearch function
             **kwargs: Search parameters
-            
+
         Returns:
             SearchResponse from the selected search provider
         """
         search_tool_name = model  # model field contains the search_tool_name
-        
+
         try:
+            team_id = kwargs.get("litellm_metadata", {}).get("user_api_key_team_id")
+            if team_id is not None:
+                await SearchAPIRouter._check_team_search_tool_permission(
+                    router_instance=router_instance,
+                    team_id=team_id,
+                    search_tool_name=search_tool_name,
+                )
+
             # Find matching search tools
             matching_tools = SearchAPIRouter.get_matching_search_tools(
                 router_instance=router_instance,
                 search_tool_name=search_tool_name,
             )
-            
+
             # Simple random selection for load balancing across multiple providers with same name
             # For search tools, we use simple random choice since they don't have TPM/RPM constraints
             selected_tool = random.choice(matching_tools)
-            
+
             # Extract search provider and other params from litellm_params
             litellm_params = selected_tool.get("litellm_params", {})
             search_provider = litellm_params.get("search_provider")
             api_key = litellm_params.get("api_key")
             api_base = litellm_params.get("api_base")
-            
+
             if not search_provider:
                 raise ValueError(f"search_provider not found in litellm_params for search tool '{search_tool_name}'")
-            
+
             verbose_router_logger.debug(
                 f"Selected search tool with provider: {search_provider}"
             )
-            
+
             # Call the original search function with the provider config
             response = await original_generic_function(
                 search_provider=search_provider,
@@ -201,12 +209,59 @@ class SearchAPIRouter:
                 api_base=api_base,
                 **kwargs,
             )
-            
+
             return response
-            
+
         except Exception as e:
             verbose_router_logger.error(
                 f"Error in SearchAPIRouter.async_search_with_fallbacks_helper for {search_tool_name}: {str(e)}"
+            )
+            raise e
+
+    @staticmethod
+    async def _check_team_search_tool_permission(
+        router_instance: Any,
+        team_id: str,
+        search_tool_name: str,
+    ):
+        try:
+            from litellm.proxy.auth.auth_checks import get_team_object
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                user_api_key_cache,
+                proxy_logging_obj,
+            )
+
+            team_obj = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+            if team_obj is None:
+                raise Exception(f"Team not found: {team_id}")
+
+            if (
+                team_obj.object_permission is not None
+                and team_obj.object_permission.search_tools is not None
+            ):
+                allowed_search_tools = team_obj.object_permission.search_tools
+                if search_tool_name not in allowed_search_tools:
+                    raise Exception(
+                        f"Team '{team_id}' does not have permission to access search tool '{search_tool_name}'. "
+                        f"Allowed search tools: {allowed_search_tools}"
+                    )
+            else:
+                raise Exception(
+                    f"Team '{team_id}' does not have permission to access search tool '{search_tool_name}'. "
+                    "No search tools are configured for this team."
+                )
+
+        except Exception as e:
+            verbose_router_logger.error(
+                f"Error checking team search tool permission for team {team_id}, tool {search_tool_name}: {str(e)}"
             )
             raise e
 
