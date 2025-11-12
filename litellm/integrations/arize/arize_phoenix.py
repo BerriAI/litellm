@@ -43,7 +43,6 @@ class ArizePhoenixLogger:
 
         collector_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", None)
 
-        # Fallback to legacy LiteLLM environment variables for backward compatibility
         if not collector_endpoint:
             grpc_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", None)
             http_endpoint = os.environ.get("PHOENIX_COLLECTOR_HTTP_ENDPOINT", None)
@@ -59,7 +58,6 @@ class ArizePhoenixLogger:
                 protocol = "otlp_grpc"
             else:
                 # Phoenix Cloud endpoints (app.phoenix.arize.com) include the space in the URL
-                # and don't need path modification
                 if "app.phoenix.arize.com" in collector_endpoint:
                     endpoint = collector_endpoint
                     protocol = "otlp_http"
@@ -75,7 +73,7 @@ class ArizePhoenixLogger:
                     endpoint = collector_endpoint
                 protocol = "otlp_http"
         else:
-            # If no endpoint specified, default to local Phoenix instance
+            # If no endpoint specified, self hosted phoenix
             endpoint = "http://localhost:6006/v1/traces"
             protocol = "otlp_http"
             verbose_logger.debug(
@@ -83,7 +81,6 @@ class ArizePhoenixLogger:
             )
 
         otlp_auth_headers = None
-        # Phoenix uses Authorization Bearer format for authentication
         if api_key is not None:
             otlp_auth_headers = f"Authorization=Bearer {api_key}"
         elif "app.phoenix.arize.com" in endpoint:
