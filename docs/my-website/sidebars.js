@@ -246,6 +246,7 @@ const sidebars = {
           type: "category",
           label: "Model Access",
           items: [
+            "proxy/model_access_guide",
             "proxy/model_access",
             "proxy/team_model_add"
           ]
@@ -792,7 +793,6 @@ const sidebars = {
             "projects/GPTLocalhost",
             "projects/HolmesGPT",
             "projects/Railtracks",
-            "projects/Softgen",
           ],
         },
         "extras/code_quality",
