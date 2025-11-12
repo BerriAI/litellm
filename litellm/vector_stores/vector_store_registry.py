@@ -279,7 +279,8 @@ class VectorStoreRegistry:
                         existing_params = vector_store_copy.get("litellm_params", {}) or {}
                         tool_params_dict = params_by_id[vector_store_id].to_dict()
                         # Tool params take precedence over existing params
-                        vector_store_copy["litellm_params"] = existing_params.update(tool_params_dict)
+                        tool_params_dict.update(existing_params)
+                        vector_store_copy["litellm_params"] = tool_params_dict
                     
                     vector_stores_to_run.append(vector_store_copy)
                     break
