@@ -8,6 +8,7 @@ from typing import (
     Callable,
     List,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     Union,
@@ -596,7 +597,6 @@ def _count_image_tokens(
             mode=detail,  # type: ignore
             use_default_image_token_count=use_default_image_token_count,
         )
-
     elif isinstance(image_url, str):
         if not image_url.strip():
             raise ValueError("Empty image_url string is not valid.")
@@ -605,7 +605,6 @@ def _count_image_tokens(
             mode="auto",
             use_default_image_token_count=use_default_image_token_count,
         )
-
     else:
         raise ValueError(
             f"Invalid image_url type: {type(image_url).__name__}. "
@@ -613,7 +612,7 @@ def _count_image_tokens(
         )
 
 
-def _validate_anthropic_content(content: dict) -> type:
+def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
     """
     Validate and determine which Anthropic TypedDict applies.
 
@@ -644,7 +643,7 @@ def _validate_anthropic_content(content: dict) -> type:
 
 
 def _count_anthropic_content(
-    content: dict,
+    content: Mapping[str, Any],
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
     default_token_count: Optional[int],
@@ -706,24 +705,20 @@ def _count_content_list(
         for c in content_list:
             if isinstance(c, str):
                 num_tokens += count_function(c)
-            elif isinstance(c, dict):
-                ctype = c.get("type")
-                if ctype == "text":
-                    num_tokens += count_function(c.get("text", ""))
-                elif ctype == "image_url":
-                    image_url = c.get("image_url")
-                    num_tokens += _count_image_tokens(
-                        image_url, use_default_image_token_count
-                    )
-                elif ctype in ("tool_use", "tool_result"):
-                    num_tokens += _count_anthropic_content(
-                        c,
-                        count_function,
-                        use_default_image_token_count,
-                        default_token_count,
-                    )
-                else:
-                    raise ValueError(f"Invalid content type: {ctype}")
+            elif c["type"] == "text":
+                num_tokens += count_function(c.get("text", ""))
+            elif c["type"] == "image_url":
+                image_url = c.get("image_url")
+                num_tokens += _count_image_tokens(
+                    image_url, use_default_image_token_count
+                )
+            elif c["type"] in ("tool_use", "tool_result"):
+                num_tokens += _count_anthropic_content(
+                    c,
+                    count_function,
+                    use_default_image_token_count,
+                    default_token_count,
+                )
             else:
                 raise ValueError(
                     f"Invalid content item type: {type(c).__name__}. "
