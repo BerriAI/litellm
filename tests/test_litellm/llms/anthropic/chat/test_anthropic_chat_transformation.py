@@ -11,6 +11,9 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+    AnthropicMessagesConfig,
+)
 from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
 
 
@@ -389,3 +392,76 @@ def test_anthropic_memory_tool_auto_adds_beta_header():
 
     assert "anthropic-beta" in headers
     assert headers["anthropic-beta"] == "context-management-2025-06-27"
+
+
+def _sample_context_management_payload():
+    return {
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 30000},
+                "keep": {"type": "tool_uses", "value": 3},
+                "clear_at_least": {"type": "input_tokens", "value": 5000},
+                "exclude_tools": ["web_search"],
+                "clear_tool_inputs": False,
+            }
+        ]
+    }
+
+
+def test_anthropic_messages_validate_adds_beta_header():
+    config = AnthropicMessagesConfig()
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        optional_params={"context_management": _sample_context_management_payload()},
+        litellm_params={},
+    )
+    assert headers["anthropic-beta"] == "context-management-2025-06-27"
+
+
+def test_anthropic_messages_transform_includes_context_management():
+    config = AnthropicMessagesConfig()
+    payload = _sample_context_management_payload()
+    headers = {
+        "x-api-key": "test",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 512,
+            "context_management": payload,
+        },
+        litellm_params={},
+        headers=headers,
+    )
+    assert result["context_management"] == payload
+
+
+def test_anthropic_chat_headers_add_context_management_beta():
+    config = AnthropicConfig()
+    headers = config.update_headers_with_optional_anthropic_beta(
+        headers={},
+        optional_params={"context_management": _sample_context_management_payload()},
+    )
+    assert headers["anthropic-beta"] == "context-management-2025-06-27"
+
+
+def test_anthropic_chat_transform_request_includes_context_management():
+    config = AnthropicConfig()
+    headers = {}
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "context_management": _sample_context_management_payload(),
+            "max_tokens": 256,
+        },
+        litellm_params={},
+        headers=headers,
+    )
+    assert result["context_management"] == _sample_context_management_payload()

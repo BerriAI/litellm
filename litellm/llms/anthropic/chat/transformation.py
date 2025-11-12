@@ -132,6 +132,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "response_format",
             "user",
             "web_search_options",
+            "context_management",
         ]
 
         if "claude-3-7-sonnet" in model or supports_reasoning(
@@ -661,6 +662,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 headers[
                     "anthropic-beta"
                 ] = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+        if optional_params.get("context_management") is not None:
+            existing_beta = headers.get("anthropic-beta")
+            beta_value = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+            if existing_beta is None:
+                headers["anthropic-beta"] = beta_value
+            elif beta_value not in [beta.strip() for beta in existing_beta.split(",")]:
+                headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
         return headers
 
     def transform_request(
