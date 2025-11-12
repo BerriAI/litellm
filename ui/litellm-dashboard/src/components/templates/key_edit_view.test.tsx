@@ -35,6 +35,7 @@ describe("KeyEditView", () => {
     max_parallel_requests: 10,
     metadata: {
       logging: [],
+      tags: ["test-tag"],
     },
     tpm_limit: 10,
     rpm_limit: 10,
@@ -102,6 +103,43 @@ describe("KeyEditView", () => {
 
     await waitFor(() => {
       expect(getByText("Save Changes")).toBeInTheDocument();
+    });
+  });
+
+  it("should render tags", async () => {
+    const { getByText } = render(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText("test-tag")).toBeInTheDocument();
+    });
+  });
+
+  it("should not render tags in metadata textarea", async () => {
+    const { getByLabelText } = render(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    const metadataTextarea = getByLabelText("Metadata") as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(metadataTextarea).toHaveValue("{}");
     });
   });
 });

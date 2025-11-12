@@ -57,7 +57,8 @@ const sidebars = {
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/prompt_injection",
           "proxy/guardrails/tool_permission",
-          "proxy/guardrails/javelin",
+          "proxy/guardrails/zscaler_ai_guard",
+          "proxy/guardrails/javelin"
         ].sort(),
       ],
     },
@@ -575,6 +576,13 @@ const sidebars = {
         "providers/nlp_cloud",
         "providers/recraft",
         "providers/replicate",
+        {
+          type: "category",
+          label: "RunwayML",
+          items: [
+            "providers/runwayml/videos",
+          ]
+        },
         "providers/togetherai",
         "providers/v0",
         "providers/vercel_ai_gateway",
@@ -784,6 +792,7 @@ const sidebars = {
             "projects/GPTLocalhost",
             "projects/HolmesGPT",
             "projects/Railtracks",
+            "projects/Softgen",
           ],
         },
         "extras/code_quality",

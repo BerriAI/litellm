@@ -125,7 +125,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(setup_vecto
     litellm._turn_on_debug()
     async_client = AsyncHTTPHandler()
     response = await litellm.acompletion(
-        model="anthropic/claude-3-5-haiku-latest",
+        model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
         messages=[{"role": "user", "content": "what is litellm?"}],
         vector_store_ids = [
             "T37J8R4WTM"
@@ -622,3 +622,121 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_vector_store_not_in_regi
         assert len(content) == 1
         assert content[0]["type"] == "text"
         
+
+@pytest.mark.asyncio
+async def test_provider_specific_fields_in_proxy_http_response(setup_vector_store_registry):
+    """
+    Test that provider_specific_fields (like search_results) are included 
+    in the proxy HTTP JSON response, not just in Python SDK objects.
+    
+    This test catches serialization bugs where exclude=True would strip 
+    provider_specific_fields from the HTTP response.
+    """
+    from fastapi.testclient import TestClient
+    from litellm.proxy.proxy_server import app, initialize
+    from litellm.proxy.utils import ProxyLogging
+    import litellm.proxy.proxy_server as proxy_server
+    from unittest.mock import patch as mock_patch
+    
+    # Initialize proxy
+    await initialize(
+        model="gpt-3.5-turbo",
+        alias=None,
+        api_base=None,
+        debug=False,
+        temperature=None,
+        max_tokens=None,
+        request_timeout=600,
+        max_budget=None,
+        telemetry=False,
+        drop_params=True,
+        add_function_to_prompt=False,
+        headers=None,
+        save=False,
+        use_queue=False,
+        config=None
+    )
+    
+    # Create test client
+    client = TestClient(app)
+    
+    # Create mock response with provider_specific_fields
+    mock_response = litellm.ModelResponse(
+        id="test-123",
+        model="gpt-3.5-turbo",
+        created=1234567890,
+        object="chat.completion"
+    )
+    
+    # Create message with provider_specific_fields
+    mock_message = litellm.Message(
+        content="LiteLLM is a tool that simplifies working with multiple LLMs.",
+        role="assistant",
+        provider_specific_fields={
+            "search_results": [{
+                "object": "vector_store.search_results.page",
+                "search_query": "what is litellm?",
+                "data": [{
+                    "score": 0.95,
+                    "content": [{"text": "Test content", "type": "text"}],
+                    "file_id": "test-file",
+                    "filename": "test.txt"
+                }]
+            }]
+        }
+    )
+    
+    mock_choice = litellm.Choices(
+        finish_reason="stop",
+        index=0,
+        message=mock_message
+    )
+    
+    mock_response.choices = [mock_choice]
+    mock_response.usage = litellm.Usage(
+        prompt_tokens=10,
+        completion_tokens=20,
+        total_tokens=30
+    )
+    
+    # Patch the completion call at the proxy level
+    with mock_patch("litellm.acompletion", new=AsyncMock(return_value=mock_response)):
+        # Make HTTP request to proxy
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "What is litellm?"}]
+            }
+        )
+        
+        # Check HTTP response
+        assert response.status_code == 200
+        result = response.json()
+        
+        print("HTTP Response JSON:", json.dumps(result, indent=2))
+        
+        # THE KEY ASSERTIONS - These would FAIL with exclude=True!
+        assert "choices" in result
+        assert len(result["choices"]) > 0
+        
+        choice = result["choices"][0]
+        assert "message" in choice
+        
+        message = choice["message"]
+        
+        # Verify provider_specific_fields is in the JSON response
+        assert "provider_specific_fields" in message, \
+            "provider_specific_fields missing from HTTP JSON response! This means exclude=True is preventing serialization."
+        
+        assert "search_results" in message["provider_specific_fields"]
+        search_results = message["provider_specific_fields"]["search_results"]
+        assert len(search_results) > 0
+        
+        # Verify search result structure
+        first_result = search_results[0]
+        assert first_result["object"] == "vector_store.search_results.page"
+        assert "data" in first_result
+        assert len(first_result["data"]) > 0
+        
+        print("✅ provider_specific_fields successfully serialized in HTTP response")

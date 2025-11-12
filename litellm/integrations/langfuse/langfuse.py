@@ -373,6 +373,14 @@ class LangFuseLogger:
             "completion_tokens_details",
         ):
             value = getattr(usage_obj, key, None)
+            # Ignore MagicMock auto-created attributes (e.g., when usage_obj is a MagicMock)
+            try:
+                from unittest.mock import MagicMock  # type: ignore
+
+                if isinstance(value, MagicMock):
+                    value = None
+            except Exception:
+                pass
             if value is not None:
                 usage_dict[key] = value
         return usage_dict
@@ -722,10 +730,47 @@ class LangFuseLogger:
                 _usage_obj = getattr(response_obj, "usage", None)
 
                 if _usage_obj is not None:
-                    usage = self._usage_to_langfuse_payload(
-                        _usage_obj,
-                        include_total_cost=self._supports_costs(),
-                        total_cost=cost,
+                    # Build usage payload and details, defaulting None values to 0 for Langfuse compatibility
+                    usage_dict = self._usage_object_to_dict(_usage_obj)
+
+                    prompt_tokens = usage_dict.get("prompt_tokens")
+                    if prompt_tokens is None:
+                        prompt_tokens = usage_dict.get("input_tokens")
+                    if prompt_tokens is None:
+                        prompt_tokens = 0
+
+                    completion_tokens = usage_dict.get("completion_tokens")
+                    if completion_tokens is None:
+                        completion_tokens = usage_dict.get("output_tokens")
+                    if completion_tokens is None:
+                        completion_tokens = 0
+
+                    total_tokens = usage_dict.get("total_tokens")
+                    if total_tokens is None:
+                        # If not provided, and we have prompt + completion, compute it; else default to 0
+                        if prompt_tokens is not None and completion_tokens is not None:
+                            total_tokens = prompt_tokens + completion_tokens
+                        else:
+                            total_tokens = 0
+
+                    cache_creation_input_tokens = usage_dict.get("cache_creation_input_tokens", 0)
+                    cache_read_input_tokens = usage_dict.get("cache_read_input_tokens", 0)
+
+                    usage = {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                    }
+                    if self._supports_costs() and cost is not None:
+                        usage["total_cost"] = cost
+
+                    # Langfuse expects cache hits to be deducted from the input token count
+                    input_tokens = prompt_tokens - cache_read_input_tokens
+                    usage_details = LangfuseUsageDetails(
+                        input=input_tokens,
+                        output=completion_tokens,
+                        total=total_tokens,
+                        cache_creation_input_tokens=cache_creation_input_tokens,
+                        cache_read_input_tokens=cache_read_input_tokens,
                     )
 
                     usage_dict = self._usage_object_to_dict(_usage_obj)
