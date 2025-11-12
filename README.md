@@ -1,3 +1,14 @@
+<div style="line-height:0;">
+  <a href="https://docs.litellm.ai/docs/benchmarks" style="text-decoration:none; display:inline-block;">
+    <img src="https://img.shields.io/badge/Proxy_Overhead-8ms_median_│_45ms_p99-0056D2?style=for-the-badge" alt="LiteLLM Proxy Latency">
+  </a>
+</div>
+<div style="line-height:0;">
+  <a href="https://docs.litellm.ai/docs/benchmarks" style="text-decoration:none; display:inline-block;">
+    <img src="https://img.shields.io/badge/Tested_on-4×_4CPU_│_8GB-4B5563?style=for-the-badge" alt="LiteLLM Benchmark Specs">
+  </a>
+</div>
+
 <h1 align="center">
         🚅 LiteLLM
     </h1>
