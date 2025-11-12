@@ -635,7 +635,7 @@ if MCP_AVAILABLE:
             allowed_mcp_server_ids
         )
 
-        if not MCPRequestHandler.is_tool_allowed(
+        if server_name_from_prefix and not MCPRequestHandler.is_tool_allowed(
             allowed_mcp_servers=allowed_mcp_servers,
             server_name=server_name_from_prefix,
         ):
