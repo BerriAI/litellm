@@ -18,6 +18,17 @@ model_list:
 
 In here, we onboard a model deployment for the model `gpt-4o` and assign it to the model group `my-custom-model`.
 
+## Client-side request
+
+Here's what a client-side request looks like:
+
+```bash
+curl --location 'http://localhost:4000/chat/completions' \
+-H 'Authorization: Bearer <your-api-key>' \
+-H 'Content-Type: application/json' \
+-d '{"model": "my-custom-model", "messages": [{"role": "user", "content": "Hello, how are you?"}]}'
+
+```
 
 ## Access Control
 When you give access to a key/user/team, you are giving them access to a "model group". 
