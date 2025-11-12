@@ -277,31 +277,27 @@ async def new_project(
             prisma_client=prisma_client,
         )
 
-        project_row = LiteLLM_ProjectTable(
-            **data.json(exclude_none=True),
-            object_permission_id=object_permission_id,
-            created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-            updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-        )
+        # Prepare project data for database insertion
+        project_data = data.json(exclude_none=True)
+        project_data = prisma_client.jsonify_object(project_data)
+        
+        # Add non-data fields
+        project_data["object_permission_id"] = object_permission_id
+        project_data["created_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
+        project_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
 
+        # Handle metadata fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
-            if getattr(data, field, None) is not None:
-                _set_object_metadata_field(
-                    object_data=project_row,
-                    field_name=field,
-                    value=getattr(data, field),
-                )
+            if field in project_data and project_data[field] is not None:
+                if project_data.get("metadata") is None:
+                    project_data["metadata"] = {}
+                project_data["metadata"][field] = project_data.pop(field)
 
-        new_project_row = prisma_client.jsonify_object(
-            project_row.json(exclude_none=True)
-        )
         verbose_proxy_logger.info(
-            f"new_project_row: {json.dumps(new_project_row, indent=2)}"
+            f"new_project_row: {json.dumps(project_data, indent=2)}"
         )
         response = await prisma_client.db.litellm_projecttable.create(
-            data={
-                **new_project_row,  # type: ignore
-            },
+            data=project_data,  # type: ignore
             include={"litellm_budget_table": True},
         )
 
