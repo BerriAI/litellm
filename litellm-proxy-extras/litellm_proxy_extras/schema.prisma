@@ -451,6 +451,7 @@ model LiteLLM_DailyTeamSpend {
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
+  request_id          String?
   tag                 String?   
   date                String
   api_key             String   
