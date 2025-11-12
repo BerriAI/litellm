@@ -28,7 +28,9 @@ from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
+from litellm.proxy.hooks.dynamic_rate_limit_handler import DynamicRateLimitHandler
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+from litellm.types.router import DynamicRateLimitPolicy
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -163,6 +165,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         
         # Batch rate limiter (lazy loaded)
         self._batch_rate_limiter: Optional[Any] = None
+        
+        # Dynamic rate limit handler for provider and error-type specific tracking
+        self.dynamic_rate_limit_handler = DynamicRateLimitHandler()
 
     def _get_batch_rate_limiter(self) -> Optional[Any]:
         """Get or lazy-load the batch rate limiter."""
@@ -767,6 +772,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return None
 
+    def _get_dynamic_rate_limit_policy(self) -> Optional[DynamicRateLimitPolicy]:
+        """
+        Get the dynamic rate limit policy from litellm settings or proxy general settings.
+        
+        Priority:
+        1. litellm.dynamic_rate_limit_policy (module-level setting)
+        2. proxy general_settings["dynamic_rate_limit_policy"]
+
+        Returns:
+            DynamicRateLimitPolicy or None if not configured
+        """
+        import litellm
+
+        # Check litellm module-level setting first
+        dynamic_rate_limit_policy_obj = litellm.dynamic_rate_limit_policy
+        if dynamic_rate_limit_policy_obj is not None:
+            return DynamicRateLimitPolicy(**dynamic_rate_limit_policy_obj)
+            
+        return None
+
     def _is_dynamic_rate_limiting_enabled(
         self,
         rpm_limit_type: Optional[str],
@@ -955,57 +980,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         model: str,
         parent_otel_span: Optional[Span] = None,
+        dynamic_rate_limit_policy: Optional[DynamicRateLimitPolicy] = None,
     ) -> bool:
         """
         Check if any deployment for this model has recent failures by using
-        the router's existing failure tracking.
+        provider and error-type specific tracking.
 
         Returns True if any deployment has failures in the current minute.
+        
+        Args:
+            model: Model name to check
+            parent_otel_span: Optional tracing span
+            dynamic_rate_limit_policy: Optional provider and error-type specific thresholds
         """
         from litellm.proxy.proxy_server import llm_router
-        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
-            get_deployment_failures_for_current_minute,
+
+        return await self.dynamic_rate_limit_handler.check_model_has_failures_exceeding_threshold(
+            litellm_router_instance=llm_router,
+            model=model,
+            dynamic_rate_limit_policy=dynamic_rate_limit_policy,
         )
-
-        if llm_router is None:
-            return False
-
-        try:
-            # Get all deployments for this model
-            model_list = llm_router.get_model_list(model_name=model)
-            if not model_list:
-                return False
-
-            # Check each deployment's failure count
-            for deployment in model_list:
-                deployment_id = deployment.get("model_info", {}).get("id")
-                if not deployment_id:
-                    continue
-
-                # Use router's existing failure tracking
-                failure_count = get_deployment_failures_for_current_minute(
-                    litellm_router_instance=llm_router,
-                    deployment_id=deployment_id,
-                )
-
-                if failure_count > DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE:
-                    verbose_proxy_logger.debug(
-                        f"[Dynamic Rate Limit] Deployment {deployment_id} has {failure_count} failures "
-                        f"in current minute - enforcing rate limits for model {model}"
-                    )
-                    return True
-
-            verbose_proxy_logger.debug(
-                f"[Dynamic Rate Limit] No failures detected for model {model} - allowing dynamic exceeding"
-            )
-            return False
-
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Error checking model failure status: {str(e)}, defaulting to enforce limits"
-            )
-            # Fail safe: enforce limits if we can't check
-            return True
     
     def get_rate_limiter_for_call_type(self, call_type: str) -> Optional[Any]:
         """Get the rate limiter for the call type."""
@@ -1144,6 +1138,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rpm_limit_type = metadata.get("rpm_limit_type")
         tpm_limit_type = metadata.get("tpm_limit_type")
 
+        # Get dynamic rate limit policy from general_settings
+        dynamic_rate_limit_policy = self._get_dynamic_rate_limit_policy()
+
         # For dynamic mode, check if the model has recent failures
         model_has_failures = False
         requested_model = data.get("model", None)
@@ -1158,6 +1155,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             model_has_failures = await self._check_model_has_recent_failures(
                 model=requested_model,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
+                dynamic_rate_limit_policy=dynamic_rate_limit_policy,
             )
 
         # Create rate limit descriptors
@@ -1490,11 +1488,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
-        Decrement max parallel requests counter for the API Key
+        Decrement max parallel requests counter for the API Key.
+        Track failures by provider and error type for dynamic rate limiting.
         """
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )
+        from litellm.proxy.proxy_server import llm_router
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
@@ -1528,6 +1528,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     increment_list=pipeline_operations,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )
+            
+            # Track failure by provider and error type for dynamic rate limiting
+            # Only track if dynamic_rate_limit_policy is configured
+            dynamic_rate_limit_policy = self._get_dynamic_rate_limit_policy()
+            if (
+                dynamic_rate_limit_policy is not None
+                and llm_router is not None
+                and isinstance(response_obj, Exception)
+            ):
+                deployment_id = kwargs.get("litellm_params", {}).get("model_info", {}).get("id")
+                custom_llm_provider = kwargs.get("litellm_params", {}).get("custom_llm_provider")
+                
+                if deployment_id and custom_llm_provider:
+                    error_type = self.dynamic_rate_limit_handler.get_exception_class_name(
+                        response_obj
+                    )
+                    if error_type:
+                        self.dynamic_rate_limit_handler.increment_deployment_failure_for_error_type(
+                            litellm_router_instance=llm_router,
+                            deployment_id=deployment_id,
+                            provider=custom_llm_provider,
+                            error_type=error_type,
+                        )
+                        verbose_proxy_logger.debug(
+                            f"[Dynamic Rate Limit] Tracked failure for deployment {deployment_id}, "
+                            f"provider {custom_llm_provider}, error type {error_type}"
+                        )
+                        
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error in rate limit failure event: {str(e)}"
