@@ -542,6 +542,70 @@ class RetryPolicy(BaseModel):
     InternalServerErrorRetries: Optional[int] = None
 
 
+class ProviderErrorThresholds(BaseModel):
+    """
+    Error thresholds for a specific provider in dynamic rate limiting.
+    Defines how many errors per minute trigger rate limit enforcement.
+    """
+
+    BadRequestErrorThreshold: Optional[int] = None
+    AuthenticationErrorThreshold: Optional[int] = None
+    TimeoutErrorThreshold: Optional[int] = None
+    RateLimitErrorThreshold: Optional[int] = None
+    ContentPolicyViolationErrorThreshold: Optional[int] = None
+    InternalServerErrorThreshold: Optional[int] = None
+
+
+class DynamicRateLimitPolicy(BaseModel):
+    """
+    Use this to set provider-specific error thresholds for dynamic rate limiting.
+    When dynamic rate limiting is enabled, this policy determines when to enforce limits
+    based on the number of errors per minute from each provider.
+    
+    Example:
+        {
+            "openai": {"BadRequestErrorThreshold": 3},
+            "bedrock": {"ContentPolicyViolationErrorThreshold": 4}
+        }
+    
+    This means:
+    - For OpenAI: enforce rate limits if > 3 BadRequestErrors occur per minute
+    - For Bedrock: enforce rate limits if > 4 ContentPolicyViolationErrors occur per minute
+    
+    https://docs.litellm.ai/docs/exception_mapping
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_threshold_for_provider(
+        self,
+        provider: str,
+        error_type: str,
+        default_threshold: int = 1,
+    ) -> int:
+        """
+        Get the error threshold for a specific provider and error type.
+        
+        Args:
+            provider: Provider name (e.g., "openai", "bedrock")
+            error_type: Error type field name (e.g., "BadRequestErrorThreshold")
+            default_threshold: Default threshold if not configured
+            
+        Returns:
+            int: The configured threshold or default
+        """
+        provider_thresholds = getattr(self, provider, None)
+        if provider_thresholds is None:
+            return default_threshold
+            
+        if isinstance(provider_thresholds, dict):
+            return provider_thresholds.get(error_type, default_threshold)
+        elif isinstance(provider_thresholds, ProviderErrorThresholds):
+            return getattr(provider_thresholds, error_type, default_threshold)
+            
+        return default_threshold
+
+
 class AlertingConfig(BaseModel):
     """
     Use this configure alerting for the router. Receive alerts on the following events
