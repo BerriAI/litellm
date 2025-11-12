@@ -1129,3 +1129,23 @@ def test_gemini_embedding():
     )
     print("response: ", response)
     assert response is not None
+
+
+def test_reasoning_effort_none_mapping():
+    """
+    Test that reasoning_effort='none' correctly maps to thinkingConfig.
+    Related issue: https://github.com/BerriAI/litellm/issues/16420
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Test reasoning_effort="none" mapping
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+        reasoning_effort="none",
+        model="gemini-2.0-flash-thinking-exp-01-21",
+    )
+
+    assert result is not None
+    assert result["thinkingBudget"] == 0
+    assert result["includeThoughts"] is False
