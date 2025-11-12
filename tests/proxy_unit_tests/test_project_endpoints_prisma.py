@@ -413,20 +413,19 @@ async def test_project_info(prisma_client):
 
         print("Project info response:", info_response)
 
-        # Assertions
-        project_data = info_response["project_info"]
-        assert project_data.project_id == project_id
-        assert project_data.project_alias == "test-project-info"
-        assert project_data.description == "Test project info endpoint"
-        assert project_data.team_id == _team_id
-        assert project_data.models == ["gpt-4", "claude-3"]
+        # Assertions - project_info returns the project object directly
+        assert info_response.project_id == project_id
+        assert info_response.project_alias == "test-project-info"
+        assert info_response.description == "Test project info endpoint"
+        assert info_response.team_id == _team_id
+        assert info_response.models == ["gpt-4", "claude-3"]
         # model_rpm_limit and model_tpm_limit are stored in metadata
-        assert project_data.metadata["use_case_id"] == "TEST-003"
-        assert project_data.metadata["cost_center"] == "engineering"
-        assert project_data.metadata["model_rpm_limit"] == {"gpt-4": 150}
-        assert project_data.metadata["model_tpm_limit"] == {"gpt-4": 1500}
-        assert project_data.litellm_budget_table is not None
-        assert project_data.litellm_budget_table.max_budget == 150.0
+        assert info_response.metadata["use_case_id"] == "TEST-003"
+        assert info_response.metadata["cost_center"] == "engineering"
+        assert info_response.metadata["model_rpm_limit"] == {"gpt-4": 150}
+        assert info_response.metadata["model_tpm_limit"] == {"gpt-4": 1500}
+        assert info_response.litellm_budget_table is not None
+        assert info_response.litellm_budget_table.max_budget == 150.0
 
     except Exception as e:
         print("Got Exception", e)
