@@ -132,6 +132,21 @@ async def _set_project_object_permission(
     return None
 
 
+def _remove_budget_fields_from_project_data(project_data: dict) -> dict:
+    """
+    Remove budget fields from project data.
+    Budget fields belong to LiteLLM_BudgetTable, not LiteLLM_ProjectTable.
+    Keep budget_id as it's a foreign key.
+    
+    Following the pattern from organization_endpoints.py
+    """
+    budget_fields = LiteLLM_BudgetTable.model_fields.keys()
+    for field in list(budget_fields):
+        if field != "budget_id":  # Keep the foreign key
+            project_data.pop(field, None)
+    return project_data
+
+
 @router.post(
     "/project/new",
     tags=["project management"],
@@ -277,27 +292,36 @@ async def new_project(
             prisma_client=prisma_client,
         )
 
-        # Prepare project data for database insertion
-        project_data = data.json(exclude_none=True)
-        project_data = prisma_client.jsonify_object(project_data)
-        
-        # Add non-data fields
-        project_data["object_permission_id"] = object_permission_id
-        project_data["created_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
-        project_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
+        # Create project row (following organization_endpoints.py pattern)
+        project_row = LiteLLM_ProjectTable(
+            **data.json(exclude_none=True),
+            object_permission_id=object_permission_id,
+            created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+            updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+        )
 
-        # Handle metadata fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
-            if field in project_data and project_data[field] is not None:
-                if project_data.get("metadata") is None:
-                    project_data["metadata"] = {}
-                project_data["metadata"][field] = project_data.pop(field)
+            if getattr(data, field, None) is not None:
+                _set_object_metadata_field(
+                    object_data=project_row,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
 
+        new_project_row = prisma_client.jsonify_object(
+            project_row.json(exclude_none=True)
+        )
+        
+        # Remove budget fields (following organization_endpoints.py pattern)
+        new_project_row = _remove_budget_fields_from_project_data(new_project_row)
+        
         verbose_proxy_logger.info(
-            f"new_project_row: {json.dumps(project_data, indent=2)}"
+            f"new_project_row: {json.dumps(new_project_row, indent=2)}"
         )
         response = await prisma_client.db.litellm_projecttable.create(
-            data=project_data,  # type: ignore
+            data={
+                **new_project_row,  # type: ignore
+            },
             include={"litellm_budget_table": True},
         )
 
@@ -451,6 +475,9 @@ async def update_project(
                 if update_data.get("metadata") is None:
                     update_data["metadata"] = {}
                 update_data["metadata"][field] = update_data.pop(field)
+
+        # Remove budget fields (following organization_endpoints.py pattern)
+        update_data = _remove_budget_fields_from_project_data(update_data)
 
         # Update project
         updated_project = await prisma_client.db.litellm_projecttable.update(
