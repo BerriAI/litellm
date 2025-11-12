@@ -257,6 +257,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self,
         base_iterator: Any,  # Can be None - will be created internally
         mcp_events: List[ResponsesAPIStreamingResponse],
+        tool_server_map: dict[str, str],
         mcp_tools_with_litellm_proxy: Optional[List[Any]] = None,
         user_api_key_auth: Any = None,
         original_request_params: Optional[Dict[str, Any]] = None,
@@ -280,6 +281,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.mcp_events = (
             mcp_events  # Store the initial MCP events for backward compatibility
         )
+        self.tool_server_map = tool_server_map
 
         # Iterator references
         self.base_iterator: Optional[Union[Any, ResponsesAPIResponse]] = (
@@ -506,7 +508,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             # Execute the tools
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-                tool_calls=tool_calls, user_api_key_auth=self.user_api_key_auth
+                tool_server_map=self.tool_server_map,
+                tool_calls=tool_calls,
+                user_api_key_auth=self.user_api_key_auth,
             )
 
             # Create completion events and output_item.done events for tool execution
@@ -518,9 +522,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 tool_name = "unknown"
                 tool_arguments = "{}"
                 for tool_call in tool_calls:
-                    name, args, call_id = (
-                        LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
-                    )
+                    (
+                        name,
+                        args,
+                        call_id,
+                    ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
                     if call_id == tool_call_id:
                         tool_name = name or "unknown"
                         tool_arguments = args or "{}"
