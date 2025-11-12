@@ -1838,7 +1838,8 @@ class MicrosoftSSOHandler:
         )
 
         user_team_ids = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
-            access_token=microsoft_sso.access_token
+            access_token=microsoft_sso.access_token,
+            disable_service_principal_team_creation=return_raw_sso_response,
         )
 
         # Extract app roles from the id_token JWT
@@ -1947,6 +1948,7 @@ class MicrosoftSSOHandler:
     @staticmethod
     async def get_user_groups_from_graph_api(
         access_token: Optional[str] = None,
+        disable_service_principal_team_creation: bool = False,
     ) -> List[str]:
         """
         Returns a list of `team_ids` the user belongs to from the Microsoft Graph API
@@ -1978,7 +1980,7 @@ class MicrosoftSSOHandler:
                 verbose_proxy_logger.debug(
                     f"Service principal group IDs: {service_principal_group_ids}"
                 )
-                if len(service_principal_group_ids) > 0:
+                if len(service_principal_group_ids) > 0 and not disable_service_principal_team_creation:
                     await MicrosoftSSOHandler.create_litellm_teams_from_service_principal_team_ids(
                         service_principal_teams=service_principal_teams,
                     )
@@ -2228,6 +2230,9 @@ async def debug_sso_login(request: Request):
         sso_callback_route="sso/debug/callback",
     )
 
+    # Optional: read prompt to influence IdP behavior (e.g., select_account, login)
+    prompt = request.query_params.get("prompt")
+
     # Check if we should use SSO handler
     if (
         SSOAuthenticationHandler.should_use_sso_handler(
@@ -2237,12 +2242,34 @@ async def debug_sso_login(request: Request):
         )
         is True
     ):
-        return await SSOAuthenticationHandler.get_sso_login_redirect(
+        redirect_response = await SSOAuthenticationHandler.get_sso_login_redirect(
             redirect_url=redirect_url,
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
         )
+        # If prompt was provided, append it to the authorization URL
+        if prompt:
+            from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+            location = str(redirect_response.headers.get("location", ""))
+            if location:
+                parsed = urlparse(location)
+                query = parse_qs(parsed.query)
+                query["prompt"] = [prompt]
+                new_query = urlencode(query, doseq=True)
+                new_url = urlunparse(
+                    (
+                        parsed.scheme,
+                        parsed.netloc,
+                        parsed.path,
+                        parsed.params,
+                        new_query,
+                        parsed.fragment,
+                    )
+                )
+                redirect_response.headers["location"] = new_url
+        return redirect_response
 
 
 @router.get("/sso/debug/callback", tags=["experimental"], include_in_schema=False)

@@ -53,6 +53,7 @@ import {
   getAllowedIPs,
   deleteAllowedIP,
   getSSOSettings,
+  getProxyBaseUrl,
 } from "./networking";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -533,6 +534,20 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                     UI Access Control
                   </Button>
                 </div>
+                {ssoConfigured && (
+                  <div>
+                    <Button
+                      style={{ width: "150px" }}
+                      onClick={() => {
+                        const base = getProxyBaseUrl();
+                        const url = base ? `${base}/sso/debug/login` : `/sso/debug/login`;
+                        window.open(url, "_blank", "noopener,noreferrer");
+                      }}
+                    >
+                      Test SSO
+                    </Button>
+                  </div>
+                )}
               </div>
             </Card>
 

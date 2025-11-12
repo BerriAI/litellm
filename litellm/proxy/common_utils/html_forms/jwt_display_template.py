@@ -227,7 +227,7 @@ jwt_display_template = """
             </div>
         </div>
         
-        <a href="/sso/debug/login" class="back-button">
+        <a href="/sso/debug/login?prompt=login" class="back-button">
             Try Another SSO Login
         </a>
     </div>
