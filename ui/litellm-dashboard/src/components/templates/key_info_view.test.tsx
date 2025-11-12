@@ -1,24 +1,9 @@
 import { render, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { KeyEditView } from "./key_edit_view";
+import { describe, expect, it } from "vitest";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import KeyInfoView from "./key_info_view";
 
-// Mock window.matchMedia
-Object.defineProperty(window, "matchMedia", {
-  writable: true,
-  value: vi.fn().mockImplementation((query) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
-});
-
-describe("KeyEditView", () => {
+describe("KeyInfoView", () => {
   const MOCK_KEY_DATA: KeyResponse = {
     token: "40b7608ea43423400d5b82bb5ee11042bfb2ed4655f05b5992b5abbc2f294931",
     token_id: "40b7608ea43423400d5b82bb5ee11042bfb2ed4655f05b5992b5abbc2f294931",
@@ -88,58 +73,45 @@ describe("KeyEditView", () => {
     last_rotation_at: undefined,
     key_rotation_at: undefined,
   };
-  it("should render", async () => {
-    const { getByText } = render(
-      <KeyEditView
-        keyData={MOCK_KEY_DATA}
-        onCancel={() => {}}
-        onSubmit={async () => {}}
-        accessToken={""}
-        userID={""}
-        userRole={""}
-        premiumUser={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(getByText("Save Changes")).toBeInTheDocument();
-    });
-  });
 
   it("should render tags", async () => {
     const { getByText } = render(
-      <KeyEditView
+      <KeyInfoView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => {}}
-        onSubmit={async () => {}}
-        accessToken={""}
-        userID={""}
-        userRole={""}
-        premiumUser={false}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={true}
+        teams={[]}
       />,
     );
-
     await waitFor(() => {
       expect(getByText("test-tag")).toBeInTheDocument();
     });
   });
 
   it("should not render tags in metadata textarea", async () => {
-    const { getByLabelText } = render(
-      <KeyEditView
+    const { container, getByText } = render(
+      <KeyInfoView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => {}}
-        onSubmit={async () => {}}
-        accessToken={""}
-        userID={""}
-        userRole={""}
-        premiumUser={false}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={true}
+        teams={[]}
       />,
     );
-
-    const metadataTextarea = getByLabelText("Metadata") as HTMLTextAreaElement;
     await waitFor(() => {
-      expect(metadataTextarea).toHaveValue("{}");
+      expect(getByText("Metadata")).toBeInTheDocument();
+      const metadataBlock = container.querySelector("pre");
+      expect(metadataBlock).toBeInTheDocument();
+      expect(metadataBlock?.textContent?.trim()).toBe("{}");
     });
   });
 });
