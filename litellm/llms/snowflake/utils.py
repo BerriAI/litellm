@@ -93,13 +93,13 @@ class SnowflakeBaseConfig:
 
         auth_type = "KEYPAIR_JWT"
 
-        pat_key_prefix = "pat/"
-        if api_key.startswith(pat_key_prefix):
-            api_key = api_key[len(pat_key_prefix) :]
-            auth_type = "PROGRAMMATIC_ACCESS_TOKEN"
-
         if api_key is None:
             raise ValueError("Missing Snowflake JWT key")
+        else:
+            pat_key_prefix = "pat/"
+            if api_key.startswith(pat_key_prefix):
+                api_key = api_key[len(pat_key_prefix) :]
+                auth_type = "PROGRAMMATIC_ACCESS_TOKEN"
 
         headers.update(
             {
