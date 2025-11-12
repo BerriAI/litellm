@@ -8041,6 +8041,16 @@ def add_openai_metadata(metadata: dict) -> dict:
 
     return visible_metadata.copy()
 
+def get_requester_metadata(metadata: dict):
+    requester_metadata = metadata.get("requester_metadata")
+    if not requester_metadata:
+        return None
+
+    cleaned_metadata = add_openai_metadata(requester_metadata)
+    if not cleaned_metadata:
+        return None
+
+    return cleaned_metadata
 
 def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
     """
