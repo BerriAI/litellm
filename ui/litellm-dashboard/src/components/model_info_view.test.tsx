@@ -175,6 +175,13 @@ describe("ModelInfoView", () => {
         expect(getByText("Tags")).toBeInTheDocument();
       });
     });
+
+    it("should render the litellm params in the edit model", async () => {
+      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+      await waitFor(() => {
+        expect(getByText("LiteLLM Params")).toBeInTheDocument();
+      });
+    });
   });
 
   it("should render a test connection button", async () => {
