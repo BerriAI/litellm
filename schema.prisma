@@ -123,12 +123,15 @@ model LiteLLM_TeamTable {
 model LiteLLM_ProjectTable {
   project_id           String   @id @default(uuid())
   project_alias        String?
+  description          String?
   team_id              String?
   budget_id            String?
   metadata             Json     @default("{}")
   models               String[]
   spend                Float    @default(0.0)
   model_spend          Json     @default("{}")
+  model_rpm_limit      Json     @default("{}")
+  model_tpm_limit      Json     @default("{}")
   blocked              Boolean  @default(false)
   object_permission_id String?
   created_at           DateTime @default(now()) @map("created_at")
