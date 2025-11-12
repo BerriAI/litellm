@@ -1,9 +1,11 @@
 import type { TableProps } from "antd";
-import { Table } from "antd";
+import { Table, Tooltip } from "antd";
 import Title from "antd/es/typography/Title";
 import { PlusCircle } from "lucide-react";
 import React from "react";
 import { AlertingObject } from "./types";
+import { Icon } from "@tremor/react";
+import { PencilAltIcon, TrashIcon, PlayIcon } from "@heroicons/react/outline";
 
 type LoggingCallbacksProps = {
   callbacks: AlertingObject[];
@@ -78,24 +80,31 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       align: "right",
       render: (_: unknown, record: CallbackRow) => (
         <div className="flex justify-end gap-2">
-          <button
-            onClick={() => onTest(record)}
-            className="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors"
-          >
-            Test
-          </button>
-          <button
-            onClick={() => onEdit(record)}
-            className="px-3 py-1 text-sm bg-[#6366f1] bg-opacity-10 text-[#6366f1] rounded hover:bg-opacity-20 transition-colors"
-          >
-            Edit
-          </button>
-          <button
-            onClick={() => onDelete(record)}
-            className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
-          >
-            Delete
-          </button>
+          <span>
+            <Icon
+              icon={PlayIcon}
+              size="sm"
+              className="cursor-pointer text-indigo-600 hover:text-indigo-700"
+              onClick={() => onTest(record)}
+            />
+          </span>
+
+          <span>
+            <Icon
+              icon={PencilAltIcon}
+              size="sm"
+              className="cursor-pointer text-indigo-600 hover:text-indigo-700"
+              onClick={() => onEdit(record)}
+            />
+          </span>
+          <span>
+            <Icon
+              icon={TrashIcon}
+              size="sm"
+              className="cursor-pointer text-indigo-600 hover:text-red-600"
+              onClick={() => onDelete(record)}
+            />
+          </span>
         </div>
       ),
       width: 240,
