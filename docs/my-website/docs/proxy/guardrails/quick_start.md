@@ -197,13 +197,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 Follow this simple workflow to implement and tune guardrails:
 
-### 1. ✨ View Available Guardrails
-
-:::info
-
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
-
-:::
+### 1. View Available Guardrails
 
 First, check what guardrails are available and their parameters:
 
@@ -547,7 +541,7 @@ guardrails:
 curl -X POST 'http://0.0.0.0:4000/team/update' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--D '{
+-d '{
     "team_id": "4198d93c-d375-4c83-8d5a-71e7c5473e50",
     "metadata": {"guardrails": {"modify_guardrails": false}}
 }'

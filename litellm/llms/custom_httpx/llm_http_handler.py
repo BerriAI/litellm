@@ -31,6 +31,7 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.google_genai.transformation import (
@@ -59,6 +60,11 @@ from litellm.responses.streaming_iterator import (
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
+)
+from litellm.types.containers.main import (
+    ContainerListResponse,
+    ContainerObject,
+    DeleteContainerResult,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -915,11 +921,13 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=headers or {},
             model=model,
+            optional_params=optional_rerank_params,
         )
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
+            optional_params=optional_rerank_params,
         )
 
         data = provider_config.transform_rerank_request(
@@ -1280,18 +1288,19 @@ class BaseLLMHTTPHandler:
         Returns: (headers, complete_url, data, files)
         """
         from litellm.llms.base_llm.ocr.transformation import OCRRequestData
-
         headers = provider_config.validate_environment(
             api_key=api_key,
             api_base=api_base,
             headers=headers or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         # Transform the request to get data and files
@@ -1352,12 +1361,14 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         # Use async transform (providers can override this method if they need async operations)
@@ -1543,10 +1554,10 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return self._transform_ocr_response(
-            provider_config=provider_config,
+        # Use async response transform for async operations
+        return await provider_config.async_transform_ocr_response(
             model=model,
-            response=response,
+            raw_response=response,
             logging_obj=logging_obj,
         )
 
@@ -1592,8 +1603,6 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers or {},
         )
-
-
 
         # Transform the request
         data = provider_config.transform_search_request(
@@ -1682,7 +1691,7 @@ class BaseLLMHTTPHandler:
             query=query,
             optional_params=optional_params,
         )
-        
+
         # Get complete URL (pass data for providers that need request body for URL construction)
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
@@ -1704,6 +1713,7 @@ class BaseLLMHTTPHandler:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             # For search providers, use special Search provider type
             from litellm.types.llms.custom_http import httpxSpecialProvider
+
             async_httpx_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.Search
             )
@@ -1726,7 +1736,7 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=complete_url,
                     headers=headers,
-                    json=data,
+                    json=data,  # type: ignore
                     timeout=timeout,
                 )
         except Exception as e:
@@ -1937,6 +1947,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Union[
         ResponsesAPIResponse,
         BaseResponsesAPIStreamingIterator,
@@ -1965,6 +1976,7 @@ class BaseLLMHTTPHandler:
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
                 fake_stream=fake_stream,
                 litellm_metadata=litellm_metadata,
+                shared_session=shared_session,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -1998,6 +2010,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        if extra_body:
+            data.update(extra_body)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2082,15 +2097,20 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
         """
         Async version of the responses API handler.
         Uses async HTTP client to make requests.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
+            verbose_logger.debug(
+                f"Creating HTTP client for responses API with shared_session: {id(shared_session) if shared_session else None}"
+            )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                shared_session=shared_session,
             )
         else:
             async_httpx_client = client
@@ -2119,6 +2139,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        if extra_body:
+            data.update(extra_body)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2203,15 +2226,20 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
     ) -> DeleteResponseResult:
         """
         Async version of the delete response API handler.
         Uses async HTTP client to make requests.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
+            verbose_logger.debug(
+                f"Creating HTTP client for delete_response with shared_session: {id(shared_session) if shared_session else None}"
+            )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                shared_session=shared_session,
             )
         else:
             async_httpx_client = client
@@ -2274,6 +2302,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Union[DeleteResponseResult, Coroutine[Any, Any, DeleteResponseResult]]:
         """
         Async version of the responses API handler.
@@ -2290,6 +2319,7 @@ class BaseLLMHTTPHandler:
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
+                shared_session=shared_session,
             )
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client(
@@ -2356,6 +2386,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
         """
         Get a response by ID
@@ -2372,6 +2403,7 @@ class BaseLLMHTTPHandler:
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
+                shared_session=shared_session,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -2435,14 +2467,19 @@ class BaseLLMHTTPHandler:
         extra_body: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> ResponsesAPIResponse:
         """
         Async version of get_responses
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
+            verbose_logger.debug(
+                f"Creating HTTP client for get_responses with shared_session: {id(shared_session) if shared_session else None}"
+            )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                shared_session=shared_session,
             )
         else:
             async_httpx_client = client
@@ -2513,6 +2550,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Union[Dict, Coroutine[Any, Any, Dict]]:
         if _is_async:
             return self.async_list_responses_input_items(
@@ -2529,6 +2567,7 @@ class BaseLLMHTTPHandler:
                 extra_headers=extra_headers,
                 timeout=timeout,
                 client=client,
+                shared_session=shared_session,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -2597,11 +2636,16 @@ class BaseLLMHTTPHandler:
         extra_headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Dict:
         if client is None or not isinstance(client, AsyncHTTPHandler):
+            verbose_logger.debug(
+                f"Creating HTTP client for list_input_items with shared_session: {id(shared_session) if shared_session else None}"
+            )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                shared_session=shared_session,
             )
         else:
             async_httpx_client = client
@@ -3288,6 +3332,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
         """
         Async version of the responses API handler.
@@ -3304,6 +3349,7 @@ class BaseLLMHTTPHandler:
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
+                shared_session=shared_session,
             )
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client(
@@ -3370,15 +3416,20 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
     ) -> ResponsesAPIResponse:
         """
         Async version of the cancel response API handler.
         Uses async HTTP client to make requests.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
+            verbose_logger.debug(
+                f"Creating HTTP client for cancel_response with shared_session: {id(shared_session) if shared_session else None}"
+            )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                shared_session=shared_session,
             )
         else:
             async_httpx_client = client
@@ -3486,6 +3537,7 @@ class BaseLLMHTTPHandler:
             BaseSearchConfig,
             BaseTextToSpeechConfig,
             "BasePassthroughConfig",
+            "BaseContainerConfig",
         ],
     ):
         status_code = getattr(e, "status_code", 500)
@@ -4047,7 +4099,7 @@ class BaseLLMHTTPHandler:
             or {},
             model=model,
         )
-
+        
         if extra_headers:
             headers.update(extra_headers)
 
@@ -4057,12 +4109,13 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data, files = video_generation_provider_config.transform_video_create_request(
+        data, files, api_base = video_generation_provider_config.transform_video_create_request(
             model=model,
             prompt=prompt,
             video_create_optional_request_params=video_generation_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
+            api_base=api_base,
         )
 
         ## LOGGING
@@ -4079,17 +4132,17 @@ class BaseLLMHTTPHandler:
         try:
             # Use JSON when no files, otherwise use form data with files
             if files and len(files) > 0:
-                    # Use multipart/form-data when files are present
-                    response = sync_httpx_client.post(
-                        url=api_base,
-                        headers=headers,
-                        data=data,
-                        files=files,
-                        timeout=timeout,
-                    )
+                # Use multipart/form-data when files are present
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
 
-                # --- END MOCK VIDEO RESPONSE ---
             else:
+                # Use JSON content type for POST requests without files
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -4107,6 +4160,8 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            request_data=data,
         )
 
     async def async_video_generation_handler(
@@ -4154,9 +4209,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data, files = video_generation_provider_config.transform_video_create_request(
+        data, files, api_base = video_generation_provider_config.transform_video_create_request(
             model=model,
             prompt=prompt,
+            api_base=api_base,
             video_create_optional_request_params=video_generation_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
@@ -4174,7 +4230,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Use JSON when no files, otherwise use form data with files
+            #Use JSON when no files, otherwise use form data with files
             if files is None or len(files) == 0:
                 response = await async_httpx_client.post(
                     url=api_base,
@@ -4201,13 +4257,14 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            request_data=data,
         )
 
     ###### VIDEO CONTENT HANDLER ######
     def video_content_handler(
         self,
         video_id: str,
-        model: str,
         video_content_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -4224,7 +4281,6 @@ class BaseLLMHTTPHandler:
         if _is_async:
             return self.async_video_content_handler(
                 video_id=video_id,
-                model=model,
                 video_content_provider_config=video_content_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -4244,7 +4300,7 @@ class BaseLLMHTTPHandler:
 
         headers = video_content_provider_config.validate_environment(
             headers=extra_headers or {},
-            model=model,
+            model="",
             api_key=api_key,
         )
 
@@ -4252,31 +4308,38 @@ class BaseLLMHTTPHandler:
             headers.update(extra_headers)
 
         api_base = video_content_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
-        url, params = video_content_provider_config.transform_video_content_request(
+        url, data = video_content_provider_config.transform_video_content_request(
             video_id=video_id,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
         )
 
         try:
-            # Make the GET request to download content
-            response = sync_httpx_client.get(
-                url=url,
-                headers=headers,
-                params=params,
-            )
+            # Use POST if params contains data (e.g., Vertex AI fetchPredictOperation)
+            # Otherwise use GET (e.g., OpenAI video content download)
+            if data:
+                response = sync_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    json=data,
+                )
+            else:
+                # Otherwise it's a GET request with query params
+                response = sync_httpx_client.get(
+                    url=url,
+                    headers=headers,
+                    params=data,
+                )
 
             # Transform the response using the provider config
             return video_content_provider_config.transform_video_content_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
@@ -4290,7 +4353,6 @@ class BaseLLMHTTPHandler:
     async def async_video_content_handler(
         self,
         video_id: str,
-        model: str,
         video_content_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -4313,7 +4375,7 @@ class BaseLLMHTTPHandler:
 
         headers = video_content_provider_config.validate_environment(
             headers=extra_headers or {},
-            model=model,
+            model="",
             api_key=api_key,
         )
 
@@ -4321,31 +4383,38 @@ class BaseLLMHTTPHandler:
             headers.update(extra_headers)
 
         api_base = video_content_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
-        url, params = video_content_provider_config.transform_video_content_request(
+        url, data = video_content_provider_config.transform_video_content_request(
             video_id=video_id,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
         )
 
         try:
-            # Make the GET request to download content
-            response = await async_httpx_client.get(
-                url=url,
-                headers=headers,
-                params=params,
-            )
+            # Use POST if params contains data (e.g., Vertex AI fetchPredictOperation)
+            # Otherwise use GET (e.g., OpenAI video content download)
+            if data:
+                response = await async_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    json=data,
+                )
+            else:
+                # Otherwise it's a GET request with query params
+                response = await async_httpx_client.get(
+                    url=url,
+                    headers=headers,
+                    params=data,
+                )
 
             # Transform the response using the provider config
-            return video_content_provider_config.transform_video_content_response(
-                model=model,
+            return await video_content_provider_config.async_transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
             )
@@ -4355,12 +4424,11 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=video_content_provider_config,
             )
-            
+
     def video_remix_handler(
         self,
         video_id: str,
         prompt: str,
-        model: str,
         video_remix_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4381,7 +4449,6 @@ class BaseLLMHTTPHandler:
             return self.async_video_remix_handler(
                 video_id=video_id,
                 prompt=prompt,
-                model=model,
                 video_remix_provider_config=video_remix_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -4404,14 +4471,14 @@ class BaseLLMHTTPHandler:
         headers = video_remix_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_remix_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
@@ -4420,7 +4487,6 @@ class BaseLLMHTTPHandler:
         url, data = video_remix_provider_config.transform_video_remix_request(
             video_id=video_id,
             prompt=prompt,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4448,9 +4514,9 @@ class BaseLLMHTTPHandler:
             )
 
             return video_remix_provider_config.transform_video_remix_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4463,7 +4529,6 @@ class BaseLLMHTTPHandler:
         self,
         video_id: str,
         prompt: str,
-        model: str,
         video_remix_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4488,14 +4553,14 @@ class BaseLLMHTTPHandler:
         headers = video_remix_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_remix_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
@@ -4504,7 +4569,6 @@ class BaseLLMHTTPHandler:
         url, data = video_remix_provider_config.transform_video_remix_request(
             video_id=video_id,
             prompt=prompt,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4532,9 +4596,9 @@ class BaseLLMHTTPHandler:
             )
 
             return video_remix_provider_config.transform_video_remix_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4548,7 +4612,6 @@ class BaseLLMHTTPHandler:
         after: Optional[str],
         limit: Optional[int],
         order: Optional[str],
-        model: str,
         video_list_provider_config,
         custom_llm_provider: str,
         litellm_params,
@@ -4568,7 +4631,6 @@ class BaseLLMHTTPHandler:
                 after=after,
                 limit=limit,
                 order=order,
-                model=model,
                 video_list_provider_config=video_list_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -4582,12 +4644,12 @@ class BaseLLMHTTPHandler:
         else:
             # For sync calls, we'll use the async handler in a sync context
             import asyncio
+
             return asyncio.run(
                 self.async_video_list_handler(
                     after=after,
                     limit=limit,
                     order=order,
-                    model=model,
                     video_list_provider_config=video_list_provider_config,
                     custom_llm_provider=custom_llm_provider,
                     litellm_params=litellm_params,
@@ -4604,7 +4666,6 @@ class BaseLLMHTTPHandler:
         after: Optional[str],
         limit: Optional[int],
         order: Optional[str],
-        model: str,
         video_list_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4629,21 +4690,20 @@ class BaseLLMHTTPHandler:
         headers = video_list_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_list_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
         url, params = video_list_provider_config.transform_video_list_request(
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4672,9 +4732,9 @@ class BaseLLMHTTPHandler:
             )
 
             return video_list_provider_config.transform_video_list_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4682,11 +4742,10 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=video_list_provider_config,
             )
-            
+
     async def async_video_delete_handler(
         self,
         video_id: str,
-        model: str,
         video_delete_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4710,14 +4769,14 @@ class BaseLLMHTTPHandler:
         headers = video_delete_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_delete_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
@@ -4725,7 +4784,6 @@ class BaseLLMHTTPHandler:
         # Transform the request using the provider config
         url, data = video_delete_provider_config.transform_video_delete_request(
             video_id=video_id,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4750,7 +4808,6 @@ class BaseLLMHTTPHandler:
             )
 
             return video_delete_provider_config.transform_video_delete_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
@@ -4764,7 +4821,6 @@ class BaseLLMHTTPHandler:
     def video_status_handler(
         self,
         video_id: str,
-        model: str,
         video_status_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4784,7 +4840,6 @@ class BaseLLMHTTPHandler:
             # Return the async coroutine if called with _is_async=True
             return self.async_video_status_handler(
                 video_id=video_id,
-                model=model,
                 video_status_provider_config=video_status_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -4807,14 +4862,14 @@ class BaseLLMHTTPHandler:
         headers = video_status_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_status_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
@@ -4822,7 +4877,6 @@ class BaseLLMHTTPHandler:
         # Transform the request using the provider config
         url, data = video_status_provider_config.transform_video_status_retrieve_request(
             video_id=video_id,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4836,19 +4890,29 @@ class BaseLLMHTTPHandler:
                 "api_base": url,
                 "headers": headers,
                 "video_id": video_id,
+                "data": data,
             },
         )
 
         try:
-            response = sync_httpx_client.get(
-                url=url,
-                headers=headers,
-            )
+            # Use POST if data is provided (e.g., Vertex AI fetchPredictOperation)
+            # Otherwise use GET (e.g., OpenAI video status)
+            if data:
+                response = sync_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    json=data,
+                )
+            else:
+                response = sync_httpx_client.get(
+                    url=url,
+                    headers=headers,
+                )
 
             return video_status_provider_config.transform_video_status_retrieve_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4860,7 +4924,6 @@ class BaseLLMHTTPHandler:
     async def async_video_status_handler(
         self,
         video_id: str,
-        model: str,
         video_status_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4885,14 +4948,14 @@ class BaseLLMHTTPHandler:
         headers = video_status_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_status_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
@@ -4900,7 +4963,6 @@ class BaseLLMHTTPHandler:
         # Transform the request using the provider config
         url, data = video_status_provider_config.transform_video_status_retrieve_request(
             video_id=video_id,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4914,17 +4976,116 @@ class BaseLLMHTTPHandler:
                 "api_base": url,
                 "headers": headers,
                 "video_id": video_id,
+                "data": data,
             },
         )
 
         try:
-            response = await async_httpx_client.get(
-                url=url,
-                headers=headers,
+            # Use POST if data is provided (e.g., Vertex AI fetchPredictOperation)
+            # Otherwise use GET (e.g., OpenAI video status)
+            if data:
+                response = await async_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    json=data,
+                )
+            else:
+                response = await async_httpx_client.get(
+                    url=url,
+                    headers=headers,
+                )
+            return video_status_provider_config.transform_video_status_retrieve_response(
+                raw_response=response,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
-            return video_status_provider_config.transform_video_status_retrieve_response(
-                model=model,
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=video_status_provider_config,
+            )
+    
+    ###### CONTAINER HANDLER ######
+    def container_create_handler(
+        self,
+        name: str,
+        container_create_request_params: Dict,
+        container_provider_config: "BaseContainerConfig",
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: "LiteLLMLoggingObj",
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Union[float, httpx.Timeout] = 600,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> Union["ContainerObject", Coroutine[Any, Any, "ContainerObject"]]:
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_container_create_handler(
+                name=name,
+                container_create_request_params=container_create_request_params,
+                container_provider_config=container_provider_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+            )
+
+        # For sync calls, use sync HTTP client
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        # Validate environment and get headers
+        headers = container_provider_config.validate_environment(
+            headers=extra_headers or {},
+            api_key=litellm_params.get("api_key", None),
+        )
+        
+        # Add Content-Type header for JSON requests
+        headers["Content-Type"] = "application/json"
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Get the complete URL for the request
+        api_base = container_provider_config.get_complete_url(
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Transform the request using the provider config
+        data = container_provider_config.transform_container_create_request(
+            name=name,
+            container_create_optional_request_params=container_create_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=name,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+
+            return container_provider_config.transform_container_create_response(
                 raw_response=response,
                 logging_obj=logging_obj,
             )
@@ -4932,7 +5093,586 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(
                 e=e,
-                provider_config=video_status_provider_config,
+                provider_config=container_provider_config,
+            )
+    
+    async def async_container_create_handler(
+        self,
+        name: str,
+        container_create_request_params: Dict,
+        container_provider_config: "BaseContainerConfig",
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: "LiteLLMLoggingObj",
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Union[float, httpx.Timeout] = 600,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> "ContainerObject":
+        # For async calls, use async HTTP client
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.OPENAI,
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        # Validate environment and get headers
+        headers = container_provider_config.validate_environment(
+            headers=extra_headers or {},
+            api_key=litellm_params.get("api_key", None),
+        )
+        
+        # Add Content-Type header for JSON requests
+        headers["Content-Type"] = "application/json"
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Get the complete URL for the request
+        api_base = container_provider_config.get_complete_url(
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Transform the request using the provider config
+        data = container_provider_config.transform_container_create_request(
+            name=name,
+            container_create_optional_request_params=container_create_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=name,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+
+            return container_provider_config.transform_container_create_response(
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=container_provider_config,
+            )
+    
+    def container_list_handler(
+        self,
+        container_provider_config: "BaseContainerConfig",
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: "LiteLLMLoggingObj",
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+        order: Optional[str] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+        timeout: Union[float, httpx.Timeout] = 600,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> Union["ContainerListResponse", Coroutine[Any, Any, "ContainerListResponse"]]:
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_container_list_handler(
+                container_provider_config=container_provider_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                after=after,
+                limit=limit,
+                order=order,
+                extra_headers=extra_headers,
+                extra_query=extra_query,
+                timeout=timeout,
+                client=client,
+            )
+
+        # For sync calls, use sync HTTP client
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        # Validate environment and get headers
+        headers = container_provider_config.validate_environment(
+            headers=extra_headers or {},
+            api_key=litellm_params.get("api_key", None),
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Get the complete URL for the request
+        api_base = container_provider_config.get_complete_url(
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Transform the request using the provider config
+        url, params = container_provider_config.transform_container_list_request(
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+            after=after,
+            limit=limit,
+            order=order,
+            extra_query=extra_query,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "params": params,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(
+                url=url,
+                headers=headers,
+                params=params,
+            )
+
+            return container_provider_config.transform_container_list_response(
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=container_provider_config,
+            )
+    
+    async def async_container_list_handler(
+        self,
+        container_provider_config: "BaseContainerConfig",
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: "LiteLLMLoggingObj",
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+        order: Optional[str] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+        timeout: Union[float, httpx.Timeout] = 600,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> "ContainerListResponse":
+        # For async calls, use async HTTP client
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.OPENAI,
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        # Validate environment and get headers
+        headers = container_provider_config.validate_environment(
+            headers=extra_headers or {},
+            api_key=litellm_params.get("api_key", None),
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Get the complete URL for the request
+        api_base = container_provider_config.get_complete_url(
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Transform the request using the provider config
+        url, params = container_provider_config.transform_container_list_request(
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+            after=after,
+            limit=limit,
+            order=order,
+            extra_query=extra_query,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "params": params,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url,
+                headers=headers,
+                params=params,
+            )
+
+            return container_provider_config.transform_container_list_response(
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=container_provider_config,
+            )
+    
+    def container_retrieve_handler(
+        self,
+        container_id: str,
+        container_provider_config: "BaseContainerConfig",
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: "LiteLLMLoggingObj",
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+        timeout: Union[float, httpx.Timeout] = 600,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> Union["ContainerObject", Coroutine[Any, Any, "ContainerObject"]]:
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_container_retrieve_handler(
+                container_id=container_id,
+                container_provider_config=container_provider_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                extra_query=extra_query,
+                timeout=timeout,
+                client=client,
+            )
+
+        # For sync calls, use sync HTTP client
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        # Validate environment and get headers
+        headers = container_provider_config.validate_environment(
+            headers=extra_headers or {},
+            api_key=litellm_params.get("api_key", None),
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Get the complete URL for the request
+        api_base = container_provider_config.get_complete_url(
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Transform the request using the provider config
+        url, params = container_provider_config.transform_container_retrieve_request(
+            container_id=container_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        
+        # Add any extra query parameters
+        if extra_query:
+            params.update(extra_query)
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "params": params,
+                "container_id": container_id,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(
+                url=url,
+                headers=headers,
+                params=params,
+            )
+
+            return container_provider_config.transform_container_retrieve_response(
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=container_provider_config,
+            )
+    
+    async def async_container_retrieve_handler(
+        self,
+        container_id: str,
+        container_provider_config: "BaseContainerConfig",
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: "LiteLLMLoggingObj",
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+        timeout: Union[float, httpx.Timeout] = 600,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> "ContainerObject":
+        # For async calls, use async HTTP client
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.OPENAI,
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        # Validate environment and get headers
+        headers = container_provider_config.validate_environment(
+            headers=extra_headers or {},
+            api_key=litellm_params.get("api_key", None),
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Get the complete URL for the request
+        api_base = container_provider_config.get_complete_url(
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Transform the request using the provider config
+        url, params = container_provider_config.transform_container_retrieve_request(
+            container_id=container_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        
+        # Add any extra query parameters
+        if extra_query:
+            params.update(extra_query)
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "params": params,
+                "container_id": container_id,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url,
+                headers=headers,
+                params=params,
+            )
+
+            return container_provider_config.transform_container_retrieve_response(
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=container_provider_config,
+            )
+    
+    def container_delete_handler(
+        self,
+        container_id: str,
+        container_provider_config: "BaseContainerConfig",
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: "LiteLLMLoggingObj",
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+        timeout: Union[float, httpx.Timeout] = 600,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> Union["DeleteContainerResult", Coroutine[Any, Any, "DeleteContainerResult"]]:
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_container_delete_handler(
+                container_id=container_id,
+                container_provider_config=container_provider_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                extra_query=extra_query,
+                timeout=timeout,
+                client=client,
+            )
+
+        # For sync calls, use sync HTTP client
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        # Validate environment and get headers
+        headers = container_provider_config.validate_environment(
+            headers=extra_headers or {},
+            api_key=litellm_params.get("api_key", None),
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Get the complete URL for the request
+        api_base = container_provider_config.get_complete_url(
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Transform the request using the provider config
+        url, params = container_provider_config.transform_container_delete_request(
+            container_id=container_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        
+        # Add any extra query parameters
+        if extra_query:
+            params.update(extra_query)
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "params": params,
+                "container_id": container_id,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.delete(
+                url=url,
+                headers=headers,
+                params=params,
+            )
+
+            return container_provider_config.transform_container_delete_response(
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=container_provider_config,
+            )
+    
+    async def async_container_delete_handler(
+        self,
+        container_id: str,
+        container_provider_config: "BaseContainerConfig",
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: "LiteLLMLoggingObj",
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+        timeout: Union[float, httpx.Timeout] = 600,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> "DeleteContainerResult":
+        # For async calls, use async HTTP client
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.OPENAI,
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        # Validate environment and get headers
+        headers = container_provider_config.validate_environment(
+            headers=extra_headers or {},
+            api_key=litellm_params.get("api_key", None),
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Get the complete URL for the request
+        api_base = container_provider_config.get_complete_url(
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Transform the request using the provider config
+        url, params = container_provider_config.transform_container_delete_request(
+            container_id=container_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        
+        # Add any extra query parameters
+        if extra_query:
+            params.update(extra_query)
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "params": params,
+                "container_id": container_id,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.delete(
+                url=url,
+                headers=headers,
+                params=params,
+            )
+
+            return container_provider_config.transform_container_delete_response(
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=container_provider_config,
             )
 
     ###### VECTOR STORE HANDLER ######
@@ -5006,6 +5746,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
+
             response = await async_httpx_client.post(
                 url=url,
                 headers=headers,

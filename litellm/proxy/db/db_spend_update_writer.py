@@ -997,7 +997,7 @@ class DBSpendUpdateWriter:
                             # should sort by the table first.
                             key=lambda x: (
                                 x[1]["date"],
-                                x[1].get(entity_id_field),
+                                x[1].get(entity_id_field) or "",
                                 x[1]["api_key"],
                                 x[1]["model"],
                                 x[1]["custom_llm_provider"],
@@ -1070,6 +1070,9 @@ class DBSpendUpdateWriter:
                                     "cache_creation_input_tokens"
                                 ] = transaction.get("cache_creation_input_tokens", 0)
 
+                            if entity_type == "tag" and "request_id" in transaction:
+                                common_data["request_id"] = transaction.get("request_id")
+                            
                             # Create update data structure
                             update_data = {
                                 "prompt_tokens": {
@@ -1385,7 +1388,7 @@ class DBSpendUpdateWriter:
         for tag in request_tags:
             daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
             daily_transaction = DailyTagSpendTransaction(
-                tag=tag, **base_daily_transaction
+                tag=tag, **base_daily_transaction, request_id=payload["request_id"]
             )
 
             await self.daily_tag_spend_update_queue.add_update(

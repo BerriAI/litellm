@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
 import { Badge } from "@tremor/react";
-import { AlertTriangle, Users, TrendingUp, Loader2, ChevronDown, ChevronUp, Minus, UserCheck } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Loader2, Minus, TrendingUp, UserCheck, Users } from "lucide-react";
+import { useEffect, useState } from "react";
 import { getRemainingUsers } from "./networking";
 
 // Simple utility function to combine class names
@@ -72,18 +72,14 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
     }
 
     // User metrics
-    const userIsOverLimit = data.total_users_remaining ? data.total_users_remaining <= 0 : false;
-    const userIsNearLimit = data.total_users_remaining
-      ? data.total_users_remaining <= 5 && data.total_users_remaining > 0
-      : false;
     const userUsagePercentage = data.total_users ? (data.total_users_used / data.total_users) * 100 : 0;
+    const userIsOverLimit = userUsagePercentage > 100;
+    const userIsNearLimit = userUsagePercentage >= 80 && userUsagePercentage <= 100;
 
     // Team metrics
-    const teamIsOverLimit = data.total_teams_remaining ? data.total_teams_remaining <= 0 : false;
-    const teamIsNearLimit = data.total_teams_remaining
-      ? data.total_teams_remaining <= 5 && data.total_teams_remaining > 0
-      : false;
     const teamUsagePercentage = data.total_teams ? (data.total_teams_used / data.total_teams) * 100 : 0;
+    const teamIsOverLimit = teamUsagePercentage > 100;
+    const teamIsNearLimit = teamUsagePercentage >= 80 && teamUsagePercentage <= 100;
 
     // Combined status (worst case scenario)
     const isOverLimit = userIsOverLimit || teamIsOverLimit;
@@ -113,12 +109,6 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
     if (isOverLimit) return "red";
     if (isNearLimit) return "yellow";
     return "green";
-  };
-
-  const getStatusText = () => {
-    if (isOverLimit) return "Over Limit";
-    if (isNearLimit) return "Near Limit";
-    return "Active";
   };
 
   const getStatusIcon = () => {
@@ -338,8 +328,6 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
           onClick={() => setIsMinimized(false)}
           className={cn(
             "bg-white border border-gray-200 rounded-lg shadow-sm p-3 hover:shadow-md transition-all w-full",
-            hasIssues && isOverLimit && "border-red-200 bg-red-50",
-            hasIssues && isNearLimit && "border-yellow-200 bg-yellow-50",
           )}
           title="Show usage details"
         >
@@ -348,12 +336,26 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
             {hasIssues && <span className="flex-shrink-0">{getStatusIcon()}</span>}
             <div className="flex items-center gap-2 text-sm font-medium truncate">
               {data && data.total_users !== null && (
-                <span className="flex-shrink-0">
+                <span
+                  className={cn(
+                    "flex-shrink-0 px-1.5 py-0.5 rounded text-xs border",
+                    userMetrics.isOverLimit && "bg-red-50 text-red-700 border-red-200",
+                    userMetrics.isNearLimit && "bg-yellow-50 text-yellow-700 border-yellow-200",
+                    !userMetrics.isOverLimit && !userMetrics.isNearLimit && "bg-gray-50 text-gray-700 border-gray-200",
+                  )}
+                >
                   U: {data.total_users_used}/{data.total_users}
                 </span>
               )}
               {data && data.total_teams !== null && (
-                <span className="flex-shrink-0">
+                <span
+                  className={cn(
+                    "flex-shrink-0 px-1.5 py-0.5 rounded text-xs border",
+                    teamMetrics.isOverLimit && "bg-red-50 text-red-700 border-red-200",
+                    teamMetrics.isNearLimit && "bg-yellow-50 text-yellow-700 border-yellow-200",
+                    !teamMetrics.isOverLimit && !teamMetrics.isNearLimit && "bg-gray-50 text-gray-700 border-gray-200",
+                  )}
+                >
                   T: {data.total_teams_used}/{data.total_teams}
                 </span>
               )}
@@ -396,23 +398,11 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
     }
 
     return (
-      <div
-        className={cn(
-          "bg-white border rounded-lg shadow-sm p-3 transition-all duration-200 group w-full",
-          isOverLimit && "border-red-200 bg-red-50",
-          isNearLimit && "border-yellow-200 bg-yellow-50",
-        )}
-      >
-        {/* Header with title and minimize button */}
+      <div className={cn("bg-white border rounded-lg shadow-sm p-3 transition-all duration-200 group w-full")}>
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <Users className="h-4 w-4 flex-shrink-0" />
             <span className="font-medium text-sm truncate">Usage</span>
-            {(isOverLimit || isNearLimit) && (
-              <Badge color={getStatusColor()} className="text-xs px-1.5 py-0.5 flex-shrink-0">
-                {getStatusText()}
-              </Badge>
-            )}
           </div>
           <button
             onClick={() => setIsMinimized(true)}
@@ -427,10 +417,26 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
         <div className="space-y-3 text-sm">
           {/* Users section */}
           {data.total_users !== null && (
-            <div className="space-y-1">
-              <div className="flex items-center gap-1 text-xs text-gray-600 mb-1">
+            <div
+              className={cn(
+                "space-y-1 border rounded-md p-2",
+                userMetrics.isOverLimit && "border-red-200 bg-red-50",
+                userMetrics.isNearLimit && "border-yellow-200 bg-yellow-50",
+              )}
+            >
+              <div className="flex items-center gap-2 text-xs text-gray-600 mb-1">
                 <Users className="h-3 w-3" />
                 <span className="font-medium">Users</span>
+                <span
+                  className={cn(
+                    "ml-1 px-1.5 py-0.5 rounded border",
+                    userMetrics.isOverLimit && "bg-red-50 text-red-700 border-red-200",
+                    userMetrics.isNearLimit && "bg-yellow-50 text-yellow-700 border-yellow-200",
+                    !userMetrics.isOverLimit && !userMetrics.isNearLimit && "bg-gray-50 text-gray-600 border-gray-200",
+                  )}
+                >
+                  {userMetrics.isOverLimit ? "Over limit" : userMetrics.isNearLimit ? "Near limit" : "OK"}
+                </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-gray-600 text-xs">Used:</span>
@@ -472,10 +478,26 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
 
           {/* Teams section */}
           {data.total_teams !== null && (
-            <div className="space-y-1">
-              <div className="flex items-center gap-1 text-xs text-gray-600 mb-1">
+            <div
+              className={cn(
+                "space-y-1 border rounded-md p-2",
+                teamMetrics.isOverLimit && "border-red-200 bg-red-50",
+                teamMetrics.isNearLimit && "border-yellow-200 bg-yellow-50",
+              )}
+            >
+              <div className="flex items-center gap-2 text-xs text-gray-600 mb-1">
                 <UserCheck className="h-3 w-3" />
                 <span className="font-medium">Teams</span>
+                <span
+                  className={cn(
+                    "ml-1 px-1.5 py-0.5 rounded border",
+                    teamMetrics.isOverLimit && "bg-red-50 text-red-700 border-red-200",
+                    teamMetrics.isNearLimit && "bg-yellow-50 text-yellow-700 border-yellow-200",
+                    !teamMetrics.isOverLimit && !teamMetrics.isNearLimit && "bg-gray-50 text-gray-600 border-gray-200",
+                  )}
+                >
+                  {teamMetrics.isOverLimit ? "Over limit" : teamMetrics.isNearLimit ? "Near limit" : "OK"}
+                </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-gray-600 text-xs">Used:</span>
