@@ -2316,8 +2316,6 @@ class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
     object_permission_id: Optional[str] = None
     created_by: str
     updated_by: str
-    created_at: datetime
-    updated_at: datetime
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
@@ -2347,6 +2345,8 @@ class LiteLLM_ProjectTableCachedObj(LiteLLMPydanticObjectBase):
     blocked: bool = False
     object_permission_id: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive data
