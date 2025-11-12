@@ -197,13 +197,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 Follow this simple workflow to implement and tune guardrails:
 
-### 1. ✨ View Available Guardrails
-
-:::info
-
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
-
-:::
+### 1. View Available Guardrails
 
 First, check what guardrails are available and their parameters:
 
