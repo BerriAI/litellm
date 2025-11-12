@@ -1,6 +1,7 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
+import asyncio
 import copy
 import datetime
 import json
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import time
 import traceback
+import threading
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import (
@@ -59,6 +61,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
+from litellm.litellm_core_utils.cached_imports import get_coroutine_checker
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -317,6 +320,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.dynamic_input_callbacks: Optional[
             List[Union[str, Callable, CustomLogger]]
         ] = dynamic_input_callbacks
+        self.dynamic_async_input_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None
         self.dynamic_success_callbacks: Optional[
             List[Union[str, Callable, CustomLogger]]
         ] = dynamic_success_callbacks
@@ -417,7 +423,9 @@ class Logging(LiteLLMLoggingBaseClass):
             return None
 
         processed_list: List[Union[str, Callable, CustomLogger]] = []
+        coroutine_checker = get_coroutine_checker()
         for callback in callback_list:
+            resolved_callback: Union[str, Callable, CustomLogger] = callback
             if (
                 isinstance(callback, str)
                 and callback in litellm._known_custom_logger_compatible_callbacks
@@ -425,20 +433,31 @@ class Logging(LiteLLMLoggingBaseClass):
                 callback_class = _init_custom_logger_compatible_class(
                     callback, internal_usage_cache=None, llm_router=None  # type: ignore
                 )
-                if callback_class is not None:
-                    processed_list.append(callback_class)
+                if callback_class is None:
+                    continue
+                resolved_callback = callback_class
 
-                    # If processing dynamic_success_callbacks, add to dynamic_async_success_callbacks
-                    if dynamic_callbacks_type == "success":
-                        if self.dynamic_async_success_callbacks is None:
-                            self.dynamic_async_success_callbacks = []
-                        self.dynamic_async_success_callbacks.append(callback_class)
-                    elif dynamic_callbacks_type == "failure":
-                        if self.dynamic_async_failure_callbacks is None:
-                            self.dynamic_async_failure_callbacks = []
-                        self.dynamic_async_failure_callbacks.append(callback_class)
-            else:
-                processed_list.append(callback)
+                # If processing dynamic_success_callbacks, add to dynamic_async_success_callbacks
+                if dynamic_callbacks_type == "success":
+                    if self.dynamic_async_success_callbacks is None:
+                        self.dynamic_async_success_callbacks = []
+                    self.dynamic_async_success_callbacks.append(callback_class)
+                elif dynamic_callbacks_type == "failure":
+                    if self.dynamic_async_failure_callbacks is None:
+                        self.dynamic_async_failure_callbacks = []
+                    self.dynamic_async_failure_callbacks.append(callback_class)
+
+            if (
+                dynamic_callbacks_type == "input"
+                and coroutine_checker.is_async_callable(resolved_callback)
+            ):
+                if self.dynamic_async_input_callbacks is None:
+                    self.dynamic_async_input_callbacks = []
+                if resolved_callback not in self.dynamic_async_input_callbacks:
+                    self.dynamic_async_input_callbacks.append(resolved_callback)
+                continue
+
+            processed_list.append(resolved_callback)
         return processed_list
 
     def initialize_standard_callback_dynamic_params(
@@ -907,6 +926,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
+            self._run_async_pre_call_callbacks()
         except Exception as e:
             verbose_logger.exception(
                 "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
@@ -918,6 +938,94 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             if capture_exception:  # log this error to sentry for debugging
                 capture_exception(e)
+
+    def _get_async_input_callbacks(self) -> List[Union[str, Callable, CustomLogger]]:
+        callbacks: List[Union[str, Callable, CustomLogger]] = []
+        try:
+            if isinstance(litellm._async_input_callback, list):
+                callbacks.extend(litellm._async_input_callback)
+        except Exception:
+            pass
+
+        if self.dynamic_async_input_callbacks:
+            for callback in self.dynamic_async_input_callbacks:
+                if callback not in callbacks:
+                    callbacks.append(callback)
+
+        return callbacks
+
+    def _run_async_pre_call_callbacks(self) -> None:
+        callbacks = self._get_async_input_callbacks()
+        if len(callbacks) == 0:
+            return
+
+        async def runner():
+            for callback in callbacks:
+                try:
+                    await self._execute_async_pre_call_callback(callback)
+                except Exception as e:
+                    verbose_logger.exception(
+                        "litellm.Logging.pre_call(): Exception occurred while running async callback - {}".format(
+                            str(e)
+                        )
+                    )
+                    if capture_exception:
+                        capture_exception(e)
+
+        try:
+            self._run_coroutine_blocking(runner)
+        except Exception as e:
+            verbose_logger.exception(
+                "litellm.Logging.pre_call(): Exception occurred while executing async callbacks - {}".format(
+                    str(e)
+                )
+            )
+            if capture_exception:
+                capture_exception(e)
+
+    async def _execute_async_pre_call_callback(
+        self, callback: Union[str, Callable, CustomLogger]
+    ) -> None:
+        if isinstance(callback, CustomLogger):
+            await callback.async_log_pre_api_call(
+                model=self.model,
+                messages=self.messages,
+                kwargs=self.model_call_details,
+            )
+        elif callable(callback):
+            global customLogger
+            if customLogger is None:
+                customLogger = CustomLogger()
+            await customLogger.async_log_input_event(
+                model=self.model,
+                messages=self.messages,
+                kwargs=self.model_call_details,
+                print_verbose=print_verbose,
+                callback_func=callback,
+            )
+
+    def _run_coroutine_blocking(self, async_callable: Callable[[], Any]) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(async_callable())
+            return
+
+        thread_exc: Optional[BaseException] = None
+
+        def _thread_target():
+            nonlocal thread_exc
+            try:
+                asyncio.run(async_callable())
+            except BaseException as exc:  # noqa: BLE001
+                thread_exc = exc
+
+        thread = threading.Thread(target=_thread_target, daemon=True)
+        thread.start()
+        thread.join()
+
+        if thread_exc is not None:
+            raise thread_exc
 
     def _print_llm_call_debugging_log(
         self,

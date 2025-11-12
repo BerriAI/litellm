@@ -1,6 +1,8 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
+import asyncio
 import re
+import threading
 import traceback
 from typing import (
     TYPE_CHECKING,
@@ -81,7 +83,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     def log_pre_api_call(self, model, messages, kwargs):
-        pass
+        async_impl = type(self).async_log_pre_api_call
+        if async_impl is not CustomLogger.async_log_pre_api_call:
+            self._run_async_method_sync(
+                self.async_log_pre_api_call, model, messages, kwargs
+            )
+        else:
+            pass
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
         pass
@@ -737,3 +745,27 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     msg[key] = self._redact_base64(value=val, max_depth=max_depth)
             filtered_messages.append(msg)
         return filtered_messages
+
+    def _run_async_method_sync(self, async_fn, *args, **kwargs) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(async_fn(*args, **kwargs))
+            return
+
+        # Running inside an existing event loop – execute in a new thread with its own loop
+        thread_exc: Optional[BaseException] = None
+
+        def _thread_target():
+            nonlocal thread_exc
+            try:
+                asyncio.run(async_fn(*args, **kwargs))
+            except BaseException as exc:  # noqa: BLE001
+                thread_exc = exc
+
+        thread = threading.Thread(target=_thread_target, daemon=True)
+        thread.start()
+        thread.join()
+
+        if thread_exc is not None:
+            raise thread_exc
