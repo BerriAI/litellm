@@ -6230,7 +6230,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url, headers=headers, params=request_params, timeout=timeout
+                url=url, headers=headers, params=request_params
             )
         except Exception as e:
             raise self._handle_error(
@@ -6316,7 +6316,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(
-                url=url, headers=headers, params=request_params, timeout=timeout
+                url=url, headers=headers, params=request_params
             )
         except Exception as e:
             raise self._handle_error(
@@ -6380,7 +6380,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url, headers=headers, params=request_params, timeout=timeout
+                url=url, headers=headers, params=request_params
             )
         except Exception as e:
             raise self._handle_error(
@@ -6457,7 +6457,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(
-                url=url, headers=headers, params=request_params, timeout=timeout
+                url=url, headers=headers, params=request_params
             )
         except Exception as e:
             raise self._handle_error(
@@ -6521,7 +6521,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url, headers=headers, params=request_params, timeout=timeout
+                url=url, headers=headers, params=request_params
             )
         except Exception as e:
             raise self._handle_error(
@@ -6601,7 +6601,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(
-                url=url, headers=headers, params=request_params, timeout=timeout
+                url=url, headers=headers, params=request_params
             )
         except Exception as e:
             raise self._handle_error(
