@@ -31,6 +31,7 @@ from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
 from litellm.proxy.hooks.dynamic_rate_limit_handler import DynamicRateLimitHandler
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 from litellm.types.router import DynamicRateLimitPolicy
+from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1532,29 +1533,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Track failure by provider and error type for dynamic rate limiting
             # Only track if dynamic_rate_limit_policy is configured
             dynamic_rate_limit_policy = self._get_dynamic_rate_limit_policy()
-            if (
-                dynamic_rate_limit_policy is not None
-                and llm_router is not None
-                and isinstance(response_obj, Exception)
-            ):
-                deployment_id = kwargs.get("litellm_params", {}).get("model_info", {}).get("id")
-                custom_llm_provider = kwargs.get("litellm_params", {}).get("custom_llm_provider")
-                
-                if deployment_id and custom_llm_provider:
-                    error_type = self.dynamic_rate_limit_handler.get_exception_class_name(
-                        response_obj
-                    )
-                    if error_type:
-                        self.dynamic_rate_limit_handler.increment_deployment_failure_for_error_type(
-                            litellm_router_instance=llm_router,
-                            deployment_id=deployment_id,
-                            provider=custom_llm_provider,
-                            error_type=error_type,
-                        )
-                        verbose_proxy_logger.debug(
-                            f"[Dynamic Rate Limit] Tracked failure for deployment {deployment_id}, "
-                            f"provider {custom_llm_provider}, error type {error_type}"
-                        )
+            if dynamic_rate_limit_policy is not None and llm_router is not None:
+                standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+                if standard_logging_object:
+                    error_information = standard_logging_object.get("error_information")
+                    if error_information:
+                        error_type = error_information.get("error_class")
+                        deployment_id = standard_logging_object.get("model_id")
+                        custom_llm_provider = standard_logging_object.get("custom_llm_provider")
+                        
+                        if error_type and deployment_id and custom_llm_provider:
+                            self.dynamic_rate_limit_handler.increment_deployment_failure_for_error_type(
+                                litellm_router_instance=llm_router,
+                                deployment_id=deployment_id,
+                                provider=custom_llm_provider,
+                                error_type=error_type,
+                            )
+                            verbose_proxy_logger.debug(
+                                f"[Dynamic Rate Limit] Tracked failure for deployment {deployment_id}, "
+                                f"provider {custom_llm_provider}, error type {error_type}"
+                            )
                         
         except Exception as e:
             verbose_proxy_logger.exception(

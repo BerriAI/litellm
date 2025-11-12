@@ -285,19 +285,3 @@ class DynamicRateLimitHandler:
             )
             # Fail safe: enforce limits if we can't check
             return True
-
-    def get_exception_class_name(self, exception: Exception) -> Optional[str]:
-        """
-        Get the exception class name for tracking purposes.
-        
-        Returns the exception's class name directly - no filtering needed.
-        Users can configure thresholds for ANY exception type.
-
-        Args:
-            exception: The exception instance
-
-        Returns:
-            str: Exception class name (e.g., "BadRequestError", "CustomError")
-        """
-        return exception.__class__.__name__
-
