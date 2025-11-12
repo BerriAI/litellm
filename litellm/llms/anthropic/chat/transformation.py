@@ -980,13 +980,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ):
                 text_content = prefix_prompt + text_content
 
+            context_management: Optional[Dict] = completion_response.get(
+                "context_management"
+            )
+
+            provider_specific_fields: Dict[str, Any] = {
+                "citations": citations,
+                "thinking_blocks": thinking_blocks,
+            }
+            if context_management is not None:
+                provider_specific_fields["context_management"] = context_management
+
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,
-                provider_specific_fields={
-                    "citations": citations,
-                    "thinking_blocks": thinking_blocks,
-                },
+                provider_specific_fields=provider_specific_fields,
                 thinking_blocks=thinking_blocks,
                 reasoning_content=reasoning_content,
             )
@@ -1018,6 +1026,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
+
+        context_management_response = completion_response.get("context_management")
+        if context_management_response is not None:
+            _hidden_params["context_management"] = context_management_response
+            try:
+                model_response.__dict__["context_management"] = (
+                    context_management_response
+                )
+            except Exception:
+                pass
 
         model_response._hidden_params = _hidden_params
 

@@ -465,3 +465,52 @@ def test_anthropic_chat_transform_request_includes_context_management():
         headers=headers,
     )
     assert result["context_management"] == _sample_context_management_payload()
+
+
+def test_transform_parsed_response_includes_context_management_metadata():
+    import httpx
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+    context_management_payload = {
+        "applied_edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "cleared_tool_uses": 2,
+                "cleared_input_tokens": 5000,
+            }
+        ]
+    }
+    completion_response = {
+        "id": "msg_context_management_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-20250514",
+        "content": [{"type": "text", "text": "Done."}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 5,
+        },
+        "context_management": context_management_payload,
+    }
+    raw_response = httpx.Response(
+        status_code=200,
+        headers={},
+    )
+    model_response = ModelResponse()
+
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+    assert result.__dict__.get("context_management") == context_management_payload
+    provider_fields = result.choices[0].message.provider_specific_fields
+    assert provider_fields and provider_fields["context_management"] == context_management_payload
