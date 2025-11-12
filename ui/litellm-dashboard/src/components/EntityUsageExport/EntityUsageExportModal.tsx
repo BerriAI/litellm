@@ -87,7 +87,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
       onCancel={onClose}
       footer={null}
       width={480}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="space-y-5 py-2">
         <ExportSummary dateRange={dateRange} selectedFilters={selectedFilters} />
@@ -110,4 +110,3 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
 };
 
 export default EntityUsageExportModal;
-
