@@ -2243,10 +2243,13 @@ class NewProjectRequest(LiteLLM_BudgetTable):
 
     project_id: Optional[str] = None
     project_alias: Optional[str] = None
+    description: Optional[str] = None
     team_id: str
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
     models: List[str] = []
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
     blocked: bool = False
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
@@ -2267,9 +2270,12 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
 
     project_id: str
     project_alias: Optional[str] = None
+    description: Optional[str] = None
     team_id: Optional[str] = None
     metadata: Optional[dict] = None
     models: Optional[List[str]] = None
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
     blocked: Optional[bool] = None
     budget_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
@@ -2297,12 +2303,15 @@ class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
 
     project_id: str
     project_alias: Optional[str] = None
+    description: Optional[str] = None
     team_id: Optional[str] = None
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
     models: List[str] = []
     spend: float = 0.0
     model_spend: Optional[dict] = None
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
     blocked: bool = False
     object_permission_id: Optional[str] = None
     created_by: str
@@ -2326,12 +2335,15 @@ class LiteLLM_ProjectTableCachedObj(LiteLLMPydanticObjectBase):
 
     project_id: str
     project_alias: Optional[str] = None
+    description: Optional[str] = None
     team_id: Optional[str] = None
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
     models: List[str] = []
     spend: float = 0.0
     model_spend: Optional[dict] = None
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
     blocked: bool = False
     object_permission_id: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
