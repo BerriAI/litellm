@@ -24566,5 +24566,97 @@
             "1024x1792",
             "1792x1024"
         ]
+    },
+    "runwayml/gen4_turbo": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1280x720",
+            "720x1280"
+        ],
+        "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+    },
+    "runwayml/gen4_aleph": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.15,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1280x720",
+            "720x1280"
+        ],
+        "comment": "15 credits per second @ $0.01 per credit = $0.15 per second"
+    },
+    "runwayml/gen3a_turbo": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1280x720",
+            "720x1280"
+        ],
+        "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+    },
+    "runwayml/gen4_image": {
+        "litellm_provider": "runwayml",
+        "mode": "image_generation",
+        "input_cost_per_image": 0.05,
+        "output_cost_per_image": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ],
+        "supported_resolutions": [
+            "1280x720",
+            "1920x1080"
+        ],
+        "comment": "5 credits per 720p image or 8 credits per 1080p image @ $0.01 per credit. Using 5 credits ($0.05) as base cost"
+    },
+    "runwayml/gen4_image_turbo": {
+        "litellm_provider": "runwayml",
+        "mode": "image_generation",
+        "input_cost_per_image": 0.02,
+        "output_cost_per_image": 0.02,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ],
+        "supported_resolutions": [
+            "1280x720",
+            "1920x1080"
+        ],
+        "comment": "2 credits per image (any resolution) @ $0.01 per credit = $0.02 per image"
     }
 }
