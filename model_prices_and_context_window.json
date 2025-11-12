@@ -18309,6 +18309,21 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "openrouter/deepseek/deepseek-v3.2-exp": {
+        "input_cost_per_token": 2e-07,
+        "input_cost_per_token_cache_hit": 2e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": false,
+        "supports_tool_choice": true
+    },
     "openrouter/deepseek/deepseek-coder": {
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "openrouter",
@@ -18550,6 +18565,19 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 1e-06,
+        "supports_tool_choice": true
+    },
+    "openrouter/minimax/minimax-m2": {
+        "input_cost_per_token": 2.55e-7,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 204800,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.02e-6,
+        "supports_function_calling": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "openrouter/mistralai/mistral-7b-instruct": {
@@ -19023,15 +19051,16 @@
         "supports_vision": true
     },
     "openrouter/qwen/qwen3-coder": {
-        "input_cost_per_token": 1e-06,
+        "input_cost_per_token": 2.2e-7,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 1000000,
-        "max_tokens": 1000000,
+        "max_input_tokens": 262100,
+        "max_output_tokens": 262100,
+        "max_tokens": 262100,
         "mode": "chat",
-        "output_cost_per_token": 5e-06,
+        "output_cost_per_token": 9.5e-7,
         "source": "https://openrouter.ai/qwen/qwen3-coder",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_function_calling": true
     },
     "openrouter/switchpoint/router": {
         "input_cost_per_token": 8.5e-07,
@@ -19079,6 +19108,32 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_web_search": false
+    },
+    "openrouter/z-ai/glm-4.6": {
+        "input_cost_per_token": 4.0e-7,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 202800,
+        "max_output_tokens": 131000,
+        "max_tokens": 202800,
+        "mode": "chat",
+        "output_cost_per_token": 1.75e-6,
+        "source": "https://openrouter.ai/z-ai/glm-4.6",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "openrouter/z-ai/glm-4.6:exacto": {
+        "input_cost_per_token": 4.5e-7,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 202800,
+        "max_output_tokens": 131000,
+        "max_tokens": 202800,
+        "mode": "chat",
+        "output_cost_per_token": 1.9e-6,
+        "source": "https://openrouter.ai/z-ai/glm-4.6:exacto",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
     },
     "ovhcloud/DeepSeek-R1-Distill-Llama-70B": {
         "input_cost_per_token": 6.7e-07,
@@ -24059,7 +24114,6 @@
         "supports_parallel_function_calling": false,
         "supports_vision": false
     },
-
     "whisper-1": {
         "input_cost_per_second": 0.0001,
         "litellm_provider": "openai",
@@ -24068,30 +24122,6 @@
         "supported_endpoints": [
             "/v1/audio/transcriptions"
         ]
-    },
-    "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
-        "input_cost_per_token": 1.5e-07,
-        "litellm_provider": "vertex_ai-qwen_models",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
-        "max_tokens": 262144,
-        "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supports_function_calling": true,
-        "supports_tool_choice": true
-    },
-    "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas": {
-        "input_cost_per_token": 1.5e-07,
-        "litellm_provider": "vertex_ai-qwen_models",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
-        "max_tokens": 262144,
-        "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supports_function_calling": true,
-        "supports_tool_choice": true
     },
     "xai/grok-2": {
         "input_cost_per_token": 2e-06,
@@ -24566,5 +24596,97 @@
             "1024x1792",
             "1792x1024"
         ]
+    },
+    "runwayml/gen4_turbo": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1280x720",
+            "720x1280"
+        ],
+        "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+    },
+    "runwayml/gen4_aleph": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.15,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1280x720",
+            "720x1280"
+        ],
+        "comment": "15 credits per second @ $0.01 per credit = $0.15 per second"
+    },
+    "runwayml/gen3a_turbo": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1280x720",
+            "720x1280"
+        ],
+        "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+    },
+    "runwayml/gen4_image": {
+        "litellm_provider": "runwayml",
+        "mode": "image_generation",
+        "input_cost_per_image": 0.05,
+        "output_cost_per_image": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ],
+        "supported_resolutions": [
+            "1280x720",
+            "1920x1080"
+        ],
+        "comment": "5 credits per 720p image or 8 credits per 1080p image @ $0.01 per credit. Using 5 credits ($0.05) as base cost"
+    },
+    "runwayml/gen4_image_turbo": {
+        "litellm_provider": "runwayml",
+        "mode": "image_generation",
+        "input_cost_per_image": 0.02,
+        "output_cost_per_image": 0.02,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ],
+        "supported_resolutions": [
+            "1280x720",
+            "1920x1080"
+        ],
+        "comment": "2 credits per image (any resolution) @ $0.01 per credit = $0.02 per image"
     }
 }

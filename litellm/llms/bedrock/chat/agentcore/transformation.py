@@ -5,7 +5,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import quote
 
 import httpx
@@ -158,9 +158,15 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         session_id = optional_params.get("runtimeSessionId", None)
         if session_id:
             return session_id
-        
+
         # Generate a session ID with 33+ characters
         return f"litellm-session-{str(uuid.uuid4())}"
+
+    def _get_runtime_user_id(self, optional_params: dict) -> Optional[str]:
+        """
+        Get runtime user ID if provided
+        """
+        return optional_params.get("runtimeUserId", None)
 
     def transform_request(
         self,
@@ -172,28 +178,34 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
     ) -> dict:
         """
         Transform the request to AgentCore format.
-        
+
         Based on boto3's implementation:
         - Session ID goes in header: X-Amzn-Bedrock-AgentCore-Runtime-Session-Id
+        - User ID goes in header: X-Amzn-Bedrock-AgentCore-Runtime-User-Id
         - Qualifier goes as query parameter
         - Only the payload goes in the request body
-        
+
         Returns:
             dict: Payload dict containing the prompt
         """
         # Use the last message content as the prompt
         prompt = convert_content_list_to_str(messages[-1])
-        
+
         # Create the payload - this is what goes in the body (raw JSON)
         payload: dict = {"prompt": prompt}
-        
+
         # Get or generate session ID - this goes in the header
         runtime_session_id = self._get_runtime_session_id(optional_params)
         headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = runtime_session_id
-        
+
+        # Get user ID if provided - this goes in the header
+        runtime_user_id = self._get_runtime_user_id(optional_params)
+        if runtime_user_id:
+            headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] = runtime_user_id
+
         # The request data is the payload dict (will be JSON encoded by the HTTP handler)
         # Qualifier will be handled as a query parameter in get_complete_url
-        
+
         return payload
 
     def _extract_sse_json(self, line: str) -> Optional[Dict]:
@@ -478,6 +490,67 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             additional_args={"complete_input_dict": data},
         )
         
+        return streaming_response
+
+    async def get_async_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional["AsyncHTTPHandler"] = None,
+        json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
+    ) -> CustomStreamWrapper:
+        """
+        Get a CustomStreamWrapper for asynchronous streaming.
+
+        This is called when stream=True is passed to acompletion().
+        """
+        from litellm.llms.custom_httpx.http_handler import (
+            AsyncHTTPHandler,
+            get_async_httpx_client,
+        )
+        from litellm.utils import CustomStreamWrapper
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            client = get_async_httpx_client(llm_provider=cast(Any, "bedrock"), params={})
+
+        # Make async streaming request
+        response = await client.post(
+            api_base,
+            headers=headers,
+            data=signed_json_body if signed_json_body else json.dumps(data),
+            stream=True,  # THIS IS KEY - tells httpx to not buffer
+            logging_obj=logging_obj,
+        )
+
+        if response.status_code != 200:
+            raise BedrockError(
+                status_code=response.status_code, message=str(await response.aread())
+            )
+
+        # Create iterator for SSE stream
+        completion_stream = self.get_streaming_response(model=model, raw_response=response)
+
+        streaming_response = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+        )
+
+        # LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response="first stream response received",
+            additional_args={"complete_input_dict": data},
+        )
+
         return streaming_response
 
     @property
