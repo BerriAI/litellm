@@ -12,7 +12,6 @@ from typing import (
     Tuple,
     Union,
     cast,
-    get_type_hints,
 )
 
 import tiktoken
