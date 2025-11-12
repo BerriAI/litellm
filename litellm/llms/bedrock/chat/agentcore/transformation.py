@@ -5,7 +5,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import quote
 
 import httpx
@@ -517,7 +517,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(llm_provider="bedrock", params={})
+            client = get_async_httpx_client(llm_provider=cast(Any, "bedrock"), params={})
 
         # Make async streaming request
         response = await client.post(
