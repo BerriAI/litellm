@@ -76,12 +76,15 @@ class TestArizePhoenixConfig(unittest.TestCase):
         self.assertEqual(config.protocol, "otlp_grpc")
 
     @patch.dict("os.environ", {}, clear=True)
-    def test_get_arize_phoenix_config_defaults_to_arize_hosted(self):
-        # Test that it defaults to Arize hosted Phoenix and requires API key
-        with self.assertRaises(ValueError) as context:
-            ArizePhoenixLogger.get_arize_phoenix_config()
-        
-        self.assertIn("PHOENIX_API_KEY must be set when using the Arize hosted Phoenix endpoint", str(context.exception))
+    def test_get_arize_phoenix_config_defaults_to_local(self):
+        # Test that it defaults to local Phoenix when no config is provided
+        config = ArizePhoenixLogger.get_arize_phoenix_config()
+
+        # Should default to localhost
+        self.assertEqual(config.endpoint, "http://localhost:6006/v1/traces")
+        self.assertEqual(config.protocol, "otlp_http")
+        # No auth headers when no API key is provided for local instance
+        self.assertIsNone(config.otlp_auth_headers)
 
 
 if __name__ == "__main__":
