@@ -2543,6 +2543,8 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
     mock_server = MCPServer(
         server_id="server-123",
         name="test_server",
+        alias="test_server",
+        server_name="test_server",
         url="https://test-server.com/mcp",
         transport=MCPTransport.http,
         mcp_info={"server_name": "test_server"},
@@ -2556,8 +2558,8 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
         new_callable=AsyncMock,
     ) as mock_get_allowed, patch.object(
         global_mcp_server_manager,
-        "get_mcp_server_names_from_ids",
-        return_value=["test-server"],
+        "get_mcp_servers_from_ids",
+        return_value=[mock_server],
     ), patch.object(
         global_mcp_server_manager,
         "_get_mcp_server_from_tool_name",
@@ -2578,6 +2580,7 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
         result = await call_mcp_tool(
             name=f"{mock_server.name}/gmail_send_email",
             arguments={"body": "hello"},
+            mcp_servers=["test_server"],
         )
 
     assert result == expected_response
