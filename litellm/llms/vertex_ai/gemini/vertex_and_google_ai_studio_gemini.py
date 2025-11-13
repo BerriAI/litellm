@@ -567,6 +567,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
                 "includeThoughts": False,
             }
+        elif reasoning_effort == "none":
+            return {
+                "thinkingBudget": 0,
+                "includeThoughts": False,
+            }
         else:
             raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
 
