@@ -290,10 +290,17 @@ def test_gemini_image_generation():
     )
 
 
-def test_gemini_2_5_flash_image_preview():
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "gemini/gemini-2.5-flash-image-preview",
+        "gemini/gemini-2.0-flash-preview-image-generation",
+    ],
+)
+def test_gemini_flash_image_preview_models(model_name: str):
     """
-    Test for GitHub issue #14120 - gemini-2.5-flash-image-preview model routing fix
-    Validates that the model correctly routes to image generation instead of chat completion
+    Validate Gemini Flash image preview models route through image_generation()
+    and invoke the generateContent endpoint returning inline image data.
     """
     from unittest.mock import patch, MagicMock
     from litellm.types.utils import ImageResponse, ImageObject
@@ -321,7 +328,7 @@ def test_gemini_2_5_flash_image_preview():
 
         # Test that the function works without throwing the original 400 error
         response = litellm.image_generation(
-            model="gemini/gemini-2.5-flash-image-preview",
+            model=model_name,
             prompt="Generate a simple test image",
             api_key="test_api_key",
         )
@@ -339,9 +346,9 @@ def test_gemini_2_5_flash_image_preview():
             call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
         )
 
-        # Verify it uses generateContent endpoint for gemini-2.5-flash-image-preview (not predict)
+        # Verify it uses generateContent endpoint for Gemini Flash image preview models (not predict)
         assert ":generateContent" in called_url
-        assert "gemini-2.5-flash-image-preview" in called_url
+        assert model_name.split("/", 1)[1] in called_url
 
         # Verify request format is Gemini format (not Imagen)
         request_data = call_args.kwargs.get("json", {})
@@ -355,7 +362,6 @@ def test_gemini_2_5_flash_image_preview():
             "IMAGE",
             "TEXT",
         ]
-
 
 def test_gemini_imagen_models_use_predict_endpoint():
     """
