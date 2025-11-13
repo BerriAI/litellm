@@ -132,6 +132,7 @@ def generate_feedback_box():
 
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from functools import lru_cache
 
 import litellm
 from litellm import Router
@@ -152,6 +153,7 @@ from litellm.constants import (
     PROXY_BATCH_WRITE_AT,
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
+    _REALTIME_BODY_CACHE_SIZE,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -5613,6 +5615,15 @@ async def vertex_ai_live_passthrough_endpoint(
 from litellm import _arealtime
 
 
+@lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
+def _realtime_request_body(model: str) -> bytes:
+    """
+    Generate the realtime websocket request body. Cached with LRU semantics to avoid repeated
+    string formatting work while keeping memory usage bounded.
+    """
+    return f'{{"model": "{model}"}}'.encode()
+
+
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
 async def websocket_endpoint(
@@ -5650,13 +5661,8 @@ async def websocket_endpoint(
     )
 
     request._url = websocket.url
-
-    async def return_body():
-        return_string = f'{{"model": "{model}"}}'
-        # return string as bytes
-        return return_string.encode()
-
-    request.body = return_body  # type: ignore
+    
+    request.body = _realtime_request_body(model)  # type: ignore
 
     ### ROUTE THE REQUEST ###
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
