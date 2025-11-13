@@ -6,6 +6,8 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm.constants import RUNWAYML_DEFAULT_API_VERSION
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -23,16 +25,9 @@ from litellm.types.videos.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
-    from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
-
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    BaseVideoConfig = _BaseVideoConfig
-    BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    BaseVideoConfig = Any
-    BaseLLMException = Any
 
 
 class RunwayMLVideoConfig(BaseVideoConfig):
