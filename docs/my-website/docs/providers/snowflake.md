@@ -3,13 +3,13 @@ import TabItem from '@theme/TabItem';
 
 
 # Snowflake
-| Property                   | Details                                                                                        |
-|----------------------------|------------------------------------------------------------------------------------------------|
-| Description                | The Snowflake Cortex LLM REST API lets you access the COMPLETE function via HTTP POST requests |
-| Provider Route on LiteLLM  | `snowflake/`                                                                                   |
-| Link to Provider Doc       | [Snowflake ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api)   |
-| Base URLs                  | `https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete`, `https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:embed`|
-| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`                                             |
+| Property                   | Details                                                                                                   |
+|----------------------------|-----------------------------------------------------------------------------------------------------------|
+| Description                | The Snowflake Cortex LLM REST API lets you access the COMPLETE and EMBED functions via HTTP POST requests |
+| Provider Route on LiteLLM  | `snowflake/`                                                                                              |
+| Link to Provider Doc       | [Snowflake ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api)              |
+| Base URLs                  | `https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete`,`https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:embed`|
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`                                                        |
 
 
 ## Supported OpenAI Parameters
@@ -23,6 +23,7 @@ import TabItem from '@theme/TabItem';
 ## API KEYS
 
 Snowflake does have API keys. Instead, you access the Snowflake API with your JWT token and account identifier.
+
 It is also possible to use [programmatic access tokens](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens) (PAT). It can be defined by using 'pat/' prefix
 
 
