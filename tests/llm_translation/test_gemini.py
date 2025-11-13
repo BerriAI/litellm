@@ -1137,6 +1137,25 @@ def test_gemini_embedding():
     assert response is not None
 
 
+def test_reasoning_effort_none_mapping():
+    """
+    Test that reasoning_effort='none' correctly maps to thinkingConfig.
+    Related issue: https://github.com/BerriAI/litellm/issues/16420
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Test reasoning_effort="none" mapping
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+        reasoning_effort="none",
+        model="gemini-2.0-flash-thinking-exp-01-21",
+    )
+
+    assert result is not None
+    assert result["thinkingBudget"] == 0
+    assert result["includeThoughts"] is False
+    
 def test_gemini_function_args_preserve_unicode():
     """
     Test for Issue #16533: Gemini function call arguments should preserve non-ASCII characters
