@@ -811,7 +811,7 @@ class LiteLLMCompletionResponsesConfig:
                     OutputImageGenerationCall(
                         type="image_generation_call",
                         id=f"{chat_completion_response.id}_img_{idx}",
-                        status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                        status=LiteLLMCompletionResponsesConfig._map_finish_reason_to_image_generation_status(
                             choice.finish_reason
                         ),
                         result=base64_data,
@@ -819,6 +819,26 @@ class LiteLLMCompletionResponsesConfig:
                 )
 
         return image_generation_items
+
+    @staticmethod
+    def _map_finish_reason_to_image_generation_status(
+        finish_reason: Optional[str],
+    ) -> Literal["in_progress", "completed", "incomplete", "failed"]:
+        """
+        Map finish_reason to image generation status.
+
+        Image generation status only supports: in_progress, completed, incomplete, failed
+        (does not support: cancelled, queued like general ResponsesAPIStatus)
+        """
+        if finish_reason == "stop":
+            return "completed"
+        elif finish_reason == "length":
+            return "incomplete"
+        elif finish_reason in ["content_filter", "error"]:
+            return "failed"
+        else:
+            # Default to completed for other cases
+            return "completed"
 
     @staticmethod
     def _extract_base64_from_data_url(data_url: str) -> Optional[str]:
