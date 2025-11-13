@@ -1444,9 +1444,6 @@ class DBSpendUpdateWriter:
             )
             return
 
-        print("org_id", org_id)
-        print("payload", payload)
-
         payload_with_org = cast(
             SpendLogsPayload,
             {
