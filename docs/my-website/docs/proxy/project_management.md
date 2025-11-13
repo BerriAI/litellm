@@ -28,81 +28,85 @@ graph TD
 
 **Hierarchy**: `Organizations > Teams > Projects > Keys`
 
-### Example: Team with Multiple Use Cases
-
-```
-Organization: Acme Corp
-└── Team A [no models] → Uses SCIM for onboarding team members
-    ├── Project: Flight Search Use Case [gpt-4, gpt-3.5-turbo]
-    │   ├── API Key 1 (Production)
-    │   └── API Key 2 (Staging)
-    ├── Project: Hotel Recommendations [claude-3-sonnet, gpt-4]
-    │   └── API Key 3
-    └── Project: Customer Support Bot [gpt-4, claude-3-haiku]
-        ├── API Key 4
-        └── API Key 5
-```
-
-**Key Points:**
-- Teams have no models assigned (model access is controlled at the project level)
-- Each project (use case) has specific models it can access
-- Projects can have different budgets and rate limits per model
-- Multiple API keys can belong to the same project
-
-## Use Cases
-
-- **Use Case Management**: Create separate projects for different applications or use cases within a team
-- **Budget Control**: Set model-specific quotas and budgets per project
-- **Spend Tracking**: Track costs and usage at the project level for reporting
-- **Access Control**: Control which models and resources each project can access
-
 ## Quick Start
 
-### 1. Create a Project
+This walkthrough shows how to create a project, generate an API key, make requests, and view project-level spend tracking in the UI.
 
-```bash
+### Step 1: Create a Project
+
+```bash showLineNumbers
 curl --location 'http://0.0.0.0:4000/project/new' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data '{
     "project_alias": "flight-search-assistant",
-    "team_id": "team-123",
+    "team_id": "ad898803-c8a3-4f4a-976a-a3c372cffa45",
     "models": ["gpt-4", "gpt-3.5-turbo"],
     "max_budget": 100,
     "metadata": {
         "use_case_id": "SNOW-12345",
         "responsible_ai_id": "RAI-67890"
     }
-}'
+}' | jq
 ```
 
-### 2. Generate API Key for Project
+**Response:**
+```json
+{
+  "project_id": "e402a141-725a-4437-bff5-d47459189716",
+  "project_alias": "flight-search-assistant",
+  "team_id": "ad898803-c8a3-4f4a-976a-a3c372cffa45",
+  "models": ["gpt-4", "gpt-3.5-turbo"],
+  "max_budget": 100,
+  ...
+}
+```
 
-```bash
-curl --location 'http://0.0.0.0:4000/key/generate' \
+### Step 2: Generate API Key for Project
+
+```bash showLineNumbers
+curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
---data '{
-    "project_id": "project-abc",
-    "key_alias": "flight-search-prod-key",
-    "models": ["gpt-4", "gpt-3.5-turbo"],
-    "max_budget": 50
-}'
+--data-raw '{
+    "models": ["gpt-3.5-turbo", "gpt-4"],
+    "metadata": {"user": "ishaan@berri.ai"},
+    "project_id": "e402a141-725a-4437-bff5-d47459189716"
+}' | jq
 ```
 
-### 3. Make API Calls
+**Response:**
+```json
+{
+  "key": "sk-W8VbscpfuyvHm5TkxRYiXA",
+  "key_name": "sk-...YiXA",
+  "project_id": "e402a141-725a-4437-bff5-d47459189716",
+  ...
+}
+```
 
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
---header 'Authorization: Bearer sk-proj-xyz-abc123...' \
+### Step 3: Use API Key in Chat Completions
+
+```bash showLineNumbers
+curl http://localhost:4000/v1/chat/completions \
 --header 'Content-Type: application/json' \
+--header 'Authorization: Bearer sk-W8VbscpfuyvHm5TkxRYiXA' \
 --data '{
     "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Find flights to Paris"}]
-}'
+    "messages": [{"role": "user", "content": "What is litellm?"}]
+}' | jq
 ```
 
-The request will be tracked under the project for spend reporting.
+### Step 4: View Project Spend in UI
+
+Navigate to the **Logs** page in the LiteLLM Admin UI. You'll see the `user_api_key_project_id` tracked in the request metadata:
+
+![Project Spend Tracking](/img/project_spend.png)
+
+As shown above, the spend logs metadata includes:
+- `"user_api_key_project_id": "e402a141-725a-4437-bff5-d47459189716"` - Links the request to your project
+- All costs and token usage are automatically attributed to the project
+- You can query and filter logs by project ID for detailed reporting
 
 ## API Endpoints
 
@@ -312,84 +316,3 @@ curl --location 'http://0.0.0.0:4000/project/new' \
     }
 }'
 ```
-
-## Spend Tracking
-
-Project spend is automatically tracked in the SpendLogs table with the `project_id` stored in the metadata field. You can view project-level spending in the LiteLLM UI or query it directly:
-
-```sql
-SELECT 
-    metadata->>'project_id' as project_id,
-    SUM(spend) as total_spend,
-    COUNT(*) as request_count
-FROM "LiteLLM_SpendLogs"
-WHERE metadata->>'project_id' = 'project-abc'
-GROUP BY metadata->>'project_id';
-```
-
-## Best Practices
-
-1. **Use Meaningful Names**: Use descriptive `project_alias` values that clearly identify the use case
-2. **Set Budgets**: Always set `max_budget` to prevent runaway costs
-3. **Use Metadata**: Store important information like use case IDs, cost centers, and approvals in metadata
-4. **Monitor Spend**: Regularly check project spend using `/project/info`
-5. **Separate Environments**: Create separate projects for dev, staging, and production
-6. **Model Restrictions**: Only grant access to models that are actually needed for the use case
-
-## Example: Expedia Use Case
-
-This example shows how to implement a use-case approval workflow similar to Expedia's requirements:
-
-```bash
-# 1. Employee gets approved use-case ID from ServiceNow (e.g., SNOW-12345)
-
-# 2. Create project with mandatory metadata
-curl --location 'http://0.0.0.0:4000/project/new' \
---header 'Authorization: Bearer sk-1234' \
---header 'Content-Type: application/json' \
---data '{
-    "project_alias": "travel-recommendation-engine",
-    "team_id": "team-travel-products",
-    "models": ["gpt-4", "claude-3-sonnet"],
-    "max_budget": 1000,
-    "metadata": {
-        "use_case_id": "SNOW-12345",
-        "responsible_ai_id": "RAI-67890",
-        "cost_center": "travel-products",
-        "approved_by": "jane.smith@company.com",
-        "approval_date": "2025-01-15"
-    }
-}'
-
-# 3. Set model-specific quotas
-curl --location 'http://0.0.0.0:4000/project/update' \
---header 'Authorization: Bearer sk-1234' \
---header 'Content-Type: application/json' \
---data '{
-    "project_id": "project-abc",
-    "metadata": {
-        "model_tpm_limit": {
-            "gpt-4": 100000,
-            "claude-3-sonnet": 200000
-        }
-    }
-}'
-
-# 4. Generate API keys for the project
-curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
---header 'Content-Type: application/json' \
---data '{
-    "project_id": "project-abc",
-    "key_alias": "travel-rec-prod",
-    "models": ["gpt-4", "claude-3-sonnet"]
-}'
-```
-
-## Permissions
-
-- **Proxy Admins**: Can create, update, delete, and view all projects
-- **Team Admins**: Can create, update, and view projects for their teams
-- **Team Members**: Can view projects for their teams
-- **Other Users**: No access to projects outside their teams
-
