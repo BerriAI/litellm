@@ -605,8 +605,13 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        # only log raw LLM request/response if message_logging is on and not globally turned off
-        if litellm.turn_off_message_logging or not self.message_logging:
+        # only log raw LLM request/response if message_logging is on, not globally turned off,
+        # and if raw request logging is enabled
+        if (
+            litellm.turn_off_message_logging
+            or not self.message_logging
+            or not litellm.log_raw_request_response
+        ):
             return
 
         litellm_params = kwargs.get("litellm_params", {})
@@ -1078,7 +1083,9 @@ class OpenTelemetry(CustomLogger):
                     span=span, key="hidden_params", value=safe_dumps(hidden_params)
                 )
             # Cost breakdown tracking
-            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get("cost_breakdown")
+            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get(
+                "cost_breakdown"
+            )
             if cost_breakdown:
                 for key, value in cost_breakdown.items():
                     if value is not None:
