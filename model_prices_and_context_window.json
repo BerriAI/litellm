@@ -11670,6 +11670,7 @@
         "litellm_provider": "vertex_ai-language-models",
         "max_audio_length_hours": 8.4,
         "max_audio_per_prompt": 1,
+        "supports_reasoning": false,
         "max_images_per_prompt": 3000,
         "max_input_tokens": 32768,
         "max_output_tokens": 32768,

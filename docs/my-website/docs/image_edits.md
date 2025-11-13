@@ -14,9 +14,9 @@ LiteLLM provides image editing functionality that maps to OpenAI's `/images/edit
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
 | Supported operations | Create image edits | Single and multiple images supported |
-| Supported LiteLLM SDK Versions | 1.63.8+ | |
-| Supported LiteLLM Proxy Versions | 1.71.1+ | |
-| Supported LLM providers | **OpenAI** | Currently only `openai` is supported |
+| Supported LiteLLM SDK Versions | 1.63.8+ | Gemini support requires 1.79.3+ |
+| Supported LiteLLM Proxy Versions | 1.71.1+ | Gemini support requires 1.79.3+ |
+| Supported LLM providers | **OpenAI**, **Gemini (Google AI Studio)** | Gemini supports the new `gemini-2.5-flash-image` family |
 
  #### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
 
@@ -149,6 +149,54 @@ for i, image_data in enumerate(response.data):
     print(f"Image {i+1}: {image_data.url}")
 ```
 
+```
+
+</TabItem>
+
+<TabItem value="gemini" label="Gemini">
+
+#### Basic Image Edit
+```python showLineNumbers title="Gemini Image Edit"
+import base64
+import os
+from litellm import image_edit
+
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+
+response = image_edit(
+    model="gemini/gemini-2.5-flash-image",
+    image=open("original_image.png", "rb"),
+    prompt="Add aurora borealis to the night sky",
+    size="1792x1024",  # mapped to aspectRatio=16:9 for Gemini
+)
+
+edited_image_bytes = base64.b64decode(response.data[0].b64_json)
+with open("edited_image.png", "wb") as f:
+    f.write(edited_image_bytes)
+```
+
+#### Multiple Images Edit
+```python showLineNumbers title="Gemini Multiple Images Edit"
+import base64
+import os
+from litellm import image_edit
+
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+
+response = image_edit(
+    model="gemini/gemini-2.5-flash-image",
+    image=[
+        open("scene.png", "rb"),
+        open("style_reference.png", "rb"),
+    ],
+    prompt="Blend the reference style into the scene while keeping the subject sharp.",
+)
+
+for idx, image_obj in enumerate(response.data):
+    with open(f"gemini_edit_{idx}.png", "wb") as f:
+        f.write(base64.b64decode(image_obj.b64_json))
+```
+
 </TabItem>
 </Tabs>
 
@@ -222,6 +270,36 @@ curl -X POST "http://localhost:4000/v1/images/edits" \
   -F "n=1" \
   -F "size=1024x1024" \
   -F "response_format=url"
+```
+
+```
+
+</TabItem>
+
+<TabItem value="gemini" label="Gemini">
+
+1. Add the Gemini image edit model to your `config.yaml`:
+```yaml showLineNumbers title="Gemini Proxy Configuration"
+model_list:
+  - model_name: gemini-image-edit
+    litellm_params:
+      model: gemini/gemini-2.5-flash-image
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start the LiteLLM proxy server:
+```bash showLineNumbers title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+```
+
+3. Make an image edit request (Gemini responses are base64-only):
+```bash showLineNumbers title="Gemini Proxy Image Edit"
+curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -F "model=gemini-image-edit" \
+  -F "image=@original_image.png" \
+  -F "prompt=Add a warm golden-hour glow to the scene" \
+  -F "size=1024x1024"
 ```
 
 </TabItem>

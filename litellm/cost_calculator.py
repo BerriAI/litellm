@@ -943,6 +943,7 @@ def completion_cost(  # noqa: PLR0915
                         n=n,
                         size=size,
                         optional_params=optional_params,
+                        call_type=call_type,
                     )
                 elif (
                     call_type == CallTypes.create_video.value

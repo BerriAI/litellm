@@ -7720,6 +7720,10 @@ class ProviderConfigManager:
             from litellm.llms.azure_ai.image_edit import get_azure_ai_image_edit_config
 
             return get_azure_ai_image_edit_config(model)
+        elif LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.image_edit import get_gemini_image_edit_config
+
+            return get_gemini_image_edit_config(model)
         elif LlmProviders.LITELLM_PROXY == provider:
             from litellm.llms.litellm_proxy.image_edit.transformation import (
                 LiteLLMProxyImageEditConfig,
