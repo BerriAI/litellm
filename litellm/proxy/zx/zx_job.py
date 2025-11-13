@@ -10,7 +10,7 @@ import json
 
 logger = logging.getLogger()
 
-NOCOBASE_API_URL = os.environ.get('NOCOBASE_API_URL', 'https://test-etools-nocobase.fzzixun.com/nocobase/api')
+NOCOBASE_API_URL = os.environ.get('NOCOBASE_API_URL')
 NOCOBASE_API_TOKEN = os.environ.get('NOCOBASE_API_TOKEN')
 
 
@@ -143,23 +143,27 @@ async def litellm_get_users(start_date, end_date):
     return results
 
 
-async def ai_usage_to_nocobase():
+async def ai_usage_to_nocobase(start_date: str | None = None, end_date: str | None = None):
     from litellm._logging import verbose_proxy_logger
     yesterday_str = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=1)).strftime('%Y-%m-%d')
+    if start_date is None:
+        start_date = yesterday_str
+    if end_date is None:
+        end_date = yesterday_str
 
     # 用户列表
     try:
-        verbose_proxy_logger.info(f"[{datetime.now()}] LiteLLM用户采集开始，时间范围: [{yesterday_str}, {yesterday_str}]")
-        datas = await litellm_get_users(yesterday_str, yesterday_str)
+        verbose_proxy_logger.info(f"[{datetime.now()}] LiteLLM用户采集开始，时间范围: [{start_date}, {end_date}]")
+        datas = await litellm_get_users(start_date, end_date)
         verbose_proxy_logger.info(f"[{datetime.now()}] LiteLLM用户采集结束，推送nocobase开始: len={len(datas)}")
-        data_to_nocobase(datas=datas, table='ai_user_litellm', filter='{"$and":[{"createdAt":{"$dateOn":"' + yesterday_str + '"}}]}')
+        data_to_nocobase(datas=datas, table='ai_user_litellm', filter='{"$and":[{"createdAt":{"$dateBetween":["' + start_date + '","'+ end_date +'"]}}]}')
         verbose_proxy_logger.info(f"[{datetime.now()}] LiteLLM用户推送nocobase结束")
     except Exception as e:
-        verbose_proxy_logger.exception(f'LiteLLM用户采集失败: 日期[{yesterday_str}] {e}')
+        verbose_proxy_logger.exception(f'LiteLLM用户采集失败: 日期[{start_date},{end_date}] {e}')
 
-    verbose_proxy_logger.info(f"[{datetime.now()}] LiteLLM用量采集开始，时间范围: [{yesterday_str}, {yesterday_str}]")
+    verbose_proxy_logger.info(f"[{datetime.now()}] LiteLLM用量采集开始，时间范围: [{start_date}, {end_date}]")
     # res = await litellm_get_user_daily_activity_aggregated('2025-07-01', '2025-10-21')
-    res = await litellm_get_user_daily_activity_aggregated(yesterday_str, yesterday_str)
+    res = await litellm_get_user_daily_activity_aggregated(start_date, end_date)
     verbose_proxy_logger.info(f"[{datetime.now()}] LiteLLM用量采集结束，len={len(res.results)}")
 
     def metrics_data(breakdown):
@@ -190,10 +194,10 @@ async def ai_usage_to_nocobase():
             if m.metadata.key_alias and '@' in m.metadata.key_alias
         ]
         verbose_proxy_logger.info(f"[{datetime.now()}] 推送nocobase开始: ai_usage_litellm 用户用量 len={len(datas)}")
-        data_to_nocobase(datas=datas, table='ai_usage_litellm', filter='{"$and":[{"date":{"$dateOn":"' + yesterday_str + '"}}]}')
+        data_to_nocobase(datas=datas, table='ai_usage_litellm', filter='{"$and":[{"date":{"$dateBetween":["' + start_date + '","'+ end_date +'"]}}]}')
         verbose_proxy_logger.info(f"[{datetime.now()}] 推送nocobase结束: ai_usage_litellm 用户用量")
     except Exception as e:
-        verbose_proxy_logger.exception(f'推送nocobase失败: ai_usage_litellm 用户用量 日期[{yesterday_str}] {e}')
+        verbose_proxy_logger.exception(f'推送nocobase失败: ai_usage_litellm 用户用量 日期[{start_date}, {end_date}] {e}')
 
     # 模型用量
     try:
@@ -209,10 +213,10 @@ async def ai_usage_to_nocobase():
             if m.metadata.key_alias and '@' in m.metadata.key_alias
         ]
         verbose_proxy_logger.info(f"[{datetime.now()}] 推送nocobase开始: ai_usage_litellm_detail 模型 len={len(datas)}")
-        data_to_nocobase(datas=datas, table='ai_usage_litellm_detail', filter='{"$and":[{"catalog":{"$eq":"model"}},{"date":{"$dateOn":"' + yesterday_str + '"}}]}')
+        data_to_nocobase(datas=datas, table='ai_usage_litellm_detail', filter='{"$and":[{"catalog":{"$eq":"model"}},{"date":{"$dateBetween":["' + start_date + '","'+ end_date +'"]}}]}')
         verbose_proxy_logger.info(f"[{datetime.now()}] 推送nocobase结束: ai_usage_litellm_detail 模型")
     except Exception as e:
-        verbose_proxy_logger.exception(f'推送nocobase失败: ai_usage_litellm_detail 模型 日期[{yesterday_str}] {e}')
+        verbose_proxy_logger.exception(f'推送nocobase失败: ai_usage_litellm_detail 模型 日期[{start_date}, {end_date}] {e}')
 
     # MCP用量
     try:
@@ -228,10 +232,10 @@ async def ai_usage_to_nocobase():
             if m.metadata.key_alias and '@' in m.metadata.key_alias
         ]
         verbose_proxy_logger.info(f"[{datetime.now()}] 推送nocobase开始: ai_usage_litellm_detail mcp len={len(datas)}")
-        data_to_nocobase(datas=datas, table='ai_usage_litellm_detail', filter='{"$and":[{"catalog":{"$eq":"mcp_server"}},{"date":{"$dateOn":"' + yesterday_str + '"}}]}')
+        data_to_nocobase(datas=datas, table='ai_usage_litellm_detail', filter='{"$and":[{"catalog":{"$eq":"mcp_server"}},{"date":{"$dateBetween":["' + start_date + '","'+ end_date +'"]}}]}')
         verbose_proxy_logger.info(f"[{datetime.now()}] 推送nocobase结束: ai_usage_litellm_detail mcp")
     except Exception as e:
-        verbose_proxy_logger.exception(f'推送nocobase失败: ai_usage_litellm_detail mcp 日期[{yesterday_str}] {e}')
+        verbose_proxy_logger.exception(f'推送nocobase失败: ai_usage_litellm_detail mcp 日期[{start_date}, {end_date}] {e}')
 
 
 if __name__ == "__main__":

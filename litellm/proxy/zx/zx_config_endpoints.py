@@ -5,7 +5,8 @@ import json
 import time
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, Response, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints import internal_user_endpoints
 from litellm.proxy.management_endpoints import key_management_endpoints
 from litellm.proxy.management_endpoints import team_endpoints
@@ -50,14 +51,15 @@ def get_store(token: str | None):
 @router.get(
     "/zx/job",
     tags=["ZX"],
+    dependencies=[Depends(user_api_key_auth)],
 )
-async def zx_job(request: Request):
+async def zx_job(request: Request, start_date: str | None = None, end_date: str | None = None):
     """
     定时任务
     """
 
     from . import zx_job
-    _ = await zx_job.ai_usage_to_nocobase()
+    _ = await zx_job.ai_usage_to_nocobase(start_date, end_date)
     # return [request.headers, request.url, request.client]
     return HTMLResponse(content="""
 <!doctype html>
