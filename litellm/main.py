@@ -5621,6 +5621,9 @@ def transcription(
         # set API KEY
 
         api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")  # type: ignore
+
+        # fix cost caculation error for different providers
+        litellm_params_dict["custom_llm_provider"] = custom_llm_provider
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
             audio_file=file,

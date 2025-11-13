@@ -97,35 +97,41 @@ def cost_per_second(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-
     ## GET MODEL INFO
     model_info = get_model_info(
         model=model, custom_llm_provider=custom_llm_provider or "openai"
     )
+
+    # For Groq transcription, recordings under 10 seconds are billed as 10 seconds.
+    if custom_llm_provider and custom_llm_provider == "groq":
+        if duration > 0 and duration < 10:
+            duration = 10
+
     prompt_cost = 0.0
     completion_cost = 0.0
-    ## Speech / Audio cost calculation
+    #  first total input cost
     if (
-        "output_cost_per_second" in model_info
-        and model_info["output_cost_per_second"] is not None
+            "input_cost_per_second" in model_info
+            and model_info["input_cost_per_second"] is not None
+    ):
+        verbose_logger.debug(
+            f"For model={model} - input_cost_per_second: {model_info.get('input_cost_per_second')}; duration: {duration}"
+        )
+        ## COST PER SECOND ##
+        if model_info["input_cost_per_second"] > 0:
+            prompt_cost = model_info["input_cost_per_second"] * duration
+            return prompt_cost, completion_cost
+    #  then total output cost
+    if (
+            "output_cost_per_second" in model_info
+            and model_info["output_cost_per_second"] is not None
     ):
         verbose_logger.debug(
             f"For model={model} - output_cost_per_second: {model_info.get('output_cost_per_second')}; duration: {duration}"
         )
         ## COST PER SECOND ##
         completion_cost = model_info["output_cost_per_second"] * duration
-    elif (
-        "input_cost_per_second" in model_info
-        and model_info["input_cost_per_second"] is not None
-    ):
-        verbose_logger.debug(
-            f"For model={model} - input_cost_per_second: {model_info.get('input_cost_per_second')}; duration: {duration}"
-        )
-        ## COST PER SECOND ##
-        prompt_cost = model_info["input_cost_per_second"] * duration
-        completion_cost = 0.0
-
-    return prompt_cost, completion_cost
+        return prompt_cost, completion_cost
 
 
 def video_generation_cost(

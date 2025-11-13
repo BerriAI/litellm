@@ -109,6 +109,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             return self.async_audio_transcriptions(  # type: ignore
                 audio_file=audio_file,
                 data=data,
+                litellm_params=litellm_params,
                 model_response=model_response,
                 timeout=timeout,
                 api_key=api_key,
@@ -155,7 +156,11 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             additional_args={"complete_input_dict": data},
             original_response=stringified_response,
         )
-        hidden_params = {"model": model, "custom_llm_provider": "openai"}
+        # fix error for groq costing ,here is a hardcode
+        original_provider = (
+                litellm_params.get("custom_llm_provider") or "openai"
+        )
+        hidden_params = {"model": model, "custom_llm_provider": original_provider}
         final_response: TranscriptionResponse = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         return final_response
 
@@ -163,6 +168,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         self,
         audio_file: FileTypes,
         data: dict,
+        litellm_params: dict,
         model_response: TranscriptionResponse,
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
@@ -212,7 +218,12 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             )
             # Extract the actual model from data instead of hardcoding "whisper-1"
             actual_model = data.get("model", "whisper-1")
-            hidden_params = {"model": actual_model, "custom_llm_provider": "openai"}
+
+            # fix error for groq costing ,here is a hardcode
+            original_provider = (
+                    litellm_params.get("custom_llm_provider") or "openai"
+            )
+            hidden_params = {"model": actual_model, "custom_llm_provider": original_provider}
 
             return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         except Exception as e:
