@@ -1022,7 +1022,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=part["functionCall"]["name"],
-                    arguments=json.dumps(part["functionCall"]["args"]),
+                    arguments=json.dumps(part["functionCall"]["args"], ensure_ascii=False),
                 )
                 if is_function_call is True:
                     function = _function_chunk
