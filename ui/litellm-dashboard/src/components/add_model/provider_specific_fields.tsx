@@ -591,6 +591,22 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       required: true,
     },
   ],
+  [Providers.BurnCloud]: [
+    {
+      key: "api_base",
+      label: "API Base",
+      type: "text",
+      tooltip: "Common endpoints: https://ai.burncloud.com/v1, https://b.burncloud.com/v1",
+      placeholder: "https://ai.burncloud.com/v1",
+      required: true,
+    },
+    {
+      key: "api_key",
+      label: "API Key",
+      type: "password",
+      required: true,
+    },
+  ],
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {

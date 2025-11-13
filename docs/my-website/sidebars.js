@@ -601,6 +601,7 @@ const sidebars = {
         "providers/ovhcloud",  
         "providers/wandb_inference",
         "providers/cometapi",
+        "providers/burncloud",
       ],
     },
     {

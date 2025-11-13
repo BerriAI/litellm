@@ -565,9 +565,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -744,7 +744,6 @@ def function_setup(  # noqa: PLR0915
                 and isinstance(messages[0], dict)
                 and "content" in messages[0]
             ):
-
                 buffer = StringIO()
                 for m in messages:
                     content = m.get("content", "")
@@ -1332,9 +1331,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1423,16 +1422,16 @@ def client(original_function):  # noqa: PLR0915
             print_verbose(
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
-            _caching_handler_response: Optional[CachingHandlerResponse] = (
-                await _llm_caching_handler._async_get_cache(
-                    model=model or "",
-                    original_function=original_function,
-                    logging_obj=logging_obj,
-                    start_time=start_time,
-                    call_type=call_type,
-                    kwargs=kwargs,
-                    args=args,
-                )
+            _caching_handler_response: Optional[
+                CachingHandlerResponse
+            ] = await _llm_caching_handler._async_get_cache(
+                model=model or "",
+                original_function=original_function,
+                logging_obj=logging_obj,
+                start_time=start_time,
+                call_type=call_type,
+                kwargs=kwargs,
+                args=args,
             )
 
             if _caching_handler_response is not None:
@@ -3191,10 +3190,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3314,6 +3313,7 @@ def pre_process_optional_params(
             and custom_llm_provider != "vercel_ai_gateway"
             and custom_llm_provider != "nebius"
             and custom_llm_provider != "wandb"
+            and custom_llm_provider != "burncloud"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
@@ -3323,16 +3323,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4095,6 +4095,17 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    elif custom_llm_provider == "burncloud":
+        optional_params = litellm.OpenAIConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -4452,9 +4463,9 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
             return delta if isinstance(delta, str) else ""
 
     # Handle standard ModelResponse and ModelResponseStream
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     response_str = ""
     for choice in _choices:
@@ -5645,6 +5656,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("MOONSHOT_API_KEY")
+        elif custom_llm_provider == "burncloud":
+            if "BURNCLOUD_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("BURNCLOUD_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -7036,7 +7052,6 @@ class ProviderConfigManager:
             if route == "v2":
                 return litellm.CohereV2ChatConfig()
             else:
-
                 return litellm.CohereChatConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
             return litellm.SnowflakeConfig()
@@ -7218,6 +7233,8 @@ class ProviderConfigManager:
             return litellm.HyperbolicChatConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudChatConfig()
+        elif litellm.LlmProviders.BURNCLOUD == provider:
+            return litellm.BurnCloudChatConfig()
         return None
 
     @staticmethod
@@ -7368,8 +7385,11 @@ class ProviderConfigManager:
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
             # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
             is_gpt_model = model and "gpt" in model.lower()
-            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt_model))
-            
+            is_o_series = model and (
+                "o_series" in model.lower()
+                or (supports_reasoning(model) and not is_gpt_model)
+            )
+
             if is_o_series:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:

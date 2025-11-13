@@ -24537,5 +24537,37 @@
             "1024x1792",
             "1792x1024"
         ]
+    },
+    "burncloud/gpt-3.5-turbo": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 7e-08,
+        "input_cost_per_token": 2.7e-07,
+        "input_cost_per_token_cache_hit": 7e-08,
+        "litellm_provider": "burncloud",
+        "max_input_tokens": 65536,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-06,
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true
+    },
+    "burncloud/deepseek-r1": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 7e-08,
+        "input_cost_per_token": 2.7e-07,
+        "input_cost_per_token_cache_hit": 7e-08,
+        "litellm_provider": "burncloud",
+        "max_input_tokens": 65536,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-06,
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true
     }
 }
