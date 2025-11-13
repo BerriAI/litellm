@@ -7,6 +7,7 @@ Refactored to follow LiteLLM patterns with class-based architecture and DRY prin
 
 import json
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Callable,
@@ -17,6 +18,11 @@ from typing import (
     Optional,
     Union,
 )
+
+if TYPE_CHECKING:
+    import httpx
+else:
+    httpx = None
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -903,8 +909,8 @@ def completion(
     api_base: Optional[str] = None,
     client=None,
     acompletion: bool = False,
-    stream: bool = False,
-    timeout: Optional[Union[float, int]] = None,
+    stream: Optional[bool] = False,
+    timeout: Optional[Union[float, int, "httpx.Timeout"]] = None,
 ) -> Union[ModelResponse, CustomStreamWrapper, Coroutine[Any, Any, ModelResponse]]:
     """
     Handle completion requests for Apple Foundation Models.
@@ -918,9 +924,12 @@ def completion(
 
     llm = AppleFoundationModelsLLM()
 
+    # Convert None to False for stream parameter
+    stream_value = stream if stream is not None else False
+
     verbose_logger.debug(
         "Apple Foundation Models dispatching with stream=%s async=%s",
-        stream,
+        stream_value,
         acompletion,
     )
     return llm.dispatch_completion(
@@ -929,6 +938,6 @@ def completion(
         model_response=model_response,
         logging_obj=logging_obj,
         optional_params=optional_params,
-        stream=stream,
+        stream=stream_value,
         async_mode=acompletion,
     )
