@@ -2,6 +2,7 @@ from .cost_calculator import cost_calculator
 from .image_generation import (
     FalAIBaseConfig,
     FalAIBriaConfig,
+    FalAIFluxProV11Config,
     FalAIFluxProV11UltraConfig,
     FalAIImageGenerationConfig,
     FalAIImagen4Config,
@@ -17,6 +18,7 @@ __all__ = [
     "FalAIImagen4Config",
     "FalAIRecraftV3Config",
     "FalAIBriaConfig",
+    "FalAIFluxProV11Config",
     "FalAIFluxProV11UltraConfig",
     "FalAIStableDiffusionConfig",
     "get_fal_ai_image_generation_config",
