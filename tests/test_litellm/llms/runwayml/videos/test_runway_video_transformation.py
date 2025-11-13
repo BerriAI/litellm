@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from litellm.llms.runway.videos.transformation import RunwayMLVideoConfig
+from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
 
