@@ -4,7 +4,7 @@ import Title from "antd/es/typography/Title";
 import { PlusCircle } from "lucide-react";
 import React from "react";
 import { AlertingObject } from "./types";
-import { Icon } from "@tremor/react";
+import { Icon, Button } from "@tremor/react";
 import { PencilAltIcon, TrashIcon, PlayIcon } from "@heroicons/react/outline";
 
 type LoggingCallbacksProps = {
@@ -113,19 +113,11 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
   return (
     <>
       <div className="w-full mt-4">
-        <div className="flex justify-between items-center mb-4">
-          <Title level={3} className="!m-0">
-            Active Logging Callbacks
-          </Title>
-          <div className="flex gap-2">
-            <button
-              onClick={onAdd}
-              className="flex items-center gap-2 px-4 py-2 bg-[#6366f1] text-white rounded-md hover:bg-[#5558eb] transition-colors"
-            >
-              <PlusCircle size={18} />
-              Add Callback
-            </button>
-          </div>
+        <Button onClick={onAdd} className="mx-auto">
+          + Add Callback
+        </Button>
+        <div className="flex justify-between items-center my-2">
+          <Title level={4}>Active Logging Callbacks</Title>
         </div>
         {/* Empty state */}
         {callbacks.length === 0 ? (
