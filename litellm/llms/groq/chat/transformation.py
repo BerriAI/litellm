@@ -1,9 +1,12 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload, Iterator, AsyncIterator
 
 import httpx
+from litellm.llms.openai.common_utils import OpenAIError
+
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from pydantic import BaseModel
 
 import litellm
@@ -16,7 +19,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
@@ -64,6 +67,18 @@ class GroqChatConfig(OpenAILikeChatConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return GroqChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
     def get_supported_openai_params(self, model: str) -> list:
         base_params = super().get_supported_openai_params(model)
@@ -254,3 +269,15 @@ class GroqChatConfig(OpenAILikeChatConfig):
             return "auto"
         
         return cast(Literal["auto", "default", "flex"], original_service_tier)
+
+class GroqChatCompletionStreamingHandler(BaseModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        error = chunk.get("error")
+        if error:
+            raise OpenAIError(
+                status_code=error.get("code"),
+                message=error.get("message"),
+                body=chunk
+            )
+
+        return super().chunk_parser(chunk)
