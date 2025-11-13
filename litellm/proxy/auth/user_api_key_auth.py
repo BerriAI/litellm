@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
@@ -1210,8 +1211,40 @@ def _populate_request_with_path_params(
             f"_populate_request_with_path_params: Found path_params, vector_store_ids={request_data.get('vector_store_ids')}"
         )
         return request_data
-    
+
+    # Fallback: parse the URL path directly to extract vector_store_id
+    _add_vector_store_id_from_path(request_data=request_data, request=request)
+
     return request_data
+
+
+def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None:
+    """
+    Parse the request path to find /vector_stores/{vector_store_id}/... segments.
+
+    When found, ensure both vector_store_id and vector_store_ids are populated.
+    """
+    path = request.url.path
+    vector_store_match = re.search(r"/vector_stores/([^/]+)/", path)
+    if vector_store_match:
+        vector_store_id = vector_store_match.group(1)
+        verbose_proxy_logger.debug(
+            f"_populate_request_with_path_params: Extracted vector_store_id={vector_store_id} from path={path}"
+        )
+        request_data.setdefault("vector_store_id", vector_store_id)
+        existing_ids = request_data.get("vector_store_ids")
+        if isinstance(existing_ids, list):
+            if vector_store_id not in existing_ids:
+                existing_ids.append(vector_store_id)
+        else:
+            request_data["vector_store_ids"] = [vector_store_id]
+        verbose_proxy_logger.debug(
+            f"_populate_request_with_path_params: Updated request_data with vector_store_ids={request_data.get('vector_store_ids')}"
+        )
+    else:
+        verbose_proxy_logger.debug(
+            f"_populate_request_with_path_params: No vector_store_id present in path={path}"
+        )
 
 
 @tracer.wrap()
