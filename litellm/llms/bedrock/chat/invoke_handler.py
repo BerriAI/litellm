@@ -493,9 +493,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params["original_response"] = (
-                            outputText  # allow user to access raw anthropic tool calling response
-                        )
+                        model_response._hidden_params[
+                            "original_response"
+                        ] = outputText  # allow user to access raw anthropic tool calling response
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -793,9 +793,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params["stream"] = (
-                        True  # cohere requires stream = True in inference params
-                    )
+                    inference_params[
+                        "stream"
+                    ] = True  # cohere requires stream = True in inference params
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
@@ -1184,6 +1184,7 @@ class AWSEventStreamDecoder:
         self.parser = EventStreamJSONParser()
         self.content_blocks: List[ContentBlockDeltaEvent] = []
         self.tool_calls_index: Optional[int] = None
+        self.response_id = f"chatcmpl-{uuid.uuid4()}"  # Create a single response ID for the entire stream session.
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1378,6 +1379,7 @@ class AWSEventStreamDecoder:
                         ),
                     )
                 ],
+                id=self.response_id,
                 usage=usage,
                 provider_specific_fields=model_response_provider_specific_fields,
             )

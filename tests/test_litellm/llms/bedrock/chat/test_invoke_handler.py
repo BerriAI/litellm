@@ -1,14 +1,10 @@
-import json
 import os
 import sys
 
-import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
-from unittest.mock import MagicMock, patch
 
 from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
@@ -167,3 +163,36 @@ def test_transform_tool_calls_index_with_optional_arg_func():
         tool_call_hunk_dict = tool_call_hunk.model_dump()
         for tool_call in tool_call_hunk_dict["choices"][0]["delta"]["tool_calls"]:
             assert tool_call["index"] == 0
+
+
+def test_bedrock_converse_streaming_consistent_id():
+    """
+    Tests that all chunks in a Bedrock Converse stream response share the same ID.
+    This verifies compliance with the OpenAI streaming specification.
+    """
+    # Simulate a series of chunks from a Bedrock Converse stream
+    mock_stream_chunks = [
+        {"delta": {"text": "Hello"}, "contentBlockIndex": 0},
+        {"delta": {"text": " world"}, "contentBlockIndex": 0},
+        {"delta": {"text": "!"}, "contentBlockIndex": 0},
+        {"stopReason": "stop"},
+    ]
+
+    decoder = AWSEventStreamDecoder(model="bedrock/anthropic.claude-3-sonnet-v1:0")
+
+    #  Process each chunk and collect the parsed responses
+    parsed_responses = []
+    for chunk in mock_stream_chunks:
+        if "delta" in chunk or "stopReason" in chunk:
+            parsed_responses.append(decoder.converse_chunk_parser(chunk))
+
+    # Verify that all parsed responses have the same, non-null ID
+    assert len(parsed_responses) > 1, "Should have processed multiple chunks"
+
+    first_chunk_id = parsed_responses[0].id
+    assert first_chunk_id is not None, "The first chunk's ID should not be null"
+
+    for response in parsed_responses[1:]:
+        assert (
+            response.id == first_chunk_id
+        ), "All subsequent chunk IDs must match the first one"
