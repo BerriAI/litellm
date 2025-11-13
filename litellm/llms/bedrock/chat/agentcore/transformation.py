@@ -118,7 +118,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         # Check if api_key (bearer token) is provided for Cognito authentication
         jwt_token = optional_params.get("api_key")
         if jwt_token:
-            verbose_logger.debug(f"AgentCore: Using Bearer token authentication (Cognito/JWT) - token: {jwt_token[:50]}...")
+            verbose_logger.debug(
+                f"AgentCore: Using Bearer token authentication (Cognito/JWT) - token: {jwt_token[:50]}..."
+            )
             headers["Content-Type"] = "application/json"
             headers["Authorization"] = f"Bearer {jwt_token}"
             # Return headers with bearer token and JSON-encoded body (not SigV4 signed)
