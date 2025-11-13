@@ -281,10 +281,8 @@ async def get_organization_daily_activity(
     """
     from litellm.proxy.proxy_server import (
         prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
     )
-
+    
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
