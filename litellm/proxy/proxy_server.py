@@ -5668,14 +5668,8 @@ async def realtime_websocket_endpoint(
         "query_params": query_params,  # Only explicit params
     }
 
-    # Single-pass header dict and list to avoid looping twice
-    headers_dict = {}
-    headers_list = []
-    for key, value in websocket.headers.items():
-        encoded_key = key.lower().encode()
-        encoded_value = value.encode()
-        headers_dict[encoded_key] = encoded_value
-        headers_list.append((encoded_key, encoded_value))
+    # Use raw ASGI headers (already lowercase bytes) to avoid extra work
+    headers_list = list(websocket.scope.get("headers") or [])
 
     scope = REALTIME_REQUEST_SCOPE_TEMPLATE.copy()
     scope["headers"] = headers_list
