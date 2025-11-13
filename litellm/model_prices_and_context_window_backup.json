@@ -24720,6 +24720,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
+    },
     "runwayml/gen4_turbo": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
