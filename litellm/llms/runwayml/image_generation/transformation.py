@@ -335,7 +335,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         
 
         verbose_logger.debug(
-            f"RunwayML starting polling..."
+            "RunwayML starting polling..."
         )
         
         # Get task ID
@@ -360,7 +360,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         # Update response_data with polled result
         response_data = raw_response.json()
         
-        verbose_logger.debug(f"RunwayML polling complete, transforming to OpenAI format")
+        verbose_logger.debug("RunwayML polling complete, transforming to OpenAI format")
         
         # Transform RunwayML response to OpenAI format
         return self._transform_runwayml_response_to_openai(
@@ -397,7 +397,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
             )
         
         verbose_logger.debug(
-            f"RunwayML starting polling (async)..."
+            "RunwayML starting polling (async)..."
         )
         
         # Get task ID
@@ -422,7 +422,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         # Update response_data with polled result
         response_data = raw_response.json()
         
-        verbose_logger.debug(f"RunwayML polling complete (async), transforming to OpenAI format")
+        verbose_logger.debug("RunwayML polling complete (async), transforming to OpenAI format")
         
         # Transform RunwayML response to OpenAI format
         return self._transform_runwayml_response_to_openai(
