@@ -3536,6 +3536,10 @@ class DailyTeamSpendTransaction(BaseDailySpendTransaction):
     team_id: str
 
 
+class DailyOrganizationSpendTransaction(BaseDailySpendTransaction):
+    organization_id: str
+
+
 class DailyUserSpendTransaction(BaseDailySpendTransaction):
     user_id: str
 
