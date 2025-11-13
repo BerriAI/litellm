@@ -57,6 +57,20 @@ def test_is_error_str_context_window_exceeded(error_str, expected):
 class TestExceptionCheckers:
     """Test the ExceptionCheckers utility methods"""
 
+    def test_is_error_str_rate_limit_ignores_embedded_numbers(self):
+        """An arbitrary 429 inside user-provided payload must not trigger rate-limit detection"""
+
+        error_str = "Invalid user message={'role': 'user', 'content': [{'text': 'payload429snippet'}]}"
+        result = ExceptionCheckers.is_error_str_rate_limit(error_str)
+        assert result is False
+
+    def test_is_error_str_rate_limit_detects_true_rate_limit(self):
+        """A real rate-limit error string should still be detected"""
+
+        error_str = "RateLimitError: OpenAIException - You exceeded your current quota. (status code 429)"
+        result = ExceptionCheckers.is_error_str_rate_limit(error_str)
+        assert result is True
+
     def test_is_azure_content_policy_violation_error_with_policy_violation_text(self):
         """Test detection of Azure content policy violation with explicit policy violation text"""
         
