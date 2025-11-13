@@ -581,6 +581,7 @@ const sidebars = {
           type: "category",
           label: "RunwayML",
           items: [
+            "providers/runwayml/images",
             "providers/runwayml/videos",
           ]
         },
