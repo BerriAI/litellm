@@ -498,7 +498,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             "guardrail_information": standard_logging_payload.get(
                 "guardrail_information", None
             ),
-            "is_streamed_request": self._get_stream_value_from_payload(standard_logging_payload),
+            "is_streamed_request": self._get_stream_value_from_payload(
+                standard_logging_payload
+            ),
         }
 
         #########################################################
@@ -548,21 +550,24 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         # Guardrail overhead latency
         guardrail_info: Optional[
-            StandardLoggingGuardrailInformation
+            list[StandardLoggingGuardrailInformation]
         ] = standard_logging_payload.get("guardrail_information")
         if guardrail_info is not None:
-            _guardrail_duration_seconds: Optional[float] = guardrail_info.get(
-                "duration"
-            )
-            if _guardrail_duration_seconds is not None:
+            total_duration = 0.0
+            for info in guardrail_info:
+                _guardrail_duration_seconds: Optional[float] = info.get("duration")
+                if _guardrail_duration_seconds is not None:
+                    total_duration += float(_guardrail_duration_seconds)
+
+            if total_duration > 0:
                 # Convert from seconds to milliseconds for consistency
-                latency_metrics["guardrail_overhead_time_ms"] = (
-                    _guardrail_duration_seconds * 1000
-                )
+                latency_metrics["guardrail_overhead_time_ms"] = total_duration * 1000
 
         return latency_metrics
 
-    def _get_stream_value_from_payload(self, standard_logging_payload: StandardLoggingPayload) -> bool:
+    def _get_stream_value_from_payload(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> bool:
         """
         Extract the stream value from standard logging payload.
 

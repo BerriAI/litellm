@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Any, Literal, Optional, Tuple, TypedDict, cast
+from typing import Literal, Optional, Tuple, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -11,8 +11,8 @@ from litellm.types.utils import (
     ImageResponse,
     ModelInfo,
     PassthroughCallTypes,
-    Usage,
     ServiceTier,
+    Usage,
 )
 from litellm.utils import get_model_info
 
@@ -118,21 +118,21 @@ def _generic_cost_per_character(
 def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> str:
     """
     Get the appropriate cost key based on service tier.
-    
+
     Args:
         base_key: The base cost key (e.g., "input_cost_per_token")
         service_tier: The service tier ("flex", "priority", or None for standard)
-        
+
     Returns:
         str: The cost key to use (e.g., "input_cost_per_token_flex" or "input_cost_per_token")
     """
     if service_tier is None:
         return base_key
-    
+
     # Only use service tier specific keys for "flex" and "priority"
     if service_tier.lower() in [ServiceTier.FLEX.value, ServiceTier.PRIORITY.value]:
         return f"{base_key}_{service_tier.lower()}"
-    
+
     # For any other service tier, use standard pricing
     return base_key
 
@@ -152,15 +152,15 @@ def _get_token_base_cost(
     # Get service tier aware cost keys
     input_cost_key = _get_service_tier_cost_key("input_cost_per_token", service_tier)
     output_cost_key = _get_service_tier_cost_key("output_cost_per_token", service_tier)
-    cache_creation_cost_key = _get_service_tier_cost_key("cache_creation_input_token_cost", service_tier)
-    cache_read_cost_key = _get_service_tier_cost_key("cache_read_input_token_cost", service_tier)
-    
-    prompt_base_cost = cast(
-        float, _get_cost_per_unit(model_info, input_cost_key)
+    cache_creation_cost_key = _get_service_tier_cost_key(
+        "cache_creation_input_token_cost", service_tier
     )
-    completion_base_cost = cast(
-        float, _get_cost_per_unit(model_info, output_cost_key)
+    cache_read_cost_key = _get_service_tier_cost_key(
+        "cache_read_input_token_cost", service_tier
     )
+
+    prompt_base_cost = cast(float, _get_cost_per_unit(model_info, input_cost_key))
+    completion_base_cost = cast(float, _get_cost_per_unit(model_info, output_cost_key))
     cache_creation_cost = cast(
         float, _get_cost_per_unit(model_info, cache_creation_cost_key)
     )
@@ -168,9 +168,7 @@ def _get_token_base_cost(
         float,
         _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
     )
-    cache_read_cost = cast(
-        float, _get_cost_per_unit(model_info, cache_read_cost_key)
-    )
+    cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
 
     ## CHECK IF ABOVE THRESHOLD
     threshold: Optional[float] = None
@@ -278,7 +276,7 @@ def _get_cost_per_unit(
             verbose_logger.exception(
                 f"litellm.litellm_core_utils.llm_cost_calc.utils.py::calculate_cost_per_component(): Exception occured - {cost_per_unit}\nDefaulting to 0.0"
             )
-    
+
     # If the service tier key doesn't exist or is None, try to fall back to the standard key
     if cost_per_unit is None:
         # Check if any service tier suffix exists in the cost key using ServiceTier enum
@@ -286,7 +284,7 @@ def _get_cost_per_unit(
             suffix = f"_{service_tier.value}"
             if suffix in cost_key:
                 # Extract the base key by removing the matched suffix
-                base_key = cost_key.replace(suffix, '')
+                base_key = cost_key.replace(suffix, "")
                 fallback_cost = model_info.get(base_key)
                 if isinstance(fallback_cost, float):
                     return fallback_cost
@@ -300,7 +298,7 @@ def _get_cost_per_unit(
                             f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_cost_per_unit(): Exception occured - {fallback_cost}\nDefaulting to 0.0"
                         )
                 break  # Only try the first matching suffix
-    
+
     return default_value
 
 
@@ -495,7 +493,10 @@ def _calculate_input_cost(
 
 
 def generic_cost_per_token(
-    model: str, usage: Usage, custom_llm_provider: str, service_tier: Optional[str] = None
+    model: str,
+    usage: Usage,
+    custom_llm_provider: str,
+    service_tier: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -547,7 +548,9 @@ def generic_cost_per_token(
         cache_creation_cost,
         cache_creation_cost_above_1hr,
         cache_read_cost,
-    ) = _get_token_base_cost(model_info=model_info, usage=usage, service_tier=service_tier)
+    ) = _get_token_base_cost(
+        model_info=model_info, usage=usage, service_tier=service_tier
+    )
 
     prompt_cost = _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
@@ -631,12 +634,13 @@ class CostCalculatorUtils:
     @staticmethod
     def route_image_generation_cost_calculator(
         model: str,
-        completion_response: Any,
+        completion_response: ImageResponse,
         custom_llm_provider: Optional[str] = None,
         quality: Optional[str] = None,
         n: Optional[int] = None,
         size: Optional[str] = None,
         optional_params: Optional[dict] = None,
+        call_type: Optional[str] = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -657,6 +661,13 @@ class CostCalculatorUtils:
         from litellm.llms.vertex_ai.image_generation.cost_calculator import (
             cost_calculator as vertex_ai_image_cost_calculator,
         )
+
+        if size is None:
+            size = completion_response.size or "1024-x-1024"
+        if quality is None:
+            quality = completion_response.quality or "standard"
+        if n is None:
+            n = len(completion_response.data) if completion_response.data else 0
 
         if custom_llm_provider == litellm.LlmProviders.VERTEX_AI.value:
             if isinstance(completion_response, ImageResponse):
@@ -703,6 +714,18 @@ class CostCalculatorUtils:
                 image_response=completion_response,
             )
         elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
+            if call_type in (
+                CallTypes.image_edit.value,
+                CallTypes.aimage_edit.value,
+            ):
+                from litellm.llms.gemini.image_edit.cost_calculator import (
+                    cost_calculator as gemini_image_edit_cost_calculator,
+                )
+
+                return gemini_image_edit_cost_calculator(
+                    model=model,
+                    image_response=completion_response,
+                )
             from litellm.llms.gemini.image_generation.cost_calculator import (
                 cost_calculator as gemini_image_cost_calculator,
             )
@@ -713,6 +736,24 @@ class CostCalculatorUtils:
             )
         elif custom_llm_provider == litellm.LlmProviders.AZURE_AI.value:
             return azure_ai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.FAL_AI.value:
+            from litellm.llms.fal_ai.cost_calculator import (
+                cost_calculator as fal_ai_image_cost_calculator,
+            )
+
+            return fal_ai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.RUNWAYML.value:
+            from litellm.llms.runwayml.cost_calculator import (
+                cost_calculator as runwayml_image_cost_calculator,
+            )
+
+            return runwayml_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
             )

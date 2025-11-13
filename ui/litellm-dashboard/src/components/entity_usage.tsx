@@ -29,6 +29,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { UsageExportHeader } from "./EntityUsageExport";
+import TopModelView from "./top_model_view";
 
 interface EntityMetrics {
   metrics: {
@@ -73,6 +74,7 @@ interface EntityUsageProps {
   userRole: string | null;
   entityList: EntityList[] | null;
   premiumUser: boolean;
+  dateValue: DateRangePickerValue;
 }
 
 const EntityUsage: React.FC<EntityUsageProps> = ({
@@ -83,6 +85,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   userRole,
   entityList,
   premiumUser,
+  dateValue,
 }) => {
   const [spendData, setSpendData] = useState<EntitySpendData>({
     results: [],
@@ -98,10 +101,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const modelMetrics = processActivityData(spendData, "models");
   const keyMetrics = processActivityData(spendData, "api_keys");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
-    to: new Date(),
-  });
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -330,7 +329,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     <div style={{ width: "100%" }} className="relative">
       <UsageExportHeader
         dateValue={dateValue}
-        onDateChange={setDateValue}
         entityType={entityType}
         spendData={spendData}
         showFilters={entityList !== null && entityList.length > 0}
@@ -550,17 +548,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               <Col numColSpan={1}>
                 <Card>
                   <Title>Top Models</Title>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={getTopModels()}
-                    index="display_key"
-                    categories={["spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-                    layout="vertical"
-                    yAxisWidth={200}
-                    showLegend={false}
-                  />
+                  <TopModelView topModels={getTopModels()} />
                 </Card>
               </Col>
 

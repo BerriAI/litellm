@@ -23,6 +23,7 @@ class BaseRerankConfig(ABC):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> dict:
         pass
 
@@ -50,7 +51,12 @@ class BaseRerankConfig(ABC):
         return model_response
 
     @abstractmethod
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         """
         OPTIONAL
 

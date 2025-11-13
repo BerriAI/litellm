@@ -2473,7 +2473,7 @@ finetune_settings:
 ft_job = await client.fine_tuning.jobs.create(
     model="gemini-1.0-pro-002",                  # Vertex model you want to fine-tune
     training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",                 # file_id from create file response
-    extra_body={"custom_llm_provider": "vertex_ai"}, # tell litellm proxy which provider to use
+    extra_headers={"custom-llm-provider": "vertex_ai"}, # tell litellm proxy which provider to use
 )
 ```
 </TabItem>
@@ -2484,8 +2484,8 @@ ft_job = await client.fine_tuning.jobs.create(
 curl http://localhost:4000/v1/fine_tuning/jobs \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer sk-1234" \
+    -H "custom-llm-provider: vertex_ai" \
     -d '{
-    "custom_llm_provider": "vertex_ai",
     "model": "gemini-1.0-pro-002",
     "training_file": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
     }'
@@ -2513,9 +2513,7 @@ ft_job = client.fine_tuning.jobs.create(
         "learning_rate_multiplier": 0.1,    # learning_rate_multiplier on Vertex
         "adapter_size": "ADAPTER_SIZE_ONE"  # type: ignore, vertex specific hyperparameter
     },
-    extra_body={
-        "custom_llm_provider": "vertex_ai",
-    },
+    extra_headers={"custom-llm-provider": "vertex_ai"},
 )
 ```
 </TabItem>
@@ -2526,8 +2524,8 @@ ft_job = client.fine_tuning.jobs.create(
 curl http://localhost:4000/v1/fine_tuning/jobs \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer sk-1234" \
+    -H "custom-llm-provider: vertex_ai" \
     -d '{
-    "custom_llm_provider": "vertex_ai",
     "model": "gemini-1.0-pro-002",
     "training_file": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
     "hyperparameters": {

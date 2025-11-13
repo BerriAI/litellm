@@ -298,6 +298,13 @@ class PrometheusLogger(CustomLogger):
                 self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
             )
 
+            # Callback Logging Failure Metrics
+            self.litellm_callback_logging_failures_metric = self._counter_factory(
+                name="litellm_callback_logging_failures_metric",
+                documentation="Total number of failures when emitting logs to callbacks (e.g. s3_v2, langfuse, etc)",
+                labelnames=["callback_name"],
+            )
+
             self.litellm_llm_api_failed_requests_metric = self._counter_factory(
                 name="litellm_llm_api_failed_requests_metric",
                 documentation="deprecated - use litellm_proxy_failed_requests_metric",
@@ -1723,6 +1730,17 @@ class PrometheusLogger(CustomLogger):
             litellm_model_name, model_id, api_base, api_provider, exception_status
         ).inc()
 
+    def increment_callback_logging_failure(
+        self,
+        callback_name: str,
+    ):
+        """
+        Increment metric when logging to a callback fails (e.g., s3_v2, langfuse, etc.)
+        """
+        self.litellm_callback_logging_failures_metric.labels(
+            callback_name=callback_name
+        ).inc()
+
     def track_provider_remaining_budget(
         self, provider: str, spend: float, budget_limit: float
     ):
@@ -2189,6 +2207,9 @@ class PrometheusLogger(CustomLogger):
                 prometheus_logger.initialize_remaining_budget_metrics,
                 "interval",
                 minutes=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+                # REMOVED jitter parameter - major cause of memory leak
+                id="prometheus_budget_metrics_job",
+                replace_existing=True,
             )
 
     @staticmethod
