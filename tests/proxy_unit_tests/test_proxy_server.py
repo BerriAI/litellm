@@ -2401,3 +2401,61 @@ def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content
         error_calls = [call[0][0] for call in mock_logger.error.call_args_list]
         assert any("Path exists:" in call for call in error_calls)
         assert mock_logger.info.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_update_config_success_callback_normalization():
+    """
+    Ensure success_callback values are normalized to lowercase when updating config.
+    This prevents delete_callback (which searches lowercase) from failing on mixed case inputs like 'SQS'.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import ConfigYAML
+
+    # Ensure feature is enabled and prisma_client is set
+    setattr(proxy_server, "store_model_in_db", True)
+    setattr(proxy_server, "proxy_logging_obj", MagicMock())
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_config = MagicMock()
+            self.db.litellm_config.upsert = AsyncMock()
+
+        # proxy_server.update_config expects this to be sync returning a dict
+        def jsonify_object(self, obj):
+            return obj
+
+    setattr(proxy_server, "prisma_client", MockPrisma())
+
+    class MockProxyConfig:
+        def __init__(self):
+            self.saved_config = None
+
+        async def get_config(self):
+            # Existing config has one lowercase callback already
+            return {"litellm_settings": {"success_callback": ["langfuse"]}}
+
+        async def save_config(self, new_config: dict):
+            self.saved_config = new_config
+
+        async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):
+            return None
+
+    mock_proxy_config = MockProxyConfig()
+    setattr(proxy_server, "proxy_config", mock_proxy_config)
+
+    # Update config with mixed-case callbacks - expect normalization to lowercase
+    config_update = ConfigYAML(litellm_settings={"success_callback": ["SQS", "sQs"]})
+    await proxy_server.update_config(config_update)
+
+    saved = mock_proxy_config.saved_config
+    assert saved is not None, "save_config was not called"
+    callbacks = saved["litellm_settings"]["success_callback"]
+
+    # Deduped and normalized
+    assert "sqs" in callbacks
+    assert "SQS" not in callbacks
+    assert "sQs" not in callbacks
+    # Existing callback should still be present
+    assert "langfuse" in callbacks

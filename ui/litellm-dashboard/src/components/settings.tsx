@@ -565,7 +565,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
       <Modal
         title="Add Logging Callback"
-        visible={showAddCallbacksModal}
+        open={showAddCallbacksModal}
         width={800}
         onCancel={() => {
           setShowAddCallbacksModal(false);
@@ -682,7 +682,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           )}
 
           <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
-            <Button
+            <Button2
               onClick={() => {
                 setShowAddCallbacksModal(false);
                 setSelectedCallback(null);
@@ -691,7 +691,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               }}
             >
               Cancel
-            </Button>
+            </Button2>
             <Button2 htmlType="submit">Add Callback</Button2>
           </div>
         </Form>
