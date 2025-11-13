@@ -2380,7 +2380,7 @@ class ModelResponseIterator:
         try:
             json_chunk = json.loads(chunk)
 
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError:
             # A JSONDecodeError means the chunk is likely incomplete.
             # Switch to accumulation mode to buffer and parse the complete JSON object.
             # This handles cases where JSON objects are split across multiple stream chunks,
