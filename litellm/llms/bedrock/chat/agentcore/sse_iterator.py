@@ -19,21 +19,21 @@ if TYPE_CHECKING:
 
 
 class AgentCoreSSEStreamIterator:
-    """Iterator for AgentCore SSE streaming responses."""
-    
+    """Async iterator for AgentCore SSE streaming responses."""
+
     def __init__(self, response: httpx.Response, model: str):
         self.response = response
         self.model = model
         self.finished = False
-        self.line_iterator = self.response.iter_lines()
-        
-    def __iter__(self):
+        self.line_iterator = self.response.aiter_lines()
+
+    def __aiter__(self):
         return self
-        
-    def __next__(self) -> ModelResponse:
+
+    async def __anext__(self) -> ModelResponse:
         """Parse SSE events and yield ModelResponse chunks."""
         try:
-            for line in self.line_iterator:
+            async for line in self.line_iterator:
                 line = line.strip()
                 
                 if not line or not line.startswith('data:'):
@@ -134,17 +134,17 @@ class AgentCoreSSEStreamIterator:
                     continue
             
             # Stream ended naturally
-            raise StopIteration
-            
-        except StopIteration:
+            raise StopAsyncIteration
+
+        except StopAsyncIteration:
             raise
         except httpx.StreamConsumed:
             # This is expected when the stream has been fully consumed
-            raise StopIteration
+            raise StopAsyncIteration
         except httpx.StreamClosed:
             # This is expected when the stream is closed
-            raise StopIteration
+            raise StopAsyncIteration
         except Exception as e:
             verbose_logger.error(f"Error in AgentCore SSE stream: {str(e)}")
-            raise StopIteration
+            raise StopAsyncIteration
 

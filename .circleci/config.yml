@@ -1,8 +1,8 @@
 version: 2.1
 orbs:
   codecov: codecov/codecov@4.0.1
-  node: circleci/node@5.1.0  # Add this line to declare the node orb
-  win: circleci/windows@5.0  # Add Windows orb
+  node: circleci/node@5.1.0 # Add this line to declare the node orb
+  win: circleci/windows@5.0 # Add Windows orb
 
 commands:
   setup_google_dns:
@@ -50,7 +50,7 @@ jobs:
           name: Run Windows-specific test
           command: |
             python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
-    
+
   mypy_linting:
     docker:
       - image: cimg/python:3.12
@@ -500,7 +500,7 @@ jobs:
           paths:
             - litellm_router_coverage.xml
             - litellm_router_coverage
-  
+
   litellm_router_unit_testing: # Runs all tests with the "router" keyword
     docker:
       - image: cimg/python:3.11
@@ -1571,7 +1571,7 @@ jobs:
             python -m pytest -vv tests/local_testing/test_basic_python_version.py
   helm_chart_testing:
     machine:
-      image: ubuntu-2204:2023.10.1  # Use machine executor instead of docker
+      image: ubuntu-2204:2023.10.1 # Use machine executor instead of docker
     resource_class: medium
     working_directory: ~/project
 
@@ -1583,7 +1583,7 @@ jobs:
           name: Install Helm
           command: |
             curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-      
+
       # Install kind
       - run:
           name: Install Kind
@@ -1591,7 +1591,7 @@ jobs:
             curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
             chmod +x ./kind
             sudo mv ./kind /usr/local/bin/kind
-      
+
       # Install kubectl
       - run:
           name: Install kubectl
@@ -1599,19 +1599,19 @@ jobs:
             curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
             chmod +x kubectl
             sudo mv kubectl /usr/local/bin/
-      
+
       # Create kind cluster
       - run:
           name: Create Kind Cluster
           command: |
             kind create cluster --name litellm-test
-      
+
       # Run helm lint
       - run:
           name: Run helm lint
           command: |
             helm lint ./deploy/charts/litellm-helm
-      
+
       # Run helm tests
       - run:
           name: Run helm tests
@@ -1620,22 +1620,21 @@ jobs:
             # Wait for pod to be ready
             echo "Waiting 30 seconds for pod to be ready..."
             sleep 30
-            
+
             # Print pod logs before running tests
             echo "Printing pod logs..."
             kubectl logs $(kubectl get pods -l app.kubernetes.io/name=litellm -o jsonpath="{.items[0].metadata.name}")
-            
+
             # Run the helm tests
             helm test litellm --logs
             helm test litellm --logs
-      
+
       # Cleanup
       - run:
           name: Cleanup
           command: |
             kind delete cluster --name litellm-test
-          when: always  # This ensures cleanup runs even if previous steps fail
-
+          when: always # This ensures cleanup runs even if previous steps fail
 
   check_code_and_doc_quality:
     docker:
@@ -1747,7 +1746,7 @@ jobs:
             echo "=== Printing Full Container Startup Logs ==="
             docker logs my-app
             echo "=== End of Full Container Startup Logs ==="
-            
+
             if docker logs my-app 2>&1 | grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two"; then
               echo "Expected message found in logs. Test passed."
             else
@@ -1759,7 +1758,6 @@ jobs:
           command: |
             python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
           no_output_timeout: 120m
-
 
   build_and_test:
     machine:
@@ -2565,8 +2563,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/store_model_in_db_tests -x --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout:
-            120m
+          no_output_timeout: 120m
       - run:
           name: Stop and remove containers
           command: |
@@ -2577,7 +2574,7 @@ jobs:
           when: always
       - store_test_results:
           path: test-results
-      
+
   proxy_build_from_pip_tests:
     # Change from docker to machine executor
     machine:
@@ -2795,17 +2792,17 @@ jobs:
               curl -sSL https://rvm.io/mpapis.asc | gpg --import -
               curl -sSL https://rvm.io/pkuczynski.asc | gpg --import -
             }
-            
+
             # Install Ruby version manager (RVM)
             curl -sSL https://get.rvm.io | bash -s stable
-            
+
             # Source RVM from the correct location
             source $HOME/.rvm/scripts/rvm
-            
+
             # Install Ruby 3.2.2
             rvm install 3.2.2
             rvm use 3.2.2 --default
-            
+
             # Install latest Bundler
             gem install bundler
 
@@ -2959,32 +2956,32 @@ jobs:
             python -m pip install toml
             # Get current version from pyproject.toml
             CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
-            
+
             # Get last published version from PyPI
             LAST_VERSION=$(curl -s https://pypi.org/pypi/litellm-proxy-extras/json | python -c "import json, sys; print(json.load(sys.stdin)['info']['version'])")
-            
+
             echo "Current version: $CURRENT_VERSION"
             echo "Last published version: $LAST_VERSION"
-            
+
             # Compare versions using Python's packaging.version
             VERSION_COMPARE=$(python -c "from packaging import version; print(1 if version.parse('$CURRENT_VERSION') < version.parse('$LAST_VERSION') else 0)")
-            
+
             echo "Version compare: $VERSION_COMPARE"
             if [ "$VERSION_COMPARE" = "1" ]; then
               echo "Error: Current version ($CURRENT_VERSION) is less than last published version ($LAST_VERSION)"
               exit 1
             fi
-            
+
             # If versions are equal or current is greater, check contents
             pip download --no-deps litellm-proxy-extras==$LAST_VERSION -d /tmp
-            
+
             echo "Contents of /tmp directory:"
             ls -la /tmp
-            
+
             # Find the downloaded file (could be .whl or .tar.gz)
             DOWNLOADED_FILE=$(ls /tmp/litellm_proxy_extras-*)
             echo "Downloaded file: $DOWNLOADED_FILE"
-            
+
             # Extract based on file extension
             if [[ "$DOWNLOADED_FILE" == *.whl ]]; then
                 echo "Extracting wheel file..."
@@ -2995,10 +2992,10 @@ jobs:
                 tar -xzf "$DOWNLOADED_FILE" -C /tmp
                 EXTRACTED_DIR="/tmp/litellm_proxy_extras-$LAST_VERSION"
             fi
-            
+
             echo "Contents of extracted package:"
             ls -R "$EXTRACTED_DIR"
-            
+
             # Compare contents
             if ! diff -r "$EXTRACTED_DIR/litellm_proxy_extras" ./litellm_proxy_extras; then
               if [ "$CURRENT_VERSION" = "$LAST_VERSION" ]; then
@@ -3064,23 +3061,24 @@ jobs:
             export NVM_DIR="/opt/circleci/.nvm"
             source "$NVM_DIR/nvm.sh"
             source "$NVM_DIR/bash_completion"
-            
+
             # Install and use Node version
             nvm install v20
             nvm use v20
-            
+
             cd ui/litellm-dashboard
-            
+
             # Install dependencies first
             npm install
-            
+
             # Now source the build script
             source ./build_ui.sh
       - run:
-          name: Install Docker CLI (In case it's not already installed)
+          name: Upgrade Docker to v24.x (API 1.44+)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
       - run:
           name: Install Python 3.9
           command: |
@@ -3128,17 +3126,16 @@ jobs:
             source "$NVM_DIR/nvm.sh"
             nvm install 20
             nvm use 20
-      
+
             cd ui/litellm-dashboard
             npm ci || npm install
-      
+
             # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
             CI=true npm run test -- --run --coverage \
               --coverage.provider=v8 \
               --coverage.reporter=lcov \
               --coverage.reporter=html \
               --coverage.reportsDirectory=coverage/html
-
 
       - run:
           name: Build Docker image
@@ -3584,4 +3581,3 @@ workflows:
             - check_code_and_doc_quality
             - publish_proxy_extras
             - guardrails_testing
-

@@ -410,6 +410,77 @@ Expected Response:
 
 ```
 
+### Advanced: Using `reasoning_effort` with `summary` field
+
+By default, `reasoning_effort` accepts a string value (`"low"`, `"medium"`, `"high"`, `"minimal"`) and only sets the effort level without including a reasoning summary.
+
+To opt-in to the `summary` feature, you can pass `reasoning_effort` as a dictionary. **Note:** The `summary` field requires your OpenAI organization to have verification status. Using `summary` without verification will result in a 400 error from OpenAI.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+```python
+# Option 1: String format (default - no summary)
+response = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="high"  # Only sets effort level
+)
+
+# Option 2: Dict format (with optional summary - requires org verification)
+response = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort={"effort": "high", "summary": "auto"}  # "auto", "detailed", or "concise" (not all supported by all models)
+)
+```
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+```bash
+# Option 1: String format (default - no summary)
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "openai/responses/gpt-5-mini",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "reasoning_effort": "high"
+}'
+
+# Option 2: Dict format (with optional summary - requires org verification)
+# summary options: "auto", "detailed", or "concise" (not all supported by all models)
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "openai/responses/gpt-5-mini",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "reasoning_effort": {"effort": "high", "summary": "auto"}
+}'
+```
+</TabItem>
+</Tabs>
+
+**Summary field options:**
+- `"auto"`: System automatically determines the appropriate summary level based on the model
+- `"concise"`: Provides a shorter summary (not supported by GPT-5 series models)
+- `"detailed"`: Offers a comprehensive reasoning summary
+
+**Note:** GPT-5 series models support `"auto"` and `"detailed"`, but do not support `"concise"`. O-series models (o3-pro, o4-mini, o3) support all three options. Some models like o3-mini and o1 do not support reasoning summaries at all.
+
+**Supported `reasoning_effort` values by model:**
+
+| Model | Default (when not set) | Supported Values |
+|-------|----------------------|------------------|
+| `gpt-5` | `medium` | `minimal`, `low`, `medium`, `high` |
+| `gpt-5-mini` | `medium` | `minimal`, `low`, `medium`, `high` |
+| `gpt-5-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
+| `gpt-5-pro` | `high` | `high` only |
+
+**Note:** `gpt-5-pro` only accepts `reasoning_effort="high"`. Other values will return an error. When `reasoning_effort` is not set (None), OpenAI defaults to the value shown in the "Default" column.
+
+See [OpenAI Reasoning documentation](https://platform.openai.com/docs/guides/reasoning) for more details on organization verification requirements.
+
 ## OpenAI Chat Completion to Responses API Bridge
 
 Call any Responses API model from OpenAI's `/chat/completions` endpoint. 
