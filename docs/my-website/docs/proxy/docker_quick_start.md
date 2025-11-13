@@ -2,7 +2,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# E2E Tutorial
+# Getting Started Tutorial
 
 End-to-End tutorial for LiteLLM Proxy to:
 - Add an Azure OpenAI model 
@@ -89,6 +89,70 @@ model_list:
     - **`api_base`** (`str`) - The API base for your azure deployment.
     - **`api_version`** (`str`) - The API Version to use when calling Azure's OpenAI API. Get the latest Inference API version [here](https://learn.microsoft.com/en-us/azure/ai-services/openai/api-version-deprecation?source=recommendations#latest-preview-api-releases).
 
+---
+
+### Understanding Model Configuration
+
+The configuration uses two key fields that often cause confusion:
+
+**How Model Resolution Works:**
+
+```
+Client Request                LiteLLM Proxy                 Provider API
+──────────────              ────────────────              ─────────────
+    
+POST /chat/completions      
+{                           1. Looks up model_name
+  "model": "gpt-4o" ──────────▶ in config.yaml
+  ...                          
+}                           2. Finds matching entry:
+                               model_name: gpt-4o
+                               
+                            3. Extracts litellm_params:
+                               model: azure/my_azure_deployment
+                               api_base: https://...
+                               api_key: sk-...
+                               
+                            4. Routes to provider ──▶ Azure OpenAI API
+                                                      POST /deployments/my_azure_deployment/...
+```
+
+**Breaking Down the `model` Parameter:**
+
+```yaml
+model_list:
+  - model_name: gpt-4o                       # What the client calls
+    litellm_params:
+      model: azure/my_azure_deployment       # <provider>/<model-name>
+             ─────  ───────────────────
+               │           │
+               │           └─────▶ Model name sent to the provider API
+               │
+               └─────────────────▶ Provider that LiteLLM routes to
+```
+
+**Visual Breakdown:**
+
+```
+model: azure/my_azure_deployment
+       └─┬─┘ └─────────┬─────────┘
+         │             │
+         │             └────▶ The actual model identifier that gets sent to Azure
+         │                   (e.g., your deployment name, or the model name)
+         │
+         └──────────────────▶ Tells LiteLLM which provider to use
+                             (azure, openai, anthropic, bedrock, etc.)
+```
+
+**Key Concepts:**
+
+- **`model_name`**: The alias your client uses to call the model. This is what you send in your API requests (e.g., `gpt-4o`).
+
+- **`model` (in litellm_params)**: Format is `<provider>/<model-identifier>`
+  - **Provider** (before `/`): Routes to the correct LLM provider (e.g., `azure`, `openai`, `anthropic`, `bedrock`)
+  - **Model identifier** (after `/`): The actual model/deployment name sent to that provider's API
+
+---
 
 ### Useful Links
 - [**All Supported LLM API Providers (OpenAI/Bedrock/Vertex/etc.)**](../providers/)
