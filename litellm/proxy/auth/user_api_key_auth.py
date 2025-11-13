@@ -1182,6 +1182,38 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
 
 
+def _populate_request_with_path_params(
+    request_data: dict, request: Request
+) -> dict:
+    """
+    Copy FastAPI path params into the request payload so downstream checks
+    (e.g. vector store RBAC) see them the same way as body params.
+    
+    Since path_params may not be available during dependency injection,
+    we parse the URL path directly for known patterns.
+    """    
+    # Try to get path_params if available (sometimes populated by FastAPI)
+    path_params = getattr(request, "path_params", None)
+    if isinstance(path_params, dict) and path_params:
+        for key, value in path_params.items():
+            if key == "vector_store_id":
+                request_data.setdefault("vector_store_id", value)
+                existing_ids = request_data.get("vector_store_ids")
+                if isinstance(existing_ids, list):
+                    if value not in existing_ids:
+                        existing_ids.append(value)
+                else:
+                    request_data["vector_store_ids"] = [value]
+                continue
+            request_data.setdefault(key, value)
+        verbose_proxy_logger.debug(
+            f"_populate_request_with_path_params: Found path_params, vector_store_ids={request_data.get('vector_store_ids')}"
+        )
+        return request_data
+    
+    return request_data
+
+
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
@@ -1203,6 +1235,9 @@ async def user_api_key_auth(
     """
 
     request_data = await _read_request_body(request=request)
+    request_data = _populate_request_with_path_params(
+        request_data=request_data, request=request
+    )
     route: str = get_request_route(request=request)
 
     ## CHECK IF ROUTE IS ALLOWED
