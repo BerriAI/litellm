@@ -39,6 +39,7 @@ from litellm.types.responses.main import (
     GenericResponseOutputItem,
     GenericResponseOutputItemContentAnnotation,
     OutputFunctionToolCall,
+    OutputImageGenerationCall,
     OutputText,
 )
 from litellm.types.utils import (
@@ -720,9 +721,9 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_completion_choices_to_responses_output(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[Union[GenericResponseOutputItem, OutputFunctionToolCall]]:
+    ) -> List[Union[GenericResponseOutputItem, OutputFunctionToolCall, OutputImageGenerationCall]]:
         responses_output: List[
-            Union[GenericResponseOutputItem, OutputFunctionToolCall]
+            Union[GenericResponseOutputItem, OutputFunctionToolCall, OutputImageGenerationCall]
         ] = []
 
         responses_output.extend(
@@ -772,27 +773,109 @@ class LiteLLMCompletionResponsesConfig:
         return []
 
     @staticmethod
+    def _extract_image_generation_output_items(
+        chat_completion_response: ModelResponse,
+        choice: Choices,
+    ) -> List[OutputImageGenerationCall]:
+        """
+        Extract image generation outputs from a choice that contains images.
+
+        Transforms message.images from chat completion format:
+        {
+            'image_url': {'url': 'data:image/png;base64,iVBORw0...'},
+            'type': 'image_url',
+            'index': 0
+        }
+
+        To Responses API format:
+        {
+            'type': 'image_generation_call',
+            'id': 'img_...',
+            'status': 'completed',
+            'result': 'iVBORw0...'  # Pure base64 without data: prefix
+        }
+        """
+        image_generation_items: List[OutputImageGenerationCall] = []
+
+        images = getattr(choice.message, 'images', [])
+        if not images:
+            return image_generation_items
+
+        for idx, image_item in enumerate(images):
+            # Extract base64 from data URL
+            image_url = image_item.get('image_url', {}).get('url', '')
+            base64_data = LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(image_url)
+
+            if base64_data:
+                image_generation_items.append(
+                    OutputImageGenerationCall(
+                        type="image_generation_call",
+                        id=f"{chat_completion_response.id}_img_{idx}",
+                        status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                            choice.finish_reason
+                        ),
+                        result=base64_data,
+                    )
+                )
+
+        return image_generation_items
+
+    @staticmethod
+    def _extract_base64_from_data_url(data_url: str) -> Optional[str]:
+        """
+        Extract pure base64 string from a data URL.
+
+        Input: 'data:image/png;base64,iVBORw0KGgoAAAANS...'
+        Output: 'iVBORw0KGgoAAAANS...'
+
+        If input is already pure base64 (no prefix), return as-is.
+        """
+        if not data_url:
+            return None
+
+        # Check if it's a data URL with prefix
+        if data_url.startswith('data:'):
+            # Split by comma to separate prefix from base64 data
+            parts = data_url.split(',', 1)
+            if len(parts) == 2:
+                return parts[1]  # Return the base64 part
+            return None
+        else:
+            # Already pure base64
+            return data_url
+
+    @staticmethod
     def _extract_message_output_items(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[GenericResponseOutputItem]:
-        message_output_items = []
+    ) -> List[Union[GenericResponseOutputItem, OutputImageGenerationCall]]:
+        message_output_items: List[Union[GenericResponseOutputItem, OutputImageGenerationCall]] = []
         for choice in choices:
-            message_output_items.append(
-                GenericResponseOutputItem(
-                    type="message",
-                    id=chat_completion_response.id,
-                    status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                        choice.finish_reason
-                    ),
-                    role=choice.message.role,
-                    content=[
-                        LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
-                            choice.message
-                        )
-                    ],
+            # Check if message has images (image generation)
+            if hasattr(choice.message, 'images') and choice.message.images:
+                # Extract image generation output
+                image_generation_items = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+                    chat_completion_response=chat_completion_response,
+                    choice=choice,
                 )
-            )
+                message_output_items.extend(image_generation_items)
+            else:
+                # Regular message output
+                message_output_items.append(
+                    GenericResponseOutputItem(
+                        type="message",
+                        id=chat_completion_response.id,
+                        status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                            choice.finish_reason
+                        ),
+                        role=choice.message.role,
+                        content=[
+                            LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
+                                choice.message
+                            )
+                        ],
+                    )
+                )
         return message_output_items
 
     @staticmethod
