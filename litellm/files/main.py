@@ -275,28 +275,6 @@ def create_file(
                 max_retries=optional_params.max_retries,
                 create_file_data=_create_file_request,
             )
-        elif custom_llm_provider == "anthropic":
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or get_secret_str("ANTHROPIC_API_BASE")
-                or "https://api.anthropic.com"
-            )
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or get_secret_str("ANTHROPIC_API_KEY")
-            )
-
-            response = anthropic_files_instance.create_file(
-                _is_async=_is_async,
-                api_base=api_base,
-                api_key=api_key,
-                timeout=timeout,
-                max_retries=optional_params.max_retries,
-                create_file_data=_create_file_request,
-                client=client,
-            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'create_file'. Only ['openai', 'azure', 'vertex_ai', 'anthropic'] are supported.".format(
@@ -1185,7 +1163,7 @@ def file_content(
             }
 
             # Make HTTP GET request to download file content
-            url = f"{api_base}/v1/files/{_file_content_request.file_id}/content"
+            url = f"{api_base}/v1/files/{_file_content_request['file_id']}/content"
 
             if _is_async:
                 async def _content():
@@ -1195,10 +1173,7 @@ def file_content(
                         async_client = client
 
                     http_response = await async_client.get(url=url, headers=headers)
-                    return FileContentObject(
-                        file_id=_file_content_request.file_id,
-                        response=http_response,
-                    )
+                    return HttpxBinaryResponseContent(http_response.content)
 
                 response = _content()
             else:
@@ -1208,10 +1183,7 @@ def file_content(
                     sync_client = client
 
                 http_response = sync_client.get(url=url, headers=headers)
-                response = FileContentObject(
-                    file_id=_file_content_request.file_id,
-                    response=http_response,
-                )
+                response = HttpxBinaryResponseContent(http_response.content)
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'file_content'. Supported providers are 'openai', 'azure', 'vertex_ai', 'anthropic'.".format(
