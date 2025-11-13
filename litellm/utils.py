@@ -7442,7 +7442,7 @@ class ProviderConfigManager:
             )
 
             return BedrockPassthroughConfig()
-        elif LlmProviders.VLLM == provider:
+        elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.vllm.passthrough.transformation import (
                 VLLMPassthroughConfig,
             )
@@ -7660,6 +7660,10 @@ class ProviderConfigManager:
             )
 
             return VertexAIVideoConfig()
+        elif LlmProviders.RUNWAYML == provider:
+            from litellm.llms.runway.videos.transformation import RunwayMLVideoConfig
+
+            return RunwayMLVideoConfig()
         return None
 
     @staticmethod

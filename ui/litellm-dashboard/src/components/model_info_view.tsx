@@ -17,7 +17,7 @@ import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
-import { truncateString } from "../utils/textUtils";
+import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import CacheControlSettings from "./add_model/cache_control_settings";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
@@ -178,8 +178,19 @@ export default function ModelInfoView({
 
       console.log("values.model_name, ", values.model_name);
 
+      // Parse LiteLLM extra params from JSON text area
+      let parsedExtraParams: Record<string, any> = {};
+      try {
+        parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
+      } catch (e) {
+        NotificationsManager.fromBackend("Invalid JSON in LiteLLM Params");
+        setIsSaving(false);
+        return;
+      }
+
       let updatedLitellmParams = {
-        ...localModelData.litellm_params,
+        ...values.litellm_params,
+        ...parsedExtraParams,
         model: values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,
@@ -537,6 +548,7 @@ export default function ModelInfoView({
                       ? localModelData.litellm_params.guardrails
                       : [],
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
+                    litellm_extra_params: JSON.stringify(localModelData.litellm_params || {}, null, 2),
                   }}
                   layout="vertical"
                   onValuesChange={() => setIsDirty(true)}
@@ -905,6 +917,39 @@ export default function ModelInfoView({
                           <div className="mt-1 p-2 bg-gray-50 rounded">
                             <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
                               {JSON.stringify(localModelData.model_info, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <Text className="font-medium">
+                          LiteLLM Params
+                          <Tooltip title="Optional litellm params used for making a litellm.completion() call. Some params are automatically added by LiteLLM.">
+                            <a
+                              href="https://docs.litellm.ai/docs/completion/input"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </a>
+                          </Tooltip>
+                        </Text>
+                        {isEditing ? (
+                          <Form.Item name="litellm_extra_params" rules={[{ validator: formItemValidateJSON }]}>
+                            <Input.TextArea
+                              rows={4}
+                              placeholder='{
+                  "rpm": 100,
+                  "timeout": 0,
+                  "stream_timeout": 0
+                }'
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                              {JSON.stringify(localModelData.litellm_params, null, 2)}
                             </pre>
                           </div>
                         )}

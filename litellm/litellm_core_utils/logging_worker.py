@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import contextlib
 import contextvars
 from typing import Coroutine, Optional
@@ -42,6 +43,9 @@ class LoggingWorker:
         self.max_queue_size = max_queue_size
         self._queue: Optional[asyncio.Queue[LoggingTask]] = None
         self._worker_task: Optional[asyncio.Task] = None
+
+        # Register cleanup handler to flush remaining events on exit
+        atexit.register(self._flush_on_exit)
 
     def _ensure_queue(self) -> None:
         """Initialize the queue if it doesn't exist."""
@@ -153,6 +157,61 @@ class LoggingWorker:
                 self._queue.task_done()  # If you're using join() elsewhere
             except asyncio.QueueEmpty:
                 break
+
+    def _flush_on_exit(self):
+        """
+        Flush remaining events synchronously before process exit.
+        Called automatically via atexit handler.
+
+        This ensures callbacks queued by async completions are processed
+        even when the script exits before the worker loop can handle them.
+        """
+        if self._queue is None:
+            verbose_logger.debug("[LoggingWorker] atexit: No queue initialized")
+            return
+
+        if self._queue.empty():
+            verbose_logger.debug("[LoggingWorker] atexit: Queue is empty")
+            return
+
+        queue_size = self._queue.qsize()
+        verbose_logger.info(f"[LoggingWorker] atexit: Flushing {queue_size} remaining events...")
+
+        # Create a new event loop since the original is closed
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            # Process remaining queue items with time limit
+            processed = 0
+            start_time = loop.time()
+
+            while not self._queue.empty() and processed < self.MAX_ITERATIONS_TO_CLEAR_QUEUE:
+                if loop.time() - start_time >= self.MAX_TIME_TO_CLEAR_QUEUE:
+                    verbose_logger.warning(
+                        f"[LoggingWorker] atexit: Reached time limit ({self.MAX_TIME_TO_CLEAR_QUEUE}s), stopping flush"
+                    )
+                    break
+
+                try:
+                    task = self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+                # Run the coroutine synchronously in new loop
+                # Note: We run the coroutine directly, not via create_task,
+                # since we're in a new event loop context
+                try:
+                    loop.run_until_complete(task["coroutine"])
+                    processed += 1
+                except Exception as e:
+                    # Silent failure to not break user's program
+                    verbose_logger.debug(f"[LoggingWorker] atexit: Error flushing callback: {e}")
+
+            verbose_logger.info(f"[LoggingWorker] atexit: Successfully flushed {processed} events!")
+
+        finally:
+            loop.close()
 
 
 # Global instance for backward compatibility
