@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
     Any,
+    Dict,
     List,
     Literal,
     Optional,
@@ -60,6 +61,12 @@ if TYPE_CHECKING:
 else:
     Span = Any
     OpenTelemetry = Any
+
+REALTIME_REQUEST_SCOPE_TEMPLATE: Dict[str, Any] = {
+    "type": "http",
+    "method": "POST",
+    "path": "/v1/realtime",
+}
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -5612,8 +5619,6 @@ async def vertex_ai_live_passthrough_endpoint(
 #                          /v1/realtime Endpoints
 
 ######################################################################
-from litellm import _arealtime
-
 
 @lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
 def _realtime_request_body(model: str) -> bytes:
@@ -5621,12 +5626,27 @@ def _realtime_request_body(model: str) -> bytes:
     Generate the realtime websocket request body. Cached with LRU semantics to avoid repeated
     string formatting work while keeping memory usage bounded.
     """
-    return f'{{"model": "{model}"}}'.encode()
+    body = f'{{"model": "{model}"}}'.encode()
+    return body
+
+
+@lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
+def _realtime_query_params_template(
+    model: str, intent: Optional[str]
+) -> Tuple[Tuple[str, str], ...]:
+    """
+    Build a hashable representation of the realtime query params so we can cache
+    the repetitive model/intent combinations.
+    """
+    params: List[Tuple[str, str]] = [("model", model)]
+    if intent is not None:
+        params.append(("intent", intent))
+    return tuple(params)
 
 
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
-async def websocket_endpoint(
+async def realtime_websocket_endpoint(
     websocket: WebSocket,
     model: str,
     intent: str = fastapi.Query(
@@ -5634,14 +5654,13 @@ async def websocket_endpoint(
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
-    import websockets
 
     await websocket.accept()
 
     # Only use explicit parameters, not all query params
-    query_params: RealtimeQueryParams = {"model": model}
-    if intent is not None:
-        query_params["intent"] = intent
+    query_params = cast(
+        RealtimeQueryParams, dict(_realtime_query_params_template(model, intent))
+    )
 
     data = {
         "model": model,
@@ -5649,16 +5668,19 @@ async def websocket_endpoint(
         "query_params": query_params,  # Only explicit params
     }
 
-    headers = dict(websocket.headers.items())  # Convert headers to dict first
+    # Single-pass header dict and list to avoid looping twice
+    headers_dict = {}
+    headers_list = []
+    for key, value in websocket.headers.items():
+        encoded_key = key.lower().encode()
+        encoded_value = value.encode()
+        headers_dict[encoded_key] = encoded_value
+        headers_list.append((encoded_key, encoded_value))
 
-    request = Request(
-        scope={
-            "type": "http",
-            "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
-            "method": "POST",
-            "path": "/v1/realtime",
-        }
-    )
+    scope = REALTIME_REQUEST_SCOPE_TEMPLATE.copy()
+    scope["headers"] = headers_list
+
+    request = Request(scope=scope)
 
     request._url = websocket.url
     
