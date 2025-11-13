@@ -1368,7 +1368,7 @@
         "embeddings": false,
         "image_generations": true,
         "audio_transcriptions": false,
-        "audio_speech": false,
+        "audio_speech": true,
         "moderations": false,
         "batches": false,
         "rerank": false,
