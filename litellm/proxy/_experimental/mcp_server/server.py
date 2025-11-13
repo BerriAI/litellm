@@ -628,8 +628,10 @@ if MCP_AVAILABLE:
             )
 
         ## CHECK IF USER IS ALLOWED TO CALL THIS TOOL
-        allowed_mcp_server_ids = await MCPRequestHandler.get_allowed_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
+        allowed_mcp_server_ids = (
+            await global_mcp_server_manager.get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+            )
         )
 
         allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(
@@ -638,7 +640,7 @@ if MCP_AVAILABLE:
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
-            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_mcp_servers=allowed_mcp_servers
         )
 
         server_name: Optional[str]
