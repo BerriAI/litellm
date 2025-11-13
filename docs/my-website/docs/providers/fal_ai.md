@@ -31,6 +31,7 @@ Get your API key from [fal.ai](https://fal.ai/).
 
 | Model Name | Description | Documentation |
 |------------|-------------|---------------|
+| `fal_ai/fal-ai/flux-pro/v1.1` | FLUX Pro v1.1 - Balanced speed and quality | [Docs ↗](https://fal.ai/models/fal-ai/flux-pro/v1.1) |
 | `fal_ai/fal-ai/flux-pro/v1.1-ultra` | FLUX Pro v1.1 Ultra - High-quality image generation | [Docs ↗](https://fal.ai/models/fal-ai/flux-pro/v1.1-ultra) |
 | `fal_ai/fal-ai/imagen4/preview` | Google's Imagen 4 - Highest quality model | [Docs ↗](https://fal.ai/models/fal-ai/imagen4/preview) |
 | `fal_ai/fal-ai/recraft/v3/text-to-image` | Recraft v3 - Multiple style options | [Docs ↗](https://fal.ai/models/fal-ai/recraft/v3/text-to-image) |
