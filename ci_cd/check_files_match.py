@@ -5,11 +5,11 @@ import shutil
 
 def main(argv=None):
     print(
-        "Comparing model_prices_and_context_window and litellm/model_prices_and_context_window_backup.json files... checking if they match."
+        "Comparing model_prices_and_context_window.json files in root and litellm/ directory... checking if they match."
     )
 
     file1 = "model_prices_and_context_window.json"
-    file2 = "litellm/model_prices_and_context_window_backup.json"
+    file2 = "litellm/model_prices_and_context_window.json"
 
     cmp_result = filecmp.cmp(file1, file2, shallow=False)
 
