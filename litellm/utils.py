@@ -7811,6 +7811,12 @@ class ProviderConfigManager:
                 )
 
                 return AzureAVATextToSpeechConfig()
+        elif litellm.LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.text_to_speech.transformation import (
+                ElevenLabsTextToSpeechConfig,
+            )
+
+            return ElevenLabsTextToSpeechConfig()
         return None
 
     @staticmethod
