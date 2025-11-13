@@ -129,8 +129,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "parallel_tool_calls",
             "response_format",
             "user",
-            "web_search_options",
-            "context_management",
+            "web_search_options"
         ]
 
         if "claude-3-7-sonnet" in model or supports_reasoning(
@@ -647,6 +646,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         return tools
 
+    def _ensure_context_management_beta_header(self, headers: dict) -> None:
+        beta_value = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+        existing_beta = headers.get("anthropic-beta")
+        if existing_beta is None:
+            headers["anthropic-beta"] = beta_value
+            return
+        existing_values = [beta.strip() for beta in existing_beta.split(",")]
+        if beta_value not in existing_values:
+            headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
+
     def update_headers_with_optional_anthropic_beta(
         self, headers: dict, optional_params: dict
     ) -> dict:
@@ -666,12 +675,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "anthropic-beta"
                 ] = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
         if optional_params.get("context_management") is not None:
-            existing_beta = headers.get("anthropic-beta")
-            beta_value = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
-            if existing_beta is None:
-                headers["anthropic-beta"] = beta_value
-            elif beta_value not in [beta.strip() for beta in existing_beta.split(",")]:
-                headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
+            self._ensure_context_management_beta_header(headers)
         return headers
 
     def transform_request(
