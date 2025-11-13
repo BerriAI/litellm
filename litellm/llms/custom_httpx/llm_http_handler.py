@@ -2760,14 +2760,24 @@ class BaseLLMHTTPHandler:
 
         if isinstance(transformed_request, dict) and "method" in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
-            upload_response = getattr(
-                sync_httpx_client, transformed_request["method"].lower()
-            )(
-                url=transformed_request["url"],
-                headers=transformed_request["headers"],
-                data=transformed_request["data"],
-                timeout=timeout,
-            )
+            # Also handle multipart file uploads (e.g., Anthropic Files API)
+            method_func = getattr(sync_httpx_client, transformed_request["method"].lower())
+
+            # Check if this is a multipart upload (has "files" key)
+            if "files" in transformed_request:
+                upload_response = method_func(
+                    url=transformed_request["url"],
+                    headers={**headers, **transformed_request.get("headers", {})},
+                    files=transformed_request["files"],
+                    timeout=timeout,
+                )
+            else:
+                upload_response = method_func(
+                    url=transformed_request["url"],
+                    headers=transformed_request["headers"],
+                    data=transformed_request["data"],
+                    timeout=timeout,
+                )
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
@@ -2871,14 +2881,24 @@ class BaseLLMHTTPHandler:
 
         if isinstance(transformed_request, dict) and "method" in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
-            upload_response = await getattr(
-                async_httpx_client, transformed_request["method"].lower()
-            )(
-                url=transformed_request["url"],
-                headers=transformed_request["headers"],
-                data=transformed_request["data"],
-                timeout=timeout,
-            )
+            # Also handle multipart file uploads (e.g., Anthropic Files API)
+            method_func = getattr(async_httpx_client, transformed_request["method"].lower())
+
+            # Check if this is a multipart upload (has "files" key)
+            if "files" in transformed_request:
+                upload_response = await method_func(
+                    url=transformed_request["url"],
+                    headers={**headers, **transformed_request.get("headers", {})},
+                    files=transformed_request["files"],
+                    timeout=timeout,
+                )
+            else:
+                upload_response = await method_func(
+                    url=transformed_request["url"],
+                    headers=transformed_request["headers"],
+                    data=transformed_request["data"],
+                    timeout=timeout,
+                )
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
