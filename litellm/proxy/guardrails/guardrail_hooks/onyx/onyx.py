@@ -154,7 +154,7 @@ class OnyxGuardrail(CustomGuardrail):
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
-    ):
+    ) -> LLMResponseTypes:
         """
         Validate LLM response before returning to client
         """
