@@ -5739,7 +5739,9 @@ def speech(  # noqa: PLR0915
     custom_llm_provider: Optional[str] = None,
     aspeech: Optional[bool] = None,
     **kwargs,
-) -> HttpxBinaryResponseContent:
+) -> Union[
+    HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
+]:
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -5799,7 +5801,11 @@ def speech(  # noqa: PLR0915
         },
         custom_llm_provider=custom_llm_provider,
     )
-    response: Optional[HttpxBinaryResponseContent] = None
+    response: Union[
+        HttpxBinaryResponseContent,
+        Coroutine[Any, Any, HttpxBinaryResponseContent],
+        None,
+    ] = None
     if (
         custom_llm_provider == "openai"
         or custom_llm_provider in litellm.openai_compatible_providers
