@@ -130,7 +130,11 @@ const sidebars = {
             "proxy/release_cycle",
           ],
         },
-        "proxy/demo",
+        {
+          "type": "link",
+          "label": "Demo LiteLLM Cloud",
+          "href": "https://www.litellm.ai/cloud"
+        },
         {
           type: "category",
           label: "Admin UI",
@@ -246,6 +250,7 @@ const sidebars = {
           type: "category",
           label: "Model Access",
           items: [
+            "proxy/model_access_guide",
             "proxy/model_access",
             "proxy/team_model_add"
           ]
@@ -483,6 +488,7 @@ const sidebars = {
             "providers/vertex_ai/videos",
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
+            "providers/vertex_embedding",
             "providers/vertex_image",
             "providers/vertex_batch",
             "providers/vertex_ocr",
@@ -580,6 +586,7 @@ const sidebars = {
           type: "category",
           label: "RunwayML",
           items: [
+            "providers/runwayml/images",
             "providers/runwayml/videos",
           ]
         },
@@ -792,7 +799,6 @@ const sidebars = {
             "projects/GPTLocalhost",
             "projects/HolmesGPT",
             "projects/Railtracks",
-            "projects/Softgen",
           ],
         },
         "extras/code_quality",

@@ -1,36 +1,22 @@
 import os
 from typing import List, Literal
 
-DEFAULT_HEALTH_CHECK_PROMPT = str(
-    os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm")
-)
-AZURE_DEFAULT_RESPONSES_API_VERSION = str(
-    os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview")
-)
+DEFAULT_HEALTH_CHECK_PROMPT = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
+AZURE_DEFAULT_RESPONSES_API_VERSION = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 ROUTER_MAX_FALLBACKS = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
 DEFAULT_BATCH_SIZE = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
-DEFAULT_S3_FLUSH_INTERVAL_SECONDS = int(
-    os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10)
-)
+DEFAULT_S3_FLUSH_INTERVAL_SECONDS = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
-DEFAULT_SQS_FLUSH_INTERVAL_SECONDS = int(
-    os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
-)
-DEFAULT_NUM_WORKERS_LITELLM_PROXY = int(
-    os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
-)
-DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(
-    os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1)
-)
+DEFAULT_SQS_FLUSH_INTERVAL_SECONDS = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
+DEFAULT_NUM_WORKERS_LITELLM_PROXY = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
+DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
 DEFAULT_SQS_BATCH_SIZE = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
 SQS_SEND_MESSAGE_ACTION = "SendMessage"
 SQS_API_VERSION = "2012-11-05"
 DEFAULT_MAX_RETRIES = int(os.getenv("DEFAULT_MAX_RETRIES", 2))
 DEFAULT_MAX_RECURSE_DEPTH = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH", 100))
-DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = int(
-    os.getenv("DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER", 10)
-)
+DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER", 10))
 DEFAULT_FAILURE_THRESHOLD_PERCENT = float(
     os.getenv("DEFAULT_FAILURE_THRESHOLD_PERCENT", 0.5)
 )  # default cooldown a deployment if 50% of requests fail in a given minute
@@ -38,12 +24,8 @@ DEFAULT_MAX_TOKENS = int(os.getenv("DEFAULT_MAX_TOKENS", 4096))
 DEFAULT_ALLOWED_FAILS = int(os.getenv("DEFAULT_ALLOWED_FAILS", 3))
 DEFAULT_REDIS_SYNC_INTERVAL = int(os.getenv("DEFAULT_REDIS_SYNC_INTERVAL", 1))
 DEFAULT_COOLDOWN_TIME_SECONDS = int(os.getenv("DEFAULT_COOLDOWN_TIME_SECONDS", 5))
-DEFAULT_REPLICATE_POLLING_RETRIES = int(
-    os.getenv("DEFAULT_REPLICATE_POLLING_RETRIES", 5)
-)
-DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
-    os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
-)
+DEFAULT_REPLICATE_POLLING_RETRIES = int(os.getenv("DEFAULT_REPLICATE_POLLING_RETRIES", 5))
+DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1))
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
 DEFAULT_IMAGE_WIDTH = int(os.getenv("DEFAULT_IMAGE_WIDTH", 300))
 DEFAULT_IMAGE_HEIGHT = int(os.getenv("DEFAULT_IMAGE_HEIGHT", 300))
@@ -54,9 +36,7 @@ SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = int(
     os.getenv("SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD", 1000)
 )  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
 
-DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
-    os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
-)
+DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0))
 
 # Gemini model-specific minimal thinking budget constants
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH = int(
@@ -66,9 +46,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO", 128)
 )
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
-    os.getenv(
-        "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE", 512
-    )
+    os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE", 512)
 )
 
 # Generic fallback for unknown models
@@ -76,22 +54,17 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)
 )
 
-DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
-    os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
-)
+DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024))
 DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET", 2048)
 )
-DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET = int(
-    os.getenv("DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET", 4096)
-)
+DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET = int(os.getenv("DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET", 4096))
 MAX_TOKEN_TRIMMING_ATTEMPTS = int(
     os.getenv("MAX_TOKEN_TRIMMING_ATTEMPTS", 10)
 )  # Maximum number of attempts to trim the message
 
-RUNWAYML_DEFAULT_API_VERSION = str(
-    os.getenv("RUNWAYML_DEFAULT_API_VERSION", "2024-11-06")
-)
+RUNWAYML_DEFAULT_API_VERSION = str(os.getenv("RUNWAYML_DEFAULT_API_VERSION", "2024-11-06"))
+RUNWAYML_POLLING_TIMEOUT = int(os.getenv("RUNWAYML_POLLING_TIMEOUT", 600))  # 10 minutes default for image generation
 
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
@@ -105,9 +78,7 @@ AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 # Default to None (unlimited) to match OpenAI's official agents SDK behavior
 # https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
 _max_size_env = os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
-REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES = (
-    int(_max_size_env) if _max_size_env is not None else None
-)
+REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES = int(_max_size_env) if _max_size_env is not None else None
 
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
@@ -124,7 +95,8 @@ DEFAULT_SSL_CIPHERS = os.getenv(
     "ECDHE-ECDSA-AES256-GCM-SHA384:"
     "ECDHE-ECDSA-AES128-GCM-SHA256:"
     # Priority 3: Additional modern ciphers (good balance)
-    "ECDHE-RSA-CHACHA20-POLY1305:" "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    "ECDHE-RSA-CHACHA20-POLY1305:"
+    "ECDHE-ECDSA-CHACHA20-POLY1305:"
     # Priority 4: Widely compatible fallbacks (slower but universally supported)
     "ECDHE-RSA-AES256-SHA384:"  # Common fallback
     "ECDHE-RSA-AES128-SHA256:"  # Very widely supported
@@ -139,9 +111,7 @@ REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_team_spend_update_buff
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 10000))
-MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
-    os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
-)
+MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000))
 ###############################################################################################
 MINIMUM_PROMPT_CACHE_TOKEN_COUNT = int(
     os.getenv("MINIMUM_PROMPT_CACHE_TOKEN_COUNT", 1024)
@@ -153,49 +123,31 @@ HOURS_IN_A_DAY = int(os.getenv("HOURS_IN_A_DAY", 24))
 DAYS_IN_A_WEEK = int(os.getenv("DAYS_IN_A_WEEK", 7))
 DAYS_IN_A_MONTH = int(os.getenv("DAYS_IN_A_MONTH", 28))
 DAYS_IN_A_YEAR = int(os.getenv("DAYS_IN_A_YEAR", 365))
-REPLICATE_MODEL_NAME_WITH_ID_LENGTH = int(
-    os.getenv("REPLICATE_MODEL_NAME_WITH_ID_LENGTH", 64)
-)
+REPLICATE_MODEL_NAME_WITH_ID_LENGTH = int(os.getenv("REPLICATE_MODEL_NAME_WITH_ID_LENGTH", 64))
 #### TOKEN COUNTING ####
 FUNCTION_DEFINITION_TOKEN_COUNT = int(os.getenv("FUNCTION_DEFINITION_TOKEN_COUNT", 9))
 SYSTEM_MESSAGE_TOKEN_COUNT = int(os.getenv("SYSTEM_MESSAGE_TOKEN_COUNT", 4))
 TOOL_CHOICE_OBJECT_TOKEN_COUNT = int(os.getenv("TOOL_CHOICE_OBJECT_TOKEN_COUNT", 4))
-DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT = int(
-    os.getenv("DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT", 10)
-)
-DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT = int(
-    os.getenv("DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT", 20)
-)
-MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES = int(
-    os.getenv("MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES", 768)
-)
-MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES = int(
-    os.getenv("MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES", 2000)
-)
+DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT = int(os.getenv("DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT", 10))
+DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT = int(os.getenv("DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT", 20))
+MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES = int(os.getenv("MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES", 768))
+MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES = int(os.getenv("MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES", 2000))
 MAX_TILE_WIDTH = int(os.getenv("MAX_TILE_WIDTH", 512))
 MAX_TILE_HEIGHT = int(os.getenv("MAX_TILE_HEIGHT", 512))
-OPENAI_FILE_SEARCH_COST_PER_1K_CALLS = float(
-    os.getenv("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000)
-)
+OPENAI_FILE_SEARCH_COST_PER_1K_CALLS = float(os.getenv("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000))
 # Azure OpenAI Assistants feature costs
 # Source: https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
 AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY = float(
     os.getenv("AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day
 )
 AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS = float(
-    os.getenv(
-        "AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 3.0
-    )  # $0.003 USD per 1K Tokens
+    os.getenv("AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 3.0)  # $0.003 USD per 1K Tokens
 )
 AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS = float(
-    os.getenv(
-        "AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS", 12.0
-    )  # $0.012 USD per 1K Tokens
+    os.getenv("AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS", 12.0)  # $0.012 USD per 1K Tokens
 )
 AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY = float(
-    os.getenv(
-        "AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY", 0.1
-    )  # $0.1 USD per 1 GB/Day (same as file search)
+    os.getenv("AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day (same as file search)
 )
 MIN_NON_ZERO_TEMPERATURE = float(os.getenv("MIN_NON_ZERO_TEMPERATURE", 0.0001))
 #### RELIABILITY ####
@@ -206,9 +158,7 @@ DEFAULT_MAX_LRU_CACHE_SIZE = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 16))
 INITIAL_RETRY_DELAY = float(os.getenv("INITIAL_RETRY_DELAY", 0.5))
 MAX_RETRY_DELAY = float(os.getenv("MAX_RETRY_DELAY", 8.0))
 JITTER = float(os.getenv("JITTER", 0.75))
-DEFAULT_IN_MEMORY_TTL = int(
-    os.getenv("DEFAULT_IN_MEMORY_TTL", 5)
-)  # default time to live for the in-memory cache
+DEFAULT_IN_MEMORY_TTL = int(os.getenv("DEFAULT_IN_MEMORY_TTL", 5))  # default time to live for the in-memory cache
 DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE = int(
     os.getenv("DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", 1000)
 )  # default max size for redis batch cache
@@ -216,12 +166,8 @@ DEFAULT_POLLING_INTERVAL = float(
     os.getenv("DEFAULT_POLLING_INTERVAL", 0.03)
 )  # default polling interval for the scheduler
 AZURE_OPERATION_POLLING_TIMEOUT = int(os.getenv("AZURE_OPERATION_POLLING_TIMEOUT", 120))
-AZURE_DOCUMENT_INTELLIGENCE_API_VERSION = str(
-    os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30")
-)
-AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI = int(
-    os.getenv("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI", 96)
-)
+AZURE_DOCUMENT_INTELLIGENCE_API_VERSION = str(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30"))
+AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI = int(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI", 96))
 REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
 REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
 # Default Redis major version to assume when version cannot be determined
@@ -233,12 +179,8 @@ NON_LLM_CONNECTION_TIMEOUT = int(
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
 MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
-REPLICATE_POLLING_DELAY_SECONDS = float(
-    os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
-)
-DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS = int(
-    os.getenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 4096)
-)
+REPLICATE_POLLING_DELAY_SECONDS = float(os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5))
+DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS = int(os.getenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 4096))
 TOGETHER_AI_4_B = int(os.getenv("TOGETHER_AI_4_B", 4))
 TOGETHER_AI_8_B = int(os.getenv("TOGETHER_AI_8_B", 8))
 TOGETHER_AI_21_B = int(os.getenv("TOGETHER_AI_21_B", 21))
@@ -250,9 +192,7 @@ TOGETHER_AI_EMBEDDING_350_M = int(os.getenv("TOGETHER_AI_EMBEDDING_350_M", 350))
 QDRANT_SCALAR_QUANTILE = float(os.getenv("QDRANT_SCALAR_QUANTILE", 0.99))
 QDRANT_VECTOR_SIZE = int(os.getenv("QDRANT_VECTOR_SIZE", 1536))
 CACHED_STREAMING_CHUNK_DELAY = float(os.getenv("CACHED_STREAMING_CHUNK_DELAY", 0.02))
-MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
-    os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 512)
-)
+MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 512))
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
@@ -269,9 +209,7 @@ FIREWORKS_AI_16_B = int(os.getenv("FIREWORKS_AI_16_B", 16))
 FIREWORKS_AI_80_B = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
-MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
-    os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
-)
+MAX_LANGFUSE_INITIALIZED_CLIENTS = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
 DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
@@ -286,9 +224,7 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 DEFAULT_VIDEO_ENDPOINT_MODEL = "sora-2"
 
-DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS = int(
-    os.getenv("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8)
-)
+DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS = int(os.getenv("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8))
 
 ### DATAFORSEO CONSTANTS ###
 DEFAULT_DATAFORSEO_LOCATION_CODE = int(
@@ -565,23 +501,21 @@ openai_compatible_providers: List = [
     "cometapi",
     "clarifai",
 ]
-openai_text_completion_compatible_providers: List = (
-    [  # providers that support `/v1/completions`
-        "together_ai",
-        "fireworks_ai",
-        "hosted_vllm",
-        "meta_llama",
-        "llamafile",
-        "featherless_ai",
-        "nebius",
-        "dashscope",
-        "moonshot",
-        "v0",
-        "lambda_ai",
-        "hyperbolic",
-        "wandb",
-    ]
-)
+openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
+    "together_ai",
+    "fireworks_ai",
+    "hosted_vllm",
+    "meta_llama",
+    "llamafile",
+    "featherless_ai",
+    "nebius",
+    "dashscope",
+    "moonshot",
+    "v0",
+    "lambda_ai",
+    "hyperbolic",
+    "wandb",
+]
 _openai_like_providers: List = [
     "predibase",
     "databricks",
@@ -611,8 +545,7 @@ clarifai_models: set = set(
         "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Instruct-2507",
         "clarifai/qwen.qwen3.qwen3-next-80B-A3B-Thinking",
         "clarifai/openai.chat-completion.gpt-oss-120b",
-        "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Thinking-2507"
-        "clarifai/openai.chat-completion.gpt-5-nano",
+        "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Thinking-2507clarifai/openai.chat-completion.gpt-5-nano",
         "clarifai/openai.chat-completion.gpt-4o",
         "clarifai/gcp.generate.gemini-2_5-pro",
         "clarifai/anthropic.completion.claude-sonnet-4",
@@ -967,9 +900,7 @@ known_tokenizer_config = {
 
 
 OPENAI_FINISH_REASONS = ["stop", "length", "function_call", "content_filter", "null"]
-HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(
-    os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)
-)  # 1 minute
+HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60))  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
 
 ########################### Logging Callback Constants ###########################
@@ -977,9 +908,7 @@ AZURE_STORAGE_MSFT_VERSION = "2019-07-07"
 PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES = int(
     os.getenv("PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES", 5)
 )
-CLOUDZERO_EXPORT_INTERVAL_MINUTES = int(
-    os.getenv("CLOUDZERO_EXPORT_INTERVAL_MINUTES", 60)
-)
+CLOUDZERO_EXPORT_INTERVAL_MINUTES = int(os.getenv("CLOUDZERO_EXPORT_INTERVAL_MINUTES", 60))
 MCP_TOOL_NAME_PREFIX = "mcp_tool"
 MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100))
 
@@ -1016,16 +945,10 @@ BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
 ]
 BASE_MCP_ROUTE = "/mcp"
 
-BATCH_STATUS_POLL_INTERVAL_SECONDS = int(
-    os.getenv("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600)
-)  # 1 hour
-BATCH_STATUS_POLL_MAX_ATTEMPTS = int(
-    os.getenv("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24)
-)  # for 24 hours
+BATCH_STATUS_POLL_INTERVAL_SECONDS = int(os.getenv("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600))  # 1 hour
+BATCH_STATUS_POLL_MAX_ATTEMPTS = int(os.getenv("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24))  # for 24 hours
 
-HEALTH_CHECK_TIMEOUT_SECONDS = int(
-    os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60)
-)  # 60 seconds
+HEALTH_CHECK_TIMEOUT_SECONDS = int(os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60))  # 60 seconds
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
@@ -1046,25 +969,15 @@ LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME = "cloudzero_export_usage_data"
-CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
-    os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
-)
+CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000))
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
-DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
-    os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
-)  # 1 minute
-PROXY_BUDGET_RESCHEDULER_MIN_TIME = int(
-    os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
-)
+DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60))  # 1 minute
+PROXY_BUDGET_RESCHEDULER_MIN_TIME = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597))
 PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
-PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
-    os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
-)
-PROXY_BATCH_WRITE_AT = int(
-    os.getenv("PROXY_BATCH_WRITE_AT", 10)
-)  # in seconds, increased from 10
+PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605))
+PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds, increased from 10
 
 # APScheduler Configuration - MEMORY LEAK FIX
 # These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
@@ -1075,51 +988,35 @@ APSCHEDULER_COALESCE = os.getenv("APSCHEDULER_COALESCE", "True").lower() in [
 APSCHEDULER_MISFIRE_GRACE_TIME = int(
     os.getenv("APSCHEDULER_MISFIRE_GRACE_TIME", 3600)
 )  # ignore runs older than 1 hour (was 120)
-APSCHEDULER_MAX_INSTANCES = int(
-    os.getenv("APSCHEDULER_MAX_INSTANCES", 1)
-)  # prevent concurrent job instances
-APSCHEDULER_REPLACE_EXISTING = os.getenv(
-    "APSCHEDULER_REPLACE_EXISTING", "True"
-).lower() in [
+APSCHEDULER_MAX_INSTANCES = int(os.getenv("APSCHEDULER_MAX_INSTANCES", 1))  # prevent concurrent job instances
+APSCHEDULER_REPLACE_EXISTING = os.getenv("APSCHEDULER_REPLACE_EXISTING", "True").lower() in [
     "true",
     "1",
 ]  # always replace existing jobs
 
-DEFAULT_HEALTH_CHECK_INTERVAL = int(
-    os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
-)  # 5 minutes
+DEFAULT_HEALTH_CHECK_INTERVAL = int(os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300))  # 5 minutes
 DEFAULT_SHARED_HEALTH_CHECK_TTL = int(
     os.getenv("DEFAULT_SHARED_HEALTH_CHECK_TTL", 300)
 )  # 5 minutes - TTL for cached health check results
 DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL = int(
     os.getenv("DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL", 60)
 )  # 1 minute - TTL for health check lock
-PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS = int(
-    os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9)
-)
+PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS = int(os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9))
 DEFAULT_MODEL_CREATED_AT_TIME = int(
     os.getenv("DEFAULT_MODEL_CREATED_AT_TIME", 1677610602)
 )  # returns on `/models` endpoint
-DEFAULT_SLACK_ALERTING_THRESHOLD = int(
-    os.getenv("DEFAULT_SLACK_ALERTING_THRESHOLD", 300)
-)
+DEFAULT_SLACK_ALERTING_THRESHOLD = int(os.getenv("DEFAULT_SLACK_ALERTING_THRESHOLD", 300))
 MAX_TEAM_LIST_LIMIT = int(os.getenv("MAX_TEAM_LIST_LIMIT", 20))
-DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(
-    os.getenv("DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD", 0.7)
-)
+DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD", 0.7))
 LENGTH_OF_LITELLM_GENERATED_KEY = int(os.getenv("LENGTH_OF_LITELLM_GENERATED_KEY", 16))
-SECRET_MANAGER_REFRESH_INTERVAL = int(
-    os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400)
-)
+SECRET_MANAGER_REFRESH_INTERVAL = int(os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400))
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
     "public_model_groups",
     "public_model_groups_links",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
-DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
-    os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
-)
+DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [
@@ -1188,6 +1085,4 @@ SENTRY_PII_DENYLIST = [
 ]
 
 # CoroutineChecker cache configuration
-COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
-    os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
-)
+COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000))

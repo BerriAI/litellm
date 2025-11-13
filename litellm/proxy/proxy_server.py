@@ -48,6 +48,8 @@ from litellm.types.utils import (
 )
 from litellm.utils import load_credentials_from_list
 
+from litellm.proxy.common_utils.callback_utils import normalize_callback_names
+
 if TYPE_CHECKING:
     from aiohttp import ClientSession
     from opentelemetry.trace import Span as _Span
@@ -9052,9 +9054,10 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 if isinstance(
                     config["litellm_settings"]["success_callback"], list
                 ) and isinstance(updated_litellm_settings["success_callback"], list):
+                    updated_success_callbacks_normalized = normalize_callback_names(updated_litellm_settings["success_callback"])
                     combined_success_callback = (
                         config["litellm_settings"]["success_callback"]
-                        + updated_litellm_settings["success_callback"]
+                        + updated_success_callbacks_normalized
                     )
                     combined_success_callback = list(set(combined_success_callback))
                     config["litellm_settings"][
