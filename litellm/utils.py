@@ -7635,6 +7635,12 @@ class ProviderConfigManager:
             )
 
             return get_fal_ai_image_generation_config(model)
+        elif LlmProviders.RUNWAYML == provider:
+            from litellm.llms.runwayml.image_generation import (
+                get_runwayml_image_generation_config,
+            )
+
+            return get_runwayml_image_generation_config(model)
         return None
 
     @staticmethod
@@ -7661,7 +7667,7 @@ class ProviderConfigManager:
 
             return VertexAIVideoConfig()
         elif LlmProviders.RUNWAYML == provider:
-            from litellm.llms.runway.videos.transformation import RunwayMLVideoConfig
+            from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
         return None
