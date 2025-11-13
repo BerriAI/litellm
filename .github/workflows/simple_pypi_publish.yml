@@ -48,7 +48,7 @@ jobs:
 
       - name: Copy model prices file
         run: |
-          cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+          cp model_prices_and_context_window.json litellm/model_prices_and_context_window.json
 
       - name: Build package
         run: |

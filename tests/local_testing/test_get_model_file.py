@@ -16,10 +16,17 @@ def test_get_model_cost_map():
         pytest.fail(f"An exception occurred: {e}")
 
 
-def test_get_backup_model_cost_map():
-    with importlib.resources.open_text(
-        "litellm", "model_prices_and_context_window_backup.json"
-    ) as f:
-        print("inside backup")
+def test_get_local_model_cost_map():
+    """Test that we can load the local model cost map"""
+    from pathlib import Path
+
+    # Test loading from project root (development scenario)
+    project_root = Path(__file__).parent.parent.parent
+    model_cost_map_path = project_root / "model_prices_and_context_window.json"
+
+    with open(model_cost_map_path, "r") as f:
+        print("inside local model cost map")
         content = json.load(f)
         print("content", content)
+        assert content is not None
+        assert len(content) > 0

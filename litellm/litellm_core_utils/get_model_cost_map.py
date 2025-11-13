@@ -9,8 +9,40 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 """
 
 import os
+from pathlib import Path
 
 import httpx
+
+
+def _load_local_model_cost_map() -> dict:
+    """Load model cost map from local filesystem.
+
+    Tries to load from:
+    1. Package resources (production, after pip install)
+    2. Project root (development)
+    """
+    import json
+
+    # Try loading from package resources (production)
+    try:
+        import importlib.resources
+        with importlib.resources.open_text(
+            "litellm", "model_prices_and_context_window.json"
+        ) as f:
+            return json.load(f)
+    except (FileNotFoundError, ModuleNotFoundError):
+        pass
+
+    # Try loading from project root (development)
+    try:
+        current_dir = Path(__file__).parent.parent.parent
+        model_cost_map_path = current_dir / "model_prices_and_context_window.json"
+        with open(model_cost_map_path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            "Could not find model_prices_and_context_window.json in package or project root"
+        )
 
 
 def get_model_cost_map(url: str) -> dict:
@@ -18,14 +50,7 @@ def get_model_cost_map(url: str) -> dict:
         os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False)
         or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
     ):
-        import importlib.resources
-        import json
-
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
+        return _load_local_model_cost_map()
 
     try:
         response = httpx.get(
@@ -35,11 +60,4 @@ def get_model_cost_map(url: str) -> dict:
         content = response.json()
         return content
     except Exception:
-        import importlib.resources
-        import json
-
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
+        return _load_local_model_cost_map()
