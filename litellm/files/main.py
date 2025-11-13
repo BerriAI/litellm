@@ -1173,7 +1173,7 @@ def file_content(
                         async_client = client
 
                     http_response = await async_client.get(url=url, headers=headers)
-                    return HttpxBinaryResponseContent(http_response.content)
+                    return HttpxBinaryResponseContent(response=http_response)
 
                 response = _content()
             else:
@@ -1183,7 +1183,7 @@ def file_content(
                     sync_client = client
 
                 http_response = sync_client.get(url=url, headers=headers)
-                response = HttpxBinaryResponseContent(http_response.content)
+                response = HttpxBinaryResponseContent(response=http_response)
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'file_content'. Supported providers are 'openai', 'azure', 'vertex_ai', 'anthropic'.".format(
