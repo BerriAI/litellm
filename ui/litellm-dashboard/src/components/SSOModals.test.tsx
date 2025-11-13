@@ -83,7 +83,7 @@ describe("SSOModals", () => {
     fireEvent.change(emailInput, { target: { value: "test@example.com" } });
 
     // Fill in an invalid URL
-    const urlInput = getByLabelText("PROXY BASE URL");
+    const urlInput = getByLabelText("Proxy Base URL");
     fireEvent.change(urlInput, { target: { value: "invalid-url" } });
 
     // Submit the form
@@ -91,9 +91,13 @@ describe("SSOModals", () => {
     fireEvent.click(saveButton);
 
     // Check for validation error
-    await waitFor(() => {
-      expect(getByText("URL must start with http:// or https://")).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(getByText("URL must start with http:// or https://")).toBeInTheDocument();
+      },
+      // The validation is based on a Promise, so we need to wait for it to resolve
+      { timeout: 5000 },
+    );
   });
 
   it("should show validation error if the proxy base url ends with a trailing slash", async () => {
@@ -133,7 +137,7 @@ describe("SSOModals", () => {
     fireEvent.change(emailInput, { target: { value: "test@example.com" } });
 
     // Fill in a URL with trailing slash
-    const urlInput = getByLabelText("PROXY BASE URL") as HTMLInputElement;
+    const urlInput = getByLabelText("Proxy Base URL") as HTMLInputElement;
     fireEvent.change(urlInput, { target: { value: "https://example.com/" } });
 
     // Submit the form
@@ -167,7 +171,7 @@ describe("SSOModals", () => {
 
     const { getByLabelText } = render(<TestWrapper />);
 
-    const urlInput = getByLabelText("PROXY BASE URL") as HTMLInputElement;
+    const urlInput = getByLabelText("Proxy Base URL") as HTMLInputElement;
 
     // Simulate user typing "https://"
     fireEvent.change(urlInput, { target: { value: "h" } });
@@ -233,7 +237,7 @@ describe("SSOModals", () => {
     fireEvent.change(emailInput, { target: { value: "test@example.com" } });
 
     // Fill in an incomplete URL like "http:"
-    const urlInput = getByLabelText("PROXY BASE URL");
+    const urlInput = getByLabelText("Proxy Base URL");
     fireEvent.change(urlInput, { target: { value: "http:" } });
 
     // Submit the form

@@ -7,6 +7,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
 import CacheControlSettings from "./cache_control_settings";
 import { Tag } from "../tag_management/types";
+import { formItemValidateJSON } from "../../utils/textUtils";
 const { Link } = Typography;
 
 interface AdvancedSettingsProps {
@@ -38,18 +39,6 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
       return Promise.reject("Please enter a valid positive number");
     }
     return Promise.resolve();
-  };
-
-  const validateJSON = (_: any, value: string) => {
-    if (!value) {
-      return Promise.resolve();
-    }
-    try {
-      JSON.parse(value);
-      return Promise.resolve();
-    } catch (error) {
-      return Promise.reject("Please enter valid JSON");
-    }
   };
 
   // Handle custom pricing changes
@@ -233,7 +222,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               name="litellm_extra_params"
               tooltip="Optional litellm params used for making a litellm.completion() call."
               className="mb-4 mt-4"
-              rules={[{ validator: validateJSON }]}
+              rules={[{ validator: formItemValidateJSON }]}
             >
               <TextArea
                 rows={4}
@@ -260,7 +249,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               name="model_info_params"
               tooltip="Optional model info params. Returned when calling `/model/info` endpoint."
               className="mb-0"
-              rules={[{ validator: validateJSON }]}
+              rules={[{ validator: formItemValidateJSON }]}
             >
               <TextArea
                 rows={4}

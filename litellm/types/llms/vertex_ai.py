@@ -638,6 +638,52 @@ class VertexBatchPredictionResponse(TypedDict, total=False):
     modelVersionId: str
 
 
+class VertexVideoImage(TypedDict, total=False):
+    """Image input for video generation"""
+
+    bytesBase64Encoded: str
+    mimeType: str
+
+
+class VertexVideoGenerationInstance(TypedDict, total=False):
+    """Instance object for Vertex AI video generation request"""
+
+    prompt: Required[str]
+    image: VertexVideoImage
+
+
+class VertexVideoGenerationParameters(TypedDict, total=False):
+    """Parameters for Vertex AI video generation"""
+
+    aspectRatio: Literal["9:16", "16:9"]
+    durationSeconds: int
+
+
+class VertexVideoGenerationRequest(TypedDict):
+    """Complete request body for Vertex AI video generation"""
+
+    instances: Required[List[VertexVideoGenerationInstance]]
+    parameters: VertexVideoGenerationParameters
+
+
+class VertexVideoOutput(TypedDict, total=False):
+    """Video output in response"""
+
+    bytesBase64Encoded: str
+    mimeType: str
+    gcsUri: str
+
+
+class VertexVideoGenerationResponse(TypedDict, total=False):
+    """Response body for Vertex AI video generation"""
+
+    name: str
+    done: bool
+    response: Dict[str, Any]
+    metadata: Dict[str, Any]
+    error: Dict[str, Any]
+
+
 VERTEX_CREDENTIALS_TYPES = Union[str, Dict[str, str]]
 
 

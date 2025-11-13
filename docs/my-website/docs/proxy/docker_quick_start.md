@@ -2,7 +2,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# E2E Tutorial
+# Getting Started Tutorial
 
 End-to-End tutorial for LiteLLM Proxy to:
 - Add an Azure OpenAI model 
@@ -82,6 +82,8 @@ model_list:
 
 ### Model List Specification
 
+You can read more about how model resolution works in the [Model Configuration](#understanding-model-configuration) section.
+
 - **`model_name`** (`str`) - This field should contain the name of the model as received.
 - **`litellm_params`** (`dict`) [See All LiteLLM Params](https://github.com/BerriAI/litellm/blob/559a6ad826b5daef41565f54f06c739c8c068b28/litellm/types/router.py#L222)
     - **`model`** (`str`) - Specifies the model name to be sent to `litellm.acompletion` / `litellm.aembedding`, etc. This is the identifier used by LiteLLM to route to the correct model + provider logic on the backend. 
@@ -89,6 +91,10 @@ model_list:
     - **`api_base`** (`str`) - The API base for your azure deployment.
     - **`api_version`** (`str`) - The API Version to use when calling Azure's OpenAI API. Get the latest Inference API version [here](https://learn.microsoft.com/en-us/azure/ai-services/openai/api-version-deprecation?source=recommendations#latest-preview-api-releases).
 
+---
+
+
+---
 
 ### Useful Links
 - [**All Supported LLM API Providers (OpenAI/Bedrock/Vertex/etc.)**](../providers/)
@@ -407,6 +413,138 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 - [Set Budgets / Rate Limits per key/user/teams](./users.md)
 - [Dynamic TPM/RPM Limits for keys](./team_budgets.md#dynamic-tpmrpm-allocation)
 
+## Key Concepts
+
+This section explains key concepts on LiteLLM AI Gateway.
+
+### Understanding Model Configuration
+
+For this config.yaml example:
+
+```yaml
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: azure/my_azure_deployment
+      api_base: os.environ/AZURE_API_BASE
+      api_key: "os.environ/AZURE_API_KEY"
+      api_version: "2025-01-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
+```
+
+**How Model Resolution Works:**
+
+```
+Client Request                LiteLLM Proxy                 Provider API
+──────────────              ────────────────              ─────────────
+    
+POST /chat/completions      
+{                           1. Looks up model_name
+  "model": "gpt-4o" ──────────▶ in config.yaml
+  ...                          
+}                           2. Finds matching entry:
+                               model_name: gpt-4o
+                               
+                            3. Extracts litellm_params:
+                               model: azure/my_azure_deployment
+                               api_base: https://...
+                               api_key: sk-...
+                               
+                            4. Routes to provider ──▶ Azure OpenAI API
+                                                      POST /deployments/my_azure_deployment/...
+```
+
+**Breaking Down the `model` Parameter under `litellm_params`:**
+
+```yaml
+model_list:
+  - model_name: gpt-4o                       # What the client calls
+    litellm_params:
+      model: azure/my_azure_deployment       # <provider>/<model-name>
+             ─────  ───────────────────
+               │           │
+               │           └─────▶ Model name sent to the provider API
+               │
+               └─────────────────▶ Provider that LiteLLM routes to
+```
+
+**Visual Breakdown:**
+
+```
+model: azure/my_azure_deployment
+       └─┬─┘ └─────────┬─────────┘
+         │             │
+         │             └────▶ The actual model identifier that gets sent to Azure
+         │                   (e.g., your deployment name, or the model name)
+         │
+         └──────────────────▶ Tells LiteLLM which provider to use
+                             (azure, openai, anthropic, bedrock, etc.)
+```
+
+**Key Concepts:**
+
+- **`model_name`**: The alias your client uses to call the model. This is what you send in your API requests (e.g., `gpt-4o`).
+
+- **`model` (in litellm_params)**: Format is `<provider>/<model-identifier>`
+  - **Provider** (before `/`): Routes to the correct LLM provider (e.g., `azure`, `openai`, `anthropic`, `bedrock`)
+  - **Model identifier** (after `/`): The actual model/deployment name sent to that provider's API
+
+**Advanced Configuration Examples:**
+
+For custom OpenAI-compatible endpoints (e.g., vLLM, Ollama, custom deployments):
+
+```yaml
+model_list:
+  - model_name: my-custom-model
+    litellm_params:
+      model: openai/nvidia/llama-3.2-nv-embedqa-1b-v2
+      api_base: http://my-service.svc.cluster.local:8000/v1
+      api_key: "sk-1234"
+```
+
+**Breaking down complex model paths:**
+
+```
+model: openai/nvidia/llama-3.2-nv-embedqa-1b-v2
+       └─┬──┘ └────────────┬────────────────┘
+         │                 │
+         │                 └────▶ Full model string sent to the provider API
+         │                       (in this case: "nvidia/llama-3.2-nv-embedqa-1b-v2")
+         │
+         └──────────────────────▶ Provider (openai = OpenAI-compatible API)
+```
+
+The key point: Everything after the first `/` is passed as-is to the provider's API.
+
+**Common Patterns:**
+
+```yaml
+model_list:
+  # Azure deployment
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-deployment
+      api_base: https://my-azure.openai.azure.com
+      
+  # OpenAI
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+      
+  # Custom OpenAI-compatible endpoint
+  - model_name: my-llama-model
+    litellm_params:
+      model: openai/meta/llama-3-8b
+      api_base: http://my-vllm-server:8000/v1
+      api_key: "optional-key"
+      
+  # Bedrock
+  - model_name: claude-3
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_region_name: us-east-1
+```
+
 
 ## Troubleshooting 
 
@@ -504,7 +642,7 @@ LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- [Community Slack 💭](https://join.slack.com/share/enQtOTE0ODczMzk2Nzk4NC01YjUxNjY2YjBlYTFmNDRiZTM3NDFiYTM3MzVkODFiMDVjOGRjMmNmZTZkZTMzOWQzZGQyZWIwYjQ0MWExYmE3)
+- [Community Slack 💭](https://www.litellm.ai/support)
 
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 

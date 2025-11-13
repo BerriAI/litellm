@@ -1,5 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
+
 
 # LiteLLM Content Filter
 
@@ -18,7 +20,41 @@ import TabItem from '@theme/TabItem';
 
 ## Quick Start
 
-### 1. Define Guardrails in config.yaml
+## LiteLLM UI
+
+### Step 1: Select LiteLLM Content Filter
+
+Click "Add New Guardrail" and select "LiteLLM Content Filter" as your guardrail provider.
+
+<Image img={require('../../../img/create_guard.gif')} alt="Select LiteLLM Content Filter" />
+
+### Step 2: Configure Pattern Detection
+
+Select the prebuilt entities you want to block or mask. In this example, we select "Email" to detect and block email addresses.
+
+If you need to block a custom entity, you can add a custom regex pattern by clicking "Add custom regex".
+
+<Image img={require('../../../img/add_Guard2.gif')} alt="Select prebuilt entities or add custom regex" />
+
+### Step 3: Add Blocked Keywords
+
+Enter specific keywords you want to block. This is useful if you have policies to block certain words or phrases.
+
+<Image img={require('../../../img/create_guard3.gif')} alt="Add blocked keywords" />
+
+### Step 4: Test Your Guardrail
+
+After creating the guardrail, navigate to "Test Playground" to test it. Select the guardrail you just created.
+
+Test examples:
+- **Blocked keyword test**: Entering "hi blue" will trigger the block since we set "blue" as a blocked keyword
+- **Pattern detection test**: Entering "Hi ishaan@berri.ai" will trigger the email pattern detector
+
+<Image img={require('../../../img/add_guard5.gif')} alt="Test guardrail in playground" />
+
+## LiteLLM Config.yaml Setup
+
+### Step 1: Define Guardrails in config.yaml
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
@@ -50,13 +86,13 @@ guardrails:
           description: "Sensitive internal information"
 ```
 
-### 2. Start LiteLLM Gateway
+### Step 2: Start LiteLLM Gateway
 
 ```shell
 litellm --config config.yaml
 ```
 
-### 3. Test Request
+### Step 3: Test Request
 
 <Tabs>
 <TabItem label="SSN Blocked" value="ssn-blocked">

@@ -1,7 +1,3 @@
-import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
-import React, { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import { v4 as uuidv4 } from "uuid";
 import {
   ApiOutlined,
   ArrowUpOutlined,
@@ -21,9 +17,13 @@ import {
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { Button, Input, Modal, Select, Spin, Tag, Tooltip, Typography, Upload } from "antd";
+import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
+import { Button, Input, Modal, Select, Spin, Tooltip, Typography, Upload } from "antd";
+import React, { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { v4 as uuidv4 } from "uuid";
 import GuardrailSelector from "../guardrails/GuardrailSelector";
 import NotificationsManager from "../molecules/notifications_manager";
 import TagSelector from "../tag_management/TagSelector";
@@ -33,7 +33,7 @@ import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
 import ChatImageRenderer from "./ChatImageRenderer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
-import { truncateString } from "./chatUtils";
+import { truncateString } from "../../utils/textUtils";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
 import { makeAnthropicMessagesRequest } from "./llm_calls/anthropic_messages";
@@ -48,7 +48,7 @@ import { makeOpenAIImageEditsRequest } from "./llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "./llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "./llm_calls/responses_api";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
-import { EndpointType } from "./mode_endpoint_mapping";
+import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import ReasoningContent from "./ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
 import ResponsesImageRenderer from "./ResponsesImageRenderer";
@@ -106,17 +106,8 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
       return [];
     }
   });
-  const [selectedModels, setSelectedModels] = useState<string[]>(() => {
-    const saved = sessionStorage.getItem("selectedModels");
-    try {
-      return saved ? JSON.parse(saved) : [];
-    } catch (error) {
-      console.error("Error parsing selectedModels from sessionStorage", error);
-      return [];
-    }
-  });
+  const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
-  const [customModelInput, setCustomModelInput] = useState<string>("");
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
   const [endpointType, setEndpointType] = useState<string>(
@@ -220,7 +211,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
         selectedGuardrails,
         selectedMCPTools,
         endpointType,
-        selectedModel: selectedModels[0], // Use first model for code snippet
+        selectedModel,
         selectedSdk,
         selectedVoice,
       });
@@ -239,7 +230,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     selectedGuardrails,
     selectedMCPTools,
     endpointType,
-    selectedModels,
+    selectedModel,
   ]);
 
   useEffect(() => {
@@ -262,7 +253,11 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     sessionStorage.setItem("selectedMCPTools", JSON.stringify(selectedMCPTools));
     sessionStorage.setItem("selectedVoice", selectedVoice);
 
-    sessionStorage.setItem("selectedModels", JSON.stringify(selectedModels));
+    if (selectedModel) {
+      sessionStorage.setItem("selectedModel", selectedModel);
+    } else {
+      sessionStorage.removeItem("selectedModel");
+    }
     if (messageTraceId) {
       sessionStorage.setItem("messageTraceId", messageTraceId);
     } else {
@@ -277,7 +272,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
   }, [
     apiKeySource,
     apiKey,
-    selectedModels,
+    selectedModel,
     endpointType,
     selectedTags,
     selectedVectorStores,
@@ -286,6 +281,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     responsesSessionId,
     useApiSessionManagement,
     selectedMCPTools,
+    selectedVoice,
   ]);
 
   useEffect(() => {
@@ -309,11 +305,11 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
         setModelInfo(uniqueModels);
 
         // check for selection overlap or empty model list
+        const hasSelection = uniqueModels.some((m) => m.model_group === selectedModel);
         if (!uniqueModels.length) {
-          setSelectedModels([]);
-        } else if (selectedModels.length === 0) {
-          // If no models selected, auto-select the first one
-          setSelectedModels([uniqueModels[0].model_group]);
+          setSelectedModel(undefined);
+        } else if (!hasSelection) {
+          setSelectedModel(undefined);
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
@@ -726,8 +722,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     setIsLoading(true);
 
     try {
-      if (selectedModels.length > 0) {
-        const selectedModel = selectedModels[0]; // For now, use first model (will be updated later for multi-model)
+      if (selectedModel) {
         if (endpointType === EndpointType.CHAT) {
           // Create chat history for API call - strip out model field and isImage field
           // For chat completions, we preserve the multimodal content structure
@@ -935,43 +930,11 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     );
   }
 
-  const onModelsChange = (values: string[]) => {
-    console.log(`selected models:`, values);
+  const onModelChange = (value: string) => {
+    console.log(`selected ${value}`);
+    setSelectedModel(value);
 
-    // Check if "custom" was added
-    if (values.includes("custom")) {
-      setShowCustomModelInput(true);
-      // Remove "custom" from the actual selection
-      setSelectedModels(values.filter((v) => v !== "custom"));
-    } else {
-      // Limit to 3 models maximum
-      if (values.length > 3) {
-        NotificationsManager.info("Maximum 3 models can be selected");
-        return;
-      }
-      setSelectedModels(values);
-    }
-  };
-
-  const handleAddCustomModel = () => {
-    const trimmedModel = customModelInput.trim();
-    if (!trimmedModel) return;
-
-    if (selectedModels.includes(trimmedModel)) {
-      NotificationsManager.info("Model already selected");
-      return;
-    }
-    if (selectedModels.length >= 3) {
-      NotificationsManager.info("Maximum 3 models can be selected");
-      return;
-    }
-    setSelectedModels([...selectedModels, trimmedModel]);
-    setCustomModelInput("");
-    setShowCustomModelInput(false);
-  };
-
-  const handleRemoveModel = (modelToRemove: string) => {
-    setSelectedModels(selectedModels.filter((m) => m !== modelToRemove));
+    setShowCustomModelInput(value === "custom");
   };
 
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
@@ -1015,75 +978,18 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
 
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                  <RobotOutlined className="mr-2" /> Select Models
-                </Text>
-                <Select
-                  mode="multiple"
-                  value={selectedModels}
-                  placeholder="Select one or more models"
-                  onChange={onModelsChange}
-                  options={[
-                    ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group, index) => ({
-                      value: model_group,
-                      label: model_group,
-                      key: index,
-                    })),
-                    { value: "custom", label: "+ Add custom model", key: "custom" },
-                  ]}
-                  style={{ width: "100%" }}
-                  showSearch={true}
-                  className="rounded-md"
-                  maxTagCount={0}
-                  maxTagPlaceholder={`${selectedModels.length} model${selectedModels.length !== 1 ? "s" : ""} selected`}
-                />
-
-                {showCustomModelInput && (
-                  <TextInput
-                    className="mt-2"
-                    placeholder="Custom Model Name (Enter to add)"
-                    value={customModelInput}
-                    onValueChange={setCustomModelInput}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        handleAddCustomModel();
-                      }
-                    }}
-                  />
-                )}
-
-                {/* Selected Models Tags */}
-                {selectedModels.length > 0 && (
-                  <div className="mt-2 overflow-hidden">
-                    <div className="flex flex-wrap gap-1.5">
-                      {selectedModels.map((model) => (
-                        <Tag
-                          key={model}
-                          closable
-                          onClose={(e) => {
-                            e.preventDefault();
-                            handleRemoveModel(model);
-                          }}
-                          color="blue"
-                          className="px-2 py-0.5 text-xs max-w-[200px]"
-                        >
-                          <span className="truncate inline-block max-w-[160px] align-middle" title={model}>
-                            {model}
-                          </span>
-                        </Tag>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
                   <ApiOutlined className="mr-2" /> Endpoint Type
                 </Text>
                 <EndpointSelector
                   endpointType={endpointType}
                   onEndpointChange={(value) => {
                     setEndpointType(value);
+                    // Clear model selection when switching endpoint type
+                    setSelectedModel(undefined);
+                    setShowCustomModelInput(false);
+                    try {
+                      sessionStorage.removeItem("selectedModel");
+                    } catch {}
                   }}
                   className="mb-4"
                 />
@@ -1115,6 +1021,68 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                   useApiSessionManagement={useApiSessionManagement}
                   onToggleSessionManagement={handleToggleSessionManagement}
                 />
+              </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <RobotOutlined className="mr-2" /> Select Model
+                </Text>
+                <Select
+                  value={selectedModel}
+                  placeholder="Select a Model"
+                  onChange={onModelChange}
+                  options={[
+                    ...Array.from(
+                      new Set(
+                        modelInfo
+                          .filter((option) => {
+                            if (!option.mode) {
+                              //If no mode, show all models
+                              return true;
+                            }
+                            const optionEndpoint = getEndpointType(option.mode);
+                            // Show chat models for responses/anthropic_messages endpoints as they are compatible
+                            if (
+                              endpointType === EndpointType.RESPONSES ||
+                              endpointType === EndpointType.ANTHROPIC_MESSAGES
+                            ) {
+                              return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
+                            }
+                            // Show image models for image_edits endpoint as they are compatible
+                            if (endpointType === EndpointType.IMAGE_EDITS) {
+                              return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
+                            }
+                            return optionEndpoint === endpointType;
+                          })
+                          .map((option) => option.model_group),
+                      ),
+                    ).map((model_group, index) => ({
+                      value: model_group,
+                      label: model_group,
+                      key: index,
+                    })),
+                    { value: "custom", label: "Enter custom model", key: "custom" },
+                  ]}
+                  style={{ width: "100%" }}
+                  showSearch={true}
+                  className="rounded-md"
+                />
+                {showCustomModelInput && (
+                  <TextInput
+                    className="mt-2"
+                    placeholder="Enter custom model name"
+                    onValueChange={(value) => {
+                      // Using setTimeout to create a simple debounce effect
+                      if (customModelTimeout.current) {
+                        clearTimeout(customModelTimeout.current);
+                      }
+
+                      customModelTimeout.current = setTimeout(() => {
+                        setSelectedModel(value);
+                      }, 500); // 500ms delay after typing stops
+                    }}
+                  />
+                )}
               </div>
 
               <div>
@@ -1225,8 +1193,8 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
 
           {/* Main Chat Area */}
           <div className="w-3/4 flex flex-col bg-white">
-            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-              <Title className="text-xl font-semibold">Test Key</Title>
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+              <Title className="text-xl font-semibold mb-0">Test Key</Title>
               <div className="flex gap-2">
                 <TremorButton
                   onClick={clearChatHistory}
