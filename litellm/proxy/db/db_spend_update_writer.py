@@ -978,6 +978,20 @@ class DBSpendUpdateWriter:
         n_retry_times: int,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: Dict[str, DailyOrganizationSpendTransaction],
+        entity_type: Literal["org"],
+        entity_id_field: str,
+        table_name: str,
+        unique_constraint_name: str,
+    ) -> None:
+        ...
+
+    @overload
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
         daily_spend_transactions: Dict[str, DailyTagSpendTransaction],
         entity_type: Literal["tag"],
         entity_id_field: str,
@@ -1430,9 +1444,16 @@ class DBSpendUpdateWriter:
             )
             return
 
-        # Inject org_id for daily aggregation check
-        payload_with_org: SpendLogsPayload = dict(payload)
-        payload_with_org["organization_id"] = org_id
+        print("org_id", org_id)
+        print("payload", payload)
+
+        payload_with_org = cast(
+            SpendLogsPayload,
+            {
+                **payload,
+                "organization_id": org_id,
+            },
+        )
 
         base_daily_transaction = (
             await self._common_add_spend_log_transaction_to_daily_transaction(
