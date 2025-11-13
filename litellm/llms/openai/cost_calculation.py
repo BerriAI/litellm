@@ -133,6 +133,8 @@ def cost_per_second(
         completion_cost = model_info["output_cost_per_second"] * duration
         return prompt_cost, completion_cost
 
+    return prompt_cost , completion_cost
+
 
 def video_generation_cost(
     model: str, duration_seconds: float, custom_llm_provider: Optional[str] = None
