@@ -1,11 +1,11 @@
+import { PencilAltIcon, PlayIcon, TrashIcon } from "@heroicons/react/outline";
+import { Button, Icon } from "@tremor/react";
 import type { TableProps } from "antd";
-import { Table, Tooltip } from "antd";
+import { Table } from "antd";
 import Title from "antd/es/typography/Title";
 import { PlusCircle } from "lucide-react";
 import React from "react";
 import { AlertingObject } from "./types";
-import { Icon, Button } from "@tremor/react";
-import { PencilAltIcon, TrashIcon, PlayIcon } from "@heroicons/react/outline";
 
 type LoggingCallbacksProps = {
   callbacks: AlertingObject[];
