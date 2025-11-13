@@ -177,7 +177,7 @@ class TestGoogleImageGen(BaseImageGenTest):
 
 class TestRunwaymlImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "runwayml/gen4_image_turbo"}
+        return {"model": "runwayml/gen4_image"}
 
 
 class TestAzureOpenAIDalle3(BaseImageGenTest):
