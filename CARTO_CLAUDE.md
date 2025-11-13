@@ -14,9 +14,10 @@
    - [Automated Nightly Sync](#automated-nightly-sync)
    - [Manual Sync](#manual-sync)
 4. [CARTO-Specific Changes](#carto-specific-changes)
-5. [Development Workflow](#development-workflow)
-6. [Troubleshooting Guide](#troubleshooting-guide)
-7. [Quick Reference](#quick-reference)
+5. [Upstream-First Development Policy](#upstream-first-development-policy)
+6. [Development Workflow](#development-workflow)
+7. [Troubleshooting Guide](#troubleshooting-guide)
+8. [Quick Reference](#quick-reference)
 
 ---
 
@@ -293,6 +294,111 @@ These modifications exist in `carto/main` but NOT in upstream. Be careful to pre
 
 - Removed upstream security scanning workflows
 - Custom secret management setup
+
+---
+
+## Upstream-First Development Policy
+
+**CRITICAL: Before implementing ANY fix or feature, check upstream first!**
+
+This policy minimizes divergence from upstream, reduces duplicate work, and keeps the fork maintainable.
+
+### 1. Check Upstream First
+
+**Before implementing any fix or feature, ALWAYS:**
+
+```bash
+# 1. Search for related commits in upstream
+git fetch upstream
+git log upstream/main --grep="<keyword>" --oneline -50
+
+# Example: For Vertex AI streaming issue
+git log upstream/main --grep="vertex" --grep="streaming" --grep="chunk" --oneline -50
+
+# 2. Check if specific file has been modified
+git diff HEAD..upstream/main -- <file-path>
+
+# Example: Check Vertex AI Gemini handler
+git diff HEAD..upstream/main -- litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py
+
+# 3. Search GitHub issues for related problems
+gh issue list --search "<keywords>" --repo BerriAI/litellm --limit 20
+
+# Example: Search for streaming issues
+gh issue list --search "vertex streaming json" --repo BerriAI/litellm --limit 20
+
+# 4. Search GitHub PRs (including closed ones)
+gh pr list --search "<keywords>" --repo BerriAI/litellm --state all --limit 20
+
+# Example: Search for related fixes
+gh pr list --search "vertex json chunk" --repo BerriAI/litellm --state all --limit 20
+```
+
+### 2. Use Upstream Fix If Available
+
+**If a fix exists in upstream:**
+
+```bash
+# Option A: Cherry-pick specific commit
+git cherry-pick <commit-hash>
+
+# Option B: Merge upstream changes
+git fetch upstream
+git merge upstream/main
+
+# Option C: Cherry-pick range of commits
+git cherry-pick <start-commit>..<end-commit>
+
+# Always test thoroughly after applying upstream fix
+make test-unit
+make lint
+```
+
+### 3. Develop Custom Fix Only If
+
+Proceed with a custom fix ONLY when:
+
+- ✅ No upstream fix exists (verified via search above)
+- ✅ Upstream fix doesn't apply to our fork
+- ✅ Urgent CARTO-specific requirements
+- ✅ Fix is specific to CARTO infrastructure
+
+### 4. Document the Decision
+
+**Always document why you're implementing a custom fix:**
+
+```bash
+# In commit message, include:
+git commit -m "fix: resolve vertex streaming json parsing
+
+No upstream fix available as of 2025-11-12.
+Related upstream issues: #16037, #14747, #10410, #5650
+
+Removes sent_first_chunk guard to allow JSON accumulation
+on any partial chunk, not just the first one.
+
+May submit PR to upstream to help community."
+```
+
+**In PR description, include:**
+- Link to related upstream issues (if any)
+- Confirmation that no upstream fix exists
+- Date when upstream was last checked
+- Consider submitting fix to upstream
+
+### 5. Example: Vertex AI Gemini Streaming Bug
+
+**Issue:** JSON parsing fails when Vertex AI sends partial chunks like `{` during streaming
+
+**Upstream Check (2025-11-12):**
+- ❌ No fix in upstream/main
+- 📋 Related upstream issues: #16037, #14747, #10410, #5650
+- 🔍 Verified file unchanged: `vertex_and_google_ai_studio_gemini.py`
+- ⏳ Status: Bug exists in upstream, affecting multiple users
+
+**Decision:** Implement custom fix in CARTO fork
+**Rationale:** No upstream fix available, blocking production use
+**Future:** Monitor upstream, consider submitting PR
 
 ---
 
@@ -646,15 +752,16 @@ git ls-remote --tags upstream | grep -E 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' | t
 
 When working on this codebase:
 
-1. **Always check which branch you're on** before making changes
-2. **Never merge main into carto/main** - only merge stable upstream tags
-3. **Preserve CARTO-specific files** during upstream syncs:
+1. **CHECK UPSTREAM FIRST** - Before implementing any fix, follow the [Upstream-First Development Policy](#upstream-first-development-policy)
+2. **Always check which branch you're on** before making changes
+3. **Never merge main into carto/main** - only merge stable upstream tags
+4. **Preserve CARTO-specific files** during upstream syncs:
    - `carto_*.yaml` workflows
    - `CARTO_*.md` documentation
    - Modified `Dockerfile` and `Makefile`
-4. **Test thoroughly after upstream merges** - run full test suite
-5. **Document changes** - update this file if you discover new patterns
-6. **Use conventional commits** for clear history:
+5. **Test thoroughly after upstream merges** - run full test suite
+6. **Document changes** - update this file if you discover new patterns
+7. **Use conventional commits** for clear history:
    - `feat:` for new features
    - `fix:` for bug fixes
    - `chore:` for maintenance
@@ -672,6 +779,6 @@ For questions about this fork:
 
 ---
 
-**Last Updated:** 2025-10-27
+**Last Updated:** 2025-11-12
 **Maintained By:** CARTO Engineering Team
 **For:** AI Assistants & Developers working on CARTO's LiteLLM fork
