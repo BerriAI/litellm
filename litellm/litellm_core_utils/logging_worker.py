@@ -29,6 +29,9 @@ class LoggingWorker:
 
     LOGGING_WORKER_MAX_QUEUE_SIZE = 50_000
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE = 20.0
+    # These aren't 1000 OS threads. They're coroutine "slots" on the single asyncio event loop.
+    # Each log coroutine still runs cooperatively and should yield back promptly (awaiting I/O, sleep, etc.).
+    LOGGING_WORKER_CONCURRENCY = 1000
 
     MAX_ITERATIONS_TO_CLEAR_QUEUE = 200
     MAX_TIME_TO_CLEAR_QUEUE = 5.0
@@ -37,11 +40,15 @@ class LoggingWorker:
         self,
         timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
         max_queue_size: int = LOGGING_WORKER_MAX_QUEUE_SIZE,
+        concurrency: int = LOGGING_WORKER_CONCURRENCY,
     ):
         self.timeout = timeout
         self.max_queue_size = max_queue_size
+        self.concurrency = concurrency
         self._queue: Optional[asyncio.Queue[LoggingTask]] = None
         self._worker_task: Optional[asyncio.Task] = None
+        self._running_tasks: set[asyncio.Task] = set()
+        self._sem: Optional[asyncio.Semaphore] = None
 
     def _ensure_queue(self) -> None:
         """Initialize the queue if it doesn't exist."""
@@ -51,29 +58,42 @@ class LoggingWorker:
     def start(self) -> None:
         """Start the logging worker. Idempotent - safe to call multiple times."""
         self._ensure_queue()
+        if self._sem is None:
+            self._sem = asyncio.Semaphore(self.concurrency)
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker_loop())
 
+    async def _process_log_task(self, task: LoggingTask):
+        """Acquires a semaphore lock, runs the logging task, and handles cleanup."""
+        if self._queue is None or self._sem is None:
+            # Worker not initialized; drop the task.
+            return
+
+        async with self._sem:
+            try:
+                # Run the coroutine in its original context
+                await asyncio.wait_for(
+                    task["context"].run(asyncio.create_task, task["coroutine"]),
+                    timeout=self.timeout,
+                )
+            except Exception as e:
+                verbose_logger.exception(f"LoggingWorker error: {e}")
+                pass
+            finally:
+                self._queue.task_done()
+
     async def _worker_loop(self) -> None:
-        """Main worker loop that processes log coroutines sequentially."""
+        """Main worker loop that gets tasks and schedules them to run concurrently."""
         try:
             if self._queue is None:
                 return
 
             while True:
-                # Process one coroutine at a time to keep event loop load predictable
                 task = await self._queue.get()
-                try:
-                    # Run the coroutine in its original context
-                    await asyncio.wait_for(
-                        task["context"].run(asyncio.create_task, task["coroutine"]),
-                        timeout=self.timeout,
-                    )
-                except Exception as e:
-                    verbose_logger.exception(f"LoggingWorker error: {e}")
-                    pass
-                finally:
-                    self._queue.task_done()
+                # Track each spawned coroutine so we can cancel on shutdown.
+                processing_task = asyncio.create_task(self._process_log_task(task))
+                self._running_tasks.add(processing_task)
+                processing_task.add_done_callback(self._running_tasks.discard)
 
         except asyncio.CancelledError:
             verbose_logger.debug("LoggingWorker cancelled during shutdown")
@@ -106,11 +126,25 @@ class LoggingWorker:
 
     async def stop(self) -> None:
         """Stop the logging worker and clean up resources."""
+        if self._worker_task is None and not self._running_tasks:
+            # No worker launched and no in-flight tasks to drain.
+            return
+
+        tasks_to_cancel: list[asyncio.Task] = list(self._running_tasks)
         if self._worker_task:
-            self._worker_task.cancel()
-            with contextlib.suppress(Exception):
-                await self._worker_task
-            self._worker_task = None
+            # Include the main worker loop so it stops fetching work.
+            tasks_to_cancel.append(self._worker_task)
+
+        for task in tasks_to_cancel:
+            # Propagate cancellation to every pending task.
+            task.cancel()
+
+        # Wait for cancellation to settle; ignore errors raised during shutdown.
+        await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+        self._worker_task = None
+        # Drop references to completed tasks so we can restart cleanly.
+        self._running_tasks.clear()
 
     async def flush(self) -> None:
         """Flush the logging queue."""
