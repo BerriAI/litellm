@@ -478,6 +478,12 @@ class MCPServerManager:
         """
         Get the allowed MCP Servers for the user
         """
+        from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+        # If admin, get all servers
+        if user_api_key_auth and _user_has_admin_view(user_api_key_auth):
+            return list(self.get_registry().keys())
+
         try:
             allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
                 user_api_key_auth
@@ -485,18 +491,14 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
             )
-            if len(allowed_mcp_servers) > 0:
-                return allowed_mcp_servers
-            else:
+            if len(allowed_mcp_servers) == 0:
                 verbose_logger.debug(
-                    "No allowed MCP Servers found for user api key auth, returning default registry servers"
+                    "No allowed MCP Servers found for user api key auth."
                 )
-                return list(self.get_registry().keys())
+            return allowed_mcp_servers
         except Exception as e:
-            verbose_logger.warning(
-                f"Failed to get allowed MCP servers: {str(e)}. Returning default registry servers."
-            )
-            return list(self.get_registry().keys())
+            verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}.")
+            return []
 
     async def get_tools_for_server(self, server_id: str) -> List[MCPTool]:
         """
