@@ -151,7 +151,7 @@ pip install litellm==1.80.0
 
 #### Features
 
-- **[Container API](../../docs/container_api)**
+- **[Container API](../../docs/containers)**
     - Add end-to-end OpenAI Container API support to LiteLLM SDK - [PR #16136](https://github.com/BerriAI/litellm/pull/16136)
     - Add proxy support for container APIs - [PR #16049](https://github.com/BerriAI/litellm/pull/16049)
     - Add logging support for Container API - [PR #16049](https://github.com/BerriAI/litellm/pull/16049)

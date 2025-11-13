@@ -33,7 +33,7 @@ import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
 import ChatImageRenderer from "./ChatImageRenderer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
-import { truncateString } from "./chatUtils";
+import { truncateString } from "../../utils/textUtils";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
 import { makeAnthropicMessagesRequest } from "./llm_calls/anthropic_messages";
@@ -48,7 +48,7 @@ import { makeOpenAIImageEditsRequest } from "./llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "./llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "./llm_calls/responses_api";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
-import { EndpointType } from "./mode_endpoint_mapping";
+import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import ReasoningContent from "./ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
 import ResponsesImageRenderer from "./ResponsesImageRenderer";
@@ -106,9 +106,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
       return [];
     }
   });
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(
-    () => sessionStorage.getItem("selectedModel") || undefined,
-  );
+  const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -311,7 +309,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
         if (!uniqueModels.length) {
           setSelectedModel(undefined);
         } else if (!hasSelection) {
-          setSelectedModel(uniqueModels[0].model_group);
+          setSelectedModel(undefined);
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
@@ -980,50 +978,18 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
 
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                  <RobotOutlined className="mr-2" /> Select Model
-                </Text>
-                <Select
-                  value={selectedModel}
-                  placeholder="Select a Model"
-                  onChange={onModelChange}
-                  options={[
-                    ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group, index) => ({
-                      value: model_group,
-                      label: model_group,
-                      key: index,
-                    })),
-                    { value: "custom", label: "Enter custom model", key: "custom" },
-                  ]}
-                  style={{ width: "100%" }}
-                  showSearch={true}
-                  className="rounded-md"
-                />
-                {showCustomModelInput && (
-                  <TextInput
-                    className="mt-2"
-                    placeholder="Enter custom model name"
-                    onValueChange={(value) => {
-                      // Using setTimeout to create a simple debounce effect
-                      if (customModelTimeout.current) {
-                        clearTimeout(customModelTimeout.current);
-                      }
-
-                      customModelTimeout.current = setTimeout(() => {
-                        setSelectedModel(value);
-                      }, 500); // 500ms delay after typing stops
-                    }}
-                  />
-                )}
-              </div>
-
-              <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
                   <ApiOutlined className="mr-2" /> Endpoint Type
                 </Text>
                 <EndpointSelector
                   endpointType={endpointType}
                   onEndpointChange={(value) => {
                     setEndpointType(value);
+                    // Clear model selection when switching endpoint type
+                    setSelectedModel(undefined);
+                    setShowCustomModelInput(false);
+                    try {
+                      sessionStorage.removeItem("selectedModel");
+                    } catch {}
                   }}
                   className="mb-4"
                 />
@@ -1055,6 +1021,68 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                   useApiSessionManagement={useApiSessionManagement}
                   onToggleSessionManagement={handleToggleSessionManagement}
                 />
+              </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <RobotOutlined className="mr-2" /> Select Model
+                </Text>
+                <Select
+                  value={selectedModel}
+                  placeholder="Select a Model"
+                  onChange={onModelChange}
+                  options={[
+                    ...Array.from(
+                      new Set(
+                        modelInfo
+                          .filter((option) => {
+                            if (!option.mode) {
+                              //If no mode, show all models
+                              return true;
+                            }
+                            const optionEndpoint = getEndpointType(option.mode);
+                            // Show chat models for responses/anthropic_messages endpoints as they are compatible
+                            if (
+                              endpointType === EndpointType.RESPONSES ||
+                              endpointType === EndpointType.ANTHROPIC_MESSAGES
+                            ) {
+                              return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
+                            }
+                            // Show image models for image_edits endpoint as they are compatible
+                            if (endpointType === EndpointType.IMAGE_EDITS) {
+                              return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
+                            }
+                            return optionEndpoint === endpointType;
+                          })
+                          .map((option) => option.model_group),
+                      ),
+                    ).map((model_group, index) => ({
+                      value: model_group,
+                      label: model_group,
+                      key: index,
+                    })),
+                    { value: "custom", label: "Enter custom model", key: "custom" },
+                  ]}
+                  style={{ width: "100%" }}
+                  showSearch={true}
+                  className="rounded-md"
+                />
+                {showCustomModelInput && (
+                  <TextInput
+                    className="mt-2"
+                    placeholder="Enter custom model name"
+                    onValueChange={(value) => {
+                      // Using setTimeout to create a simple debounce effect
+                      if (customModelTimeout.current) {
+                        clearTimeout(customModelTimeout.current);
+                      }
+
+                      customModelTimeout.current = setTimeout(() => {
+                        setSelectedModel(value);
+                      }, 500); // 500ms delay after typing stops
+                    }}
+                  />
+                )}
               </div>
 
               <div>

@@ -4414,7 +4414,7 @@ class BaseLLMHTTPHandler:
                 )
 
             # Transform the response using the provider config
-            return video_content_provider_config.transform_video_content_response(
+            return await video_content_provider_config.async_transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
             )

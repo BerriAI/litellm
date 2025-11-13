@@ -18,6 +18,7 @@ from litellm.secret_managers.main import str_to_bool
 AIOHTTP_EXC_MAP: Dict = {
     # Order matters here, most specific exception first
     # Timeout related exceptions
+    asyncio.TimeoutError: httpx.TimeoutException,
     aiohttp.ServerTimeoutError: httpx.TimeoutException,
     aiohttp.ConnectionTimeoutError: httpx.ConnectTimeout,
     aiohttp.SocketTimeoutError: httpx.ReadTimeout,
@@ -253,6 +254,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             allow_redirects=False,
             auto_decompress=False,
             timeout=ClientTimeout(
+                total=timeout.get("read"),
                 sock_connect=timeout.get("connect"),
                 sock_read=timeout.get("read"),
                 connect=timeout.get("pool"),

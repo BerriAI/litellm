@@ -28,3 +28,16 @@ Object.defineProperty(window, "matchMedia", {
     dispatchEvent: vi.fn(),
   }),
 });
+
+// Silence jsdom "getComputedStyle with pseudo-elements" not implemented warnings
+// by ignoring the second argument and delegating to the native implementation.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((elt: Element) => realGetComputedStyle(elt)) as any;
+
+// Avoid "navigation to another Document" warnings when clicking <a> with blob: URLs
+// used by download flows in tests.
+Object.defineProperty(HTMLAnchorElement.prototype, "click", {
+  configurable: true,
+  writable: true,
+  value: vi.fn(),
+});
