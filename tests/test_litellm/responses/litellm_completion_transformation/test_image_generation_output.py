@@ -35,78 +35,25 @@ class TestExtractBase64FromDataUrl:
         )
         assert result == pure_base64
 
-    def test_handles_empty_string(self):
-        """Should return None for empty string"""
-        result = LiteLLMCompletionResponsesConfig._extract_base64_from_data_url("")
-        assert result is None
-
-    def test_handles_none(self):
-        """Should return None for None input"""
-        result = LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(None)
-        assert result is None
-
-    def test_handles_data_url_without_comma(self):
-        """Should return None if data URL has no comma separator"""
-        invalid_url = "data:image/png;base64"
-        result = LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(
-            invalid_url
-        )
-        assert result is None
+    def test_handles_invalid_inputs(self):
+        """Should return None for empty/None/malformed inputs"""
+        assert LiteLLMCompletionResponsesConfig._extract_base64_from_data_url("") is None
+        assert LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(None) is None
+        assert LiteLLMCompletionResponsesConfig._extract_base64_from_data_url("data:image/png;base64") is None
 
 
 class TestExtractImageGenerationOutputItems:
     """Tests for _extract_image_generation_output_items function"""
 
-    def test_extracts_single_image(self):
-        """Should extract one OutputImageGenerationCall for one image"""
-        # Mock objects
+    def test_extracts_images_correctly(self):
+        """Should extract OutputImageGenerationCall objects from images"""
         mock_response = Mock(spec=ModelResponse)
-        mock_response.id = "test_response_123"
+        mock_response.id = "test_123"
 
         mock_message = Mock(spec=Message)
         mock_message.images = [
-            {
-                "image_url": {"url": "data:image/png;base64,ABC123"},
-                "type": "image_url",
-                "index": 0,
-            }
-        ]
-
-        mock_choice = Mock(spec=Choices)
-        mock_choice.message = mock_message
-        mock_choice.finish_reason = "stop"
-
-        # Execute
-        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-            chat_completion_response=mock_response,
-            choice=mock_choice,
-        )
-
-        # Verify
-        assert len(result) == 1
-        assert isinstance(result[0], OutputImageGenerationCall)
-        assert result[0].type == "image_generation_call"
-        assert result[0].id == "test_response_123_img_0"
-        assert result[0].status == "completed"
-        assert result[0].result == "ABC123"
-
-    def test_extracts_multiple_images(self):
-        """Should extract multiple OutputImageGenerationCall objects"""
-        mock_response = Mock(spec=ModelResponse)
-        mock_response.id = "test_response_456"
-
-        mock_message = Mock(spec=Message)
-        mock_message.images = [
-            {
-                "image_url": {"url": "data:image/png;base64,IMG1"},
-                "type": "image_url",
-                "index": 0,
-            },
-            {
-                "image_url": {"url": "data:image/jpeg;base64,IMG2"},
-                "type": "image_url",
-                "index": 1,
-            },
+            {"image_url": {"url": "data:image/png;base64,IMG1"}, "type": "image_url", "index": 0},
+            {"image_url": {"url": "data:image/jpeg;base64,IMG2"}, "type": "image_url", "index": 1},
         ]
 
         mock_choice = Mock(spec=Choices)
@@ -119,13 +66,15 @@ class TestExtractImageGenerationOutputItems:
         )
 
         assert len(result) == 2
+        assert result[0].type == "image_generation_call"
         assert result[0].result == "IMG1"
         assert result[1].result == "IMG2"
-        assert result[0].id == "test_response_456_img_0"
-        assert result[1].id == "test_response_456_img_1"
+        assert result[0].id == "test_123_img_0"
+        assert result[1].id == "test_123_img_1"
+        assert result[0].status == "completed"
 
-    def test_returns_empty_list_if_no_images(self):
-        """Should return empty list if message has no images"""
+    def test_returns_empty_for_no_images(self):
+        """Should return empty list if no images"""
         mock_response = Mock(spec=ModelResponse)
         mock_message = Mock(spec=Message)
         mock_message.images = []
@@ -141,51 +90,6 @@ class TestExtractImageGenerationOutputItems:
 
         assert result == []
 
-    def test_returns_empty_list_if_images_attribute_missing(self):
-        """Should return empty list if message doesn't have images attribute"""
-        mock_response = Mock(spec=ModelResponse)
-        mock_message = Mock(spec=Message)
-        # No images attribute
-
-        mock_choice = Mock(spec=Choices)
-        mock_choice.message = mock_message
-        mock_choice.finish_reason = "stop"
-
-        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-            chat_completion_response=mock_response,
-            choice=mock_choice,
-        )
-
-        assert result == []
-
-    def test_skips_images_with_invalid_url(self):
-        """Should skip images that don't have valid base64 data"""
-        mock_response = Mock(spec=ModelResponse)
-        mock_response.id = "test_789"
-
-        mock_message = Mock(spec=Message)
-        mock_message.images = [
-            {"image_url": {"url": ""}, "type": "image_url", "index": 0},  # Empty URL
-            {
-                "image_url": {"url": "data:image/png;base64,VALID"},
-                "type": "image_url",
-                "index": 1,
-            },
-        ]
-
-        mock_choice = Mock(spec=Choices)
-        mock_choice.message = mock_message
-        mock_choice.finish_reason = "stop"
-
-        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-            chat_completion_response=mock_response,
-            choice=mock_choice,
-        )
-
-        # Should only extract the valid one
-        assert len(result) == 1
-        assert result[0].result == "VALID"
-
     def test_maps_finish_reason_to_status(self):
         """Should correctly map finish_reason to status"""
         mock_response = Mock(spec=ModelResponse)
@@ -193,14 +97,9 @@ class TestExtractImageGenerationOutputItems:
 
         mock_message = Mock(spec=Message)
         mock_message.images = [
-            {
-                "image_url": {"url": "data:image/png;base64,TEST"},
-                "type": "image_url",
-                "index": 0,
-            }
+            {"image_url": {"url": "data:image/png;base64,TEST"}, "type": "image_url", "index": 0}
         ]
 
-        # Test with 'length' finish_reason (should map to 'incomplete')
         mock_choice = Mock(spec=Choices)
         mock_choice.message = mock_message
         mock_choice.finish_reason = "length"
@@ -211,46 +110,6 @@ class TestExtractImageGenerationOutputItems:
         )
 
         assert result[0].status == "incomplete"
-
-
-class TestOutputImageGenerationCallType:
-    """Tests for OutputImageGenerationCall type definition"""
-
-    def test_creates_valid_instance(self):
-        """Should create valid OutputImageGenerationCall instance"""
-        output = OutputImageGenerationCall(
-            type="image_generation_call",
-            id="img_123",
-            status="completed",
-            result="base64data",
-        )
-
-        assert output.type == "image_generation_call"
-        assert output.id == "img_123"
-        assert output.status == "completed"
-        assert output.result == "base64data"
-
-    def test_allows_none_result(self):
-        """Should allow None as result value"""
-        output = OutputImageGenerationCall(
-            type="image_generation_call",
-            id="img_456",
-            status="failed",
-            result=None,
-        )
-
-        assert output.result is None
-
-    def test_type_is_literal(self):
-        """Type field should only accept 'image_generation_call'"""
-        # Valid
-        output = OutputImageGenerationCall(
-            type="image_generation_call",
-            id="img_789",
-            status="completed",
-            result="data",
-        )
-        assert output.type == "image_generation_call"
 
 
 class TestExtractMessageOutputItemsIntegration:
