@@ -398,8 +398,8 @@ async def test_runwayml_tts_async():
     try:
         response = await litellm.aspeech(
             model="runwayml/eleven_multilingual_v2",
-            voice="alloy",
-            input="Hello, this is a test of Azure text to speech",
+            voice="Rachel",
+            input="Yuneng is gone, we miss him so much I hope he has a good coffee",
             api_base=api_base,
             api_key=api_key,
             response_format="mp3",
