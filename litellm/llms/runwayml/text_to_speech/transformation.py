@@ -43,13 +43,14 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
     DEFAULT_VOICE_PRESET_ID: str = "Bernard"
     
     # Voice mappings from OpenAI voices to RunwayML preset IDs
+    # OpenAI voices mapped to similar-sounding RunwayML voices
     VOICE_MAPPINGS = {
-        "alloy": "Bernard",
-        "echo": "Bernard",
-        "fable": "Bernard",
-        "onyx": "Bernard",
-        "nova": "Bernard",
-        "shimmer": "Bernard",
+        "alloy": "Maya",      # Neutral, balanced female voice
+        "echo": "James",      # Male voice
+        "fable": "Bernard",   # Warm, storytelling voice
+        "onyx": "Vincent",    # Deep male voice
+        "nova": "Serene",     # Warm, expressive female voice
+        "shimmer": "Ella",    # Clear, friendly female voice
     }
 
     def dispatch_text_to_speech(
