@@ -262,6 +262,15 @@ class LiteLLMRoutes(enum.Enum):
         # image edit
         "/images/edits",
         "/v1/images/edits",
+        # video generation
+        "/videos",
+        "/v1/videos",
+        "/videos/{video_id}",
+        "/v1/videos/{video_id}",
+        "/videos/{video_id}/content",
+        "/v1/videos/{video_id}/content",
+        "/videos/{video_id}/remix",
+        "/v1/videos/{video_id}/remix",
         # audio transcription
         "/audio/transcriptions",
         "/v1/audio/transcriptions",
@@ -3532,6 +3541,7 @@ class DailyUserSpendTransaction(BaseDailySpendTransaction):
 
 
 class DailyTagSpendTransaction(BaseDailySpendTransaction):
+    request_id: Optional[str]
     tag: str
 
 

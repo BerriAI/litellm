@@ -357,23 +357,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         servers: [],
         accessGroups: [],
       };
-      const mcpToolPermissions = values.mcp_tool_permissions || {};
+      const serverIds = new Set(servers || []);
+      const mcpToolPermissions = Object.fromEntries(
+        Object.entries(values.mcp_tool_permissions || {}).filter(([serverId]) =>
+          serverIds.has(serverId)
+        )
+      );
 
-      if (
-        (servers && servers.length > 0) ||
-        (accessGroups && accessGroups.length > 0) ||
-        Object.keys(mcpToolPermissions).length > 0
-      ) {
-        updateData.object_permission = {};
-        if (servers && servers.length > 0) {
-          updateData.object_permission.mcp_servers = servers;
-        }
-        if (accessGroups && accessGroups.length > 0) {
-          updateData.object_permission.mcp_access_groups = accessGroups;
-        }
-        if (Object.keys(mcpToolPermissions).length > 0) {
-          updateData.object_permission.mcp_tool_permissions = mcpToolPermissions;
-        }
+      updateData.object_permission = {};
+      if (servers) {
+        updateData.object_permission.mcp_servers = servers;
+      }
+      if (accessGroups) {
+        updateData.object_permission.mcp_access_groups = accessGroups;
+      }
+      if (mcpToolPermissions) {
+        updateData.object_permission.mcp_tool_permissions = mcpToolPermissions;
       }
       delete values.mcp_servers_and_groups;
       delete values.mcp_tool_permissions;
