@@ -8,6 +8,7 @@ import { isAdminRole } from "@/utils/roles";
 import GuardrailInfoView from "./guardrails/guardrail_info";
 import GuardrailTestPlayground from "./guardrails/GuardrailTestPlayground";
 import NotificationsManager from "./molecules/notifications_manager";
+import { Guardrail, GuardrailDefinitionLocation } from "./guardrails/types";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
@@ -25,14 +26,15 @@ interface GuardrailItem {
   guardrail_info: Record<string, any> | null;
   created_at?: string;
   updated_at?: string;
+  guardrail_definition_location: GuardrailDefinitionLocation;
 }
 
 interface GuardrailsResponse {
-  guardrails: GuardrailItem[];
+  guardrails: Guardrail[];
 }
 
 const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole }) => {
-  const [guardrailsList, setGuardrailsList] = useState<GuardrailItem[]>([]);
+  const [guardrailsList, setGuardrailsList] = useState<Guardrail[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);

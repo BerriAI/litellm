@@ -7,6 +7,7 @@ sys.path.insert(
 
 from litellm.proxy.common_utils.callback_utils import (
     get_remaining_tokens_and_requests_from_request_data,
+    normalize_callback_names,
 )
 
 
@@ -27,3 +28,13 @@ def test_get_remaining_tokens_and_requests_from_request_data():
         f"x-litellm-key-remaining-requests-{expected_name}": 100,
         f"x-litellm-key-remaining-tokens-{expected_name}": 200,
     }
+
+
+def test_normalize_callback_names_none_returns_empty_list():
+    assert normalize_callback_names(None) == []
+    assert normalize_callback_names([]) == []
+
+
+def test_normalize_callback_names_lowercases_strings():
+    assert normalize_callback_names(["SQS", "S3", "CUSTOM_CALLBACK"]) == ["sqs", "s3", "custom_callback"]
+

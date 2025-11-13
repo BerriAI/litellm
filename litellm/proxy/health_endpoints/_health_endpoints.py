@@ -38,6 +38,7 @@ services = Union[
     Literal[
         "slack_budget_alerts",
         "langfuse",
+        "langfuse_otel",
         "slack",
         "openmeter",
         "webhook",
@@ -46,6 +47,7 @@ services = Union[
         "datadog",
         "generic_api",
         "arize",
+        "sqs"
     ],
     str,
 ]
@@ -106,6 +108,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "slack_budget_alerts",
             "email",
             "langfuse",
+            "langfuse_otel",
             "slack",
             "openmeter",
             "webhook",
@@ -116,6 +119,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog",
             "generic_api",
             "arize",
+            "sqs"
         ]:
             raise HTTPException(
                 status_code=400,
@@ -196,6 +200,14 @@ async def health_services_endpoint(  # noqa: PLR0915
                 type="user_budget",
                 user_info=user_info,
             )
+        elif service == "sqs":
+            from litellm.integrations.sqs import SQSLogger
+            sqs_logger = SQSLogger()
+            response = await sqs_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": response["error_message"],
+            }
 
         if service == "slack" or service == "slack_budget_alerts":
             if "slack" in general_settings.get("alerting", []):
