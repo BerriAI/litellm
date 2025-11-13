@@ -1315,7 +1315,7 @@ class Router:
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
-    async def _acompletion(
+    async def _acompletion(  # noqa: PLR0915
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[ModelResponse, CustomStreamWrapper,]:
         """
