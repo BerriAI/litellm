@@ -1376,6 +1376,20 @@ from .search.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
+from .vector_store_files.main import (
+    acreate as avector_store_file_create,
+    adelete as avector_store_file_delete,
+    alist as avector_store_file_list,
+    aretrieve as avector_store_file_retrieve,
+    aretrieve_content as avector_store_file_content,
+    aupdate as avector_store_file_update,
+    create as vector_store_file_create,
+    delete as vector_store_file_delete,
+    list as vector_store_file_list,
+    retrieve as vector_store_file_retrieve,
+    retrieve_content as vector_store_file_content,
+    update as vector_store_file_update,
+)
 from .scheduler import *
 from .cost_calculator import response_cost_calculator, cost_per_token
 
