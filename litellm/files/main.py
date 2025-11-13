@@ -55,7 +55,7 @@ def _transform_anthropic_file_response(http_response: httpx.Response) -> FileObj
 
     # Parse created_at
     try:
-        from dateutil import parser
+        from dateutil import parser  # type: ignore[import-untyped]
         created_at = int(parser.parse(response_json.get("created_at", "")).timestamp())
     except Exception:
         created_at = int(time.time())
@@ -880,7 +880,7 @@ def file_list(
                         # Parse created_at
                         import time
                         try:
-                            from dateutil import parser
+                            from dateutil import parser  # type: ignore[import-untyped]
                             created_at = int(parser.parse(file_data.get("created_at", "")).timestamp())
                         except Exception:
                             created_at = int(time.time())
@@ -916,7 +916,7 @@ def file_list(
                     # Parse created_at
                     import time
                     try:
-                        from dateutil import parser
+                        from dateutil import parser  # type: ignore[import-untyped]
                         created_at = int(parser.parse(file_data.get("created_at", "")).timestamp())
                     except Exception:
                         created_at = int(time.time())

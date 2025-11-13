@@ -236,7 +236,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
             created_at_str = response_json.get("created_at", "")
             try:
                 # Anthropic returns ISO 8601 format, convert to Unix timestamp
-                from dateutil import parser
+                from dateutil import parser  # type: ignore[import-untyped]
                 created_at = int(parser.parse(created_at_str).timestamp())
             except Exception:
                 # Fallback to current time if parsing fails
@@ -257,10 +257,11 @@ class AnthropicFilesConfig(BaseFilesConfig):
             verbose_logger.exception(
                 f"Error transforming Anthropic file upload response: {str(e)}"
             )
+            from httpx import Headers
             raise AnthropicError(
                 status_code=raw_response.status_code,
                 message=f"Failed to parse Anthropic file upload response: {str(e)}",
-                headers=raw_response.headers,
+                headers=Headers(raw_response.headers) if not isinstance(raw_response.headers, Headers) else raw_response.headers,
             )
 
     def get_error_class(
@@ -269,6 +270,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         """
         Get the appropriate error class for Anthropic errors.
         """
+        from httpx import Headers as HttpxHeaders
         return AnthropicError(
-            status_code=status_code, message=error_message, headers=headers
+            status_code=status_code,
+            message=error_message,
+            headers=HttpxHeaders(headers) if not isinstance(headers, HttpxHeaders) else headers
         )
