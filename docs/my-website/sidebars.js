@@ -31,9 +31,16 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        {
+          type: "category",
+          "label": "Contributing to Guardrails",
+          items: [
+            "adding_provider/simple_guardrail_tutorial",
+            "adding_provider/adding_guardrail_support",
+          ]
+        },
         "proxy/guardrails/test_playground",
         ...[
-          "adding_provider/adding_guardrail_support",
           "proxy/guardrails/aim_security",
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
