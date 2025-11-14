@@ -493,22 +493,14 @@ export default function ModelInfoView({
                 <Title>Model Settings</Title>
                 <div className="flex gap-2">
                   {isAutoRouter && canEditModel && !isEditing && (
-                    <TremorButton
-                      variant="primary"
-                      onClick={() => setIsAutoRouterModalOpen(true)}
-                      className="flex items-center"
-                    >
+                    <TremorButton onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
                       Edit Auto Router
                     </TremorButton>
                   )}
                   {canEditModel ? (
                     !isEditing && (
-                      <TremorButton
-                        variant="secondary"
-                        onClick={() => setIsEditing(true)}
-                        className="flex items-center"
-                      >
-                        Edit Model
+                      <TremorButton onClick={() => setIsEditing(true)} className="flex items-center">
+                        Edit Settings
                       </TremorButton>
                     )
                   ) : (
