@@ -10,7 +10,7 @@ import pytest
 from enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
     BaseEmailLogger,
 )
-from litellm_enterprise.types.enterprise_callbacks.send_emails import (
+from enterprise.litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
     SendKeyCreatedEmailEvent,
     SendKeyRotatedEmailEvent,
