@@ -40,6 +40,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy.common_utils.callback_utils import normalize_callback_names
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -47,8 +48,6 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 from litellm.utils import load_credentials_from_list
-
-from litellm.proxy.common_utils.callback_utils import normalize_callback_names
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -175,6 +174,8 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 from litellm.proxy._types import *
+from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_router
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -2582,6 +2583,11 @@ class ProxyConfig:
         if mcp_tools_config:
             global_mcp_tool_registry.load_tools_from_config(mcp_tools_config)
 
+        ## AGENTS
+        agent_config = config.get("agent_list", None)
+        if agent_config:
+            global_agent_registry.load_agents_from_config(agent_config)  # type: ignore
+
         mcp_servers_config = config.get("mcp_servers", None)
         if mcp_servers_config:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -2818,7 +2824,9 @@ class ProxyConfig:
                 for k, v in _litellm_params.items():
                     if isinstance(v, str):
                         # decrypt value - returns original value if decryption fails or no key is set
-                        _value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+                        _value = decrypt_value_helper(
+                            value=v, key=k, return_original_value=True
+                        )
                         _litellm_params[k] = _value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
@@ -9054,7 +9062,9 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 if isinstance(
                     config["litellm_settings"]["success_callback"], list
                 ) and isinstance(updated_litellm_settings["success_callback"], list):
-                    updated_success_callbacks_normalized = normalize_callback_names(updated_litellm_settings["success_callback"])
+                    updated_success_callbacks_normalized = normalize_callback_names(
+                        updated_litellm_settings["success_callback"]
+                    )
                     combined_success_callback = (
                         config["litellm_settings"]["success_callback"]
                         + updated_success_callbacks_normalized
@@ -10187,6 +10197,7 @@ app.include_router(cache_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
+app.include_router(agent_endpoints_router)
 ########################################################
 # MCP Server
 ########################################################
