@@ -426,7 +426,7 @@ async def test_runwayml_tts_async():
         assert speech_file_path.exists()
         assert speech_file_path.stat().st_size > 0
         
-        print(f"Azure TTS audio saved to: {speech_file_path}")
+        print(f"RunwayML TTS audio saved to: {speech_file_path}")
 
         # assert response cost is greater than 0
         print("Response cost: ", response._hidden_params["response_cost"])
