@@ -13,6 +13,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+# Clear cache and reload models to pick up the access group changes
+from litellm.proxy.management_endpoints.model_management_endpoints import (
+    clear_cache,
+)
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AccessGroupInfo,
@@ -296,6 +301,8 @@ async def create_model_group(
             prisma_client=prisma_client,
         )
         
+        await clear_cache()
+        
         verbose_proxy_logger.info(
             f"Successfully created access group '{data.access_group}' with {models_updated} models updated"
         )
@@ -543,6 +550,9 @@ async def update_access_group(
             prisma_client=prisma_client,
         )
         
+        # Clear cache and reload models to pick up the access group changes
+        await clear_cache()
+        
         verbose_proxy_logger.info(
             f"Successfully updated access group '{access_group}' with {models_updated} models updated"
         )
@@ -641,6 +651,9 @@ async def delete_access_group(
                     data={"model_info": json.dumps(updated_model_info)},
                 )
                 models_updated += 1
+        
+        # Clear cache and reload models to pick up the access group changes
+        await clear_cache()
         
         verbose_proxy_logger.info(
             f"Successfully deleted access group '{access_group}' from {models_updated} deployments"
