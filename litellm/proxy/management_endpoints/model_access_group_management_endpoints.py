@@ -30,7 +30,7 @@ def validate_models_exist(
 ) -> Tuple[bool, List[str]]:
     """
     Validate that all requested model names exist in the router.
-    Uses router's get_model_list() which checks both exact matches and wildcard patterns.
+    Checks only exact model name matches.
     
     Returns:
         Tuple[bool, List[str]]: (all_valid, missing_models)
@@ -38,15 +38,8 @@ def validate_models_exist(
     if llm_router is None:
         return False, model_names
     
-    missing = []
-    
-    for model_name in model_names:
-        # Use router's built-in method that checks both exact and pattern matches
-        model_list = llm_router.get_model_list(model_name=model_name)
-        
-        if not model_list or len(model_list) == 0:
-            missing.append(model_name)
-    
+    router_model_names = set(llm_router.get_model_names())
+    missing = [m for m in model_names if m not in router_model_names]
     return (len(missing) == 0, missing)
 
 
