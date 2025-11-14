@@ -71,7 +71,6 @@ async def get_license_info(
             return LicenseInfoResponse(
                 license_configured=False,
                 license_details={},
-                error=None,
             )
 
         license_details_dict = dict(premium_user_data)
@@ -83,11 +82,10 @@ async def get_license_info(
         return LicenseInfoResponse(
             license_configured=True,
             license_details=license_details_dict,
-            error=None,
         )
 
     except HTTPException:
         # Re-raise HTTP exceptions (like RBAC checks)
         raise
     except Exception as e:
-        handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
