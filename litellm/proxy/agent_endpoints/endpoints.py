@@ -287,6 +287,15 @@ async def update_agent(
             updated_by=updated_by,
         )
 
+        # deregister in memory
+        AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))  # type: ignore
+        # register in memory
+        AGENT_REGISTRY.register_agent(agent_config=request)
+
+        verbose_proxy_logger.info(
+            f"Successfully updated agent '{existing_agent.get('agent_name')}' (ID: {agent_id}) in memory"
+        )
+
         return AgentResponse(**result)
     except HTTPException:
         raise
@@ -296,7 +305,7 @@ async def update_agent(
 
 
 @router.delete(
-    "/agents/{agent_id}",
+    "/v1/agents/{agent_id}",
     tags=["Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -332,7 +341,7 @@ async def delete_agent(agent_id: str):
 
         if existing_agent is None:
             raise HTTPException(
-                status_code=404, detail=f"Agent with ID {agent_id} not found"
+                status_code=404, detail=f"Agent with ID {agent_id} not found in DB."
             )
 
         await AGENT_REGISTRY.delete_agent_from_db(
