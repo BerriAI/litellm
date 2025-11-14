@@ -50,6 +50,7 @@ from litellm.types.utils import (
 from litellm.utils import load_credentials_from_list
 
 from litellm.proxy.common_utils.callback_utils import normalize_callback_names
+from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -5619,16 +5620,6 @@ async def vertex_ai_live_passthrough_endpoint(
 #                          /v1/realtime Endpoints
 
 ######################################################################
-
-@lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
-def _realtime_request_body(model: str) -> bytes:
-    """
-    Generate the realtime websocket request body. Cached with LRU semantics to avoid repeated
-    string formatting work while keeping memory usage bounded.
-    """
-    body = f'{{"model": "{model}"}}'.encode()
-    return body
-
 
 @lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
 def _realtime_query_params_template(

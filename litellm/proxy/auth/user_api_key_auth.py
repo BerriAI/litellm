@@ -54,6 +54,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
 )
+from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
@@ -166,12 +167,8 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 
     model = query_params.get("model")
 
-    async def return_body():
-        return_string = f'{{"model": "{model}"}}'
-        # return string as bytes
-        return return_string.encode()
 
-    request.body = return_body  # type: ignore
+    request.body = _realtime_request_body(model)  # type: ignore
 
     authorization = websocket.headers.get("authorization")
     # If no Authorization header, try the api-key header
