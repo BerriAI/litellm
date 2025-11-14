@@ -284,6 +284,17 @@ async def create_model_group(
         )
     
     try:
+        # Check if access group already exists
+        existing_access_groups = await get_all_access_groups_from_db(
+            prisma_client=prisma_client
+        )
+        
+        if data.access_group in existing_access_groups:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": f"Access group '{data.access_group}' already exists. Use PUT /access_group/{data.access_group}/update to modify it."},
+            )
+        
         # Update deployments using helper function
         models_updated = await update_deployments_with_access_group(
             model_names=data.model_names,
