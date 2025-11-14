@@ -218,3 +218,111 @@ async def test_stream_transformation_error_async():
                     litellm_params={},  # Empty dict for params
                     stream=True
                 )
+
+
+def test_citation_metadata_transformation():
+    """
+    Test that citationMetadata.citationSources is properly transformed to citationMetadata.citations
+    to avoid Pydantic validation errors.
+    """
+    from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from unittest.mock import MagicMock
+    import httpx
+    
+    # Create a mock response with citationMetadata.citationSources (the problematic format)
+    mock_response_data = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "text": "This is a video analysis response with citation metadata."
+                        }
+                    ],
+                    "role": "model"
+                },
+                "finishReason": "STOP",
+                "index": 0,
+                "safetyRatings": [],
+                "citationMetadata": {
+                    "citationSources": [
+                        {
+                            "startIndex": 5848,
+                            "endIndex": 5900,
+                            "uri": "https://example.com/video-source",
+                            "license": "MIT",
+                            "title": "Video Analysis Source",
+                            "publicationDate": "2024-01-15"
+                        },
+                        {
+                            "startIndex": 6200,
+                            "endIndex": 6250,
+                            "uri": "https://another-source.com/reference",
+                            "license": "CC-BY",
+                            "title": "Another Reference",
+                            "publicationDate": "2024-02-01"
+                        }
+                    ]
+                }
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 150,
+            "candidatesTokenCount": 200,
+            "totalTokenCount": 350
+        },
+        "responseId": "test-response-123"
+    }
+    
+    # Create mock httpx response
+    mock_httpx_response = MagicMock(spec=httpx.Response)
+    mock_httpx_response.json.return_value = mock_response_data
+    mock_httpx_response.status_code = 200
+    mock_httpx_response.headers = {}
+    
+    # Create logging object
+    logging_obj = LiteLLMLoggingObj(
+        model="gemini-2.5-flash",
+        messages=[],
+        stream=False,
+        call_type="generate_content",
+        start_time=1234567890,
+        litellm_call_id="test-call-123",
+        function_id="test-function-123"
+    )
+    
+    # Create GoogleGenAI config
+    config = GoogleGenAIConfig()
+    
+    # Test the transformation
+    try:
+        result = config.transform_generate_content_response(
+            model="gemini-2.5-flash",
+            raw_response=mock_httpx_response,
+            logging_obj=logging_obj
+        )
+        
+        # Verify the transformation worked
+        assert result is not None
+        
+        # Check that citationSources was transformed to citations
+        if hasattr(result, 'candidates') and result.candidates:
+            candidate = result.candidates[0]
+            if hasattr(candidate, 'citationMetadata') and candidate.citationMetadata:
+                # The citationMetadata should now have 'citations' instead of 'citationSources'
+                citation_metadata = candidate.citationMetadata
+                
+                # Check that citations field exists
+                assert hasattr(citation_metadata, 'citations'), "citations field should exist after transformation"
+                
+                # Verify the citations data is preserved
+                if hasattr(citation_metadata, 'citations') and citation_metadata.citations:
+                    assert len(citation_metadata.citations) == 2, "Should have 2 citations"
+                    assert citation_metadata.citations[0]['uri'] == "https://example.com/video-source"
+                    assert citation_metadata.citations[1]['uri'] == "https://another-source.com/reference"
+        
+        print("✅ Citation metadata transformation test passed!")
+        
+    except Exception as e:
+        pytest.fail(f"Citation metadata transformation failed: {e}")

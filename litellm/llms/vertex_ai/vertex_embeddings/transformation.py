@@ -105,9 +105,15 @@ class VertexAITextEmbeddingConfig(BaseModel):
         """
         Transforms an openai request to a vertex embedding request.
         """
+        # Import here to avoid circular import issues with litellm.__init__
+        from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
         if model.isdigit():
             return self._transform_openai_request_to_fine_tuned_embedding_request(
                 input, optional_params, model
+            )
+        if VertexBGEConfig.is_bge_model(model):
+            return VertexBGEConfig.transform_request(
+                input=input, optional_params=optional_params, model=model
             )
 
         vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
@@ -167,6 +173,9 @@ class VertexAITextEmbeddingConfig(BaseModel):
         vertex_request["parameters"] = TextEmbeddingFineTunedParameters(
             **optional_params
         )
+        # Remove 'shared_session' from parameters if present
+        if vertex_request["parameters"] is not None and "shared_session" in vertex_request["parameters"]:
+            del vertex_request["parameters"]["shared_session"]  # type: ignore[typeddict-item]
 
         return vertex_request
 
@@ -183,8 +192,8 @@ class VertexAITextEmbeddingConfig(BaseModel):
 
         Args:
             content (str): The content to be embedded.
-            task_type (Optional[TaskType]): The type of task to be performed".
-            title (Optional[str]): The title of the document to be embedded
+            task_type (Optional[TaskType]): The type of task to be performed.
+            title (Optional[str]): The title of the document to be embedded.
 
         Returns:
             TextEmbeddingInput: A TextEmbeddingInput object.
@@ -205,6 +214,14 @@ class VertexAITextEmbeddingConfig(BaseModel):
         if model.isdigit():
             return self._transform_vertex_response_to_openai_for_fine_tuned_models(
                 response, model, model_response
+            )
+        
+        # Import here to avoid circular import issues with litellm.__init__
+        from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
+        
+        if VertexBGEConfig.is_bge_model(model):
+            return VertexBGEConfig.transform_response(
+                response=response, model=model, model_response=model_response
             )
 
         _predictions = response["predictions"]

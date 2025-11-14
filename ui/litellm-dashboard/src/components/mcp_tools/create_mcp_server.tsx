@@ -3,7 +3,7 @@ import { Modal, Tooltip, Form, Select } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
-import { MCPServer, MCPServerCostInfo } from "./types";
+import { AUTH_TYPE, MCPServer, MCPServerCostInfo } from "./types";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -25,6 +25,8 @@ interface CreateMCPServerProps {
   availableAccessGroups: string[];
 }
 
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
+
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   userRole,
   accessToken,
@@ -43,6 +45,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [transportType, setTransportType] = useState<string>("");
   const [searchValue, setSearchValue] = useState<string>("");
   const [urlWarning, setUrlWarning] = useState<string>("");
+  const authType = formValues.auth_type as string | undefined;
+  const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
 
   // Function to check URL format based on transport type
   const checkUrlFormat = (url: string, transport: string) => {
@@ -60,18 +64,55 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   };
 
-  const handleCreate = async (formValues: Record<string, any>) => {
+  const handleCreate = async (values: Record<string, any>) => {
     setIsLoading(true);
     try {
-      // Transform access groups into objects with name property
+      const {
+        static_headers: staticHeadersList,
+        stdio_config: rawStdioConfig,
+        credentials: credentialValues,
+        ...restValues
+      } = values;
 
-      const accessGroups = formValues.mcp_access_groups;
+      // Transform access groups into objects with name property
+      const accessGroups = restValues.mcp_access_groups;
+
+      const staticHeaders = Array.isArray(staticHeadersList)
+        ? staticHeadersList.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
+            const header = entry?.header?.trim();
+            if (!header) {
+              return acc;
+            }
+            acc[header] = entry?.value ?? "";
+            return acc;
+          }, {})
+        : ({} as Record<string, string>);
+
+      const credentialsPayload =
+        credentialValues && typeof credentialValues === "object"
+          ? Object.entries(credentialValues).reduce((acc: Record<string, any>, [key, value]) => {
+              if (value === undefined || value === null || value === "") {
+                return acc;
+              }
+              if (key === "scopes") {
+                if (Array.isArray(value)) {
+                  const filteredScopes = value.filter((scope) => scope != null && scope !== "");
+                  if (filteredScopes.length > 0) {
+                    acc[key] = filteredScopes;
+                  }
+                }
+              } else {
+                acc[key] = value;
+              }
+              return acc;
+            }, {})
+          : undefined;
 
       // Process stdio configuration if present
       let stdioFields = {};
-      if (formValues.stdio_config && transportType === "stdio") {
+      if (rawStdioConfig && transportType === "stdio") {
         try {
-          const stdioConfig = JSON.parse(formValues.stdio_config);
+          const stdioConfig = JSON.parse(rawStdioConfig);
 
           // Handle both formats:
           // 1. Full mcpServers structure: {"mcpServers": {"server-name": {...}}}
@@ -87,8 +128,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               actualConfig = stdioConfig.mcpServers[firstServerName];
 
               // If no alias is provided, use the server name from the JSON
-              if (!formValues.server_name) {
-                formValues.server_name = firstServerName.replace(/-/g, "_"); // Replace hyphens with underscores
+              if (!restValues.server_name) {
+                restValues.server_name = firstServerName.replace(/-/g, "_"); // Replace hyphens with underscores
               }
             }
           }
@@ -107,20 +148,28 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
 
       // Prepare the payload with cost configuration and allowed tools
-      const payload = {
-        ...formValues,
+      const payload: Record<string, any> = {
+        ...restValues,
         ...stdioFields,
         // Remove the raw stdio_config field as we've extracted its components
         stdio_config: undefined,
         mcp_info: {
-          server_name: formValues.server_name || formValues.url,
-          description: formValues.description,
+          server_name: restValues.server_name || restValues.url,
+          description: restValues.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups,
-        alias: formValues.alias,
+        alias: restValues.alias,
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        static_headers: staticHeaders,
       };
+
+      payload.static_headers = staticHeaders;
+      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(restValues.auth_type);
+
+      if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
+        payload.credentials = credentialsPayload;
+      }
 
       console.log(`Payload: ${JSON.stringify(payload)}`);
 
@@ -377,6 +426,27 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   <Select.Option value="bearer_token">Bearer Token</Select.Option>
                   <Select.Option value="basic">Basic Auth</Select.Option>
                 </Select>
+              </Form.Item>
+            )}
+
+            {transportType !== "stdio" && shouldShowAuthValueField && (
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Authentication Value
+                    <Tooltip title="Token, password, or header value to send with each request for the selected auth type.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name={["credentials", "auth_value"]}
+                rules={[{ required: true, message: "Please enter the authentication value" }]}
+              >
+                <TextInput
+                  type="password"
+                  placeholder="Enter token or secret"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
               </Form.Item>
             )}
 

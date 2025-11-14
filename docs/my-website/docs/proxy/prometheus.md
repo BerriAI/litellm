@@ -122,6 +122,14 @@ Use this to track overall LiteLLM Proxy usage.
 | `litellm_proxy_failed_requests_metric`             | Total number of failed responses from proxy - the client did not get a success response from litellm proxy. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "exception_status", "exception_class", "route"`          |
 | `litellm_proxy_total_requests_metric`             | Total number of requests made to the proxy server - track number of client side requests. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "status_code", "user_email", "route"`          |
 
+### Callback Logging Metrics
+
+Monitor failures while shipping logs to downstream callbacks like `s3_v3` cold storage
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_callback_logging_failures_metric` | Total number of failed attempts to emit logs to a configured callback. Labels: `"callback_name"`. Use this to alert on callback delivery issues such as repeated failures when writing to `s3_v3`. |
+
 ## LLM Provider Metrics
 
 Use this for LLM API Error monitoring and tracking remaining rate limits and token limits

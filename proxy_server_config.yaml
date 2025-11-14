@@ -7,16 +7,12 @@ model_list:
       id: "1"
   - model_name: gpt-3.5-turbo-end-user-test
     litellm_params:
-      model: azure/gpt-4.1-nano
-      api_base: https://krris-m2f9a9i7-eastus2.openai.azure.com/
-      api_version: "2023-05-15"
-      api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
   - model_name: gpt-3.5-turbo
     litellm_params:
-      model: azure/gpt-4.1-nano
-      api_base: https://krris-m2f9a9i7-eastus2.openai.azure.com/
-      api_version: "2023-05-15"
-      api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
   - model_name: gpt-3.5-turbo-large
     litellm_params: 
       model: "gpt-3.5-turbo-1106"
@@ -26,10 +22,8 @@ model_list:
       stream_timeout: 60
   - model_name: gpt-4
     litellm_params:
-      model: azure/gpt-4.1-nano
-      api_base: https://krris-m2f9a9i7-eastus2.openai.azure.com/
-      api_version: "2023-05-15"
-      api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
       rpm: 480
       timeout: 300
       stream_timeout: 60
@@ -39,10 +33,8 @@ model_list:
       input_cost_per_second: 0.000420  
   - model_name: text-embedding-ada-002
     litellm_params: 
-      model: azure/text-embedding-ada-002
-      api_key: os.environ/AZURE_API_KEY
-      api_base: https://krris-m2f9a9i7-eastus2.openai.azure.com/
-      api_version: "2023-05-15"
+      model: openai/text-embedding-ada-002
+      api_key: os.environ/OPENAI_API_KEY
     model_info:
       mode: embedding
       base_model: text-embedding-ada-002
@@ -169,6 +161,7 @@ litellm_settings:
       langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
       langfuse_host: https://us.cloud.langfuse.com
   # cache: true   # [OPTIONAL] use for caching responses 
+  # enable_caching_on_provider_specific_optional_params: True  # Include provider-specific params in cache keys
   # cache_params:  # And for shared health check
   #   type: redis
   #   host: localhost

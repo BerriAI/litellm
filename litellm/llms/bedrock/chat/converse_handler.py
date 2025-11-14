@@ -1,5 +1,4 @@
 import json
-import urllib
 from typing import Any, Optional, Union
 
 import httpx
@@ -83,16 +82,6 @@ def make_sync_call(
 class BedrockConverseLLM(BaseAWSLLM):
     def __init__(self) -> None:
         super().__init__()
-
-    def encode_model_id(self, model_id: str) -> str:
-        """
-        Double encode the model ID to ensure it matches the expected double-encoded format.
-        Args:
-            model_id (str): The model ID to encode.
-        Returns:
-            str: The double-encoded model ID.
-        """
-        return urllib.parse.quote(model_id, safe="")  # type: ignore
 
     async def async_streaming(
         self,

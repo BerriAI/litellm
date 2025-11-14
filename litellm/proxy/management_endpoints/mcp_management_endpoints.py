@@ -58,6 +58,26 @@ if MCP_AVAILABLE:
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 
+    def _redact_mcp_credentials(
+        mcp_server: LiteLLM_MCPServerTable,
+    ) -> LiteLLM_MCPServerTable:
+        """Return a copy of the MCP server object with credentials removed."""
+
+        try:
+            redacted_server = mcp_server.model_copy(deep=True)
+        except AttributeError:
+            redacted_server = mcp_server.copy(deep=True)  # type: ignore[attr-defined]
+
+        if hasattr(redacted_server, "credentials"):
+            setattr(redacted_server, "credentials", None)
+
+        return redacted_server
+
+    def _redact_mcp_credentials_list(
+        mcp_servers: Iterable[LiteLLM_MCPServerTable],
+    ) -> List[LiteLLM_MCPServerTable]:
+        return [_redact_mcp_credentials(server) for server in mcp_servers]
+
     def get_prisma_client_or_throw(message: str):
         from litellm.proxy.proxy_server import prisma_client
 
@@ -273,11 +293,12 @@ if MCP_AVAILABLE:
         ```
         """
         # Use server manager to get all servers with health and team data
-        return (
+        mcp_servers = (
             await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=user_api_key_dict
             )
         )
+        return _redact_mcp_credentials_list(mcp_servers)
 
     @router.get(
         "/server/{server_id}",
@@ -335,7 +356,7 @@ if MCP_AVAILABLE:
 
         # Implement authz restriction from requested user
         if _user_has_admin_view(user_api_key_dict):
-            return mcp_server
+            return _redact_mcp_credentials(mcp_server)
 
         # Perform authz check to filter the mcp servers user has access to
         mcp_server_records = await get_all_mcp_servers_for_user(
@@ -345,7 +366,7 @@ if MCP_AVAILABLE:
 
         if exists:
             global_mcp_server_manager.add_update_server(mcp_server)
-            return mcp_server
+            return _redact_mcp_credentials(mcp_server)
         else:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -428,7 +449,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error creating mcp server: {str(e)}"},
             )
-        return new_mcp_server
+        return _redact_mcp_credentials(new_mcp_server)
 
     @router.delete(
         "/server/{server_id}",
@@ -563,4 +584,4 @@ if MCP_AVAILABLE:
         if litellm.store_audit_logs:
             pass
 
-        return mcp_server_record_updated
+        return _redact_mcp_credentials(mcp_server_record_updated)

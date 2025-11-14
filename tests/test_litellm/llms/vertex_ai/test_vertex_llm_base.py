@@ -718,7 +718,7 @@ class TestVertexBase:
                 None,
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
-                "test-api-key",
+                {"x-goog-api-key": "test-api-key"},
                 "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
             ),
             # Test case 2: Gemini with custom API base and streaming
@@ -731,7 +731,7 @@ class TestVertexBase:
                 None,
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
-                "test-api-key",
+                {"x-goog-api-key": "test-api-key"},
                 "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
             ),
             # Test case 3: Non-Gemini provider with custom API base
@@ -878,3 +878,62 @@ class TestVertexBase:
         
         expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
         assert result_url_no_streaming == expected_no_streaming_url, f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
+
+    @pytest.mark.parametrize(
+        "api_base, custom_llm_provider, gemini_api_key, endpoint, stream, auth_header, url, model, expected_auth_header, expected_url",
+        [
+            # Test case 1: Gemini with custom API base
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                False,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                {"x-goog-api-key": "test-api-key"},
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+            ),
+            # Test case 2: Gemini with custom API base and streaming
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                True,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                {"x-goog-api-key": "test-api-key"},
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
+            ),
+        ],
+    )
+    def test_check_custom_proxy_minimal_gemini_key_param(
+        self,
+        api_base,
+        custom_llm_provider,
+        gemini_api_key,
+        endpoint,
+        stream,
+        auth_header,
+        url,
+        model,
+        expected_auth_header,
+        expected_url,
+    ):
+        """Single focused test to ensure ?key is appended (and &alt=sse for streaming)."""
+        vertex_base = VertexBase()
+        result_auth_header, result_url = vertex_base._check_custom_proxy(
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            gemini_api_key=gemini_api_key,
+            endpoint=endpoint,
+            stream=stream,
+            auth_header=auth_header,
+            url=url,
+            model=model,
+        )
+        assert result_auth_header == expected_auth_header
+        assert result_url == expected_url

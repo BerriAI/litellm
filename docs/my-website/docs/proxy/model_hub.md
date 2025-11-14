@@ -37,3 +37,17 @@ Click on `Make Public` and select the models you want to expose.
 Go to the public url (`PROXY_BASE_URL/ui/model_hub_table`) and see available models. 
 
 <Image img={require('../../img/final_public_model_hub_view.png')} />  
+
+## API Endpoints
+
+LiteLLM also exposes REST endpoints:
+
+- `GET /public/model_hub` – returns the list of public model groups. Requires a valid user API key.
+- `GET /public/model_hub/info` – returns metadata (docs title, version, useful links) for the public model hub.
+- `GET /public/providers` – returns a sorted list of all providers supported by LiteLLM. No authentication required.
+
+Example:
+
+```bash
+curl -s PROXY_BASE_URL/public/providers | jq
+```

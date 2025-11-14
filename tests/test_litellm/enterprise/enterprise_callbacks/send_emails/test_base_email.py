@@ -7,18 +7,27 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
-from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+from enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
     BaseEmailLogger,
 )
+
+sys.path.insert(0, os.path.abspath("../../.."))
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
     SendKeyCreatedEmailEvent,
+    SendKeyRotatedEmailEvent,
 )
 
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
 from litellm.proxy._types import Litellm_EntityType, WebhookEvent
 
+
+@pytest.fixture(autouse=True)
+def no_invitation_wait(monkeypatch):
+    async def _noop(self):
+        return None
+
+    monkeypatch.setattr(BaseEmailLogger, "_wait_for_invitation_creation", _noop)
 
 @pytest.fixture
 def base_email_logger():
@@ -201,6 +210,113 @@ async def test_send_key_created_email_no_email(
     # Test that it raises ValueError
     with pytest.raises(ValueError, match="User email not found"):
         await base_email_logger.send_key_created_email(event)
+
+
+@pytest.mark.asyncio
+async def test_send_key_rotated_email(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """
+    Test that send_key_rotated_email sends an email with the correct parameters and content
+    """
+    event = SendKeyRotatedEmailEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        virtual_key="sk-rotated-key-123",
+        key_alias="test-key-alias",
+        max_budget=200.0,
+        spend=50.0,
+        event_group=Litellm_EntityType.KEY,
+        event="key_rotated",
+        event_message="API Key Rotated",
+    )
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "EMAIL_LOGO_URL": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png",
+            "EMAIL_SUPPORT_CONTACT": "support@berri.ai",
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        await base_email_logger.send_key_rotated_email(event)
+
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert call_args["from_email"] == BaseEmailLogger.DEFAULT_LITELLM_EMAIL
+        assert call_args["to_email"] == ["test@example.com"]
+        assert call_args["subject"] == "LiteLLM: API Key Rotated"
+        assert "sk-rotated-key-123" in call_args["html_body"]
+        assert "$200.0" in call_args["html_body"]
+        assert "rotated" in call_args["html_body"].lower()
+        assert "Security Best Practices" in call_args["html_body"]
+
+
+@pytest.mark.asyncio
+async def test_send_key_created_email_without_key(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """
+    Test that send_key_created_email hides the API key when EMAIL_INCLUDE_API_KEY is false
+    """
+    event = SendKeyCreatedEmailEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        virtual_key="sk-secret-key-456",
+        max_budget=100.0,
+        spend=0.0,
+        event_group=Litellm_EntityType.USER,
+        event="key_created",
+        event_message="Test Key Created",
+    )
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "EMAIL_INCLUDE_API_KEY": "false",
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        await base_email_logger.send_key_created_email(event)
+
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert "sk-secret-key-456" not in call_args["html_body"]
+        assert "[Key hidden for security - retrieve from dashboard]" in call_args["html_body"]
+
+
+@pytest.mark.asyncio
+async def test_send_key_rotated_email_without_key(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """
+    Test that send_key_rotated_email hides the API key when EMAIL_INCLUDE_API_KEY is false
+    """
+    event = SendKeyRotatedEmailEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        virtual_key="sk-secret-rotated-789",
+        key_alias="test-key-alias",
+        max_budget=200.0,
+        spend=50.0,
+        event_group=Litellm_EntityType.KEY,
+        event="key_rotated",
+        event_message="API Key Rotated",
+    )
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "EMAIL_INCLUDE_API_KEY": "false",
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        await base_email_logger.send_key_rotated_email(event)
+
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert "sk-secret-rotated-789" not in call_args["html_body"]
+        assert "[Key hidden for security - retrieve from dashboard]" in call_args["html_body"]
 
 
 @pytest.mark.asyncio

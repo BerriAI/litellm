@@ -2,8 +2,8 @@
 anyio==4.8.0 # openai + http req.
 httpx==0.28.1
 openai==1.99.5  # openai req.
-fastapi==0.116.1 # server dep
-starlette==0.47.2 # starlette fastapi dep
+fastapi==0.120.1 # server dep
+starlette==0.49.1 # starlette fastapi dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
 uvicorn==0.29.0 # server dep
@@ -43,7 +43,7 @@ sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==44.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.2.27 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.4.3 # for proxy extras - e.g. prisma migrations
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env
 tiktoken==0.8.0 # for calculating usage
@@ -58,6 +58,7 @@ tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
 pydantic==2.10.2 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
+soundfile==0.12.1 # for audio file processing
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES

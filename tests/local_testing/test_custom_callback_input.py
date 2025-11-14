@@ -450,12 +450,12 @@ def test_chat_azure_stream():
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = litellm.completion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
         )
         # test streaming
         response = litellm.completion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
             stream=True,
         )
@@ -464,7 +464,7 @@ def test_chat_azure_stream():
         # test failure callback
         try:
             response = litellm.completion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
                 api_key="my-bad-key",
                 stream=True,
@@ -491,12 +491,12 @@ async def test_async_chat_azure_stream():
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = await litellm.acompletion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[{"role": "user", "content": "Hi 👋 - i'm async azure"}],
         )
         ## test streaming
         response = await litellm.acompletion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[{"role": "user", "content": "Hi 👋 - i'm async azure"}],
             stream=True,
         )
@@ -507,7 +507,7 @@ async def test_async_chat_azure_stream():
         # test failure callback
         try:
             response = await litellm.acompletion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm async azure"}],
                 api_key="my-bad-key",
                 stream=True,
@@ -930,10 +930,8 @@ def test_image_generation_openai():
 
         response = litellm.image_generation(
             prompt="A cute baby sea otter",
-            model="azure/dall-e-3-test",
-            api_version="2023-12-01-preview",
-            api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
-            api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
+            model="openai/dall-e-3",
+            api_key=os.getenv("OPENAI_API_KEY"),
         )
 
         print(f"response: {response}")
@@ -1004,7 +1002,7 @@ def test_turn_off_message_logging():
     "model",
     [
         "ft:gpt-3.5-turbo:my-org:custom_suffix:id"
-    ],  # "gpt-3.5-turbo", "azure/gpt-4.1-nano",
+    ],  # "gpt-3.5-turbo", "azure/gpt-4.1-mini",
 )
 @pytest.mark.parametrize(
     "turn_off_message_logging",
@@ -1420,7 +1418,7 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
         with patch.object(customHandler, patch_event, new=return_val) as mock_client:
             if sync_mode:
                 resp = litellm.completion(
-                    model="anthropic/claude-3-5-sonnet-20240620",
+                    model="anthropic/claude-sonnet-4-5-20250929",
                     messages=[{"role": "user", "content": "Hey, how's it going?"}],
                     stream=stream,
                 )
@@ -1431,7 +1429,7 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
                 time.sleep(2)
             else:
                 resp = await litellm.acompletion(
-                    model="anthropic/claude-3-5-sonnet-20240620",
+                    model="anthropic/claude-sonnet-4-5-20250929",
                     messages=[{"role": "user", "content": "Hey, how's it going?"}],
                     stream=stream,
                 )

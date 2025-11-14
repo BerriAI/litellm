@@ -15,6 +15,7 @@ from litellm.proxy._types import (
     MCPTransportType,
     MCPTransport,
     NewMCPServerRequest,
+    UpdateMCPServerRequest,
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
@@ -165,6 +166,7 @@ async def test_create_mcp_server_direct():
             updated_by=LITELLM_PROXY_ADMIN_NAME,
             teams=[],
         )
+        expected_response.credentials = {"auth_value": "secret"}
 
         # Mock the database calls
         mock_get_server.return_value = None  # Server doesn't exist yet
@@ -188,6 +190,7 @@ async def test_create_mcp_server_direct():
         assert result.alias == expected_alias  # Check against normalized alias
         assert result.url == mcp_server_request.url
         assert result.transport == mcp_server_request.transport
+        assert result.credentials is None
 
         # Verify mocks were called
         mock_get_server.assert_called_once_with(mock_prisma, server_id)
@@ -353,6 +356,69 @@ async def test_create_mcp_server_invalid_alias():
         )
 
 
+@pytest.mark.asyncio
+async def test_edit_mcp_server_redacts_credentials():
+    with mock.patch(
+        "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
+        True,
+    ), mock.patch(
+        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
+    ) as mock_get_prisma, mock.patch(
+        "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+        new_callable=mock.AsyncMock,
+    ) as mock_update, mock.patch(
+        "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+        autospec=True,
+    ) as mock_validate, mock.patch(
+        "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager"
+    ) as mock_manager:
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            edit_mcp_server,
+        )
+
+        mock_prisma = mock.Mock()
+        mock_get_prisma.return_value = mock_prisma
+
+        mock_manager.add_update_server = mock.Mock()
+        mock_manager.reload_servers_from_database = mock.AsyncMock()
+
+        server_id = str(uuid.uuid4())
+        updated_server = LiteLLM_MCPServerTable(
+            server_id=server_id,
+            alias="Updated Server",
+            url="https://updated.example.com/mcp",
+            transport=MCPTransport.http,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            teams=[],
+        )
+        updated_server.credentials = {"auth_value": "secret"}
+
+        mock_update.return_value = updated_server
+
+        payload = UpdateMCPServerRequest(
+            server_id=server_id,
+            alias="Updated Server",
+            url="https://updated.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key=TEST_MASTER_KEY,
+            user_id="test-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        result = await edit_mcp_server(payload=payload, user_api_key_dict=user_auth)
+
+        assert result.server_id == server_id
+        assert result.credentials is None
+        assert updated_server.credentials == {"auth_value": "secret"}
+
+        mock_validate.assert_called_once()
+        mock_update.assert_awaited_once()
+        mock_manager.add_update_server.assert_called_once_with(updated_server)
+        mock_manager.reload_servers_from_database.assert_awaited_once()
 def test_validate_mcp_server_name_direct():
     """
     Test the validation function directly to ensure it works.

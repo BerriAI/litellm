@@ -314,9 +314,23 @@ class StandardBuiltInToolCostTracking:
 
         if isinstance(response_object, ModelResponse):
             # chat completions only include url_citation annotations when a web search call is made
-            return StandardBuiltInToolCostTracking.response_includes_annotation_type(
+            has_url_citations = StandardBuiltInToolCostTracking.response_includes_annotation_type(
                 response_object=response_object, annotation_type="url_citation"
             )
+            if has_url_citations:
+                return True
+            # Fallback: Check usage object for providers that use usage instead of annotations
+            # (e.g., Vertex AI Gemini uses usage.prompt_tokens_details.web_search_requests)
+            if usage is not None:
+                if (
+                    hasattr(usage, "prompt_tokens_details")
+                    and usage.prompt_tokens_details is not None
+                    and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+                    and hasattr(usage.prompt_tokens_details, "web_search_requests")
+                    and usage.prompt_tokens_details.web_search_requests is not None
+                ):
+                    return True
+            return False
         elif isinstance(response_object, ResponsesAPIResponse):
             # response api explicitly includes web_search_call in the output
             return StandardBuiltInToolCostTracking.response_includes_output_type(
@@ -582,6 +596,31 @@ class StandardBuiltInToolCostTracking:
         return 0.0
 
     @staticmethod
+    def _get_code_interpreter_cost_from_model_map(
+        provider: str,
+    ) -> Optional[float]:
+        """
+        Get code interpreter cost per session from model cost map.
+        """
+        import litellm
+        
+        try:
+            container_model = f"{provider}/container"
+            model_info = litellm.get_model_info(
+                model=container_model,
+                custom_llm_provider=provider
+            )
+            model_key = model_info.get("key") if isinstance(model_info, dict) else getattr(model_info, "key", None)
+            
+            if model_key and model_key in litellm.model_cost:
+                return litellm.model_cost[model_key].get("code_interpreter_cost_per_session")
+            
+        except Exception:
+            pass
+        
+        return None
+
+    @staticmethod
     def get_cost_for_code_interpreter(
         sessions: Optional[int] = None,
         provider: Optional[str] = None,
@@ -590,7 +629,8 @@ class StandardBuiltInToolCostTracking:
         """
         Calculate cost for code interpreter feature.
 
-        Azure: $0.03 USD per session
+        Azure: $0.03 USD per session (from model cost map)
+        OpenAI: $0.03 USD per session (from model cost map)
         """
         if sessions is None or sessions == 0:
             return 0.0
@@ -599,13 +639,15 @@ class StandardBuiltInToolCostTracking:
         if model_info and "code_interpreter_cost_per_session" in model_info:
             return sessions * model_info["code_interpreter_cost_per_session"]
 
-        # Azure pricing for code interpreter
-        if provider == "azure":
-            from litellm.constants import AZURE_CODE_INTERPRETER_COST_PER_SESSION
+        # Try to get cost from model cost map for any provider
+        if provider:
+            cost_per_session = StandardBuiltInToolCostTracking._get_code_interpreter_cost_from_model_map(
+                provider=provider
+            )
+            if cost_per_session is not None:
+                return sessions * cost_per_session
+            
 
-            return sessions * AZURE_CODE_INTERPRETER_COST_PER_SESSION
-
-        # OpenAI doesn't charge separately for code interpreter yet
         return 0.0
 
     @staticmethod

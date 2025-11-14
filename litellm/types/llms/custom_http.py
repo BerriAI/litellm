@@ -16,10 +16,12 @@ class httpxSpecialProvider(str, Enum):
     GuardrailCallback = "guardrail_callback"
     Caching = "caching"
     Oauth2Check = "oauth2_check"
+    Oauth2Register = "oauth2_register"
     SecretManager = "secret_manager"
     PassThroughEndpoint = "pass_through_endpoint"
     PromptFactory = "prompt_factory"
     SSO_HANDLER = "sso_handler"
+    Search = "search"
 
 
 VerifyTypes = Union[str, bool, ssl.SSLContext]

@@ -12,7 +12,6 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import sys
-from typing import Literal
 
 from fastapi import HTTPException
 
@@ -20,6 +19,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import CallTypesLiteral
 
 
 class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
@@ -35,15 +35,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-        ],
+        call_type: CallTypesLiteral,
     ):
         text = ""
         if "messages" in data and isinstance(data["messages"], list):
@@ -61,7 +53,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
         )
 
         verbose_proxy_logger.debug("Moderation response: %s", moderation_response)
-        if moderation_response.results[0].flagged is True:
+        if moderation_response and moderation_response.results[0].flagged is True:
             raise HTTPException(
                 status_code=403, detail={"error": "Violated content safety policy"}
             )

@@ -1,6 +1,6 @@
 /**
  * Tests for EntityUsageExportModal component
- * 
+ *
  * Validates core export functionality:
  * - Renders modal with correct default state (CSV format, daily scope)
  * - User can select export type (daily vs daily_with_models)
@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import EntityUsageExportModal from "./EntityUsageExportModal";
 
@@ -72,13 +72,13 @@ describe("EntityUsageExportModal", () => {
     const user = userEvent.setup();
     const { generateExportData } = await import("./utils");
 
-    render(<EntityUsageExportModal {...baseProps} />);
+    const { getByRole } = render(<EntityUsageExportModal {...baseProps} />);
 
     // Default primary action reflects CSV export
-    expect(screen.getByRole("button", { name: /Export CSV/i })).toBeInTheDocument();
+    expect(getByRole("button", { name: /Export CSV/i })).toBeInTheDocument();
 
     // Click export
-    await user.click(screen.getByRole("button", { name: /Export CSV/i }));
+    await user.click(getByRole("button", { name: /Export CSV/i }));
 
     // Verifies export pipeline was invoked with default scope 'daily'
     expect(generateExportData).toHaveBeenCalled();
@@ -98,14 +98,14 @@ describe("EntityUsageExportModal", () => {
     const user = userEvent.setup();
     const { generateExportData } = await import("./utils");
 
-    render(<EntityUsageExportModal {...baseProps} />);
+    const { getByText, getByRole } = render(<EntityUsageExportModal {...baseProps} />);
 
     // Choose the alternate export type - click the label to trigger radio
-    const dailyModelLabel = screen.getByText(/Day-by-day by tag and model/i);
+    const dailyModelLabel = getByText(/Day-by-day by tag and model/i);
     await user.click(dailyModelLabel);
 
     // Export with default CSV format
-    const exportBtn = screen.getByRole("button", { name: /Export CSV/i });
+    const exportBtn = getByRole("button", { name: /Export CSV/i });
     await user.click(exportBtn);
 
     // Ensure the selected scope flowed through
@@ -117,5 +117,3 @@ describe("EntityUsageExportModal", () => {
     expect(baseProps.onClose).toHaveBeenCalled();
   });
 });
-
-

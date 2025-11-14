@@ -74,7 +74,7 @@ async def test_provider_budgets_e2e_test():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -153,7 +153,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
 
     response = await router.acompletion(
         messages=[{"role": "user", "content": "Hello, how are you?"}],
-        model="anthropic/claude-3-5-sonnet-20240620",
+        model="anthropic/claude-sonnet-4-5-20250929",
     )
     print(response)
 
@@ -163,7 +163,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
         with pytest.raises(Exception) as exc_info:
             response = await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
-                model="anthropic/claude-3-5-sonnet-20240620",
+                model="anthropic/claude-sonnet-4-5-20250929",
             )
             print(response)
             print("response.hidden_params", response._hidden_params)

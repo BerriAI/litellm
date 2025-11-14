@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import mimetypes
 import re
@@ -38,7 +39,11 @@ from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionRespo
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
-from .common_utils import convert_content_list_to_str, is_non_content_values_set
+from .common_utils import (
+    convert_content_list_to_str,
+    infer_content_type_from_url_and_content,
+    is_non_content_values_set,
+)
 from .image_handling import convert_url_to_base64
 
 
@@ -364,17 +369,19 @@ def phind_codellama_pt(messages):
     return prompt
 
 
-def _render_chat_template(env, chat_template: str, bos_token: str, eos_token: str, messages: list) -> str:
+def _render_chat_template(
+    env, chat_template: str, bos_token: str, eos_token: str, messages: list
+) -> str:
     """
     Shared template rendering logic for both sync and async hf_chat_template
-    
+
     Args:
         env: Jinja2 environment
         chat_template: Chat template string
         bos_token: Beginning of sequence token
         eos_token: End of sequence token
         messages: Messages to render
-        
+
     Returns:
         Rendered template string
     """
@@ -456,7 +463,7 @@ async def _afetch_and_extract_template(
 ) -> Tuple[str, str, str]:
     """
     Async version: Fetch template and tokens from HuggingFace.
-    
+
     Returns: (chat_template, bos_token, eos_token)
     """
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
@@ -518,7 +525,7 @@ def _fetch_and_extract_template(
 ) -> Tuple[str, str, str]:
     """
     Sync version: Fetch template and tokens from HuggingFace.
-    
+
     Returns: (chat_template, bos_token, eos_token)
     """
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
@@ -604,9 +611,7 @@ async def ahf_chat_template(
     )
 
 
-def hf_chat_template(
-    model: str, messages: list, chat_template: Optional[Any] = None
-):
+def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
     """HuggingFace chat template (sync version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
         _get_chat_template_file,
@@ -1205,10 +1210,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for tool in tool_calls:
                 if "function" in tool:
-                    gemini_function_call: Optional[
-                        VertexFunctionCall
-                    ] = _gemini_tool_call_invoke_helper(
-                        function_call_params=tool["function"]
+                    gemini_function_call: Optional[VertexFunctionCall] = (
+                        _gemini_tool_call_invoke_helper(
+                            function_call_params=tool["function"]
+                        )
                     )
                     if gemini_function_call is not None:
                         _parts_list.append(
@@ -1486,7 +1491,7 @@ def convert_to_anthropic_tool_invoke(
 
         _content_element = add_cache_control_to_content(
             anthropic_content_element=_anthropic_tool_use_param,
-            orignal_content_element=dict(tool),
+            original_content_element=dict(tool),
         )
 
         if "cache_control" in _content_element:
@@ -1508,9 +1513,9 @@ def add_cache_control_to_content(
         AnthropicMessagesToolUseParam,
         ChatCompletionThinkingBlock,
     ],
-    orignal_content_element: Union[dict, AllMessageValues],
+    original_content_element: Union[dict, AllMessageValues],
 ):
-    cache_control_param = orignal_content_element.get("cache_control")
+    cache_control_param = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
         transformed_param = ChatCompletionCachedContent(**cache_control_param)  # type: ignore
 
@@ -1723,13 +1728,13 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
-                                orignal_content_element=dict(m),
+                                original_content_element=dict(m),
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element[
-                                    "cache_control"
-                                ] = _content_element["cache_control"]
+                                _anthropic_content_element["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1741,7 +1746,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_text_content_element,
-                                orignal_content_element=dict(m),
+                                original_content_element=dict(m),
                             )
                             _content_element = cast(
                                 AnthropicMessagesTextParam, _content_element
@@ -1763,13 +1768,13 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     }
                     _content_element = add_cache_control_to_content(
                         anthropic_content_element=_anthropic_content_text_element,
-                        orignal_content_element=dict(user_message_types_block),
+                        original_content_element=dict(user_message_types_block),
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_content_text_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -1821,7 +1826,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         )
                         _cached_message = add_cache_control_to_content(
                             anthropic_content_element=anthropic_message,
-                            orignal_content_element=dict(m),
+                            original_content_element=dict(m),
                         )
 
                         assistant_content.append(
@@ -1841,7 +1846,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
 
                 _content_element = add_cache_control_to_content(
                     anthropic_content_element=_anthropic_text_content_element,
-                    orignal_content_element=dict(assistant_content_block),
+                    original_content_element=dict(assistant_content_block),
                 )
 
                 if "cache_control" in _content_element:
@@ -2536,13 +2541,17 @@ class BedrockImageProcessor:
     """Handles both sync and async image processing for Bedrock conversations."""
 
     @staticmethod
-    def _post_call_image_processing(response: httpx.Response) -> Tuple[str, str]:
+    def _post_call_image_processing(response: httpx.Response, image_url: str = "") -> Tuple[str, str]:
         # Check the response's content type to ensure it is an image
         content_type = response.headers.get("content-type")
-        if not content_type:
-            raise ValueError(
-                f"URL does not contain content-type (content-type: {content_type})"
-            )
+        
+        # Use helper function to infer content type with fallback logic
+        content_type = infer_content_type_from_url_and_content(
+            url=image_url,
+            content=response.content,
+            current_content_type=content_type,
+        )
+        
         content_type = _parse_content_type(content_type)
 
         # Convert the image content to base64 bytes
@@ -2561,7 +2570,7 @@ class BedrockImageProcessor:
             response = await client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response)
+            return BedrockImageProcessor._post_call_image_processing(response, image_url)
 
         except Exception as e:
             raise e
@@ -2574,7 +2583,7 @@ class BedrockImageProcessor:
             response = client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response)
+            return BedrockImageProcessor._post_call_image_processing(response, image_url)
 
         except Exception as e:
             raise e
@@ -2698,12 +2707,39 @@ class BedrockImageProcessor:
             for video_type in supported_video_formats
         )
 
+        HASH_SAMPLE_BYTES = 64 * 1024  # hash up to 64 KB of data
+
         if is_document:
+            # --- Prepare normalized bytes for hashing (without modifying original) ---
+            if isinstance(image_bytes, str):
+                # Remove whitespace/newlines so base64 variations hash identically
+                normalized = "".join(image_bytes.split()).encode("utf-8")
+            else:
+                normalized = image_bytes
+
+            # --- Use only the first 64 KB for speed ---
+            if len(normalized) <= HASH_SAMPLE_BYTES:
+                sample = normalized
+            else:
+                sample = normalized[:HASH_SAMPLE_BYTES]
+
+            # --- Compute deterministic hash (sample + total length) ---
+            hasher = hashlib.sha256()
+            hasher.update(sample)
+            hasher.update(
+                str(len(normalized)).encode("utf-8")
+            )  # include full length for uniqueness
+            full_hash = hasher.hexdigest()
+            content_hash = full_hash[:16]  # short deterministic ID
+
+            document_name = f"DocumentPDFmessages_{content_hash}_{image_format}"
+
+            # --- Return content block ---
             return BedrockContentBlock(
                 document=BedrockDocumentBlock(
                     source=_blob,
                     format=image_format,
-                    name=f"DocumentPDFmessages_{str(uuid.uuid4())}",
+                    name=document_name,
                 )
             )
         elif is_video:
@@ -3803,7 +3839,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 assistant_parts=assistants_parts,
                             )
                         elif element["type"] == "text":
-                            assistants_part = BedrockContentBlock(text=element["text"])
+                            # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
+                            text_content = element["text"] if element["text"].strip() else "."
+                            assistants_part = BedrockContentBlock(text=text_content)
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
@@ -3827,7 +3865,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
-                assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
+                text_content = _assistant_content if _assistant_content.strip() else "."
+                assistant_content.append(BedrockContentBlock(text=text_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -3964,9 +4004,11 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
         name = make_valid_bedrock_tool_name(input_tool_name=name)
-        description = tool.get("function", {}).get(
-            "description", name
-        )  # converse api requires a description
+        _tool_description = tool.get("function", {}).get("description", None)
+        if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
+            description = _tool_description
+        else:
+            description = name
 
         defs = parameters.pop("$defs", {})
         defs_copy = copy.deepcopy(defs)
@@ -4171,8 +4213,11 @@ def prompt_factory(
         return azure_text_pt(messages=messages)
     elif custom_llm_provider == "watsonx":
         from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
-        return IBMWatsonXChatConfig.apply_prompt_template(model=model, messages=messages)
-        
+
+        return IBMWatsonXChatConfig.apply_prompt_template(
+            model=model, messages=messages
+        )
+
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)

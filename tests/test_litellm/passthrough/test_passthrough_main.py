@@ -258,7 +258,7 @@ async def test_pass_through_request_stream_param_override(
 
     # Create request body with stream=True
     request_body = {
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "max_tokens": 256,
         "messages": [{"role": "user", "content": "Hello, world"}],
         "stream": True,  # This should override the function parameter
@@ -355,7 +355,7 @@ async def test_pass_through_request_stream_param_no_override(
 
     # Create request body without stream parameter
     request_body = {
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "max_tokens": 256,
         "messages": [{"role": "user", "content": "Hello, world"}],
         # No stream parameter - should use function parameter stream=False

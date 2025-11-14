@@ -1,13 +1,24 @@
 "use client";
 
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { serverRootPath } from "@/components/networking";
+
 const getBasePath = () => {
   const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
   const trimmed = raw.replace(/^\/+|\/+$/g, ""); // strip leading/trailing slashes
-  return trimmed ? `/${trimmed}/` : "/"; // ensure trailing slash
-};
-
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { useRouter } from "next/navigation"; // ⟵ add this
+  const uiPath = trimmed ? `/${trimmed}/` : "/";
+  
+  // If serverRootPath is set and not "/", prepend it to the UI path
+  if (serverRootPath && serverRootPath !== "/") {
+    // Remove trailing slash from serverRootPath and ensure uiPath has no leading slash for proper joining
+    const cleanServerRoot = serverRootPath.replace(/\/+$/, "");
+    const cleanUiPath = uiPath.replace(/^\/+/, "");
+    return `${cleanServerRoot}/${cleanUiPath}`;
+  }
+  
+  return uiPath;
+}
 
 type Flags = {
   refactoredUIFlag: boolean;
@@ -87,15 +98,29 @@ export const FeatureFlagsProvider = ({ children }: { children: React.ReactNode }
   useEffect(() => {
     if (refactoredUIFlag) return; // only act when turned off
 
-    const base = getBasePath();
-    const normalize = (p: string) => (p.endsWith("/") ? p : p + "/");
-    const current = normalize(window.location.pathname);
+    // Wait a moment for serverRootPath to be initialized from getUiConfig()
+    // This prevents a race condition where we redirect before knowing the correct path
+    const checkAndRedirect = () => {
+      const base = getBasePath();
+      const normalize = (p: string) => (p.endsWith("/") ? p : p + "/");
+      const current = normalize(window.location.pathname);
 
-    // Avoid a redirect loop if we're already at the base path.
-    if (current !== base) {
-      // Replace so the "off" redirect doesn't pollute history.
-      router.replace(base);
-    }
+      // Don't redirect if we're already on a UI path (even if serverRootPath hasn't loaded yet)
+      // This handles the case where the page is mounted at a custom server root path
+      if (current.includes("/ui")) {
+        return;
+      }
+
+      // Avoid a redirect loop if we're already at the base path.
+      if (current !== base) {
+        // Replace so the "off" redirect doesn't pollute history.
+        router.replace(base);
+      }
+    };
+
+    // Small delay to allow serverRootPath to be set by getUiConfig()
+    const timeoutId = setTimeout(checkAndRedirect, 100);
+    return () => clearTimeout(timeoutId);
   }, [refactoredUIFlag, router]);
 
   return (

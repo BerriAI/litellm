@@ -18,6 +18,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _user_has_admin_view,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -1749,6 +1753,28 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 where_conditions["spend"]["gte"] = min_spend
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
+        is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        if not is_admin_view:
+            if team_id is not None:
+                can_view_team = await _can_team_member_view_log(
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    team_id=team_id,
+                )
+                if not can_view_team:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "error": "Not authorized to view team spend for team_id={}".format(
+                                team_id
+                            )
+                        },
+                    )
+                where_conditions["team_id"] = team_id
+            else:
+                if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
+                    where_conditions["user"] = user_api_key_dict.user_id
+                    where_conditions.pop("team_id", None)
         # Calculate skip value for pagination
         skip = (page - 1) * page_size
 
@@ -1928,13 +1954,21 @@ async def view_spend_logs(  # noqa: PLR0915
             and isinstance(end_date, str)
         ):
             # Convert the date strings to datetime objects
-            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+
+            # Convert to ISO format strings for Prisma
+            start_date_iso = start_date_obj.isoformat()
+            end_date_iso = end_date_obj.isoformat()
 
             filter_query = {
                 "startTime": {
-                    "gte": start_date_obj,  # Greater than or equal to Start Date
-                    "lte": end_date_obj,  # Less than or equal to End Date
+                    "gte": start_date_iso,  # Greater than or equal to Start Date
+                    "lte": end_date_iso,  # Less than or equal to End Date
                 }
             }
 
@@ -2934,10 +2968,30 @@ async def ui_view_session_spend_logs(
     session_id: str = fastapi.Query(
         description="Get all spend logs for a particular session",
     ),
+    page: int = fastapi.Query(
+        default=1,
+        ge=1,
+        description="Page number for pagination",
+    ),
+    page_size: int = fastapi.Query(
+        default=50,
+        ge=1,
+        le=100,
+        description="Number of items per page",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get all spend logs for a particular session
+    Get paginated spend logs for a particular session.
+
+    Returns:
+        {
+            "data": List[LiteLLM_SpendLogs],
+            "total": int,
+            "page": int,
+            "page_size": int,
+            "total_pages": int,
+        }
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -2950,11 +3004,32 @@ async def ui_view_session_spend_logs(
 
         # Build query conditions
         where_conditions = {"session_id": session_id}
-        # Query the database
-        result = await prisma_client.db.litellm_spendlogs.find_many(
-            where=where_conditions, order={"startTime": "asc"}
+
+        # Calculate pagination offsets
+        skip = (page - 1) * page_size
+
+        # Get total count for pagination metadata
+        total_records = await prisma_client.db.litellm_spendlogs.count(
+            where=where_conditions
         )
-        return result
+
+        # Query the database with pagination
+        result = await prisma_client.db.litellm_spendlogs.find_many(
+            where=where_conditions,
+            order={"startTime": "asc"},
+            skip=skip,
+            take=page_size,
+        )
+
+        total_pages = (total_records + page_size - 1) // page_size
+
+        return {
+            "data": result,
+            "total": total_records,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
@@ -2982,3 +3057,45 @@ def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, An
         return {"OR": [{"status": {"equals": "success"}}, {"status": None}]}
     else:
         return {"status": {"equals": status_filter}}
+
+
+def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """
+    Safely determine if the current user has admin view permissions.
+    Wraps the underlying check and defaults to False on any exception.
+    """
+    try:
+        return _user_has_admin_view(user_api_key_dict=user_api_key_dict)
+    except Exception:
+        return False
+
+
+async def _can_team_member_view_log(
+    prisma_client,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_id: Optional[str],
+) -> bool:
+    """
+    Check if the requesting user can view spend logs for the given team.
+    Returns True only if the team exists and the user is a team admin.
+    """
+    if team_id is None:
+        return False
+    team_obj = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id}
+    )
+    if team_obj is None:
+        return False
+    return _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+
+
+def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """
+    Check if the requesting user can view their own spend logs.
+    """
+    user_role = user_api_key_dict.user_role
+    user_id = user_api_key_dict.user_id
+    return user_role in (
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    ) and user_id is not None

@@ -683,16 +683,35 @@ class LangFuseLogger:
                 _usage_obj = getattr(response_obj, "usage", None)
 
                 if _usage_obj:
+                    # Safely get usage values, defaulting None to 0 for Langfuse compatibility.
+                    # Some providers may return null for token counts.
+                    prompt_tokens = getattr(_usage_obj, "prompt_tokens", None) or 0
+                    completion_tokens = (
+                        getattr(_usage_obj, "completion_tokens", None) or 0
+                    )
+                    total_tokens = getattr(_usage_obj, "total_tokens", None) or 0
+
+                    cache_creation_input_tokens = (
+                        _usage_obj.get("cache_creation_input_tokens") or 0
+                    )
+                    cache_read_input_tokens = (
+                        _usage_obj.get("cache_read_input_tokens") or 0
+                    )
+
                     usage = {
-                        "prompt_tokens": _usage_obj.prompt_tokens,
-                        "completion_tokens": _usage_obj.completion_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
                         "total_cost": cost if self._supports_costs() else None,
                     }
-                    usage_details = LangfuseUsageDetails(input=_usage_obj.prompt_tokens,
-                                                        output=_usage_obj.completion_tokens,
-                                                        total=_usage_obj.total_tokens,
-                                                        cache_creation_input_tokens=_usage_obj.get('cache_creation_input_tokens', 0),
-                                                        cache_read_input_tokens=_usage_obj.get('cache_read_input_tokens', 0))
+                    # According to langfuse documentation: "the input value must be reduced by the number of cache_read_input_tokens"
+                    input_tokens = prompt_tokens - cache_read_input_tokens
+                    usage_details = LangfuseUsageDetails(
+                        input=input_tokens,
+                        output=completion_tokens,
+                        total=total_tokens,
+                        cache_creation_input_tokens=cache_creation_input_tokens,
+                        cache_read_input_tokens=cache_read_input_tokens,
+                    )
 
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
@@ -790,7 +809,7 @@ class LangFuseLogger:
         """
         Get the responses API content for Langfuse logging
         """
-        if hasattr(response_obj, 'output') and response_obj.output:
+        if hasattr(response_obj, "output") and response_obj.output:
             # ResponsesAPIResponse.output is a list of strings
             return response_obj.output
         else:
@@ -880,29 +899,44 @@ class LangFuseLogger:
         guardrail_information = standard_logging_object.get(
             "guardrail_information", None
         )
-        if guardrail_information is None:
+        if not guardrail_information:
             verbose_logger.debug(
-                "Not logging guardrail information as span because guardrail_information is None"
+                "Not logging guardrail information as span because guardrail_information is empty"
             )
             return
 
-        span = trace.span(
-            name="guardrail",
-            input=guardrail_information.get("guardrail_request", None),
-            output=guardrail_information.get("guardrail_response", None),
-            metadata={
-                "guardrail_name": guardrail_information.get("guardrail_name", None),
-                "guardrail_mode": guardrail_information.get("guardrail_mode", None),
-                "guardrail_masked_entity_count": guardrail_information.get(
-                    "masked_entity_count", None
-                ),
-            },
-            start_time=guardrail_information.get("start_time", None),  # type: ignore
-            end_time=guardrail_information.get("end_time", None),  # type: ignore
-        )
+        if not isinstance(guardrail_information, list):
+            verbose_logger.debug(
+                "Not logging guardrail information as span because guardrail_information is not a list: %s",
+                type(guardrail_information),
+            )
+            return
 
-        verbose_logger.debug(f"Logged guardrail information as span: {span}")
-        span.end()
+        for guardrail_entry in guardrail_information:
+            if not isinstance(guardrail_entry, dict):
+                verbose_logger.debug(
+                    "Skipping guardrail entry with unexpected type: %s",
+                    type(guardrail_entry),
+                )
+                continue
+
+            span = trace.span(
+                name="guardrail",
+                input=guardrail_entry.get("guardrail_request", None),
+                output=guardrail_entry.get("guardrail_response", None),
+                metadata={
+                    "guardrail_name": guardrail_entry.get("guardrail_name", None),
+                    "guardrail_mode": guardrail_entry.get("guardrail_mode", None),
+                    "guardrail_masked_entity_count": guardrail_entry.get(
+                        "masked_entity_count", None
+                    ),
+                },
+                start_time=guardrail_entry.get("start_time", None),  # type: ignore
+                end_time=guardrail_entry.get("end_time", None),  # type: ignore
+            )
+
+            verbose_logger.debug(f"Logged guardrail information as span: {span}")
+            span.end()
 
 
 def _add_prompt_to_generation_params(

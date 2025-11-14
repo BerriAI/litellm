@@ -181,6 +181,107 @@ def test_arize_set_attributes():
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 40)
 
 
+def test_arize_set_attributes_responses_api():
+    """
+    Test setting attributes for Responses API with mixed output (reasoning + message).
+    Verifies that multiple output types are correctly handled.
+    """
+    from unittest.mock import MagicMock
+    from litellm.types.llms.openai import ResponsesAPIResponse, ResponseAPIUsage, OutputTokensDetails
+    from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage, ResponseOutputText
+    from openai.types.responses.response_reasoning_item import Summary
+
+    span = MagicMock()  # Mocked tracing span to test attribute setting
+
+    # Construct kwargs to simulate a real LLM request scenario
+    kwargs = {
+        "model": "o3-mini",
+        "messages": [{"role": "user", "content": "What is the answer?"}],
+        "standard_logging_object": {
+            "model_parameters": {"user": "test_user", "stream": True},
+            "metadata": {"key_1": "value_1", "key_2": None},
+            "call_type": "responses",
+        },
+        "optional_params": {
+            "max_tokens": "100",
+            "temperature": "1",
+            "top_p": "5",
+            "stream": True,
+            "user": "test_user",
+        },
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+
+    # Simulate Responses API response with mixed output
+    response_obj = ResponsesAPIResponse(
+        id="response-123",
+        created_at=1625247600,
+        output=[
+            ResponseReasoningItem(
+                id="reasoning-001",
+                type="reasoning",
+                summary=[
+                    Summary(
+                        text="First, I need to analyze...",
+                        type="summary_text"
+                    )
+                ]
+            ),
+            ResponseOutputMessage(
+                id="msg-001",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[
+                    ResponseOutputText(
+                        annotations=[],
+                        text="The answer is 42",
+                        type="output_text",
+                    )
+                ]
+            )
+        ],
+        usage=ResponseAPIUsage(
+            input_tokens=120,
+            output_tokens=250,
+            total_tokens=370,
+            output_tokens_details=OutputTokensDetails(
+                reasoning_tokens=180
+            )
+        )
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    # Verify reasoning summary was set (index 0)
+    span.set_attribute.assert_any_call(
+        f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_REASONING_SUMMARY}",
+        "First, I need to analyze..."
+    )
+
+    # Verify message content was set (index 1)
+    span.set_attribute.assert_any_call(
+        SpanAttributes.OUTPUT_VALUE,
+        "The answer is 42"
+    )
+    span.set_attribute.assert_any_call(
+        f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.1.{MessageAttributes.MESSAGE_CONTENT}",
+        "The answer is 42"
+    )
+    span.set_attribute.assert_any_call(
+        f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.1.{MessageAttributes.MESSAGE_ROLE}",
+        "assistant"
+    )
+
+    # Verify token counts including reasoning tokens
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 370)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 250)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 120)
+    span.set_attribute.assert_any_call(
+        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 180
+    )
+
+
 class TestArizeLogger(CustomLogger):
     """
     Custom logger implementation to capture standard_callback_dynamic_params.

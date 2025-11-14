@@ -132,9 +132,7 @@ class _ProxyDBLogger(CustomLogger):
                 else kwargs.get("response_cost", None)
             )
             tags: Optional[List[str]] = (
-                sl_object.get("request_tags", None)
-                if sl_object is not None
-                else None
+                sl_object.get("request_tags", None) if sl_object is not None else None
             )
 
             if response_cost is not None:
@@ -187,10 +185,6 @@ class _ProxyDBLogger(CustomLogger):
                         end_user_id=end_user_id,
                         response_cost=response_cost,
                         max_budget=end_user_max_budget,
-                    )
-                else:
-                    raise Exception(
-                        "User API key and team id and user id missing from custom callback."
                     )
             else:
                 if kwargs["stream"] is not True or (

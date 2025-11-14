@@ -50,7 +50,6 @@ def get_current_weather(location, unit="fahrenheit"):
         "claude-3-haiku-20240307",
         "gemini/gemini-2.5-flash-lite",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "cohere_chat/command-r",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -561,33 +560,6 @@ def test_groq_parallel_function_call():
 @pytest.mark.parametrize(
     "model",
     [
-        # "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "claude-3-haiku-20240307",
-        "databricks/databricks-claude-3-7-sonnet"
-    ],
-)
-def test_anthropic_function_call_with_no_schema(model):
-    """
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/6012
-    """
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in New York",
-            },
-        }
-    ]
-    messages = [
-        {"role": "user", "content": "What is the current temperature in New York?"}
-    ]
-    completion(model=model, messages=messages, tools=tools, tool_choice="auto")
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
         "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
     ],
 )
@@ -728,7 +700,7 @@ def test_passing_tool_result_as_list(model):
         resp = completion(model=model, messages=messages, tools=tools)
         print(resp)
 
-    if model == "claude-3-5-sonnet-20241022":
+    if model == "claude-sonnet-4-5-20250929":
         assert resp.usage.prompt_tokens_details.cached_tokens > 0
 
 

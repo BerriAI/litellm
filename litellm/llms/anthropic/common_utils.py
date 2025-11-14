@@ -63,13 +63,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     def is_computer_tool_used(
         self, tools: Optional[List[AllAnthropicToolsValues]]
-    ) -> bool:
+    ) -> Optional[str]:
+        """Returns the computer tool version if used, e.g. 'computer_20250124' or None"""
         if tools is None:
-            return False
+            return None
         for tool in tools:
             if "type" in tool and tool["type"].startswith("computer_"):
-                return True
-        return False
+                return tool["type"]
+        return None
 
     def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
         """
@@ -94,11 +95,29 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return None
         return anthropic_beta_header.split(",")
 
+    def get_computer_tool_beta_header(self, computer_tool_version: str) -> str:
+        """
+        Get the appropriate beta header for a given computer tool version.
+        
+        Args:
+            computer_tool_version: The computer tool version (e.g., 'computer_20250124', 'computer_20241022')
+            
+        Returns:
+            The corresponding beta header string
+        """
+        computer_tool_beta_mapping = {
+            "computer_20250124": "computer-use-2025-01-24",
+            "computer_20241022": "computer-use-2024-10-22",
+        }
+        return computer_tool_beta_mapping.get(
+            computer_tool_version, "computer-use-2024-10-22"  # Default fallback
+        )
+
     def get_anthropic_headers(
         self,
         api_key: str,
         anthropic_version: Optional[str] = None,
-        computer_tool_used: bool = False,
+        computer_tool_used: Optional[str] = None,
         prompt_caching_set: bool = False,
         pdf_used: bool = False,
         file_id_used: bool = False,
@@ -110,7 +129,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if prompt_caching_set:
             betas.add("prompt-caching-2024-07-31")
         if computer_tool_used:
-            betas.add("computer-use-2024-10-22")
+            beta_header = self.get_computer_tool_beta_header(computer_tool_used)
+            betas.add(beta_header)
         # if pdf_used:
         #     betas.add("pdfs-2024-09-25")
         if file_id_used:

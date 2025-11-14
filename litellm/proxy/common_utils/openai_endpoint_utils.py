@@ -54,3 +54,11 @@ def get_custom_llm_provider_from_request_query(request: Request) -> Optional[str
     if "custom_llm_provider" in request.query_params:
         return request.query_params["custom_llm_provider"]
     return None
+
+def get_custom_llm_provider_from_request_headers(request: Request) -> Optional[str]:
+    """
+    Get the `custom_llm_provider` from the request header `custom-llm-provider`
+    """
+    if "custom-llm-provider" in request.headers:
+        return request.headers["custom-llm-provider"]
+    return None

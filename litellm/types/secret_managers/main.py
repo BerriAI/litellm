@@ -1,5 +1,5 @@
 import enum
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -10,8 +10,10 @@ class KeyManagementSystem(enum.Enum):
     AWS_SECRET_MANAGER = "aws_secret_manager"
     GOOGLE_SECRET_MANAGER = "google_secret_manager"
     HASHICORP_VAULT = "hashicorp_vault"
+    CYBERARK = "cyberark"
     LOCAL = "local"
     AWS_KMS = "aws_kms"
+    CUSTOM = "custom"
 
 
 class KeyManagementSettings(LiteLLMPydanticObjectBase):
@@ -35,4 +37,16 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
     If set, will read secrets from this primary secret in the secret manager
 
     eg. on AWS you can store multiple secret values as K/V pairs in a single secret
+    """
+
+    description: Optional[str] = None
+    """Optional description attached when creating secrets (visible in AWS console)."""
+
+    tags: Optional[Dict[str, str]] = None
+    """Optional tags to attach when creating secrets (e.g. {"Environment": "Prod", "Owner": "AI-Platform"})."""
+
+    custom_secret_manager: Optional[str] = None
+    """
+    Path to custom secret manager class (e.g. "my_secret_manager.InMemorySecretManager")
+    Required when key_management_system is "custom"
     """

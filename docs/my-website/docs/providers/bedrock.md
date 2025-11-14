@@ -7,7 +7,7 @@ ALL Bedrock models (Anthropic, Meta, Deepseek, Mistral, Amazon, etc.) are Suppor
 | Property | Details |
 |-------|-------|
 | Description | Amazon Bedrock is a fully managed service that offers a choice of high-performing foundation models (FMs). |
-| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy), [`bedrock/llama/`](#deepseek-not-r1), [`bedrock/deepseek_r1/`](#deepseek-r1) |
+| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy), [`bedrock/llama/`](#deepseek-not-r1), [`bedrock/deepseek_r1/`](#deepseek-r1), [`bedrock/qwen3/`](#qwen3-imported-models) |
 | Provider Doc | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
 | Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`, `/images/generations` |
 | Rerank Endpoint | `/rerank` |
@@ -1734,7 +1734,69 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
+### Qwen3 Imported Models
 
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/qwen3/{model_arn}` |
+| Provider Documentation | [Bedrock Imported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-import-model.html), [Qwen3 Models](https://aws.amazon.com/about-aws/whats-new/2025/09/qwen3-models-fully-managed-amazon-bedrock/) |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+response = completion(
+    model="bedrock/qwen3/arn:aws:bedrock:us-east-1:086734376398:imported-model/your-qwen3-model",  # bedrock/qwen3/{your-model-arn}
+    messages=[{"role": "user", "content": "Tell me a joke"}],
+    max_tokens=100,
+    temperature=0.7
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: Qwen3-32B
+      litellm_params:
+        model: bedrock/qwen3/arn:aws:bedrock:us-east-1:086734376398:imported-model/your-qwen3-model
+
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "Qwen3-32B", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
 
 ### OpenAI GPT OSS
 
@@ -1937,203 +1999,13 @@ response = embedding(
 ### Advanced - [Pass model/provider-specific Params](https://docs.litellm.ai/docs/completion/provider_specific_params#proxy-usage)
 
 ## Image Generation
-Use this for stable diffusion, and amazon nova canvas on bedrock
+
+See [Bedrock Image Generation](./bedrock_image_gen) for using Stable Diffusion and Amazon Nova Canvas models on Bedrock.
 
 
-### Usage
+## Rerank API
 
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import os
-from litellm import image_generation
-
-os.environ["AWS_ACCESS_KEY_ID"] = ""
-os.environ["AWS_SECRET_ACCESS_KEY"] = ""
-os.environ["AWS_REGION_NAME"] = ""
-
-response = image_generation(
-            prompt="A cute baby sea otter",
-            model="bedrock/stability.stable-diffusion-xl-v0",
-        )
-print(f"response: {response}")
-```
-
-**Set optional params**
-```python
-import os
-from litellm import image_generation
-
-os.environ["AWS_ACCESS_KEY_ID"] = ""
-os.environ["AWS_SECRET_ACCESS_KEY"] = ""
-os.environ["AWS_REGION_NAME"] = ""
-
-response = image_generation(
-            prompt="A cute baby sea otter",
-            model="bedrock/stability.stable-diffusion-xl-v0",
-            ### OPENAI-COMPATIBLE ###
-            size="128x512", # width=128, height=512
-            ### PROVIDER-SPECIFIC ### see `AmazonStabilityConfig` in bedrock.py for all params
-            seed=30
-        )
-print(f"response: {response}")
-```
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-  - model_name: amazon.nova-canvas-v1:0
-    litellm_params:
-      model: bedrock/amazon.nova-canvas-v1:0
-      aws_region_name: "us-east-1"
-      aws_secret_access_key: my-key # OPTIONAL - all boto3 auth params supported
-      aws_secret_access_id: my-id # OPTIONAL - all boto3 auth params supported
-```
-
-2. Start proxy 
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Test it! 
-
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer $LITELLM_VIRTUAL_KEY' \
--d '{
-    "model": "amazon.nova-canvas-v1:0",
-    "prompt": "A cute baby sea otter"
-}'
-```
-
-</TabItem>
-</Tabs>
-
-### Using Inference Profiles with Image Generation
-
-For AWS Bedrock Application Inference Profiles with image generation, use the `model_id` parameter to specify the inference profile ARN:
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import image_generation
-
-response = image_generation(
-    model="bedrock/amazon.nova-canvas-v1:0",
-    model_id="arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
-    prompt="A cute baby sea otter"
-)
-print(f"response: {response}")
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-```yaml
-model_list:
-  - model_name: nova-canvas-inference-profile
-    litellm_params:
-      model: bedrock/amazon.nova-canvas-v1:0
-      model_id: arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0
-      aws_region_name: "eu-west-1"
-```
-
-</TabItem>
-</Tabs>
-
-## Supported AWS Bedrock Image Generation Models
-
-| Model Name           | Function Call                               |
-|----------------------|---------------------------------------------|
-| Stable Diffusion 3 - v0 | `embedding(model="bedrock/stability.stability.sd3-large-v1:0", prompt=prompt)` |
-| Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v0", prompt=prompt)` |
-| Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v1", prompt=prompt)` |
-
-
-## Rerank API 
-
-Use Bedrock's Rerank API in the Cohere `/rerank` format. 
-
-Supported Cohere Rerank Params
-- `model` - the foundation model ARN
-- `query` - the query to rerank against
-- `documents` - the list of documents to rerank
-- `top_n` - the number of results to return
-
-<Tabs>
-<TabItem label="SDK" value="sdk">
-
-```python
-from litellm import rerank
-import os 
-
-os.environ["AWS_ACCESS_KEY_ID"] = ""
-os.environ["AWS_SECRET_ACCESS_KEY"] = ""
-os.environ["AWS_REGION_NAME"] = ""
-
-response = rerank(
-    model="bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0", # provide the model ARN - get this here https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock/client/list_foundation_models.html
-    query="hello",
-    documents=["hello", "world"],
-    top_n=2,
-)
-
-print(response)
-```
-
-</TabItem>
-<TabItem label="PROXY" value="proxy">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-    - model_name: bedrock-rerank
-      litellm_params:
-        model: bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0
-        aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-        aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-        aws_region_name: os.environ/AWS_REGION_NAME
-```
-
-2. Start proxy server
-
-```bash
-litellm --config config.yaml
-
-# RUNNING on http://0.0.0.0:4000
-```
-
-3. Test it! 
-
-```bash
-curl http://0.0.0.0:4000/rerank \
-  -H "Authorization: Bearer sk-1234" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "bedrock-rerank",
-    "query": "What is the capital of the United States?",
-    "documents": [
-        "Carson City is the capital city of the American state of Nevada.",
-        "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
-        "Washington, D.C. is the capital of the United States.",
-        "Capital punishment has existed in the United States since before it was a country."
-    ],
-    "top_n": 3
-
-
-  }'
-```
-
-</TabItem>
-</Tabs>
+See [Bedrock Rerank](./bedrock_rerank) for using Bedrock's Rerank API in the Cohere `/rerank` format.
 
 
 ## Bedrock Application Inference Profile 
@@ -2428,38 +2300,6 @@ model_list:
 
 </Tabs>
 
-Text to Image : 
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer $LITELLM_VIRTUAL_KEY' \
--d '{
-    "model": "amazon.nova-canvas-v1:0",
-    "prompt": "A cute baby sea otter"
-}'
-```
-
-Color Guided Generation:
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer $LITELLM_VIRTUAL_KEY' \
--d '{
-    "model": "amazon.nova-canvas-v1:0",
-    "prompt": "A cute baby sea otter",
-    "taskType": "COLOR_GUIDED_GENERATION",
-    "colorGuidedGenerationParams":{"colors":["#FFFFFF"]}
-}'
-```
-
-| Model Name              | Function Call                               |
-|-------------------------|---------------------------------------------|
-| Stable Diffusion 3 - v0 | `image_generation(model="bedrock/stability.stability.sd3-large-v1:0", prompt=prompt)` |
-| Stable Diffusion - v0   | `image_generation(model="bedrock/stability.stable-diffusion-xl-v0", prompt=prompt)` |
-| Stable Diffusion - v1   | `image_generation(model="bedrock/stability.stable-diffusion-xl-v1", prompt=prompt)` |
-| Amazon Nova Canvas - v0 | `image_generation(model="bedrock/amazon.nova-canvas-v1:0", prompt=prompt)` |
-  
-  
 ### Passing an external BedrockRuntime.Client as a parameter - Completion()
   
 This is a deprecated flow. Boto3 is not async. And boto3.client does not let us make the http call through httpx. Pass in your aws params through the method above 👆. [See Auth Code](https://github.com/BerriAI/litellm/blob/55a20c7cce99a93d36a82bf3ae90ba3baf9a7f89/litellm/llms/bedrock_httpx.py#L284) [Add new auth flow](https://github.com/BerriAI/litellm/issues)

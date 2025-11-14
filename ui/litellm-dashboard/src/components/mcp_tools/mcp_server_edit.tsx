@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Button as AntdButton } from "antd";
+import { Form, Select, Button as AntdButton, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { MCPServer, MCPServerCostInfo } from "./types";
+import { AUTH_TYPE, MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
@@ -17,6 +18,8 @@ interface MCPServerEditProps {
   availableAccessGroups: string[];
 }
 
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
+
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   mcpServer,
   accessToken,
@@ -31,6 +34,26 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const authType = Form.useWatch("auth_type", form) as string | undefined;
+  const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
+
+  const initialStaticHeaders = React.useMemo(() => {
+    if (!mcpServer.static_headers) {
+      return [];
+    }
+    return Object.entries(mcpServer.static_headers).map(([header, value]) => ({
+      header,
+      value: value != null ? String(value) : "",
+    }));
+  }, [mcpServer.static_headers]);
+
+  const initialValues = React.useMemo(
+    () => ({
+      ...mcpServer,
+      static_headers: initialStaticHeaders,
+    }),
+    [mcpServer, initialStaticHeaders],
+  );
 
   // Initialize cost config from existing server data
   useEffect(() => {
@@ -130,26 +153,66 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (!accessToken) return;
     try {
       // Ensure access groups is always a string array
-      const accessGroups = (values.mcp_access_groups || []).map((g: any) =>
+      const { static_headers: staticHeadersList, credentials: credentialValues, ...restValues } = values;
+
+      const accessGroups = (restValues.mcp_access_groups || []).map((g: any) =>
         typeof g === "string" ? g : g.name || String(g),
       );
 
+      const staticHeaders = Array.isArray(staticHeadersList)
+        ? staticHeadersList.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
+            const header = entry?.header?.trim();
+            if (!header) {
+              return acc;
+            }
+            acc[header] = entry?.value ?? "";
+            return acc;
+          }, {})
+        : ({} as Record<string, string>);
+
+      const credentialsPayload =
+        credentialValues && typeof credentialValues === "object"
+          ? Object.entries(credentialValues).reduce((acc: Record<string, any>, [key, value]) => {
+              if (value === undefined || value === null || value === "") {
+                return acc;
+              }
+              if (key === "scopes") {
+                if (Array.isArray(value)) {
+                  const filteredScopes = value.filter((scope) => scope != null && scope !== "");
+                  if (filteredScopes.length > 0) {
+                    acc[key] = filteredScopes;
+                  }
+                }
+              } else {
+                acc[key] = value;
+              }
+              return acc;
+            }, {})
+          : undefined;
+
       // Prepare the payload with cost configuration and permission fields
-      const payload = {
-        ...values,
+      const payload: Record<string, any> = {
+        ...restValues,
         server_id: mcpServer.server_id,
         mcp_info: {
-          server_name: values.server_name || values.url,
-          description: values.description,
+          server_name: restValues.server_name || restValues.url,
+          description: restValues.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups,
-        alias: values.alias,
+        alias: restValues.alias,
         // Include permission management fields
-        extra_headers: values.extra_headers || [],
+        extra_headers: restValues.extra_headers || [],
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
-        disallowed_tools: values.disallowed_tools || [],
+        disallowed_tools: restValues.disallowed_tools || [],
+        static_headers: staticHeaders,
       };
+
+      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(restValues.auth_type);
+
+      if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
+        payload.credentials = credentialsPayload;
+      }
 
       const updated = await updateMCPServer(accessToken, payload);
       NotificationsManager.success("MCP Server updated successfully");
@@ -167,7 +230,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       </TabList>
       <TabPanels className="mt-6">
         <TabPanel>
-          <Form form={form} onFinish={handleSave} initialValues={mcpServer} layout="vertical">
+          <Form form={form} onFinish={handleSave} initialValues={initialValues} layout="vertical">
             <Form.Item
               label="MCP Server Name"
               name="server_name"
@@ -217,6 +280,34 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 <Select.Option value="basic">Basic Auth</Select.Option>
               </Select>
             </Form.Item>
+
+            {shouldShowAuthValueField && (
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Authentication Value
+                    <Tooltip title="Token, password, or header value to send with each request for the selected auth type.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name={["credentials", "auth_value"]}
+                rules={[
+                  {
+                    validator: (_, value) =>
+                      value && typeof value === "string" && value.trim() === ""
+                        ? Promise.reject(new Error("Authentication value cannot be empty"))
+                        : Promise.resolve(),
+                  },
+                ]}
+              >
+                <TextInput
+                  type="password"
+                  placeholder="Enter token or secret (leave blank to keep existing)"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+            )}
 
             {/* Permission Management / Access Control Section */}
             <div className="mt-6">

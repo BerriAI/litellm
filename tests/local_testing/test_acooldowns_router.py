@@ -26,7 +26,7 @@ model_list = [
     {  # list of model deployments
         "model_name": "gpt-3.5-turbo",  # openai model name
         "litellm_params": {  # params for litellm completion/embedding call
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "api_key": "bad-key",
             "api_version": os.getenv("AZURE_API_VERSION"),
             "api_base": os.getenv("AZURE_API_BASE"),
@@ -180,7 +180,7 @@ async def test_cooldown_same_model_name(sync_mode):
                 model_ids.append(model["model_info"]["id"])
             print("\n litellm model ids ", model_ids)
 
-            # example litellm_model_names ['azure/gpt-4.1-nano-ModelID-64321', 'azure/gpt-4.1-nano-ModelID-63960']
+            # example litellm_model_names ['azure/gpt-4.1-mini-ModelID-64321', 'azure/gpt-4.1-mini-ModelID-63960']
             assert (
                 model_ids[0] != model_ids[1]
             )  # ensure both models have a uuid added, and they have different names
@@ -197,7 +197,7 @@ async def test_cooldown_same_model_name(sync_mode):
                 model_ids.append(model["model_info"]["id"])
             print("\n litellm model ids ", model_ids)
 
-            # example litellm_model_names ['azure/gpt-4.1-nano-ModelID-64321', 'azure/gpt-4.1-nano-ModelID-63960']
+            # example litellm_model_names ['azure/gpt-4.1-mini-ModelID-64321', 'azure/gpt-4.1-mini-ModelID-63960']
             assert (
                 model_ids[0] != model_ids[1]
             )  # ensure both models have a uuid added, and they have different names

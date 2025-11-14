@@ -107,6 +107,26 @@ For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport t
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
+<br/>
+<br/>
+
+### Static Headers
+
+Sometimes your MCP server needs specific headers on every request. Maybe it's an API key, maybe it's a custom header the server expects. Instead of configuring auth, you can just set them directly.
+
+<Image 
+  img={require('../img/static_headers.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+These headers get sent with every request to the server. That's it.
+
+
+**When to use this:**
+- Your server needs custom headers that don't fit the standard auth patterns
+- You want full control over exactly what headers are sent
+- You're debugging and need to quickly add headers without changing auth configuration
+
 </TabItem>
 
 <TabItem value="config" label="config.yaml">
@@ -175,6 +195,7 @@ mcp_servers:
   | `authorization` | `Authorization: <auth_value>` |
 
 - **Extra Headers**: Optional list of additional header names that should be forwarded from client to the MCP server
+- **Static Headers**: Optional map of header key/value pairs to include every request to the MCP server.
 - **Spec Version**: Optional MCP specification version (defaults to `2025-06-18`)
 
 Examples for each auth type:
@@ -217,8 +238,14 @@ mcp_servers:
     auth_type: "bearer_token"
     auth_value: "ghp_example_token"
     extra_headers: ["custom_key", "x-custom-header"]  # These headers will be forwarded from client
-```
 
+  # Example with static headers
+  my_mcp_server:
+    url: "https://my-mcp-server.com/mcp"
+    static_headers: # These headers will be requested to the MCP server
+      X-API-Key: "abc123"
+      X-Custom-Header: "some-value"
+```
 
 ### MCP Aliases
 
@@ -1203,6 +1230,10 @@ mcp_servers:
     client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
     scopes: ["public_repo", "user:email"]
 ```
+
+**Note**  
+In the future, users will only need to specify the `url` of the MCP server.
+LiteLLM will automatically resolve the corresponding `authorization_url`, `token_url`, and `registration_url` based on the MCP server metadata (e.g., `.well-known/oauth-authorization-server` or `oauth-protected-resource`).
 
 [**See Claude Code Tutorial**](./tutorials/claude_responses_api#connecting-mcp-servers)
 

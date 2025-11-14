@@ -1,6 +1,7 @@
 from litellm.llms.vertex_ai.gemini.transformation import (
     check_if_part_exists_in_parts,
     _transform_request_body,
+    _gemini_convert_messages_with_history,
 )
 
 
@@ -155,3 +156,23 @@ def test_metadata_to_labels_vertex_only():
     )
     assert "labels" in result
     assert result["labels"] == {"user": "john_doe", "project": "test-project"}
+
+
+def test_empty_content_handling():
+    """Test that empty content strings are properly handled in Gemini message transformation"""
+    # Test with empty content in user message
+    messages = [
+        {
+            "content": "",
+            "role": "user"
+        }
+    ]
+    
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Verify that the content was properly transformed
+    assert len(contents) == 1
+    assert contents[0]["role"] == "user"
+    assert len(contents[0]["parts"]) == 1
+    assert "text" in contents[0]["parts"][0]
+    assert contents[0]["parts"][0]["text"] == ""

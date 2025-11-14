@@ -24,6 +24,7 @@ import { adminGlobalCacheActivity, cachingHealthCheckCall } from "./networking";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
+import CacheSettings from "./cache_settings";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
@@ -273,6 +274,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           <Tab>
             <pre>Cache Health</pre>
           </Tab>
+          <Tab>Cache Settings</Tab>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -383,6 +385,13 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
             accessToken={accessToken}
             healthCheckResponse={healthCheckResponse}
             runCachingHealthCheck={runCachingHealthCheck}
+          />
+        </TabPanel>
+        <TabPanel>
+          <CacheSettings
+            accessToken={accessToken}
+            userRole={userRole}
+            userID={userID}
           />
         </TabPanel>
       </TabPanels>

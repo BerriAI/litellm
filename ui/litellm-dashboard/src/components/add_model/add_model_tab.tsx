@@ -9,7 +9,7 @@ import ProviderSpecificFields from "./provider_specific_fields";
 import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
-import { CredentialItem, getGuardrailsList, modelAvailableCall } from "../networking";
+import { CredentialItem, getGuardrailsList, modelAvailableCall, tagListCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
@@ -18,6 +18,7 @@ import TeamDropdown from "../common_components/team_dropdown";
 import { all_admin_roles } from "@/utils/roles";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import { Tag } from "../tag_management/types";
 
 interface AddModelTabProps {
   form: FormInstance; // For the Add Model tab
@@ -63,6 +64,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   // Using a unique ID to force the ConnectionErrorDisplay to remount and run a fresh test
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
@@ -78,6 +80,19 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
     };
 
     fetchGuardrails();
+  }, [accessToken]);
+
+  useEffect(() => {
+    const fetchTags = async () => {
+      try {
+        const response = await tagListCall(accessToken);
+        setTagsList(response);
+      } catch (error) {
+        console.error("Failed to fetch tags:", error);
+      }
+    };
+
+    fetchTags();
   }, [accessToken]);
 
   // Test connection when button is clicked
@@ -225,7 +240,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     </Typography.Text>
                   </div>
 
-                  <Form.Item label="Existing Credentials" name="litellm_credential_name">
+                  <Form.Item label="Existing Credentials" name="litellm_credential_name" initialValue={null}>
                     <AntdSelect
                       showSearch
                       placeholder="Select or search for existing credentials"
@@ -244,12 +259,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     />
                   </Form.Item>
 
-                  <div className="flex items-center my-4">
-                    <div className="flex-grow border-t border-gray-200"></div>
-                    <span className="px-4 text-gray-500 text-sm">OR</span>
-                    <div className="flex-grow border-t border-gray-200"></div>
-                  </div>
-
                   <Form.Item
                     noStyle
                     shouldUpdate={(prevValues, currentValues) =>
@@ -262,13 +271,18 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                       console.log("🔑 Credential Name Changed:", credentialName);
                       // Only show provider specific fields if no credentials selected
                       if (!credentialName) {
-                        return <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />;
+                        return (
+                          <>
+                            <div className="flex items-center my-4">
+                              <div className="flex-grow border-t border-gray-200"></div>
+                              <span className="px-4 text-gray-500 text-sm">OR</span>
+                              <div className="flex-grow border-t border-gray-200"></div>
+                            </div>
+                            <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+                          </>
+                        );
                       }
-                      return (
-                        <div className="text-gray-500 text-sm text-center">
-                          Using existing credentials - no additional provider fields needed
-                        </div>
-                      );
+                      return null;
                     }}
                   </Form.Item>
                   <div className="flex items-center my-4">
@@ -349,6 +363,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     setShowAdvancedSettings={setShowAdvancedSettings}
                     teams={teams}
                     guardrailsList={guardrailsList}
+                    tagsList={tagsList}
                   />
 
                   <div className="flex justify-between items-center mb-4">

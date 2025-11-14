@@ -26,7 +26,12 @@ from ..common_utils import InfinityError
 
 
 class InfinityRerankConfig(CohereRerankConfig):
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Infinity rerank")
         # Remove trailing slashes and ensure clean base URL
@@ -40,6 +45,7 @@ class InfinityRerankConfig(CohereRerankConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> dict:
         if api_key is None:
             api_key = (

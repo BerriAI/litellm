@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 from .base_cache import BaseCache
 from .in_memory_cache import InMemoryCache
@@ -60,7 +61,7 @@ class DualCache(BaseCache):
         default_in_memory_ttl: Optional[float] = None,
         default_redis_ttl: Optional[float] = None,
         default_redis_batch_cache_expiry: Optional[float] = None,
-        default_max_redis_batch_cache_size: int = 100,
+        default_max_redis_batch_cache_size: int = DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
     ) -> None:
         super().__init__()
         # If in_memory_cache is not provided, use the default InMemoryCache
@@ -260,7 +261,7 @@ class DualCache(BaseCache):
         **kwargs,
     ):
         try:
-            result = [None for _ in range(len(keys))]
+            result = [None] * len(keys)
             if self.in_memory_cache is not None:
                 in_memory_result = await self.in_memory_cache.async_batch_get_cache(
                     keys, **kwargs
@@ -283,20 +284,27 @@ class DualCache(BaseCache):
                     redis_result = await self.redis_cache.async_batch_get_cache(
                         sublist_keys, parent_otel_span=parent_otel_span
                     )
+                    
+                    # Update the last access time for ALL queried keys
+                    # This includes keys with None values to throttle repeated Redis queries
+                    for key in sublist_keys:
+                        self.last_redis_batch_access_time[key] = current_time
+                    
+                    # Short-circuit if redis_result is None or contains only None values
+                    if redis_result is None or all(v is None for v in redis_result.values()):
+                        return result
 
-                    if redis_result is not None:
-                        # Update in-memory cache with the value from Redis
-                        for key, value in redis_result.items():
-                            if value is not None:
-                                await self.in_memory_cache.async_set_cache(
-                                    key, redis_result[key], **kwargs
-                                )
-                            # Update the last access time for each key fetched from Redis
-                            self.last_redis_batch_access_time[key] = current_time
-
+                    # Pre-compute key-to-index mapping for O(1) lookup
+                    key_to_index = {key: i for i, key in enumerate(keys)}
+                    
+                    # Update both result and in-memory cache in a single loop
                     for key, value in redis_result.items():
-                        index = keys.index(key)
-                        result[index] = value
+                        result[key_to_index[key]] = value
+                        
+                        if value is not None and self.in_memory_cache is not None:
+                            await self.in_memory_cache.async_set_cache(
+                                key, value, **kwargs
+                            )
 
             return result
         except Exception:

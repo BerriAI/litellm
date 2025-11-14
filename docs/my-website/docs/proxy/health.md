@@ -106,6 +106,13 @@ model_list:
       mode: image_generation # 👈 ADD THIS
 ```
 
+#### Custom Health Check Prompt
+
+By default, health checks use the prompt `"test from litellm"`. You can customize this prompt globally by setting an environment variable, or per-model via config:
+
+```bash
+DEFAULT_HEALTH_CHECK_PROMPT="this is a test prompt"
+```
 
 ### Text Completion Models 
 
@@ -211,6 +218,20 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       mode: realtime
+```
+
+### OCR Models 
+
+To run OCR health checks, specify the mode as "ocr" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: mistral/mistral-ocr-latest
+    litellm_params:
+      model: mistral/mistral-ocr-latest
+      api_key: os.environ/MISTRAL_API_KEY
+    model_info:
+      mode: ocr
 ```
 
 ### Wildcard Routes

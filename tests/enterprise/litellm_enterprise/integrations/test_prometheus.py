@@ -838,3 +838,86 @@ async def test_spend_counter_semantics(mock_prometheus_logger):
 # ==============================================================================
 # END SEMANTIC VALIDATION TESTS
 # ==============================================================================
+
+
+# ==============================================================================
+# CALLBACK FAILURE METRICS TESTS
+# ==============================================================================
+
+def test_callback_failure_metric_increments(prometheus_logger):
+    """
+    Test that the callback logging failure metric can be incremented.
+    
+    This tests the litellm_callback_logging_failures_metric counter.
+    """
+    # Get initial value
+    initial_value = 0
+    try:
+        initial_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+            callback_name="S3Logger"
+        )._value.get()
+    except Exception:
+        initial_value = 0
+    
+    # Increment the metric
+    prometheus_logger.increment_callback_logging_failure(callback_name="S3Logger")
+    
+    # Verify it incremented by 1
+    current_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+        callback_name="S3Logger"
+    )._value.get()
+    
+    assert current_value == initial_value + 1, \
+        f"Expected callback failure metric to increment by 1, got {current_value - initial_value}"
+    
+    # Increment again for different callback
+    prometheus_logger.increment_callback_logging_failure(callback_name="LangFuseLogger")
+    
+    langfuse_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+        callback_name="LangFuseLogger"
+    )._value.get()
+    
+    assert langfuse_value == 1, "LangFuseLogger metric should be 1"
+    
+    # S3Logger should still be initial + 1
+    s3_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+        callback_name="S3Logger"
+    )._value.get()
+    assert s3_value == initial_value + 1, "S3Logger metric should not change"
+    
+    print(f"✓ Callback failure metric test passed: S3Logger={s3_value}, LangFuseLogger={langfuse_value}")
+
+
+def test_callback_failure_metric_different_callbacks(prometheus_logger):
+    """
+    Test that different callbacks are tracked separately with their own labels.
+    """
+    callbacks_to_test = ["S3Logger", "LangFuseLogger", "DataDogLogger", "CustomCallback"]
+    
+    for callback_name in callbacks_to_test:
+        # Get initial value
+        initial = 0
+        try:
+            initial = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+                callback_name=callback_name
+            )._value.get()
+        except Exception:
+            initial = 0
+        
+        # Increment
+        prometheus_logger.increment_callback_logging_failure(callback_name=callback_name)
+        
+        # Verify incremented
+        current = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+            callback_name=callback_name
+        )._value.get()
+        
+        assert current == initial + 1, \
+            f"{callback_name} should increment by 1"
+    
+    print(f"✓ Multiple callback tracking test passed for {len(callbacks_to_test)} callbacks")
+
+
+# ==============================================================================
+# END CALLBACK FAILURE METRICS TESTS
+# ==============================================================================

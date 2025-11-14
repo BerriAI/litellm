@@ -91,8 +91,13 @@ async def test_anthropic_cache_control_hook_system_message():
 
             print("request_body: ", json.dumps(request_body, indent=4))
 
-            # Verify the request body
-            assert request_body["system"][1]["cachePoint"] == {"type": "default"}
+            # Verify that cache control was applied (Bedrock transforms it to a separate item)
+            cache_control_count = sum(
+                1
+                for item in request_body["system"]
+                if isinstance(item, dict) and "cachePoint" in item
+            )
+            assert cache_control_count == 1, f"Expected exactly 1 cache control point, found {cache_control_count}"
 
 
 @pytest.mark.asyncio
@@ -753,3 +758,148 @@ async def test_anthropic_cache_control_hook_no_op():
                         for item in content
                         if isinstance(item, dict)
                     )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
+    """
+    Test that cache_control is only applied to the last content item in a list, not all items.
+    This verifies the fix for https://github.com/BerriAI/litellm/issues/15696
+    """
+    with patch.dict(
+        os.environ,
+        {
+            "AWS_ACCESS_KEY_ID": "fake_access_key_id",
+            "AWS_SECRET_ACCESS_KEY": "fake_secret_access_key",
+            "AWS_REGION_NAME": "us-west-2",
+        },
+    ):
+        anthropic_cache_control_hook = AnthropicCacheControlHook()
+        litellm.callbacks = [anthropic_cache_control_hook]
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": "Response",
+                }
+            },
+            "stopReason": "stop_sequence",
+            "usage": {
+                "inputTokens": 100,
+                "outputTokens": 200,
+                "totalTokens": 300,
+            },
+        }
+        mock_response.status_code = 200
+
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
+            response = await litellm.acompletion(
+                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "First piece of context"},
+                            {"type": "text", "text": "Second piece of context"},
+                            {"type": "text", "text": "Third piece of context"},
+                            {"type": "text", "text": "Fourth piece of context"},
+                            {"type": "text", "text": "Fifth piece of context - should be cached"},
+                        ],
+                    }
+                ],
+                cache_control_injection_points=[
+                    {"location": "message", "index": -1}
+                ],
+                client=client,
+            )
+
+            mock_post.assert_called_once()
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+
+            print("Multi-content request_body: ", json.dumps(request_body, indent=4))
+
+            message_content = request_body["messages"][0]["content"]
+            assert isinstance(message_content, list)
+
+            cache_control_count = sum(
+                1
+                for item in message_content
+                if isinstance(item, dict) and "cachePoint" in item
+            )
+            assert cache_control_count == 1, f"Expected exactly 1 cache control point, found {cache_control_count}. This test verifies the fix for issue 15696 where cache_control was incorrectly applied to ALL content items."
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
+    """
+    Test cache_control with multiple document pages to ensure only the last page gets cached.
+    This simulates document analysis with 6 content blocks, verifying the fix for issue 15696.
+    """
+    with patch.dict(
+        os.environ,
+        {
+            "AWS_ACCESS_KEY_ID": "fake_access_key_id",
+            "AWS_SECRET_ACCESS_KEY": "fake_secret_access_key",
+            "AWS_REGION_NAME": "us-west-2",
+        },
+    ):
+        anthropic_cache_control_hook = AnthropicCacheControlHook()
+        litellm.callbacks = [anthropic_cache_control_hook]
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": "Summary",
+                }
+            },
+            "stopReason": "stop_sequence",
+            "usage": {
+                "inputTokens": 100,
+                "outputTokens": 200,
+                "totalTokens": 300,
+            },
+        }
+        mock_response.status_code = 200
+
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
+            response = await litellm.acompletion(
+                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Summarize this document"},
+                            {"type": "text", "text": "Page 1 content"},
+                            {"type": "text", "text": "Page 2 content"},
+                            {"type": "text", "text": "Page 3 content"},
+                            {"type": "text", "text": "Page 4 content"},
+                            {"type": "text", "text": "Page 5 content - final page to cache"},
+                        ],
+                    }
+                ],
+                cache_control_injection_points=[
+                    {"location": "message", "role": "user"}
+                ],
+                client=client,
+            )
+
+            mock_post.assert_called_once()
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+
+            print("Document analysis request_body: ", json.dumps(request_body, indent=4))
+
+            message_content = request_body["messages"][0]["content"]
+            assert isinstance(message_content, list)
+
+            cache_control_count = sum(
+                1
+                for item in message_content
+                if isinstance(item, dict) and "cachePoint" in item
+            )
+            assert cache_control_count == 1, f"Expected exactly 1 cache control point (last item only), found {cache_control_count}. Before fix, this would be 6 (one for each content item)."

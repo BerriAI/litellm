@@ -227,6 +227,11 @@ const ModelAnalyticsTab = ({
 
   return (
     <TabPanel>
+      <div className="mb-4 rounded-md border border-red-500 bg-red-50 p-4">
+        <Text className="font-semibold text-red-700">
+          This page is deprecated and will be removed in the future. Some functionality may not work as expected.
+        </Text>
+      </div>
       <Grid numItems={4} className="mt-2 mb-2">
         <Col>
           <UsageDatePicker

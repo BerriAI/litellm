@@ -3,20 +3,15 @@ TODO: DELETE FILE. Bedrock LLM is no longer used. Goto `litellm/llms/bedrock/cha
 """
 
 import copy
-import json
 import time
 import types
-import urllib.parse
 from functools import partial
 from typing import (
-    Any,
     AsyncIterator,
     Callable,
     Iterator,
-    List,
     Optional,
     Tuple,
-    Union,
     cast,
     get_args,
 )
@@ -672,16 +667,6 @@ class BedrockLLM(BaseAWSLLM):
 
         return model_response
 
-    def encode_model_id(self, model_id: str) -> str:
-        """
-        Double encode the model ID to ensure it matches the expected double-encoded format.
-        Args:
-            model_id (str): The model ID to encode.
-        Returns:
-            str: The double-encoded model ID.
-        """
-        return urllib.parse.quote(model_id, safe="")
-
     def completion(  # noqa: PLR0915
         self,
         model: str,
@@ -1175,33 +1160,6 @@ class BedrockLLM(BaseAWSLLM):
             if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
-
-    def get_bedrock_model_id(
-        self,
-        optional_params: dict,
-        provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL],
-        model: str,
-    ) -> str:
-        modelId = optional_params.pop("model_id", None)
-        if modelId is not None:
-            modelId = self.encode_model_id(model_id=modelId)
-        else:
-            modelId = model
-
-        if provider == "llama" and "llama/" in modelId:
-            modelId = self._get_model_id_for_llama_like_model(modelId)
-
-        return modelId
-
-    def _get_model_id_for_llama_like_model(
-        self,
-        model: str,
-    ) -> str:
-        """
-        Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
-        """
-        model_id = model.replace("llama/", "")
-        return self.encode_model_id(model_id=model_id)
 
 
 def get_response_stream_shape():

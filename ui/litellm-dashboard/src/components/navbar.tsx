@@ -15,7 +15,6 @@ import {
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import { useTheme } from "@/contexts/ThemeContext";
-import { clearMCPAuthTokens } from "./mcp_tools/mcp_auth_storage";
 import useFeatureFlags from "@/hooks/useFeatureFlags";
 
 interface NavbarProps {
@@ -71,7 +70,6 @@ const Navbar: React.FC<NavbarProps> = ({
 
   const handleLogout = () => {
     clearTokenCookies();
-    clearMCPAuthTokens(); // Clear MCP auth tokens on logout
     window.location.href = logoutUrl;
   };
 

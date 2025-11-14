@@ -45,7 +45,7 @@ install-proxy-dev-ci:
 install-test-deps: install-proxy-dev
 	poetry run pip install "pytest-retry==1.6.3"
 	poetry run pip install pytest-xdist
-	cd enterprise && python -m pip install -e . && cd ..
+	cd enterprise && poetry run pip install -e . && cd ..
 
 install-helm-unittest:
 	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"

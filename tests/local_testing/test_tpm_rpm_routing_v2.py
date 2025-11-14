@@ -44,7 +44,7 @@ def test_tpm_rpm_updated():
     )
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
-    deployment = "azure/gpt-4.1-nano"
+    deployment = "azure/gpt-4.1-mini"
     total_tokens = 50
     standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
@@ -99,12 +99,12 @@ def test_get_available_deployments():
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/gpt-4.1-nano"},
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
             "model_info": {"id": "1234"},
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/gpt-4.1-nano"},
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
             "model_info": {"id": "5678"},
         },
     ]
@@ -115,7 +115,7 @@ def test_get_available_deployments():
     ## DEPLOYMENT 1 ##
     total_tokens = 50
     deployment_id = "1234"
-    deployment = "azure/gpt-4.1-nano"
+    deployment = "azure/gpt-4.1-mini"
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
     standard_logging_payload["model_id"] = deployment_id
@@ -730,7 +730,7 @@ async def test_tpm_rpm_routing_model_name_checks():
     deployment = {
         "model_name": "gpt-3.5-turbo",
         "litellm_params": {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": os.getenv("AZURE_API_BASE"),
             "mock_response": "Hey, how's it going?",
@@ -772,5 +772,5 @@ async def test_tpm_rpm_routing_model_name_checks():
 
         assert (
             standard_logging_payload["hidden_params"]["litellm_model_name"]
-            == "azure/gpt-4.1-nano"
+            == "azure/gpt-4.1-mini"
         )

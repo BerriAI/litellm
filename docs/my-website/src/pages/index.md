@@ -214,6 +214,92 @@ response = completion(
 
 </Tabs>
 
+### Responses API
+
+Use `litellm.responses()` for advanced models that support reasoning content like GPT-5, o3, etc.
+
+<Tabs>
+<TabItem value="openai-responses" label="OpenAI">
+
+```python
+from litellm import responses
+import os
+
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+response = responses(
+  model="gpt-5-mini",
+  messages=[{ "content": "What is the capital of France?","role": "user"}],
+  reasoning_effort="medium"
+)
+
+print(response)
+print(response.choices[0].message.content) # response
+print(response.choices[0].message.reasoning_content) # reasoning
+
+```
+
+</TabItem>
+<TabItem value="anthropic-responses" label="Anthropic (Claude)">
+
+```python
+from litellm import responses
+import os
+
+## set ENV variables
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+
+response = responses(
+  model="claude-3.5-sonnet",
+  messages=[{ "content": "What is the capital of France?","role": "user"}]
+)
+```
+
+</TabItem>
+
+<TabItem value="vertex-responses" label="VertexAI">
+
+```python
+from litellm import responses
+import os
+
+# auth: run 'gcloud auth application-default'
+os.environ["VERTEX_PROJECT"] = "jr-smith-386718"
+os.environ["VERTEX_LOCATION"] = "us-central1"
+
+response = responses(
+  model="chat-bison",
+  messages=[{ "content": "What is the capital of France?","role": "user"}]
+)
+```
+
+</TabItem>
+
+<TabItem value="azure-responses" label="Azure OpenAI">
+
+```python
+from litellm import responses
+import os
+
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+# azure call
+response = responses(
+  "azure/<your_deployment_name>",
+  messages = [{ "content": "What is the capital of France?","role": "user"}]
+)
+
+print(response)
+```
+
+</TabItem>
+
+</Tabs>
+
 ### Streaming
 Set `stream=True` in the `completion` args. 
 
@@ -504,6 +590,10 @@ model_list:
       api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
       api_key: os.environ/AZURE_API_KEY # runs os.getenv("AZURE_API_KEY")
       api_version: "2023-07-01-preview"
+
+litellm_settings:
+  master_key: sk-1234
+  database_url: postgres://
 ```
 
 ### Step 2. RUN Docker Image
@@ -524,6 +614,9 @@ docker run \
 
 #### Step 2: Make ChatCompletions Request to Proxy
 
+<Tabs>
+<TabItem value="chat-completions" label="Chat Completions">
+
 ```python
 import openai # openai v1.0.0+
 client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:4000") # set proxy to base_url
@@ -537,6 +630,28 @@ response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
 
 print(response)
 ```
+
+</TabItem>
+<TabItem value="responses-api" label="Responses API">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.responses.create(
+  model="gpt-5",
+  input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
 
 ## More details
 

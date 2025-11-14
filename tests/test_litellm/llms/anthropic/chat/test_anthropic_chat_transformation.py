@@ -138,7 +138,7 @@ def test_extract_response_content_with_citations():
         "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
         "type": "message",
         "role": "assistant",
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "content": [
             {"type": "text", "text": "According to the documents, "},
             {
@@ -326,7 +326,7 @@ def test_transform_response_with_prefix_prompt():
         "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
         "type": "message",
         "role": "assistant",
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "content": [{"type": "text", "text": " The grass is green."}],
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -364,3 +364,28 @@ def test_get_supported_params_thinking():
     config = AnthropicConfig()
     params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
     assert "thinking" in params
+
+
+def test_anthropic_memory_tool_auto_adds_beta_header():
+    """
+    Tests that LiteLLM automatically adds the required 'anthropic-beta' header
+    when the memory tool is present, and the user has NOT provided a beta header.
+    """
+
+    config = AnthropicConfig()
+    memory_tool = [{"type": "memory_20250818", "name": "memory"}]
+    messages = [{"role": "user", "content": "Remember this."}]
+
+    headers = {}
+    optional_params = {"tools": memory_tool}
+
+    config.transform_request(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert "anthropic-beta" in headers
+    assert headers["anthropic-beta"] == "context-management-2025-06-27"

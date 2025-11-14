@@ -1,11 +1,11 @@
 import asyncio
 import json
-from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (
     CommonProxyErrors,
     GenerateKeyRequest,
@@ -45,10 +45,9 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        if data.send_invite_email is True:
-            await KeyManagementEventHooks._send_key_created_email(
-                response.model_dump(exclude_none=True)
-            )
+        await KeyManagementEventHooks._send_key_created_email(
+            response.model_dump(exclude_none=True)
+        )
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
@@ -144,6 +143,12 @@ class KeyManagementEventHooks:
                 new_secret_value=response.key,
             )
 
+        # send key rotated email if configured
+        await KeyManagementEventHooks._send_key_rotated_email(
+            response=response.model_dump(exclude_none=True),
+            existing_key_alias=existing_key_row.key_alias,
+        )
+
         # store the audit log
         if litellm.store_audit_logs is True and existing_key_row.token is not None:
             asyncio.create_task(
@@ -234,11 +239,21 @@ class KeyManagementEventHooks:
 
                 # store the key in the secret manager
                 if isinstance(litellm.secret_manager_client, BaseSecretManager):
+                    tags = getattr(litellm._key_management_settings, "tags", None)
+                    description = getattr(
+                        litellm._key_management_settings, "description", None
+                    )
+                    verbose_proxy_logger.debug(
+                        f"Creating secret with {secret_name} and tags={tags} and description={description}"
+                    )
+
                     await litellm.secret_manager_client.async_write_secret(
                         secret_name=KeyManagementEventHooks._get_secret_name(
                             secret_name
                         ),
+                        description=description,
                         secret_value=secret_token,
+                        tags=tags
                     )
 
     @staticmethod
@@ -375,3 +390,53 @@ class KeyManagementEventHooks:
                     webhook_event=event,
                 )
             )
+
+    @staticmethod
+    async def _send_key_rotated_email(response: dict, existing_key_alias: Optional[str]):
+        try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+                BaseEmailLogger,
+            )
+        except ImportError:
+            raise Exception(
+                "Trying to use Email Hooks"
+                + CommonProxyErrors.missing_enterprise_package.value
+            )
+
+        try:
+            from litellm_enterprise.types.enterprise_callbacks.send_emails import (
+                SendKeyRotatedEmailEvent,
+            )
+        except ImportError:
+            raise Exception(
+                "Trying to use Email Hooks"
+                + CommonProxyErrors.missing_enterprise_package.value
+            )
+
+        event = SendKeyRotatedEmailEvent(
+            virtual_key=response.get("key", ""),
+            event="key_rotated",
+            event_group=Litellm_EntityType.KEY,
+            event_message="API Key Rotated",
+            token=response.get("token", ""),
+            spend=response.get("spend", 0.0),
+            max_budget=response.get("max_budget", 0.0),
+            user_id=response.get("user_id", None),
+            team_id=response.get("team_id", "Default Team"),
+            key_alias=response.get("key_alias", existing_key_alias),
+        )
+
+        ##########################
+        # v2 integration for emails
+        ##########################
+        initialized_email_loggers = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger
+            )
+        )
+        if len(initialized_email_loggers) > 0:
+            for email_logger in initialized_email_loggers:
+                if isinstance(email_logger, BaseEmailLogger):
+                    await email_logger.send_key_rotated_email(
+                        send_key_rotated_email_event=event,
+                    )
