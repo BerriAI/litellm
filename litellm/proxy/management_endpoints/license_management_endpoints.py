@@ -2,7 +2,7 @@
 License-related endpoints for viewing enterprise license information.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
