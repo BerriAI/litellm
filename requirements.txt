@@ -6,7 +6,7 @@ fastapi==0.120.1 # server dep
 starlette==0.49.1 # starlette fastapi dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
-uvicorn==0.29.0 # server dep
+uvicorn==0.31.1 # server dep
 gunicorn==23.0.0 # server dep
 fastuuid==0.13.5 # for uuid4
 uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
@@ -19,7 +19,7 @@ google-cloud-aiplatform==1.47.0 # for vertex ai calls
 google-cloud-iam==2.19.1 # for GCP IAM Redis authentication
 google-genai==1.22.0
 anthropic[vertex]==0.54.0
-mcp==1.10.1    # for MCP server
+mcp==1.20.0    # for MCP server
 google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
@@ -55,7 +55,7 @@ jinja2==3.1.6 # for prompt templates
 aiohttp==3.12.14 # for network calls
 aioboto3==13.4.0 # for async sagemaker calls
 tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
-pydantic==2.10.2 # proxy + openai req.
+pydantic>=2.11,<3.0.0 # proxy + openai req. (relaxed for MCP 1.20.0 compatibility)
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
 soundfile==0.12.1 # for audio file processing
