@@ -8523,6 +8523,14 @@
             "/v1/images/generations"
         ]
     },
+    "fal_ai/fal-ai/flux/schnell": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.003,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "fal_ai/fal-ai/imagen4/preview": {
         "litellm_provider": "fal_ai",
         "mode": "image_generation",
