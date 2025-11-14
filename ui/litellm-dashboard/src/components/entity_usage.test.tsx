@@ -1,21 +1,23 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import EntityUsage from "./entity_usage";
 import * as networking from "./networking";
 
-// Polyfill ResizeObserver for test environment
-if (typeof window !== "undefined" && !window.ResizeObserver) {
-  window.ResizeObserver = class ResizeObserver {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  } as any;
-}
+beforeAll(() => {
+  if (typeof window !== "undefined" && !window.ResizeObserver) {
+    window.ResizeObserver = class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as any;
+  }
+});
 
 // Mock the networking module
 vi.mock("./networking", () => ({
   tagDailyActivityCall: vi.fn(),
   teamDailyActivityCall: vi.fn(),
+  organizationDailyActivityCall: vi.fn(),
 }));
 
 // Mock the child components to simplify testing
@@ -39,6 +41,7 @@ vi.mock("./EntityUsageExport", () => ({
 describe("EntityUsage", () => {
   const mockTagDailyActivityCall = vi.mocked(networking.tagDailyActivityCall);
   const mockTeamDailyActivityCall = vi.mocked(networking.teamDailyActivityCall);
+  const mockOrganizationDailyActivityCall = vi.mocked(networking.organizationDailyActivityCall);
 
   const mockSpendData = {
     results: [
@@ -124,8 +127,10 @@ describe("EntityUsage", () => {
   beforeEach(() => {
     mockTagDailyActivityCall.mockClear();
     mockTeamDailyActivityCall.mockClear();
+    mockOrganizationDailyActivityCall.mockClear();
     mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockOrganizationDailyActivityCall.mockResolvedValue(mockSpendData);
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
@@ -158,6 +163,19 @@ describe("EntityUsage", () => {
 
     // Use getAllByText since $100.50 appears in multiple places
     const spendElements = screen.getAllByText("$100.50");
+    expect(spendElements.length).toBeGreaterThan(0);
+  });
+
+  it("should render with organization entity type and call organization API", async () => {
+    const { getByText, getAllByText } = render(<EntityUsage {...defaultProps} entityType="organization" />);
+
+    await waitFor(() => {
+      expect(mockOrganizationDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(getByText("Organization Spend Overview")).toBeInTheDocument();
+
+    const spendElements = getAllByText("$100.50");
     expect(spendElements.length).toBeGreaterThan(0);
   });
 
