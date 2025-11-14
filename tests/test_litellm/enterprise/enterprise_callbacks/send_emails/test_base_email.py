@@ -5,8 +5,6 @@ import unittest.mock as mock
 from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
-
 from enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
     BaseEmailLogger,
 )
