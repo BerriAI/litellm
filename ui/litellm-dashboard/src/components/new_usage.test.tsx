@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import NewUsagePage from "./new_usage";
+import type { Organization } from "./networking";
 import * as networking from "./networking";
 
 // Polyfill ResizeObserver for test environment
@@ -153,6 +154,26 @@ describe("NewUsage", () => {
     },
   };
 
+  const mockOrganizations: Organization[] = [
+    {
+      organization_id: "org-123",
+      organization_alias: "Acme Org",
+      budget_id: "budget-1",
+      metadata: {},
+      models: [],
+      spend: 0,
+      model_spend: {},
+      created_at: "2025-01-01T00:00:00Z",
+      created_by: "user-123",
+      updated_at: "2025-01-02T00:00:00Z",
+      updated_by: "user-123",
+      litellm_budget_table: null,
+      teams: null,
+      users: null,
+      members: null,
+    },
+  ];
+
   const defaultProps = {
     accessToken: "test-token",
     userRole: "Admin",
@@ -175,6 +196,7 @@ describe("NewUsage", () => {
         members_with_roles: [],
       },
     ],
+    organizations: [],
     premiumUser: true,
   };
 
@@ -247,6 +269,23 @@ describe("NewUsage", () => {
     // Should still render EntityUsage component for tags
     await waitFor(() => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
+      expect(entityUsageElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should show organization usage banner and tab for admins", async () => {
+    const { getByText, getAllByText } = render(<NewUsagePage {...defaultProps} organizations={mockOrganizations} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    const organizationTab = getByText("Organization Usage");
+    fireEvent.click(organizationTab);
+
+    await waitFor(() => {
+      expect(getByText("Organization usage is a new feature.")).toBeInTheDocument();
+      const entityUsageElements = getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
   });

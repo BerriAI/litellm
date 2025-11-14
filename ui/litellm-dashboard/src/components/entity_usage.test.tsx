@@ -1,18 +1,16 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import EntityUsage from "./entity_usage";
 import * as networking from "./networking";
 
 // Polyfill ResizeObserver for test environment
-beforeAll(() => {
-  if (typeof window !== "undefined" && !window.ResizeObserver) {
-    window.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    } as any;
-  }
-});
+if (typeof window !== "undefined" && !window.ResizeObserver) {
+  window.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as any;
+}
 
 // Mock the networking module
 vi.mock("./networking", () => ({

@@ -50,7 +50,7 @@ export const generateDailyData = (spendData: EntitySpendData, entityLabel: strin
         [entityLabel]: data.metadata?.team_alias || entity,
         [`${entityLabel} ID`]: entity,
         "Spend ($)": formatNumberWithCommas(data.metrics.spend, 4),
-        "Requests": data.metrics.api_requests,
+        Requests: data.metrics.api_requests,
         "Successful Requests": data.metrics.successful_requests,
         "Failed Requests": data.metrics.failed_requests,
         "Total Tokens": data.metrics.total_tokens,
@@ -109,9 +109,9 @@ export const generateDailyWithModelsData = (spendData: EntitySpendData, entityLa
           [`${entityLabel} ID`]: entity,
           Model: model,
           "Spend ($)": formatNumberWithCommas(metrics.spend, 4),
-          "Requests": metrics.requests,
-          "Successful": metrics.successful,
-          "Failed": metrics.failed,
+          Requests: metrics.requests,
+          Successful: metrics.successful,
+          Failed: metrics.failed,
           "Total Tokens": metrics.tokens,
         });
       });
@@ -137,7 +137,7 @@ export const generateExportData = (
 };
 
 export const generateMetadata = (
-  entityType: "tag" | "team",
+  entityType: "tag" | "team" | "organization",
   dateRange: { from?: Date; to?: Date },
   selectedFilters: string[],
   exportScope: ExportScope,
@@ -159,4 +159,3 @@ export const generateMetadata = (
     total_tokens: spendData.metadata.total_tokens,
   },
 });
-
