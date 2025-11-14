@@ -1,22 +1,21 @@
 import pytest
 
 import litellm
-from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_5_reasoning_transformation import AzureOpenAIGPT5ReasoningConfig
 
 
 @pytest.fixture()
-def config() -> AzureOpenAIGPT5Config:
-    return AzureOpenAIGPT5Config()
+def config() -> AzureOpenAIGPT5ReasoningConfig:
+    return AzureOpenAIGPT5ReasoningConfig()
 
 
-def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5ReasoningConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5")
     assert "reasoning_effort" in config.get_supported_openai_params(
         model="gpt5_series/my-deployment"
     )
 
-
-def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5ReasoningConfig):
     params = config.map_openai_params(
         non_default_params={"max_tokens": 5},
         optional_params={},
@@ -28,7 +27,7 @@ def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5Config):
     assert "max_tokens" not in params
 
 
-def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5ReasoningConfig):
     with pytest.raises(litellm.utils.UnsupportedParamsError):
         config.map_openai_params(
             non_default_params={"temperature": 0.2},
@@ -38,8 +37,7 @@ def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5Config):
             api_version="2024-05-01-preview",
         )
 
-
-def test_azure_gpt5_series_transform_request(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_series_transform_request(config: AzureOpenAIGPT5ReasoningConfig):
     request = config.transform_request(
         model="gpt5_series/gpt-5",
         messages=[],
@@ -51,13 +49,13 @@ def test_azure_gpt5_series_transform_request(config: AzureOpenAIGPT5Config):
 
 
 # GPT-5-Codex specific tests for Azure
-def test_azure_gpt5_codex_model_detection(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_codex_model_detection(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5-Codex models are correctly detected."""
-    assert config.is_model_gpt_5_model("gpt-5-codex")
-    assert config.is_model_gpt_5_model("gpt5_series/gpt-5-codex")
+    assert config.is_model_gpt_5_reasoning_model("gpt-5-codex")
+    assert config.is_model_gpt_5_reasoning_model("gpt5_series/gpt-5-codex")
 
 
-def test_azure_gpt5_codex_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_codex_supports_reasoning_effort(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5-Codex supports reasoning_effort parameter."""
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-codex")
     assert "reasoning_effort" in config.get_supported_openai_params(
@@ -65,7 +63,7 @@ def test_azure_gpt5_codex_supports_reasoning_effort(config: AzureOpenAIGPT5Confi
     )
 
 
-def test_azure_gpt5_codex_maps_max_tokens(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_codex_maps_max_tokens(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5-Codex correctly maps max_tokens to max_completion_tokens."""
     params = config.map_openai_params(
         non_default_params={"max_tokens": 150},
@@ -78,7 +76,7 @@ def test_azure_gpt5_codex_maps_max_tokens(config: AzureOpenAIGPT5Config):
     assert "max_tokens" not in params
 
 
-def test_azure_gpt5_codex_temperature_error(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_codex_temperature_error(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5-Codex raises error for unsupported temperature."""
     with pytest.raises(litellm.utils.UnsupportedParamsError):
         config.map_openai_params(
@@ -90,7 +88,7 @@ def test_azure_gpt5_codex_temperature_error(config: AzureOpenAIGPT5Config):
         )
 
 
-def test_azure_gpt5_codex_series_transform_request(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_codex_series_transform_request(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5-Codex series routing works correctly."""
     request = config.transform_request(
         model="gpt5_series/gpt-5-codex",

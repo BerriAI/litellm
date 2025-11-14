@@ -121,8 +121,8 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(
                 model=model
             )
-        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
-            return litellm.AzureOpenAIGPT5Config().get_supported_openai_params(
+        elif litellm.AzureOpenAIGPT5ReasoningConfig.is_model_gpt_5_reasoning_model(model=model):
+            return litellm.AzureOpenAIGPT5ReasoningConfig().get_supported_openai_params(
                 model=model
             )
         else:
