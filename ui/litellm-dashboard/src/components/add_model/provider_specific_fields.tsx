@@ -68,10 +68,15 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     {
       key: "api_base",
       label: "API Base",
-      type: "text",
-      placeholder: "https://api.openai.com/v1",
-      tooltip: "Common endpoints: https://api.openai.com/v1, https://eu.api.openai.com, https://us.api.openai.com",
+      type: "select",
+      placeholder: "Select an endpoint",
+      tooltip: "Select from common OpenAI endpoints",
       defaultValue: "https://api.openai.com/v1",
+      options: [
+        "https://api.openai.com/v1",
+        "https://us.api.openai.com/v1",
+        "https://eu.api.openai.com/v1",
+      ],
     },
     {
       key: "organization",
@@ -89,10 +94,15 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     {
       key: "api_base",
       label: "API Base",
-      type: "text",
-      placeholder: "https://api.openai.com/v1",
-      tooltip: "Common endpoints: https://api.openai.com/v1, https://eu.api.openai.com, https://us.api.openai.com",
+      type: "select",
+      placeholder: "Select an endpoint",
+      tooltip: "Select from common OpenAI endpoints",
       defaultValue: "https://api.openai.com/v1",
+      options: [
+        "https://api.openai.com/v1",
+        "https://us.api.openai.com/v1",
+        "https://eu.api.openai.com/v1",
+      ],
     },
     {
       key: "organization",
