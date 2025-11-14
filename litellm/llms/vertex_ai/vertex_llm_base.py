@@ -6,7 +6,7 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -156,7 +156,6 @@ class VertexBase:
         )
 
     def _credentials_from_default_auth(self, scopes):
-
         import google.auth as google_auth
 
         return google_auth.default(scopes=scopes)
@@ -299,7 +298,7 @@ class VertexBase:
     ) -> Tuple[Optional[str], str]:
         """
         for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
-        
+
         Handles custom api_base for:
         1. Gemini (Google AI Studio) - constructs /models/{model}:{endpoint}
         2. Vertex AI with standard proxies - constructs {api_base}:{endpoint}
@@ -322,7 +321,7 @@ class VertexBase:
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
                     )
                 if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment] 
+                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
             else:
                 # For Vertex AI
                 # Check if this is a PSC endpoint or custom deployment
@@ -330,13 +329,14 @@ class VertexBase:
                 if vertex_project and vertex_location and model:
                     # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
                     model_for_url = get_vertex_base_model_name(model=model)
-                    
+
                     # Check if model is numeric (endpoint ID) or if api_base doesn't contain googleapis.com
                     # These are indicators of PSC/custom endpoints
                     is_psc_or_custom = (
-                        "googleapis.com" not in api_base.lower() or model_for_url.isdigit()
+                        "googleapis.com" not in api_base.lower()
+                        or model_for_url.isdigit()
                     )
-                    
+
                     if is_psc_or_custom:
                         # Construct full PSC/custom endpoint URL
                         # Format: {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
@@ -381,7 +381,7 @@ class VertexBase:
         Returns
             token, url
         """
-        version: Optional[Literal["v1beta1", "v1"]] = None
+        version: Optional[Literal["v1", "v1beta1"]] = None
         if custom_llm_provider == "gemini":
             url, endpoint = _get_gemini_url(
                 mode=mode,
@@ -397,16 +397,14 @@ class VertexBase:
             )
 
             ### SET RUNTIME ENDPOINT ###
-            version = (
-                "v1beta1" if should_use_v1beta1_features is True else "v1"
-            )
+            version = "v1beta1" if should_use_v1beta1_features is True else "v1"
             url, endpoint = _get_vertex_url(
                 mode=mode,
                 model=model,
                 stream=stream,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
-                vertex_api_version=version,
+                vertex_api_version=cast(Literal["v1", "v1beta1"], version),
             )
 
         return self._check_custom_proxy(
@@ -675,13 +673,13 @@ class VertexBase:
     def safe_get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI project without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_project(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI project ID or None
         """
@@ -696,13 +694,13 @@ class VertexBase:
     def safe_get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI credentials without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_credentials(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI credentials or None
         """
@@ -716,13 +714,13 @@ class VertexBase:
     def safe_get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI location without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_location(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI location/region or None
         """
