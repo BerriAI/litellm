@@ -366,7 +366,7 @@ def _transform_request_body(
         # as "labels" field to the request sent to the Gemini backend.
         if labels is None and "metadata" in litellm_params:
             metadata = litellm_params["metadata"]
-            if "requester_metadata" in metadata:
+            if metadata is not None and "requester_metadata" in metadata:
                 rm = metadata["requester_metadata"]
                 labels = {k: v for k, v in rm.items() if type(v) is str}
 
