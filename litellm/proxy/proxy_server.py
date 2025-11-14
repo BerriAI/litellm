@@ -5669,7 +5669,10 @@ async def realtime_websocket_endpoint(
 
     request._url = websocket.url
     
-    request.body = _realtime_request_body(model)  # type: ignore
+    async def return_body():
+        return _realtime_request_body(model)
+    
+    request.body = return_body  # type: ignore
 
     ### ROUTE THE REQUEST ###
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)

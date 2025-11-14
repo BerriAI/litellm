@@ -167,8 +167,12 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 
     model = query_params.get("model")
 
+    
+    async def return_body():
+        return _realtime_request_body(model)
+    
+    request.body = return_body  # type: ignore
 
-    request.body = _realtime_request_body(model)  # type: ignore
 
     authorization = websocket.headers.get("authorization")
     # If no Authorization header, try the api-key header
