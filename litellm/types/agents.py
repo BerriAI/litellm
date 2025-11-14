@@ -152,3 +152,8 @@ class AgentCard(TypedDict, total=False):
     security: Optional[List[Dict[str, List[str]]]]
     supportsAuthenticatedExtendedCard: Optional[bool]
     signatures: Optional[List[AgentCardSignature]]
+
+
+class AgentConfig(TypedDict):
+    agent_name: str
+    agent_card_params: AgentCard
