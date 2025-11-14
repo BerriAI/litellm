@@ -18,6 +18,7 @@ from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..utils import client as wrapper_client
+from ..litellm_core_utils.realtime_ssl import SHARED_REALTIME_SSL_CONTEXT
 
 azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
@@ -184,5 +185,6 @@ async def _realtime_health_check(
             "api-key": api_key,  # type: ignore
         },
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+        ssl=SHARED_REALTIME_SSL_CONTEXT,
     ):
         return True

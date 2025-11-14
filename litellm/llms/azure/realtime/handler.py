@@ -10,6 +10,7 @@ from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
+from ....litellm_core_utils.realtime_ssl import SHARED_REALTIME_SSL_CONTEXT
 from ..azure import AzureChatCompletion
 
 # BACKEND_WS_URL = "ws://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
@@ -67,6 +68,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     "api-key": api_key,  # type: ignore
                 },
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=SHARED_REALTIME_SSL_CONTEXT,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket, cast(ClientConnection, backend_ws), logging_obj

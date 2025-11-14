@@ -4,7 +4,6 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-import ssl
 from typing import Any, Optional, cast
 
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -12,10 +11,8 @@ from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
+from ....litellm_core_utils.realtime_ssl import SHARED_REALTIME_SSL_CONTEXT
 from ..openai import OpenAIChatCompletion
-
-
-_SHARED_SSL_CONTEXT = ssl.create_default_context()
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
@@ -66,7 +63,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "OpenAI-Beta": "realtime=v1",
                 },
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-                ssl=_SHARED_SSL_CONTEXT,
+                ssl=SHARED_REALTIME_SSL_CONTEXT,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket, cast(ClientConnection, backend_ws), logging_obj

@@ -22,6 +22,7 @@ import litellm.types.utils
 from litellm._logging import verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.litellm_core_utils.realtime_ssl import SHARED_REALTIME_SSL_CONTEXT
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -3599,6 +3600,7 @@ class BaseLLMHTTPHandler:
                 url,
                 extra_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=SHARED_REALTIME_SSL_CONTEXT,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket,
