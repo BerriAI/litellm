@@ -83,6 +83,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_store_integrations.base_vector_store import (
     BaseVectorStore,
 )
+from litellm.types.llms.openai import OpenAIChatCompletionTextObject
 
 # Import cached imports utilities
 from litellm.litellm_core_utils.cached_imports import (
@@ -222,6 +223,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
+from typing_extensions import TypeGuard
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -565,9 +567,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -575,7 +577,9 @@ def function_setup(  # noqa: PLR0915
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                        callback,
+                        internal_usage_cache=None,
+                        llm_router=None,  # type: ignore
                     )
                     if callback is None or any(
                         isinstance(cb, type(callback))
@@ -744,7 +748,6 @@ def function_setup(  # noqa: PLR0915
                 and isinstance(messages[0], dict)
                 and "content" in messages[0]
             ):
-
                 buffer = StringIO()
                 for m in messages:
                     content = m.get("content", "")
@@ -994,9 +997,7 @@ def post_call_processing(
                         isinstance(original_response, ModelResponse)
                         and len(original_response.choices) > 0
                     ):
-                        model_response: Optional[str] = original_response.choices[
-                            0
-                        ].message.content  # type: ignore
+                        model_response: Optional[str] = original_response.choices[0].message.content  # type: ignore
                         if model_response is not None:
                             ### POST-CALL RULES ###
                             rules_obj.post_call_rules(input=model_response, model=model)
@@ -1332,9 +1333,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1423,16 +1424,16 @@ def client(original_function):  # noqa: PLR0915
             print_verbose(
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
-            _caching_handler_response: Optional[CachingHandlerResponse] = (
-                await _llm_caching_handler._async_get_cache(
-                    model=model or "",
-                    original_function=original_function,
-                    logging_obj=logging_obj,
-                    start_time=start_time,
-                    call_type=call_type,
-                    kwargs=kwargs,
-                    args=args,
-                )
+            _caching_handler_response: Optional[
+                CachingHandlerResponse
+            ] = await _llm_caching_handler._async_get_cache(
+                model=model or "",
+                original_function=original_function,
+                logging_obj=logging_obj,
+                start_time=start_time,
+                call_type=call_type,
+                kwargs=kwargs,
+                args=args,
             )
 
             if _caching_handler_response is not None:
@@ -1808,7 +1809,9 @@ def create_pretrained_tokenizer(
 
     try:
         tokenizer = Tokenizer.from_pretrained(
-            identifier, revision=revision, auth_token=auth_token  # type: ignore
+            identifier,
+            revision=revision,
+            auth_token=auth_token,  # type: ignore
         )
     except Exception as e:
         verbose_logger.error(
@@ -3191,10 +3194,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3323,16 +3326,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4453,9 +4456,9 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
             return delta if isinstance(delta, str) else ""
 
     # Handle standard ModelResponse and ModelResponseStream
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     response_str = ""
     for choice in _choices:
@@ -6233,57 +6236,199 @@ def get_token_count(messages, model):
 
 
 def shorten_message_to_fit_limit(
-    message, tokens_needed, model: Optional[str], raise_error_on_max_limit: bool = False
+    message,
+    tokens_needed: int,
+    model: Optional[str],
+    raise_error_on_max_limit: bool = False,
 ):
     """
     Shorten a message to fit within a token limit by removing characters from the middle.
+    Handles both string content and list content.
 
     Args:
         message: The message to shorten
         tokens_needed: The maximum number of tokens allowed
         model: The model being used (optional)
-        raise_error_on_max_limit: If True, raises an error when max attempts reached. If False, returns final trimmed content.
+        raise_error_on_max_limit: If True, raises an error when max attempts reached.
+            If False, returns final trimmed content.
+    Returns:
+        The shortened message.
     """
 
     # For OpenAI models, even blank messages cost 7 token,
     # and if the buffer is less than 3, the while loop will never end,
     # hence the value 10.
-    if model is not None and "gpt" in model and tokens_needed <= 10:
+    minimum_tokens = 10
+    if model is not None and "gpt" in model and tokens_needed <= minimum_tokens:
         return message
 
     content = message["content"]
+
+    # Handle list content (multimodal messages with text + images)
+    if isinstance(content, list):
+        return shorten_message_with_list_content(
+            message, tokens_needed, model, raise_error_on_max_limit
+        )
+
+    # Handle string content (original logic)
     attempts = 0
 
-    verbose_logger.debug(f"content: {content}")
+    verbose_logger.debug("content: %s", content)
 
     while attempts < MAX_TOKEN_TRIMMING_ATTEMPTS:
-        verbose_logger.debug(f"getting token count for message: {message}")
+        verbose_logger.debug("getting token count for message: %s", message)
         total_tokens = get_token_count([message], model)
         verbose_logger.debug(
-            f"total_tokens: {total_tokens}, tokens_needed: {tokens_needed}"
+            "total_tokens: %d, tokens_needed: %d", total_tokens, tokens_needed
         )
 
         if total_tokens <= tokens_needed:
             break
 
-        ratio = (tokens_needed) / total_tokens
+        trimmed_content = trim_text(content, tokens_needed, total_tokens)
 
-        new_length = int(len(content) * ratio) - 1
-        new_length = max(0, new_length)
-
-        half_length = new_length // 2
-        left_half = content[:half_length]
-        right_half = content[-half_length:]
-
-        trimmed_content = left_half + ".." + right_half
         message["content"] = trimmed_content
-        verbose_logger.debug(f"trimmed_content: {trimmed_content}")
+        verbose_logger.debug("trimmed_content: %s", trimmed_content)
         content = trimmed_content
         attempts += 1
 
     if attempts >= MAX_TOKEN_TRIMMING_ATTEMPTS and raise_error_on_max_limit:
-        raise Exception(
+        raise ValueError(
             f"Failed to trim message to fit within {tokens_needed} tokens after {MAX_TOKEN_TRIMMING_ATTEMPTS} attempts"
+        )
+
+    return message
+
+
+def is_text_content(item: Any) -> TypeGuard[OpenAIChatCompletionTextObject]:
+    """Check if the content item is of type OpenAIChatCompletionTextObject."""
+    return (
+        isinstance(item, dict)
+        and item.get("type") == "text"
+        and isinstance(item.get("text"), str)
+    )
+
+
+def trim_text(text: str, tokens_needed: int, total_tokens: int) -> str:
+    """Trim text by removing characters from the middle to fit within token limit."""
+    ratio = (tokens_needed) / total_tokens
+
+    new_length = int(len(text) * ratio) - 1
+    new_length = max(0, new_length)
+
+    half_length = new_length // 2
+    if half_length == 0:
+        return ".."
+    left_half = text[:half_length]
+    right_half = text[-half_length:]
+
+    trimmed_content = left_half + ".." + right_half
+    return trimmed_content
+
+
+def shorten_message_with_list_content(
+    message,
+    tokens_needed: int,
+    model: Optional[str],
+    raise_error_on_max_limit: bool = False,
+):
+    """
+    Shorten a message with list content (multimodal format).
+
+    Strategy:
+    1. Replace images that alone exceed token limit with text placeholder
+    2. Greedily pack items (images + text) until token limit
+    3. Trim text items if they don't fit entirely
+    """
+    content = message["content"]
+    role = message.get("role", "user")
+    if not isinstance(content, list):
+        raise ValueError("Content is not a list for list content message shortening")
+
+    # Step 1: Replace oversized multi modal items (e.g. images) with text placeholders
+    multi_modal_items = [
+        i for i, item in enumerate(content) if not is_text_content(item)
+    ]
+    multi_modal_tokens = {
+        i: get_token_count([{"role": role, "content": [content[i]]}], model)
+        for i in multi_modal_items
+    }
+
+    # Process in reverse to avoid index invalidation (could only happen if popped)
+    for image_idx in sorted(
+        [
+            idx
+            for idx, token_count in multi_modal_tokens.items()
+            if token_count > tokens_needed
+        ],
+        reverse=True,
+    ):
+        verbose_logger.warning(
+            "Removing multi-modal item at index %d (exceeds token limit: %d > %d)",
+            image_idx,
+            multi_modal_tokens[image_idx],
+            tokens_needed,
+        )
+        content[image_idx] = {
+            "type": "text",
+            "text": "[Multi-modal item removed: exceeds token limit]",
+        }
+
+    # Step 2: Greedily pack items until we fit within token limit
+    attempts = 0
+    while attempts < MAX_TOKEN_TRIMMING_ATTEMPTS:
+        total_tokens = get_token_count([message], model)
+
+        if total_tokens <= tokens_needed:
+            break
+
+        current_tokens = 0
+        current_items = []
+
+        for item in content:
+            item_token_count = get_token_count(
+                [{"role": role, "content": [item]}], model
+            )
+            available_tokens = tokens_needed - current_tokens
+
+            minimum_trimming_tokens = 10
+            if available_tokens <= minimum_trimming_tokens:
+                # Not enough tokens left to add more items
+                break
+            # Check if item fits
+            if item_token_count <= available_tokens:
+                # Item fits completely
+                current_items.append(item)
+                current_tokens += item_token_count
+            elif is_text_content(item):
+                # Text item doesn't fit, but we can trim it
+                trimmed_text = trim_text(
+                    item["text"], available_tokens, item_token_count
+                )
+                trimmed_item = {"type": "text", "text": trimmed_text}
+                trimmed_token_count = get_token_count(
+                    [{"role": role, "content": [trimmed_item]}], model
+                )
+
+                current_items.append(trimmed_item)
+                current_tokens += trimmed_token_count
+                break  # Stop after trimming - we've reached our limit
+            else:
+                # Image doesn't fit and we can't trim it - skip
+                verbose_logger.debug(
+                    "Skipping image item (doesn't fit in remaining tokens: %d)",
+                    available_tokens,
+                )
+                continue
+
+        content = current_items
+        message["content"] = content
+        attempts += 1
+
+    if attempts >= MAX_TOKEN_TRIMMING_ATTEMPTS and raise_error_on_max_limit:
+        raise ValueError(
+            f"Failed to trim list message to fit within {tokens_needed} "
+            f"tokens after {MAX_TOKEN_TRIMMING_ATTEMPTS} attempts"
         )
 
     return message
@@ -7037,7 +7182,6 @@ class ProviderConfigManager:
             if route == "v2":
                 return litellm.CohereV2ChatConfig()
             else:
-
                 return litellm.CohereChatConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
             return litellm.SnowflakeConfig()
@@ -7369,8 +7513,11 @@ class ProviderConfigManager:
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
             # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
             is_gpt_model = model and "gpt" in model.lower()
-            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt_model))
-            
+            is_o_series = model and (
+                "o_series" in model.lower()
+                or (supports_reasoning(model) and not is_gpt_model)
+            )
+
             if is_o_series:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
