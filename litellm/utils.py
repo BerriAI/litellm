@@ -7826,6 +7826,12 @@ class ProviderConfigManager:
                 )
 
                 return AzureAVATextToSpeechConfig()
+        elif litellm.LlmProviders.RUNWAYML == provider:
+            from litellm.llms.runwayml.text_to_speech.transformation import (
+                RunwayMLTextToSpeechConfig,
+            )
+
+            return RunwayMLTextToSpeechConfig()
         return None
 
     @staticmethod
