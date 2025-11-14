@@ -276,7 +276,7 @@ async def afile_retrieve(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-):
+) -> OpenAIFileObject:
     """
     Async: Get file contents
 
@@ -305,7 +305,7 @@ async def afile_retrieve(
         else:
             response = init_response
 
-        return response
+        return OpenAIFileObject(**response.model_dump())
     except Exception as e:
         raise e
 
@@ -419,6 +419,7 @@ def file_retrieve(
                     request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
             )
+
         return cast(FileObject, response)
     except Exception as e:
         raise e

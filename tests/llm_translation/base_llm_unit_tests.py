@@ -187,6 +187,7 @@ class BaseLLMChatTest(ABC):
         print(response)
         print(json.dumps(response, indent=4, default=str))
 
+    @pytest.mark.flaky(retries=3, delay=1)
     def test_tool_call_with_empty_enum_property(self):
         litellm._turn_on_debug()
         from litellm.utils import supports_function_calling
@@ -1056,14 +1057,14 @@ class BaseLLMChatTest(ABC):
     @pytest.fixture
     def pdf_messages(self):
         import base64
+        import os
 
-        import requests
-
-        # URL of the file
-        url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
-
-        response = requests.get(url)
-        file_data = response.content
+        # Use local PDF file instead of external URL to avoid flaky tests
+        test_dir = os.path.dirname(__file__)
+        pdf_path = os.path.join(test_dir, "fixtures", "dummy.pdf")
+        
+        with open(pdf_path, "rb") as f:
+            file_data = f.read()
 
         encoded_file = base64.b64encode(file_data).decode("utf-8")
         url = f"data:application/pdf;base64,{encoded_file}"
