@@ -651,7 +651,29 @@ def _get_response_for_spend_logs_payload(
     if payload is None:
         return "{}"
     if _should_store_prompts_and_responses_in_spend_logs():
-        return json.dumps(payload.get("response", {}))
+        response_obj: Any = payload.get("response")
+        if response_obj is None:
+            return "{}"
+
+        # If the response is a JSON string, attempt to parse it so downstream
+        # consumers always get structured JSON instead of a double-encoded string.
+        parsed_response: Any = response_obj
+        if isinstance(response_obj, str):
+            try:
+                parsed_response = json.loads(response_obj)
+            except (TypeError, ValueError):
+                parsed_response = response_obj
+
+        sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
+            {"response": parsed_response}
+        )
+        sanitized_response = sanitized_wrapper.get("response", parsed_response)
+
+        if sanitized_response is None:
+            return "{}"
+        if isinstance(sanitized_response, str):
+            return sanitized_response
+        return safe_dumps(sanitized_response)
     return "{}"
 
 
