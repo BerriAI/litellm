@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
@@ -165,3 +166,21 @@ class AgentConfig(TypedDict, total=False):
     agent_name: Required[str]
     agent_card_params: Required[AgentCard]
     litellm_params: AgentLitellmParams
+
+
+# Request/Response models for CRUD endpoints
+
+
+class AgentResponse(BaseModel):
+    agent_id: str
+    agent_name: str
+    litellm_params: Optional[Dict[str, Any]] = None
+    agent_card_params: Dict[str, Any]
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
+
+
+class ListAgentsResponse(BaseModel):
+    agents: List[AgentResponse]
