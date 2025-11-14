@@ -157,14 +157,8 @@ def _apply_budget_limits_to_end_user_params(
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
-    request = Request(
-        scope={
-            "type": "http",
-            "headers": [
-                (k.lower().encode(), v.encode()) for k, v in websocket.headers.items()
-            ],
-        }
-    )
+    scope_headers = list(websocket.scope.get("headers") or [])
+    request = Request(scope={"type": "http", "headers": scope_headers})
 
     request._url = websocket.url
 
