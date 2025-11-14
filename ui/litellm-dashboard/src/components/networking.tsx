@@ -145,6 +145,25 @@ export interface CredentialItem {
   };
 }
 
+export interface ProviderCredentialFieldMetadata {
+  key: string;
+  label: string;
+  placeholder?: string | null;
+  tooltip?: string | null;
+  required?: boolean;
+  field_type?: "text" | "password" | "select" | "upload";
+  options?: string[] | null;
+  default_value?: string | null;
+}
+
+export interface ProviderCreateInfo {
+  provider: string;
+  provider_display_name: string;
+  litellm_provider: string;
+  default_model_placeholder?: string | null;
+  credential_fields: ProviderCredentialFieldMetadata[];
+}
+
 export interface PublicModelHubInfo {
   docs_title: string;
   custom_docs_description: string | null;
@@ -180,6 +199,26 @@ const handleError = async (errorData: string) => {
   } else {
     console.log("Error suppressed to prevent spam:", errorData);
   }
+};
+
+export const getProviderCreateMetadata = async (): Promise<ProviderCreateInfo[]> => {
+  /**
+   * Fetch provider credential field metadata from the proxy's public endpoint.
+   * This is used by the UI to dynamically render provider-specific credential fields.
+   */
+  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/public/providers/fields` : `/public/providers/fields`;
+  const response = await fetch(url, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("Failed to fetch provider create metadata:", response.status, errorText);
+    throw new Error("Failed to load provider configuration");
+  }
+
+  const jsonData: ProviderCreateInfo[] = await response.json();
+  return jsonData;
 };
 
 // Global variable for the header name
@@ -5794,11 +5833,7 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   }
 };
 
-export const callMCPTool = async (
-  accessToken: string,
-  toolName: string,
-  toolArguments: Record<string, any>
-) => {
+export const callMCPTool = async (accessToken: string, toolName: string, toolArguments: Record<string, any>) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/call` : `/mcp-rest/tools/call`;

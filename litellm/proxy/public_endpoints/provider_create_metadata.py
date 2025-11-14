@@ -6,6 +6,7 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
     ProviderCreateInfo,
     ProviderCredentialField,
 )
+from litellm.types.utils import LlmProviders
 
 DEFAULT_MODEL_PLACEHOLDER = "gpt-3.5-turbo"
 
@@ -735,6 +736,30 @@ def get_provider_create_metadata() -> List[ProviderCreateInfo]:
                 default_model_placeholder=base_info.get(
                     "default_model_placeholder", DEFAULT_MODEL_PLACEHOLDER
                 ),
+                credential_fields=normalized_fields,
+            )
+        )
+
+    # Ensure we have metadata entries for all providers defined in LlmProviders.
+    # If a provider enum value is not already present in the litellm_provider
+    # field of any entry, create a default entry for it using the fallback
+    # credential fields (api_key + api_base) and a generated display name.
+    existing_litellm_providers = {p.litellm_provider for p in providers}
+
+    for provider_enum in LlmProviders:
+        litellm_provider_value = provider_enum.value
+        if litellm_provider_value in existing_litellm_providers:
+            continue
+
+        normalized_fields = [_normalize_field(field) for field in _FALLBACK_FIELDS]
+        provider_display_name = provider_enum.value.replace("_", " ").title()
+
+        providers.append(
+            ProviderCreateInfo(
+                provider=provider_enum.name,
+                provider_display_name=provider_display_name,
+                litellm_provider=litellm_provider_value,
+                default_model_placeholder=DEFAULT_MODEL_PLACEHOLDER,
                 credential_fields=normalized_fields,
             )
         )
