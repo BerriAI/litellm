@@ -3800,14 +3800,7 @@ class Router:
             "list_containers",
             "retrieve_container",
             "delete_container",
-            "vector_store_file_create",
-            "vector_store_file_list",
-            "vector_store_file_retrieve",
-            "vector_store_file_content",
-            "vector_store_file_update",
-            "vector_store_file_delete",
         ):
-
             def sync_wrapper(
                 custom_llm_provider: Optional[str] = None,
                 client: Optional[Any] = None,
@@ -3818,6 +3811,28 @@ class Router:
                 )
 
             return sync_wrapper
+
+        if call_type in (
+            "vector_store_file_create",
+            "vector_store_file_list",
+            "vector_store_file_retrieve",
+            "vector_store_file_content",
+            "vector_store_file_update",
+            "vector_store_file_delete",
+        ):
+
+            def vector_store_file_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                return original_function(
+                    custom_llm_provider=custom_llm_provider,
+                    client=client,
+                    **kwargs,
+                )
+
+            return vector_store_file_sync_wrapper
 
         # Handle asynchronous call types
         async def async_wrapper(
@@ -3842,6 +3857,19 @@ class Router:
                     **kwargs,
                 )
             elif call_type in (
+                "avector_store_file_create",
+                "avector_store_file_list",
+                "avector_store_file_retrieve",
+                "avector_store_file_content",
+                "avector_store_file_update",
+                "avector_store_file_delete",
+            ):
+                return await self._init_vector_store_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
+            elif call_type in (
                 "anthropic_messages",
                 "aresponses",
                 "_arealtime",
@@ -3863,13 +3891,7 @@ class Router:
                 "acreate_container",
                 "alist_containers",
                 "aretrieve_container",
-                "adelete_container",
-                "avector_store_file_create",
-                "avector_store_file_list",
-                "avector_store_file_retrieve",
-                "avector_store_file_content",
-                "avector_store_file_update",
-                "avector_store_file_delete",
+                "adelete_container"
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
