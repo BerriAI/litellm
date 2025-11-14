@@ -477,6 +477,11 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
             content = f.read()
     elif isinstance(file_content, io.IOBase):
         # If it's a file-like object
+        # Try to get filename from file handle if not already set
+        if not filename and hasattr(file_content, 'name'):
+            import os
+            filename = os.path.basename(file_content.name)
+
         content = file_content.read()
 
         if isinstance(content, str):

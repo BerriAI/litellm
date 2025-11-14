@@ -1717,6 +1717,337 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 </TabItem>
 </Tabs>
 
+## [BETA] Files API
+
+:::info
+The Anthropic Files API is currently in beta. It allows you to upload and manage files to use with Claude without re-uploading content with each request.
+:::
+
+The Files API provides operations to:
+- **Upload files** to secure storage and receive a unique `file_id`
+- **List files** in your workspace
+- **Retrieve metadata** about specific files
+- **Delete files** from your workspace
+- **Download file content** (only for files created by skills or code execution tool)
+
+### Storage Limits
+- **Maximum file size:** 500 MB per file
+- **Total storage:** 100 GB per organization
+- **Supported file types:** PDF, plain text, images, datasets (for code execution)
+
+:::note
+File operations (upload, download, list, retrieve metadata, delete) are **free**. Only file content used in Messages requests is priced as input tokens.
+:::
+
+### Upload a File
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+import os
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+# Upload a file
+async def upload_file():
+    file_object = await litellm.acreate_file(
+        file=open("/path/to/document.pdf", "rb"),
+        purpose="assistants",
+        custom_llm_provider="anthropic",
+    )
+
+    print(f"File ID: {file_object.id}")
+    print(f"Filename: {file_object.filename}")
+    print(f"Size: {file_object.bytes} bytes")
+    return file_object.id
+
+# Synchronous version
+file_object = litellm.create_file(
+    file=open("/path/to/document.pdf", "rb"),
+    purpose="assistants",
+    custom_llm_provider="anthropic",
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+The LiteLLM Proxy does not currently support file operations through the proxy server. Use the SDK directly for file management.
+
+</TabItem>
+</Tabs>
+
+### List Files
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+import os
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+# List all files (async)
+async def list_files():
+    files = await litellm.afile_list(
+        custom_llm_provider="anthropic",
+    )
+
+    for file in files:
+        print(f"ID: {file.id}, Filename: {file.filename}")
+
+# Synchronous version
+files = litellm.file_list(
+    custom_llm_provider="anthropic",
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+The LiteLLM Proxy does not currently support file operations through the proxy server. Use the SDK directly for file management.
+
+</TabItem>
+</Tabs>
+
+### Retrieve File Metadata
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+import os
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+file_id = "file_011CNha8iCJcU1wXNR6q4V8w"
+
+# Retrieve file metadata (async)
+async def get_file_info():
+    file_object = await litellm.afile_retrieve(
+        file_id=file_id,
+        custom_llm_provider="anthropic",
+    )
+
+    print(f"Filename: {file_object.filename}")
+    print(f"Created: {file_object.created_at}")
+    print(f"Size: {file_object.bytes} bytes")
+
+# Synchronous version
+file_object = litellm.file_retrieve(
+    file_id=file_id,
+    custom_llm_provider="anthropic",
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+The LiteLLM Proxy does not currently support file operations through the proxy server. Use the SDK directly for file management.
+
+</TabItem>
+</Tabs>
+
+### Delete a File
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+import os
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+file_id = "file_011CNha8iCJcU1wXNR6q4V8w"
+
+# Delete file (async)
+async def delete_file():
+    result = await litellm.afile_delete(
+        file_id=file_id,
+        custom_llm_provider="anthropic",
+    )
+
+    print(f"Deleted: {result.deleted}")
+
+# Synchronous version
+result = litellm.file_delete(
+    file_id=file_id,
+    custom_llm_provider="anthropic",
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+The LiteLLM Proxy does not currently support file operations through the proxy server. Use the SDK directly for file management.
+
+</TabItem>
+</Tabs>
+
+### Download File Content
+
+:::note
+You can only download files that were created by [skills](https://docs.anthropic.com/en/docs/build-with-claude/skills-guide) or the [code execution tool](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/code-execution-tool). Files that you uploaded cannot be downloaded.
+:::
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+import os
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+file_id = "file_011CNha8iCJcU1wXNR6q4V8w"
+
+# Download file content (async)
+async def download_file():
+    content = await litellm.afile_content(
+        file_id=file_id,
+        custom_llm_provider="anthropic",
+    )
+
+    # Save to file
+    with open("downloaded_file.txt", "wb") as f:
+        f.write(content.content)
+
+# Synchronous version
+content = litellm.file_content(
+    file_id=file_id,
+    custom_llm_provider="anthropic",
+)
+
+with open("downloaded_file.txt", "wb") as f:
+    f.write(content.content)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+The LiteLLM Proxy does not currently support file operations through the proxy server. Use the SDK directly for file management.
+
+</TabItem>
+</Tabs>
+
+### Using Files in Messages
+
+Once you've uploaded a file, you can reference it in your messages using the `file_id`. The Files API supports different content block types:
+
+| File Type | Content Block Type | Use Case |
+|-----------|-------------------|----------|
+| PDF | `document` | Text analysis, document processing |
+| Plain text | `document` | Text analysis, processing |
+| Images | `image` | Image analysis, visual tasks |
+| Datasets | `container_upload` | Analyze data, create visualizations |
+
+**Example with Document:**
+
+```python
+import litellm
+import os
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+# First, upload the file
+file_object = await litellm.acreate_file(
+    file=open("/path/to/document.pdf", "rb"),
+    purpose="assistants",
+    custom_llm_provider="anthropic",
+)
+
+# Then use it in a message
+response = await litellm.acompletion(
+    model="anthropic/claude-sonnet-4-5-20250929",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Please summarize this document for me."
+                },
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "file",
+                        "file_id": file_object.id
+                    },
+                    "title": "My Document",  # Optional
+                    "context": "This is an important document.",  # Optional
+                    "citations": {"enabled": True}  # Optional - enables citations
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+**Example with Image:**
+
+```python
+# Upload an image file
+image_file = await litellm.acreate_file(
+    file=open("/path/to/image.jpg", "rb"),
+    purpose="assistants",
+    custom_llm_provider="anthropic",
+)
+
+# Use it in a message
+response = await litellm.acompletion(
+    model="anthropic/claude-sonnet-4-5-20250929",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What's in this image?"
+                },
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "file",
+                        "file_id": image_file.id
+                    }
+                }
+            ]
+        }
+    ]
+)
+```
+
+### Error Handling
+
+Common errors when using the Files API:
+
+- **File not found (404):** The specified `file_id` doesn't exist or you don't have access to it
+- **Invalid file type (400):** The file type doesn't match the content block type
+- **File too large (413):** File exceeds the 500 MB limit
+- **Storage limit exceeded (403):** Your organization has reached the 100 GB storage limit
+
+```python
+import litellm
+from litellm.exceptions import BadRequestError, NotFoundError
+
+try:
+    file_object = await litellm.afile_retrieve(
+        file_id="invalid_file_id",
+        custom_llm_provider="anthropic",
+    )
+except NotFoundError as e:
+    print(f"File not found: {e}")
+except BadRequestError as e:
+    print(f"Bad request: {e}")
+```
+
 ## Usage - passing 'user_id' to Anthropic
 
 LiteLLM translates the OpenAI `user` param to Anthropic's `metadata[user_id]` param.

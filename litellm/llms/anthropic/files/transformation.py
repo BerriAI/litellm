@@ -165,7 +165,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
         verbose_logger.debug(
             f"Anthropic file upload - filename: {extracted_data.get('filename')}, "
-            f"content_type: {extracted_data.get('content_type')}"
+            f"content_type: {extracted_data.get('content_type')}, "
+            f"content_length: {len(extracted_data['content']) if extracted_data.get('content') else 0}"
         )
 
         # Get complete URL for upload
@@ -182,7 +183,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
         # Return dict with method and files for multipart upload
         # This tells the HTTP handler to use httpx's files parameter
-        return {
+        result = {
             "method": "POST",
             "url": api_base,
             "headers": {},  # Additional headers already set in validate_environment
@@ -194,6 +195,16 @@ class AnthropicFilesConfig(BaseFilesConfig):
                 )
             },
         }
+
+        file_tuple = result['files']['file']  # type: ignore[index]
+        verbose_logger.debug(
+            f"Anthropic transform_create_file_request result: "
+            f"method={result['method']}, url={result['url']}, "
+            f"file_tuple=(name={file_tuple[0]}, "  # type: ignore[index]
+            f"content_len={len(file_tuple[1])}, "  # type: ignore[index, arg-type]
+            f"content_type={file_tuple[2]})"  # type: ignore[index]
+        )
+        return result
 
     def transform_create_file_response(
         self,

@@ -17,6 +17,7 @@ import litellm
 from litellm import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.files.handler import AnthropicFilesAPI
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -44,31 +45,8 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
+anthropic_files_instance = AnthropicFilesAPI()
 #################################################
-
-
-# Helper function for Anthropic Files API
-def _transform_anthropic_file_response(http_response: httpx.Response) -> FileObject:
-    """Transform Anthropic file response to OpenAI FileObject format"""
-    import time
-    response_json = http_response.json()
-
-    # Parse created_at
-    try:
-        from dateutil import parser  # type: ignore[import-untyped]
-        created_at = int(parser.parse(response_json.get("created_at", "")).timestamp())
-    except Exception:
-        created_at = int(time.time())
-
-    return FileObject(
-        id=response_json.get("id", ""),
-        object="file",
-        bytes=response_json.get("size_bytes", 0),
-        created_at=created_at,
-        filename=response_json.get("filename", ""),
-        purpose="assistants",
-        status="processed",
-    )
 
 
 @client
@@ -366,6 +344,7 @@ def file_retrieve(
             timeout = 600.0
 
         _is_async = kwargs.pop("is_async", False) is True
+        client = kwargs.get("client")
 
         if custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -431,7 +410,6 @@ def file_retrieve(
                 file_id=file_id,
             )
         elif custom_llm_provider == "anthropic":
-            # Direct HTTP implementation for Anthropic Files API
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
@@ -447,35 +425,14 @@ def file_retrieve(
             if api_key is None:
                 raise ValueError("ANTHROPIC_API_KEY is required")
 
-            # Prepare headers
-            headers = {
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "anthropic-beta": "files-api-2025-04-14",
-            }
-
-            url = f"{api_base}/v1/files/{file_id}"
-
-            # Make HTTP request
-            if _is_async:
-                async def _retrieve():
-                    if client is None or not isinstance(client, AsyncHTTPHandler):
-                        async_client = AsyncHTTPHandler(timeout=timeout)
-                    else:
-                        async_client = client
-
-                    http_response = await async_client.get(url=url, headers=headers)
-                    return _transform_anthropic_file_response(http_response)
-
-                response = _retrieve()
-            else:
-                if client is None or not isinstance(client, HTTPHandler):
-                    sync_client = HTTPHandler(timeout=timeout)
-                else:
-                    sync_client = client
-
-                http_response = sync_client.get(url=url, headers=headers)
-                response = _transform_anthropic_file_response(http_response)
+            response = anthropic_files_instance.retrieve_file(
+                _is_async=_is_async,
+                file_id=file_id,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                client=client,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'file_retrieve'. Only 'openai', 'azure', and 'anthropic' are supported.".format(
@@ -635,7 +592,6 @@ def file_delete(
                 litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "anthropic":
-            # Direct HTTP implementation for Anthropic Files API
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
@@ -651,36 +607,14 @@ def file_delete(
             if api_key is None:
                 raise ValueError("ANTHROPIC_API_KEY is required")
 
-            # Prepare headers
-            headers = {
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "anthropic-beta": "files-api-2025-04-14",
-            }
-
-            # Make HTTP DELETE request
-            url = f"{api_base}/v1/files/{file_id}"
-
-            if _is_async:
-                async def _delete():
-                    if client is None or not isinstance(client, AsyncHTTPHandler):
-                        async_client = AsyncHTTPHandler(timeout=timeout)
-                    else:
-                        async_client = client
-
-                    await async_client.delete(url=url, headers=headers)
-                    return FileDeleted(id=file_id, deleted=True, object="file")
-
-                response = _delete()
-            else:
-                if client is None or not isinstance(client, HTTPHandler):
-                    sync_client = HTTPHandler(timeout=timeout)
-                else:
-                    sync_client = client
-
-                sync_client.delete(url=url, headers=headers)
-                # Anthropic returns empty response on successful delete
-                response = FileDeleted(id=file_id, deleted=True, object="file")
+            response = anthropic_files_instance.delete_file(
+                _is_async=_is_async,
+                file_id=file_id,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                client=client,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'file_delete'. Only 'openai', 'azure', and 'anthropic' are supported.".format(
@@ -773,6 +707,7 @@ def file_list(
             timeout = 600.0
 
         _is_async = kwargs.pop("is_async", False) is True
+        client = kwargs.get("client")
         if custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
@@ -837,7 +772,6 @@ def file_list(
                 purpose=purpose,
             )
         elif custom_llm_provider == "anthropic":
-            # Direct HTTP implementation for Anthropic Files API
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
@@ -853,87 +787,13 @@ def file_list(
             if api_key is None:
                 raise ValueError("ANTHROPIC_API_KEY is required")
 
-            # Prepare headers
-            headers = {
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "anthropic-beta": "files-api-2025-04-14",
-            }
-
-            # Make HTTP GET request
-            url = f"{api_base}/v1/files"
-
-            if _is_async:
-                async def _list():
-                    if client is None or not isinstance(client, AsyncHTTPHandler):
-                        async_client = AsyncHTTPHandler(timeout=timeout)
-                    else:
-                        async_client = client
-
-                    http_response = await async_client.get(url=url, headers=headers)
-
-                    # Transform Anthropic response to OpenAI format
-                    response_json = http_response.json()
-                    files = []
-
-                    for file_data in response_json.get("data", []):
-                        # Parse created_at
-                        import time
-                        try:
-                            from dateutil import parser  # type: ignore[import-untyped]
-                            created_at = int(parser.parse(file_data.get("created_at", "")).timestamp())
-                        except Exception:
-                            created_at = int(time.time())
-
-                        files.append(
-                            FileObject(
-                                id=file_data.get("id", ""),
-                                object="file",
-                                bytes=file_data.get("size_bytes", 0),
-                                created_at=created_at,
-                                filename=file_data.get("filename", ""),
-                                purpose="assistants",
-                                status="processed",
-                            )
-                        )
-
-                    return files
-
-                response = _list()
-            else:
-                if client is None or not isinstance(client, HTTPHandler):
-                    sync_client = HTTPHandler(timeout=timeout)
-                else:
-                    sync_client = client
-
-                http_response = sync_client.get(url=url, headers=headers)
-
-                # Transform Anthropic response to OpenAI format
-                response_json = http_response.json()
-                files = []
-
-                for file_data in response_json.get("data", []):
-                    # Parse created_at
-                    import time
-                    try:
-                        from dateutil import parser  # type: ignore[import-untyped]
-                        created_at = int(parser.parse(file_data.get("created_at", "")).timestamp())
-                    except Exception:
-                        created_at = int(time.time())
-
-                    files.append(
-                        FileObject(
-                            id=file_data.get("id", ""),
-                            object="file",
-                            bytes=file_data.get("size_bytes", 0),
-                            created_at=created_at,
-                            filename=file_data.get("filename", ""),
-                            purpose="assistants",
-                            status="processed",
-                        )
-                    )
-
-                response = files
+            response = anthropic_files_instance.list_files(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                client=client,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'file_list'. Only 'openai', 'azure', and 'anthropic' are supported.".format(
@@ -1139,7 +999,6 @@ def file_content(
                 max_retries=optional_params.max_retries,
             )
         elif custom_llm_provider == "anthropic":
-            # Direct HTTP implementation for Anthropic Files API
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
@@ -1155,35 +1014,14 @@ def file_content(
             if api_key is None:
                 raise ValueError("ANTHROPIC_API_KEY is required")
 
-            # Prepare headers
-            headers = {
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "anthropic-beta": "files-api-2025-04-14",
-            }
-
-            # Make HTTP GET request to download file content
-            url = f"{api_base}/v1/files/{_file_content_request['file_id']}/content"
-
-            if _is_async:
-                async def _content():
-                    if client is None or not isinstance(client, AsyncHTTPHandler):
-                        async_client = AsyncHTTPHandler(timeout=timeout)
-                    else:
-                        async_client = client
-
-                    http_response = await async_client.get(url=url, headers=headers)
-                    return HttpxBinaryResponseContent(response=http_response)
-
-                response = _content()
-            else:
-                if client is None or not isinstance(client, HTTPHandler):
-                    sync_client = HTTPHandler(timeout=timeout)
-                else:
-                    sync_client = client
-
-                http_response = sync_client.get(url=url, headers=headers)
-                response = HttpxBinaryResponseContent(response=http_response)
+            response = anthropic_files_instance.file_content(
+                _is_async=_is_async,
+                file_content_request=_file_content_request,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                client=client,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'file_content'. Supported providers are 'openai', 'azure', 'vertex_ai', 'anthropic'.".format(
