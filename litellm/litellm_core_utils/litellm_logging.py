@@ -3600,11 +3600,11 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                     and callback.callback_name == "arize_phoenix"
                 ):
                     return callback  # type: ignore
-            _arize_phoenix_otel_logger = ArizePhoenixLogger(
+            _otel_logger = ArizePhoenixLogger(
                 config=otel_config, callback_name="arize_phoenix"
             )
-            _in_memory_loggers.append(_arize_phoenix_otel_logger)
-            return _arize_phoenix_otel_logger  # type: ignore
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
         elif logging_integration == "otel":
             from litellm.integrations.opentelemetry import OpenTelemetry
 
@@ -3660,9 +3660,9 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenTelemetry):
                     return callback  # type: ignore
-            _arize_phoenix_otel_logger = OpenTelemetry(config=otel_config)
-            _in_memory_loggers.append(_arize_phoenix_otel_logger)
-            return _arize_phoenix_otel_logger  # type: ignore
+            _otel_logger = OpenTelemetry(config=otel_config)
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
         elif logging_integration == "dynamic_rate_limiter":
             from litellm.proxy.hooks.dynamic_rate_limiter import (
                 _PROXY_DynamicRateLimitHandler,
@@ -3733,9 +3733,9 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                     and callback.callback_name == "langtrace"
                 ):
                     return callback  # type: ignore
-            _arize_phoenix_otel_logger = OpenTelemetry(config=otel_config, callback_name="langtrace")
-            _in_memory_loggers.append(_arize_phoenix_otel_logger)
-            return _arize_phoenix_otel_logger  # type: ignore
+            _otel_logger = OpenTelemetry(config=otel_config, callback_name="langtrace")
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
 
         elif logging_integration == "mlflow":
             for callback in _in_memory_loggers:
@@ -3774,11 +3774,11 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                     and callback.callback_name == "langfuse_otel"
                 ):
                     return callback  # type: ignore
-            _arize_phoenix_otel_logger = LangfuseOtelLogger(
+            _otel_logger = LangfuseOtelLogger(
                 config=otel_config, callback_name="langfuse_otel"
             )
-            _in_memory_loggers.append(_arize_phoenix_otel_logger)
-            return _arize_phoenix_otel_logger  # type: ignore
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
