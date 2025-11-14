@@ -1073,6 +1073,10 @@ class Router:
             if not self.has_model_id(model):
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
+            # Preserve allowed_openai_params from deployment config if not explicitly set in kwargs
+            if "allowed_openai_params" in data and kwargs.get("allowed_openai_params") is None:
+                kwargs["allowed_openai_params"] = data["allowed_openai_params"]
+
             response = litellm.completion(
                 **{
                     **data,
@@ -1369,6 +1373,10 @@ class Router:
                 kwargs=kwargs,
             )
             self.total_calls[model_name] += 1
+
+            # Preserve allowed_openai_params from deployment config if not explicitly set in kwargs
+            if "allowed_openai_params" in data and kwargs.get("allowed_openai_params") is None:
+                kwargs["allowed_openai_params"] = data["allowed_openai_params"]
 
             input_kwargs = {
                 **data,
