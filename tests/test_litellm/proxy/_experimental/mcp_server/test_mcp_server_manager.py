@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -700,6 +701,64 @@ class TestMCPServerManager:
         )
         assert len(tools_unprefixed) == 1
         assert tools_unprefixed[0].name == "send_email"
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_propagates_cancelled_error(self):
+        manager = MCPServerManager()
+
+        client = AsyncMock()
+        client.connect.side_effect = asyncio.CancelledError(
+            "connect cancelled"
+        )
+        client.disconnect = AsyncMock()
+
+        with pytest.raises(Exception) as exc_info:
+            await manager._fetch_tools_with_timeout(client, "test-server")
+
+        assert (
+            str(exc_info.value)
+            == "Connection error while listing tools from test-server"
+        )
+        assert client.disconnect.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_propagates_list_tools_error(self):
+        manager = MCPServerManager()
+
+        client = AsyncMock()
+        client.connect = AsyncMock(return_value=None)
+        client.list_tools = AsyncMock(side_effect=Exception("list failure"))
+        client.disconnect = AsyncMock()
+
+        with pytest.raises(Exception) as exc_info:
+            await manager._fetch_tools_with_timeout(client, "test-server")
+
+        assert str(exc_info.value) == "list_tools error: {asyncio.CancelledError}"
+        assert client.disconnect.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_propagates_fetch_failure(self):
+        manager = MCPServerManager()
+
+        server = MagicMock()
+        server.name = "failing-server"
+
+        client = AsyncMock()
+        client.disconnect = AsyncMock()
+
+        manager._create_mcp_client = MagicMock(return_value=client)
+        manager._create_prefixed_tools = MagicMock()
+
+        manager._fetch_tools_with_timeout = AsyncMock(
+            side_effect=Exception("fetch failure")
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            await manager._get_tools_from_server(server)
+
+        assert str(exc_info.value) == "fetch failure"
+        assert client.disconnect.await_count == 1
+        manager._create_prefixed_tools.assert_not_called()
 
     def test_create_prefixed_tools_updates_mapping_for_both_forms(self):
         """_create_prefixed_tools should populate mapping for prefixed and original names even when not adding prefix in output."""

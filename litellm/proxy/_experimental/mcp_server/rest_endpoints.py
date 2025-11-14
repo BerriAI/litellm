@@ -1,7 +1,7 @@
 import importlib
 from typing import Dict, List, Optional, Union
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -152,11 +152,14 @@ if MCP_AVAILABLE:
                     verbose_logger.exception(
                         f"Error getting tools from {server.name}: {e}"
                     )
-                    return {
-                        "tools": [],
-                        "error": "server_error",
-                        "message": f"Failed to get tools from server {server.name}: {str(e)}",
-                    }
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "tools": [],
+                            "error": "server_error",
+                            "message": f"An unexpected error occurred: {str(e)}",
+                        },
+                    )
             else:
                 # Query all servers
                 errors = []
@@ -190,15 +193,20 @@ if MCP_AVAILABLE:
                 ),
             }
 
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_logger.exception(
                 "Unexpected error in list_tool_rest_api: %s", str(e)
             )
-            return {
-                "tools": [],
-                "error": "unexpected_error",
-                "message": f"An unexpected error occurred: {str(e)}",
-            }
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "tools": [],
+                    "error": "unexpected_error",
+                    "message": f"An unexpected error occurred: {str(e)}",
+                },
+            )
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
     async def call_tool_rest_api(
