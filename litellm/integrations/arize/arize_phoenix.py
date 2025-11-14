@@ -136,16 +136,6 @@ class ArizePhoenixLogger(OpenTelemetry):
         """Arize is used mainly for LLM I/O tracing, sending Proxy Server Request adds bloat to arize logs"""
         pass
 
-    # def log_success_event(self, kwargs, response_obj, start_time, end_time):
-    #     _, parent_span = self._get_span_context(kwargs)
-    #     if parent_span is not None:
-    #         parent_span.end(end_time=self._to_ns(datetime.now()))
-
-    # async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-    #     _, parent_span = self._get_span_context(kwargs)
-    #     if parent_span is not None:
-    #         parent_span.end(end_time=self._to_ns(datetime.now()))
-
     async def async_health_check(self):
         """
         Performs a health check for Arize integration.
