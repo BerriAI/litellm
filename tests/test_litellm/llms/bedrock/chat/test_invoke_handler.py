@@ -167,32 +167,36 @@ def test_transform_tool_calls_index_with_optional_arg_func():
 
 def test_bedrock_converse_streaming_consistent_id():
     """
-    Tests that all chunks in a Bedrock Converse stream response share the same ID.
-    This verifies compliance with the OpenAI streaming specification.
+    Tests that all chunks in a Bedrock Converse stream response share the same ID,
+    capturing the ID from the initial 'messageStart' event.
     """
-    # Simulate a series of chunks from a Bedrock Converse stream
+    # Simulate a realistic Bedrock Converse stream
+    native_conversation_id = "a1b2c3d4-e5f6-7890-1234-56789abcdef0"
     mock_stream_chunks = [
+        {
+            "messageStart": {
+                "conversationId": native_conversation_id,
+                "role": "assistant",
+            }
+        },
         {"delta": {"text": "Hello"}, "contentBlockIndex": 0},
-        {"delta": {"text": " world"}, "contentBlockIndex": 0},
-        {"delta": {"text": "!"}, "contentBlockIndex": 0},
+        {"delta": {"text": " world!"}, "contentBlockIndex": 0},
         {"stopReason": "stop"},
     ]
 
     decoder = AWSEventStreamDecoder(model="bedrock/anthropic.claude-3-sonnet-v1:0")
 
-    #  Process each chunk and collect the parsed responses
+    # Process each chunk and collect the parsed responses
     parsed_responses = []
     for chunk in mock_stream_chunks:
-        if "delta" in chunk or "stopReason" in chunk:
-            parsed_responses.append(decoder.converse_chunk_parser(chunk))
+        parsed_responses.append(decoder.converse_chunk_parser(chunk))
 
-    # Verify that all parsed responses have the same, non-null ID
+    # Verify that all parsed responses have the same, non-null ID derived from the native ID
     assert len(parsed_responses) > 1, "Should have processed multiple chunks"
 
-    first_chunk_id = parsed_responses[0].id
-    assert first_chunk_id is not None, "The first chunk's ID should not be null"
+    expected_id = f"chatcmpl-{native_conversation_id}"
 
-    for response in parsed_responses[1:]:
+    for response in parsed_responses:
         assert (
-            response.id == first_chunk_id
-        ), "All subsequent chunk IDs must match the first one"
+            response.id == expected_id
+        ), "All chunk IDs must match the one captured from the messageStart event"

@@ -1184,7 +1184,7 @@ class AWSEventStreamDecoder:
         self.parser = EventStreamJSONParser()
         self.content_blocks: List[ContentBlockDeltaEvent] = []
         self.tool_calls_index: Optional[int] = None
-        self.response_id = f"chatcmpl-{uuid.uuid4()}"  # Create a single response ID for the entire stream session.
+        self.response_id: Optional[str] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1248,6 +1248,17 @@ class AWSEventStreamDecoder:
 
     def converse_chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         try:
+            # Capture the conversationId from the first messageStart event
+            # and use it as the consistent ID for all subsequent chunks.
+            if self.response_id is None:
+                if "messageStart" in chunk_data:
+                    conversation_id = chunk_data["messageStart"].get("conversationId")
+                    if conversation_id:
+                        self.response_id = f"chatcmpl-{conversation_id}"
+                else:
+                    # Fallback to generating a UUID if the first chunk is not messageStart
+                    self.response_id = f"chatcmpl-{uuid.uuid4()}"
+
             verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
