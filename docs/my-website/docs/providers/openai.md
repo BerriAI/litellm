@@ -412,7 +412,7 @@ Expected Response:
 
 ### Advanced: Using `reasoning_effort` with `summary` field
 
-By default, `reasoning_effort` accepts a string value (`"low"`, `"medium"`, `"high"`, `"minimal"`) and only sets the effort level without including a reasoning summary.
+By default, `reasoning_effort` accepts a string value (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`) and only sets the effort level without including a reasoning summary.
 
 To opt-in to the `summary` feature, you can pass `reasoning_effort` as a dictionary. **Note:** The `summary` field requires your OpenAI organization to have verification status. Using `summary` without verification will result in a 400 error from OpenAI.
 
@@ -472,12 +472,17 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 | Model | Default (when not set) | Supported Values |
 |-------|----------------------|------------------|
+| `gpt-5.1` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5` | `medium` | `minimal`, `low`, `medium`, `high` |
-| `gpt-5-mini` | `medium` | `minimal`, `low`, `medium`, `high` |
+| `gpt-5-mini` | `medium` | `none`, `minimal`, `low`, `medium`, `high` |
+| `gpt-5-nano` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5-pro` | `high` | `high` only |
 
-**Note:** `gpt-5-pro` only accepts `reasoning_effort="high"`. Other values will return an error. When `reasoning_effort` is not set (None), OpenAI defaults to the value shown in the "Default" column.
+**Note:**
+- GPT-5.1 introduced a new `reasoning_effort="none"` setting for faster, lower-latency responses. This replaces the `"minimal"` setting from GPT-5.
+- `gpt-5-pro` only accepts `reasoning_effort="high"`. Other values will return an error.
+- When `reasoning_effort` is not set (None), OpenAI defaults to the value shown in the "Default" column.
 
 See [OpenAI Reasoning documentation](https://platform.openai.com/docs/guides/reasoning) for more details on organization verification requirements.
 
