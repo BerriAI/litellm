@@ -9,8 +9,10 @@ sys.path.insert(
 
 from litellm_proxy_extras.utils import ProxyExtrasDBManager, MigrationLockManager
 
+
 def test_custom_prisma_dir(monkeypatch):
     import tempfile
+
     # create a temp directory
     temp_dir = tempfile.mkdtemp()
     monkeypatch.setenv("LITELLM_MIGRATION_DIR", temp_dir)
@@ -25,6 +27,7 @@ def test_custom_prisma_dir(monkeypatch):
     ## Check if the migrations dir is in the temp directory
     migrations_dir = os.path.join(temp_dir, "migrations")
     assert os.path.exists(migrations_dir)
+
 
 class TestMigrationLockManager:
     """Test cases for MigrationLockManager"""
@@ -133,7 +136,6 @@ class TestMigrationLockManager:
         mock_redis.delete_cache.assert_not_called()
         assert lock_manager.lock_acquired is False
 
-
     def test_context_manager(self):
         """Test MigrationLockManager as context manager"""
         mock_redis = Mock()
@@ -155,14 +157,18 @@ class TestMigrationLockManager:
 class TestProxyExtrasDBManagerMigrationLock:
     """Test cases for ProxyExtrasDBManager with migration locking"""
 
-    @patch('litellm_proxy_extras.utils.subprocess.run')
-    @patch('litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir')
-    @patch('os.chdir')
-    def test_setup_database_with_redis_lock_success(self, mock_chdir, mock_get_prisma_dir, mock_subprocess):
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._resolve_all_migrations")
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir")
+    @patch("os.chdir")
+    def test_setup_database_with_redis_lock_success(
+        self, mock_chdir, mock_get_prisma_dir, mock_subprocess, mock_resolve_migrations
+    ):
         """Test successful database setup with Redis lock"""
         # Setup mocks
         mock_get_prisma_dir.return_value = "/test/prisma"
         mock_subprocess.return_value = Mock(stdout="Migration completed", stderr="")
+        mock_resolve_migrations.return_value = None
 
         # Mock Redis cache
         mock_redis = Mock()
@@ -170,21 +176,29 @@ class TestProxyExtrasDBManagerMigrationLock:
         mock_redis.get_cache.return_value = "pod_123_456"
 
         # Set DATABASE_URL
-        with patch.dict(os.environ, {'DATABASE_URL': 'postgresql://test:test@localhost/test'}):
-            result = ProxyExtrasDBManager.setup_database(use_migrate=True, redis_cache=mock_redis)
+        with patch.dict(
+            os.environ, {"DATABASE_URL": "postgresql://test:test@localhost/test"}
+        ):
+            result = ProxyExtrasDBManager.setup_database(
+                use_migrate=True, redis_cache=mock_redis
+            )
 
         assert result is True
         # set_cache is called once in acquire_lock (__enter__ calls acquire_lock)
         assert mock_redis.set_cache.call_count == 1
         mock_subprocess.assert_called_once()
 
-    @patch('litellm_proxy_extras.utils.subprocess.run')
-    @patch('litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir')
-    @patch('os.chdir')
-    def test_setup_database_with_redis_lock_wait_and_skip(self, mock_chdir, mock_get_prisma_dir, mock_subprocess):
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._resolve_all_migrations")
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir")
+    @patch("os.chdir")
+    def test_setup_database_with_redis_lock_wait_and_skip(
+        self, mock_chdir, mock_get_prisma_dir, mock_subprocess, mock_resolve_migrations
+    ):
         """Test database setup when lock is held by another pod, then acquired after waiting"""
         # Setup mocks
         mock_get_prisma_dir.return_value = "/test/prisma"
+        mock_resolve_migrations.return_value = None
 
         # Mock Redis cache - first call fails, second call succeeds
         mock_redis = Mock()
@@ -192,8 +206,12 @@ class TestProxyExtrasDBManagerMigrationLock:
         mock_redis.get_cache.return_value = "pod_123_456"
 
         # Set DATABASE_URL
-        with patch.dict(os.environ, {'DATABASE_URL': 'postgresql://test:test@localhost/test'}):
-            result = ProxyExtrasDBManager.setup_database(use_migrate=True, redis_cache=mock_redis)
+        with patch.dict(
+            os.environ, {"DATABASE_URL": "postgresql://test:test@localhost/test"}
+        ):
+            result = ProxyExtrasDBManager.setup_database(
+                use_migrate=True, redis_cache=mock_redis
+            )
 
         assert result is True  # Should return True after waiting and acquiring lock
         # set_cache is called 2 times: once in __enter__, once in wait_for_lock_release
@@ -201,18 +219,26 @@ class TestProxyExtrasDBManagerMigrationLock:
         # Proceed for case handling in case of migration failure
         mock_subprocess.assert_called_once()
 
-    @patch('litellm_proxy_extras.utils.subprocess.run')
-    @patch('litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir')
-    @patch('os.chdir')
-    def test_setup_database_without_redis(self, mock_chdir, mock_get_prisma_dir, mock_subprocess):
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._resolve_all_migrations")
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir")
+    @patch("os.chdir")
+    def test_setup_database_without_redis(
+        self, mock_chdir, mock_get_prisma_dir, mock_subprocess, mock_resolve_migrations
+    ):
         """Test database setup without Redis cache"""
         # Setup mocks
         mock_get_prisma_dir.return_value = "/test/prisma"
         mock_subprocess.return_value = Mock(stdout="Migration completed", stderr="")
+        mock_resolve_migrations.return_value = None
 
         # Set DATABASE_URL
-        with patch.dict(os.environ, {'DATABASE_URL': 'postgresql://test:test@localhost/test'}):
-            result = ProxyExtrasDBManager.setup_database(use_migrate=True, redis_cache=None)
+        with patch.dict(
+            os.environ, {"DATABASE_URL": "postgresql://test:test@localhost/test"}
+        ):
+            result = ProxyExtrasDBManager.setup_database(
+                use_migrate=True, redis_cache=None
+            )
 
         assert result is True
         # Redis가 없을 때는 락 보호 없이 마이그레이션을 실행해야 함
@@ -221,15 +247,21 @@ class TestProxyExtrasDBManagerMigrationLock:
     def test_setup_database_no_database_url(self):
         """Test database setup without DATABASE_URL"""
         with patch.dict(os.environ, {}, clear=True):
-            result = ProxyExtrasDBManager.setup_database(use_migrate=True, redis_cache=None)
+            result = ProxyExtrasDBManager.setup_database(
+                use_migrate=True, redis_cache=None
+            )
 
         assert result is False
 
-    @patch('litellm_proxy_extras.utils.subprocess.run')
-    @patch('litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir')
-    @patch('os.chdir')
-    @patch.object(MigrationLockManager, 'LOCK_TTL_SECONDS', 1)  # Set short TTL for testing
-    def test_setup_database_lock_timeout(self, mock_chdir, mock_get_prisma_dir, mock_subprocess):
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir")
+    @patch("os.chdir")
+    @patch.object(
+        MigrationLockManager, "LOCK_TTL_SECONDS", 1
+    )  # Set short TTL for testing
+    def test_setup_database_lock_timeout(
+        self, mock_chdir, mock_get_prisma_dir, mock_subprocess
+    ):
         """Test database setup when lock acquisition times out"""
         # Setup mocks
         mock_get_prisma_dir.return_value = "/test/prisma"
@@ -239,12 +271,18 @@ class TestProxyExtrasDBManagerMigrationLock:
         mock_redis.set_cache.return_value = False  # Always fails
 
         # Set DATABASE_URL
-        with patch.dict(os.environ, {'DATABASE_URL': 'postgresql://test:test@localhost/test'}):
+        with patch.dict(
+            os.environ, {"DATABASE_URL": "postgresql://test:test@localhost/test"}
+        ):
             # Patch the wait_for_lock_release method to use shorter timeout
-            with patch.object(MigrationLockManager, 'wait_for_lock_release') as mock_wait:
+            with patch.object(
+                MigrationLockManager, "wait_for_lock_release"
+            ) as mock_wait:
                 mock_wait.return_value = False  # Simulate timeout
 
-                result = ProxyExtrasDBManager.setup_database(use_migrate=True, redis_cache=mock_redis)
+                result = ProxyExtrasDBManager.setup_database(
+                    use_migrate=True, redis_cache=mock_redis
+                )
 
         assert result is False  # Should return False after timeout
         mock_subprocess.assert_not_called()  # Should not run migration
@@ -264,7 +302,6 @@ class TestProxyExtrasDBManagerMigrationLock:
 
         assert result is False  # Should timeout
         assert end_time - start_time >= 0.5  # Should wait at least the max_wait time
-        assert end_time - start_time < 1.0   # But not too much longer
+        assert end_time - start_time < 1.0  # But not too much longer
         # Should have called set_cache multiple times during the wait
         assert mock_redis.set_cache.call_count > 1
-

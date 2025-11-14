@@ -18,6 +18,7 @@ def str_to_bool(value: Optional[str]) -> bool:
         return False
     return value.lower() in ("true", "1", "t", "y", "yes")
 
+
 class MigrationLockManager:
     """Redis-based lock manager for database migrations"""
 
@@ -36,7 +37,9 @@ class MigrationLockManager:
     def acquire_lock(self) -> bool:
         """Acquire migration lock"""
         if self.redis_cache is None:
-            logger.warning("Redis cache is not available, running migration without lock protection")
+            logger.warning(
+                "Redis cache is not available, running migration without lock protection"
+            )
             self.lock_acquired = True
             return True
 
@@ -45,10 +48,7 @@ class MigrationLockManager:
 
             # Redis SET with NX (only if not exists) and EX (expiration)
             acquired = self.redis_cache.set_cache(
-                key=lock_key,
-                value=self.pod_id,
-                nx=True,
-                ttl=self.LOCK_TTL_SECONDS
+                key=lock_key, value=self.pod_id, nx=True, ttl=self.LOCK_TTL_SECONDS
             )
 
             if acquired:
@@ -63,7 +63,9 @@ class MigrationLockManager:
             logger.warning(f"Failed to acquire migration lock: {e}")
             return False
 
-    def wait_for_lock_release(self, check_interval: int = 5, max_wait: int = 300) -> bool:
+    def wait_for_lock_release(
+        self, check_interval: int = 5, max_wait: int = 300
+    ) -> bool:
         """Wait for another process to release the lock"""
         if self.redis_cache is None:
             logger.warning("Redis cache is not available, cannot wait for lock")
@@ -75,7 +77,9 @@ class MigrationLockManager:
         while time.time() - start_time < max_wait:
             # Try to acquire lock using the public acquire_lock method
             if self.acquire_lock():
-                logger.info(f"Migration lock acquired after waiting by pod {self.pod_id}")
+                logger.info(
+                    f"Migration lock acquired after waiting by pod {self.pod_id}"
+                )
                 return True
 
             time.sleep(check_interval)
@@ -112,7 +116,6 @@ class MigrationLockManager:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit - release lock when exiting with statement"""
         self.release_lock()
-
 
 
 class ProxyExtrasDBManager:
@@ -154,6 +157,8 @@ class ProxyExtrasDBManager:
         init_dir.mkdir(parents=True, exist_ok=True)
 
         database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            raise ValueError("DATABASE_URL environment variable is not set")
 
         try:
             # 1. Generate migration SQL file by comparing empty state to current db state
@@ -237,6 +242,8 @@ class ProxyExtrasDBManager:
         3. Mark all existing migrations as applied.
         """
         database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            raise ValueError("DATABASE_URL environment variable is not set")
         diff_dir = (
             Path(migrations_dir)
             / "migrations"
@@ -331,7 +338,9 @@ class ProxyExtrasDBManager:
                     )
 
     @staticmethod
-    def setup_database(use_migrate: bool = False, redis_cache: Optional[RedisCache] = None) -> bool:
+    def setup_database(
+        use_migrate: bool = False, redis_cache: Optional[RedisCache] = None
+    ) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
         Uses migrations from litellm-proxy-extras package.
@@ -357,7 +366,9 @@ class ProxyExtrasDBManager:
             # Lock is already acquired in __enter__, check if it was successful
             if not lock_manager.lock_acquired:
                 # Cannot acquire lock, another process is running migration
-                logger.info("Another pod is running migration, waiting for completion...")
+                logger.info(
+                    "Another pod is running migration, waiting for completion..."
+                )
 
                 # Wait for other process to complete migration
                 if not lock_manager.wait_for_lock_release():
