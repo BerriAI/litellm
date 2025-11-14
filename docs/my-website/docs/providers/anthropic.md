@@ -2024,30 +2024,6 @@ response = await litellm.acompletion(
 )
 ```
 
-### Error Handling
-
-Common errors when using the Files API:
-
-- **File not found (404):** The specified `file_id` doesn't exist or you don't have access to it
-- **Invalid file type (400):** The file type doesn't match the content block type
-- **File too large (413):** File exceeds the 500 MB limit
-- **Storage limit exceeded (403):** Your organization has reached the 100 GB storage limit
-
-```python
-import litellm
-from litellm.exceptions import BadRequestError, NotFoundError
-
-try:
-    file_object = await litellm.afile_retrieve(
-        file_id="invalid_file_id",
-        custom_llm_provider="anthropic",
-    )
-except NotFoundError as e:
-    print(f"File not found: {e}")
-except BadRequestError as e:
-    print(f"Bad request: {e}")
-```
-
 ## Usage - passing 'user_id' to Anthropic
 
 LiteLLM translates the OpenAI `user` param to Anthropic's `metadata[user_id]` param.
