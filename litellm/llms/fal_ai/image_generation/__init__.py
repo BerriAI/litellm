@@ -5,6 +5,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from .bria_transformation import FalAIBriaConfig
 from .flux_pro_v11_transformation import FalAIFluxProV11Config
 from .flux_pro_v11_ultra_transformation import FalAIFluxProV11UltraConfig
+from .flux_schnell_transformation import FalAIFluxSchnellConfig
 from .imagen4_transformation import FalAIImagen4Config
 from .recraft_v3_transformation import FalAIRecraftV3Config
 from .stable_diffusion_transformation import FalAIStableDiffusionConfig
@@ -18,6 +19,7 @@ __all__ = [
     "FalAIBriaConfig",
     "FalAIFluxProV11Config",
     "FalAIFluxProV11UltraConfig",
+    "FalAIFluxSchnellConfig",
     "FalAIStableDiffusionConfig",
 ]
 
@@ -45,6 +47,8 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
         if "ultra" in model_lower:
             return FalAIFluxProV11UltraConfig()
         return FalAIFluxProV11Config()
+    elif "flux/schnell" in model_lower or "flux-schnell" in model_lower or "schnell" in model_lower:
+        return FalAIFluxSchnellConfig()
     elif "stable-diffusion" in model_lower:
         return FalAIStableDiffusionConfig()
     

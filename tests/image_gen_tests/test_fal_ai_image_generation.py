@@ -15,6 +15,7 @@ from litellm import aimage_generation
     [
         "fal_ai/fal-ai/flux-pro/v1.1-ultra",
         "fal_ai/fal-ai/flux-pro/v1.1",
+        "fal_ai/fal-ai/flux/schnell",
         "fal_ai/fal-ai/recraft/v3/text-to-image",
         "fal_ai/bria/text-to-image/3.2",
         "fal_ai/fal-ai/stable-diffusion-v35-medium"
