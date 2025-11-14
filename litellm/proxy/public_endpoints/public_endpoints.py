@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.agents import AgentCard
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -37,6 +38,19 @@ async def public_model_hub():
         )
 
     return model_groups
+
+
+@router.get(
+    "/public/agent_hub",
+    tags=["[beta] Agents", "public"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=List[AgentCard],
+)
+async def get_agents():
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+    agents = global_agent_registry.get_public_agent_list()
+    return [agent.get("agent_card_params") for agent in agents]
 
 
 @router.get(

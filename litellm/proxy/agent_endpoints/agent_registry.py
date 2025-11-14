@@ -19,6 +19,13 @@ class AgentRegistry:
             ]
         return self.agent_list
 
+    def get_public_agent_list(self):
+        public_agent_list = []
+        for agent in self.agent_list:
+            if agent.get("litellm_params", {}).get("make_public", False) is True:
+                public_agent_list.append(agent)
+        return public_agent_list
+
     def load_agents_from_config(self, agent_config: Optional[List[AgentConfig]] = None):
         if agent_config is None:
             return None

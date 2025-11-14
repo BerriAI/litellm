@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 
 # AgentProvider
@@ -157,6 +157,11 @@ class AgentCard(TypedDict, total=False):
     signatures: Optional[List[AgentCardSignature]]
 
 
-class AgentConfig(TypedDict):
-    agent_name: str
-    agent_card_params: AgentCard
+class AgentLitellmParams(TypedDict):
+    make_public: bool
+
+
+class AgentConfig(TypedDict, total=False):
+    agent_name: Required[str]
+    agent_card_params: Required[AgentCard]
+    litellm_params: AgentLitellmParams
