@@ -102,7 +102,7 @@ async def test_arouter_with_tags_and_fallbacks():
             {
                 "model_name": "anthropic-claude-3-5-sonnet",
                 "litellm_params": {
-                    "model": "claude-3-5-sonnet-latest",
+                    "model": "claude-sonnet-4-5-20250929",
                     "mock_response": "Hello, world 2!",
                 },
             },
@@ -670,9 +670,9 @@ async def test_router_v1_messages_fallbacks():
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "claude-3-5-sonnet-latest",
+                "model_name": "claude-sonnet-4-5-20250929",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-latest",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "mock_response": "litellm.InternalServerError",
                 },
             },
@@ -685,12 +685,12 @@ async def test_router_v1_messages_fallbacks():
             },
         ],
         fallbacks=[
-            {"claude-3-5-sonnet-latest": ["bedrock-claude"]},
+            {"claude-sonnet-4-5-20250929": ["bedrock-claude"]},
         ],
     )
 
     result = await router.aanthropic_messages(
-        model="claude-3-5-sonnet-latest",
+        model="claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "Hello, world!"}],
         max_tokens=256,
     )
@@ -1053,7 +1053,6 @@ async def test_acompletion_streaming_iterator():
         "async_function_with_fallbacks_common_utils",
         return_value=mock_fallback_response,
     ) as mock_fallback_utils:
-
         collected_chunks = []
         result = await router._acompletion_streaming_iterator(
             model_response=mock_error_response,
@@ -1150,7 +1149,6 @@ async def test_acompletion_streaming_iterator_edge_cases():
         "async_function_with_fallbacks_common_utils",
         return_value=mock_fallback_response,
     ) as mock_fallback_utils:
-
         collected_chunks = []
         iterator = await router._acompletion_streaming_iterator(
             model_response=mock_response,
@@ -1576,7 +1574,8 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
         model_name="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
     )
     assert (
-        result["endpoint"] == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
+        result["endpoint"]
+        == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
     ), f"Expected '/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke', got '{result['endpoint']}'"
 
     # Test Case 2: Bedrock invoke-with-response-stream endpoint
@@ -1590,7 +1589,8 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
         model_name="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
     )
     assert (
-        result["endpoint"] == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream"
+        result["endpoint"]
+        == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream"
     ), f"Expected streaming endpoint with stripped prefix, got '{result['endpoint']}'"
 
     # Test Case 3: Bedrock converse endpoint
@@ -1619,3 +1619,76 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     assert (
         result["endpoint"] == "/model/us.meta.llama3-8b-instruct-v1:0/invoke"
     ), f"Expected '/model/us.meta.llama3-8b-instruct-v1:0/invoke', got '{result['endpoint']}'"
+
+
+@pytest.mark.asyncio
+async def test_router_acompletion_with_unknown_model_and_default_fallback():
+    """
+    Test that the router successfully uses a default fallback when a completely
+    unknown model is requested. It should not raise a BadRequestError.
+    This test verifies the fix for issue #15114.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-4o",  # This is the fallback model
+            "litellm_params": {
+                "model": "azure/gpt-4o-real",  # The actual underlying model name
+                "api_key": "fake-key",
+                "api_base": "https://fake-endpoint.openai.azure.com/",
+                "mock_response": "this is the fallback response",  # Mocked response to prevent real API calls
+            },
+        }
+    ]
+
+    # Initialize the router with a default fallback
+    router = litellm.Router(model_list=model_list, default_fallbacks=["gpt-4o"])
+
+    messages = [
+        {"role": "user", "content": "This call should succeed by falling back."}
+    ]
+
+    # Call completion with a model name that is NOT in the model_list
+    response = await router.acompletion(
+        model="completely-unknown-model", messages=messages
+    )
+
+    # Check that the call did not fail and we received a valid response object.
+    assert response is not None
+
+    # Check that the content of the response is from the MOCKED fallback model.
+    assert response.choices[0].message.content == "this is the fallback response"
+
+    # Check that the response object reports the model that was *actually* called.
+    assert response.model == "gpt-4o-real"
+
+
+@pytest.mark.asyncio
+async def test_router_acompletion_with_unknown_model_and_no_fallback():
+    """
+    Test that the router still raises a BadRequestError for an unknown model
+    when no default fallbacks are configured. This ensures we don't break
+    the original behavior.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-4o",
+            "litellm_params": {
+                "model": "azure/gpt-4o-real",
+                "api_key": "fake-key",
+                "mock_response": "this should not be called",
+            },
+        }
+    ]
+
+    # Initialize the router WITHOUT any default fallbacks
+    router = litellm.Router(model_list=model_list)
+
+    messages = [{"role": "user", "content": "This call should fail."}]
+
+    # Use pytest.raises to assert that a BadRequestError is thrown.
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await router.acompletion(model="completely-unknown-model", messages=messages)
+
+    # Check that the error message is correct.
+    # The router returns 'no healthy deployments' because get_model_list returns [] not None.
+    assert "no healthy deployments for this model" in str(excinfo.value)

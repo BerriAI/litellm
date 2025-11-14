@@ -65,7 +65,10 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_for_health_check
+from litellm.litellm_core_utils.audio_utils.utils import (
+    calculate_request_duration,
+    get_audio_file_for_health_check,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -5298,11 +5301,15 @@ def moderation(
         or get_secret_str("OPENAI_API_KEY")
     )
 
+    # Extract api_base from kwargs
+    api_base = kwargs.get("api_base", None)
+
     openai_client = kwargs.get("client", None)
     if openai_client is None:
-        openai_client = openai.OpenAI(
-            api_key=api_key,
-        )
+        if api_base is not None:
+            openai_client = openai.OpenAI(api_key=api_key, base_url=api_base)
+        else:
+            openai_client = openai.OpenAI(api_key=api_key)
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)
@@ -5332,21 +5339,11 @@ async def amoderation(
         or litellm.openai_key
         or get_secret_str("OPENAI_API_KEY")
     )
-    openai_client = kwargs.get("client", None)
-    if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
-        # call helper to get OpenAI client
-        # _get_openai_client maintains in-memory caching logic for OpenAI clients
-        _openai_client: AsyncOpenAI = openai_chat_completions._get_openai_client(  # type: ignore
-            is_async=True,
-            api_key=api_key,
-        )
-    else:
-        _openai_client = openai_client
-
     optional_params = GenericLiteLLMParams(**kwargs)
     litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
         "litellm_logging_obj", None
     )
+    _dynamic_api_base = None
     try:
         (
             model,
@@ -5362,6 +5359,18 @@ async def amoderation(
     except litellm.BadRequestError:
         # `model` is optional field for moderation - get_llm_provider will throw BadRequestError if model is not set / not recognized
         pass
+
+    openai_client = kwargs.get("client", None)
+    if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
+        # call helper to get OpenAI client
+        # _get_openai_client maintains in-memory caching logic for OpenAI clients
+        _openai_client: AsyncOpenAI = openai_chat_completions._get_openai_client(  # type: ignore
+            is_async=True,
+            api_key=api_key,
+            api_base=optional_params.api_base or _dynamic_api_base,
+        )
+    else:
+        _openai_client = openai_client
 
     # update litellm_logging_obj with environment variables
     custom_llm_provider = custom_llm_provider or litellm.LlmProviders.OPENAI.value
@@ -5400,6 +5409,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["atranscription"] = True
+    file = kwargs.get("file", None)
     custom_llm_provider = None
     try:
         # Use a partial function to pass your keyword arguments
@@ -5428,6 +5438,20 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
             raise ValueError(
                 f"Invalid response from transcription provider, expected TranscriptionResponse, but got {type(response)}"
             )
+
+        # Calculate and add duration if response is missing it
+        if (
+            response is not None
+            and not isinstance(response, Coroutine)
+            and file is not None
+        ):
+            # Check if response is missing duration
+            existing_duration = getattr(response, "duration", None)
+            if existing_duration is None:
+                calculated_duration = calculate_request_duration(file)
+                if calculated_duration is not None:
+                    setattr(response, "duration", calculated_duration)
+
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -5638,6 +5662,16 @@ def transcription(
             headers={},
             provider_config=provider_config,
         )
+
+    # Calculate and add duration if response is missing it
+    if response is not None and not isinstance(response, Coroutine):
+        # Check if response is missing duration
+        existing_duration = getattr(response, "duration", None)
+        if existing_duration is None:
+            calculated_duration = calculate_request_duration(file)
+            if calculated_duration is not None:
+                setattr(response, "duration", calculated_duration)
+
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
@@ -5972,6 +6006,39 @@ def speech(  # noqa: PLR0915
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
         )
+    elif custom_llm_provider == "runwayml":
+        from litellm.llms.runwayml.text_to_speech.transformation import (
+            RunwayMLTextToSpeechConfig,
+        )
+
+        # RunwayML Text-to-Speech
+        if text_to_speech_provider_config is None:
+            raise litellm.BadRequestError(
+                message="RunwayML Text-to-Speech configuration not found",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+
+        # Cast to specific RunwayML config type to access dispatch method
+        runwayml_config = cast(
+            RunwayMLTextToSpeechConfig, text_to_speech_provider_config
+        )
+
+        response = runwayml_config.dispatch_text_to_speech(  # type: ignore
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            litellm_params_dict=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            base_llm_http_handler=base_llm_http_handler,
+            aspeech=aspeech or False,
+            api_base=api_base,
+            api_key=api_key,
+            **kwargs,
+        )
 
     if response is None:
         raise Exception(
@@ -5995,6 +6062,7 @@ async def ahealth_check(
             "audio_speech",
             "audio_transcription",
             "image_generation",
+            "video_generation",
             "batch",
             "rerank",
             "realtime",

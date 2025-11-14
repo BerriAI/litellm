@@ -220,11 +220,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     
     def _supports_penalty_parameters(self, model: str) -> bool:
         unsupported_models = ["gemini-2.5-pro-preview-06-05"]
-
-        for pattern in unsupported_models:
-            if model in pattern:
-                return False
-
+        if model in unsupported_models:
+            return False
         return True
 
     def get_supported_openai_params(self, model: str) -> List[str]:
@@ -416,7 +413,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
             if "type" in tool:
-                del tool["type"]  # type: ignore
+                tool = {k: tool[k] for k in tool if k != "type"}
 
             tool_name = list(tool.keys())[0] if len(tool.keys()) == 1 else None
             if tool_name and (
@@ -568,6 +565,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "disable":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
+                "includeThoughts": False,
+            }
+        elif reasoning_effort == "none":
+            return {
+                "thinkingBudget": 0,
                 "includeThoughts": False,
             }
         else:
@@ -1025,7 +1027,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=part["functionCall"]["name"],
-                    arguments=json.dumps(part["functionCall"]["args"]),
+                    arguments=json.dumps(part["functionCall"]["args"], ensure_ascii=False),
                 )
                 if is_function_call is True:
                     function = _function_chunk
@@ -1422,7 +1424,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
-    ) -> Tuple[List[dict], List[dict], List, List]:
+        cumulative_tool_call_index: int = 0,
+    ) -> Tuple[List[dict], List[dict], List, List, int]:
         """
         Helper method to process candidates and extract metadata
 
@@ -1431,6 +1434,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata: List[dict]
             safety_ratings: List
             citation_metadata: List
+            cumulative_tool_call_index: int
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             is_function_call,
@@ -1446,7 +1450,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_logprobs: Optional[ChoiceLogprobs] = None
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
-        cumulative_tool_call_index: int = 0
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
 
         for idx, candidate in enumerate(_candidates):
@@ -1566,6 +1569,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata,
             safety_ratings,
             citation_metadata,
+            cumulative_tool_call_index,
         )
 
     def transform_response(
@@ -1666,6 +1670,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    _,  # cumulative_tool_call_index not needed in non-streaming
                 ) = VertexGeminiConfig._process_candidates(
                     _candidates, model_response, logging_obj.optional_params
                 )
@@ -1743,13 +1748,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         messages: List[AllMessageValues],
         optional_params: Dict,
         litellm_params: Dict,
-        api_key: Optional[str] = None,
+        api_key: Optional[Union[str, Dict]] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
         default_headers = {
             "Content-Type": "application/json",
         }
-        if api_key is not None:
+        if isinstance(api_key, dict):
+            default_headers.update(api_key)
+        elif api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
         if headers is not None:
             default_headers.update(headers)
@@ -2280,6 +2287,7 @@ class ModelResponseIterator:
         self.sent_first_chunk = False
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
+        self.cumulative_tool_call_index: int = 0
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -2301,8 +2309,12 @@ class ModelResponseIterator:
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    self.cumulative_tool_call_index,
                 ) = VertexGeminiConfig._process_candidates(
-                    _candidates, model_response, self.logging_obj.optional_params
+                    _candidates,
+                    model_response,
+                    self.logging_obj.optional_params,
+                    cumulative_tool_call_index=self.cumulative_tool_call_index,
                 )
 
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore

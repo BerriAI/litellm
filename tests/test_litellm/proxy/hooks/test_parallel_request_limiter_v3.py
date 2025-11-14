@@ -5,7 +5,8 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 import asyncio
 import os
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -21,10 +22,27 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.utils import ModelResponse, Usage
 
+class TimeController:
+    def __init__(self):
+        self._current = datetime.utcnow()
+
+    def now(self) -> datetime:
+        return self._current
+
+    def advance(self, seconds: float) -> None:
+        self._current += timedelta(seconds=seconds)
+
+
+@pytest.fixture
+def time_controller(monkeypatch):
+    controller = TimeController()
+    monkeypatch.setattr(time, "time", lambda: controller.now().timestamp())
+    return controller
+
 
 @pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
-async def test_sliding_window_rate_limit_v3(monkeypatch):
+async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
     """
     Test the sliding window rate limiting functionality
     """
@@ -34,7 +52,8 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=3)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(local_cache)
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
@@ -103,7 +122,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
     assert "Rate limit exceeded" in str(exc_info.value.detail)
 
     # Wait for window to expire (2 seconds)
-    await asyncio.sleep(3)
+    time_controller.advance(3)
 
     print("WAITED 3 seconds")
 
@@ -116,7 +135,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rate_limiter_script_return_values_v3(monkeypatch):
+async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller):
     """
     Test that the rate limiter script returns both counter and window values correctly
     """
@@ -126,7 +145,8 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=3)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(local_cache)
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
@@ -199,7 +219,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
     assert new_counter_value == 2, "Counter should be 2 after second request"
 
     # Wait for window to expire
-    await asyncio.sleep(3)
+    time_controller.advance(3)
 
     # Make request after window expiry
     await parallel_request_handler.async_pre_call_hook(
@@ -226,7 +246,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
 )
 @pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
-async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
+async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object, time_controller):
     """
     Test normal router call with parallel request limiter v3 for TPM rate limiting
     """
@@ -276,7 +296,8 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         )
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(local_cache)
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
@@ -359,7 +380,8 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         },
         mock_response="hello",
     )
-    await asyncio.sleep(1)  # success is done in a separate thread
+    await asyncio.sleep(0)
+    time_controller.advance(1)
 
     # Verify the token count is tracked
     counter_value = await local_cache.async_get_cache(key=counter_key)
@@ -383,7 +405,7 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         )
 
     # Wait for window to expire
-    await asyncio.sleep(3)
+    time_controller.advance(3)
 
     # Make request after window expiry
     await parallel_request_handler.async_pre_call_hook(
@@ -1416,6 +1438,147 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
         # Should have processed all keys (some might be duplicated due to fallback)
         unique_processed_keys = set(all_processed_keys)
         assert len(unique_processed_keys) >= 2, "Should have processed at least some keys"
+
+
+@pytest.mark.asyncio
+async def test_multiple_rate_limits_per_descriptor():
+    """
+    Test that the IndexError fix works correctly when a descriptor has multiple rate limit types.
+
+    This specifically tests the scenario where:
+    1. A descriptor has multiple rate limit types (requests, tokens, max_parallel_requests)
+    2. Multiple statuses are generated for a single descriptor
+    3. The old floor(i / 2) mapping would fail with IndexError
+    4. The new descriptor_key-based lookup works correctly
+    """
+    _api_key = "sk-12345"
+    _api_key_hash = hash_token(_api_key)
+
+    # Create a user with multiple rate limit types to trigger multiple statuses per descriptor
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key_hash,
+        rpm_limit=2,  # requests limit
+        tpm_limit=10,  # tokens limit
+        max_parallel_requests=1,  # parallel requests limit
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock should_rate_limit to return a response with multiple statuses where one hits the limit
+    # This simulates the case where we have more statuses than descriptors due to multiple rate limit types
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        # Verify we have one descriptor but will generate multiple statuses
+        assert len(descriptors) == 1, "Should have exactly one api_key descriptor"
+        assert descriptors[0]["key"] == "api_key", "Descriptor should be for api_key"
+
+        # Return multiple statuses for the single descriptor (requests OK, tokens OK, parallel OVER_LIMIT)
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [
+                {
+                    "code": "OK",
+                    "current_limit": 2,
+                    "limit_remaining": 1,
+                    "rate_limit_type": "requests",
+                    "descriptor_key": "api_key"
+                },
+                {
+                    "code": "OK",
+                    "current_limit": 10,
+                    "limit_remaining": 8,
+                    "rate_limit_type": "tokens",
+                    "descriptor_key": "api_key"
+                },
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 1,
+                    "limit_remaining": -1,
+                    "rate_limit_type": "max_parallel_requests",
+                    "descriptor_key": "api_key"
+                }
+            ]
+        }
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    # Test the pre-call hook - this should raise HTTPException but NOT IndexError
+    with pytest.raises(HTTPException) as exc_info:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+
+    # Verify the exception details are correct and use the descriptor_key approach
+    assert exc_info.value.status_code == 429
+    assert "Rate limit exceeded for api_key:" in exc_info.value.detail
+    assert "max_parallel_requests" in exc_info.value.detail
+    assert "Current limit: 1" in exc_info.value.detail
+    assert "Remaining: 0" in exc_info.value.detail  # max(0, -1) = 0
+
+    # Verify headers are set correctly
+    assert exc_info.value.headers.get("rate_limit_type") == "max_parallel_requests"
+    assert "retry-after" in exc_info.value.headers
+    assert "reset_at" in exc_info.value.headers
+
+
+@pytest.mark.asyncio
+async def test_missing_descriptor_fallback():
+    """
+    Test that the fallback works when a descriptor_key cannot be found in the descriptors list.
+
+    This tests an edge case where somehow the descriptor_key in status doesn't match
+    any descriptor key (shouldn't happen in normal operation but good for robustness).
+    """
+    _api_key = "sk-12345"
+    _api_key_hash = hash_token(_api_key)
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key_hash,
+        rpm_limit=2,
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock should_rate_limit to return a status with descriptor_key that doesn't match descriptors
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        # Return a status with a mismatched descriptor_key to test fallback
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 2,
+                    "limit_remaining": -1,
+                    "rate_limit_type": "requests",
+                    "descriptor_key": "nonexistent_key"  # This won't match any descriptor
+                }
+            ]
+        }
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    # Test the pre-call hook - should handle missing descriptor gracefully
+    with pytest.raises(HTTPException) as exc_info:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+
+    # Verify the exception uses fallback values
+    assert exc_info.value.status_code == 429
+    assert "Rate limit exceeded for nonexistent_key: unknown" in exc_info.value.detail
+    assert "requests" in exc_info.value.detail
+    assert "Current limit: 2" in exc_info.value.detail
 
 
 @pytest.mark.asyncio

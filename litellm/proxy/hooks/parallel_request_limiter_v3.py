@@ -7,10 +7,10 @@ This is currently in development and not yet ready for production.
 import binascii
 import os
 from datetime import datetime
-from math import floor
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     List,
     Literal,
@@ -137,8 +137,13 @@ class RateLimitResponseWithDescriptors(TypedDict):
 
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
-    def __init__(self, internal_usage_cache: InternalUsageCache):
+    def __init__(
+        self,
+        internal_usage_cache: InternalUsageCache,
+        time_provider: Optional[Callable[[], datetime]] = None,
+    ):
         self.internal_usage_cache = internal_usage_cache
+        self._time_provider = time_provider or datetime.now
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = (
                 self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
@@ -155,6 +160,31 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.token_increment_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
+        
+        # Batch rate limiter (lazy loaded)
+        self._batch_rate_limiter: Optional[Any] = None
+
+    def _get_batch_rate_limiter(self) -> Optional[Any]:
+        """Get or lazy-load the batch rate limiter."""
+        if self._batch_rate_limiter is None:
+            try:
+                from litellm.proxy.hooks.batch_rate_limiter import (
+                    _PROXY_BatchRateLimiter,
+                )
+
+                self._batch_rate_limiter = _PROXY_BatchRateLimiter(
+                    internal_usage_cache=self.internal_usage_cache,
+                    parallel_request_limiter=self,
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Could not load batch rate limiter: {str(e)}"
+                )
+        return self._batch_rate_limiter
+
+    def _get_current_time(self) -> datetime:
+        """Return the current time for rate limiting calculations."""
+        return self._time_provider()
 
     def _is_redis_cluster(self) -> bool:
         """
@@ -425,7 +455,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             read_only: If True, only check limits without incrementing counters
         """
 
-        now = datetime.now().timestamp()
+        current_time = self._get_current_time()
+        now = current_time.timestamp()
         now_int = int(now)  # Convert to integer for Redis Lua script
 
         # Collect all keys and their metadata upfront
@@ -975,6 +1006,112 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             # Fail safe: enforce limits if we can't check
             return True
+    
+    def get_rate_limiter_for_call_type(self, call_type: str) -> Optional[Any]:
+        """Get the rate limiter for the call type."""
+        if call_type == "acreate_batch":
+            batch_limiter = self._get_batch_rate_limiter()
+            return batch_limiter
+        return None
+
+    def _add_team_model_rate_limit_descriptor_from_metadata(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """Add team model rate limit descriptor from team_metadata if applicable."""
+        if (
+            get_model_rate_limit_from_metadata(
+                user_api_key_dict, "team_metadata", "model_rpm_limit"
+            )
+            is not None
+            or get_model_rate_limit_from_metadata(
+                user_api_key_dict, "team_metadata", "model_tpm_limit"
+            )
+            is not None
+        ):
+            _tpm_limit_for_team_model = (
+                get_model_rate_limit_from_metadata(
+                    user_api_key_dict, "team_metadata", "model_tpm_limit"
+                )
+                or {}
+            )
+            _rpm_limit_for_team_model = (
+                get_model_rate_limit_from_metadata(
+                    user_api_key_dict, "team_metadata", "model_rpm_limit"
+                )
+                or {}
+            )
+            should_check_rate_limit = (
+                requested_model in _tpm_limit_for_team_model
+                or requested_model in _rpm_limit_for_team_model
+            )
+
+            if should_check_rate_limit and requested_model is not None:
+                model_specific_tpm_limit = _tpm_limit_for_team_model.get(
+                    requested_model
+                )
+                model_specific_rpm_limit = _rpm_limit_for_team_model.get(
+                    requested_model
+                )
+                descriptors.append(
+                    RateLimitDescriptor(
+                        key="model_per_team",
+                        value=f"{user_api_key_dict.team_id}:{requested_model}",
+                        rate_limit={
+                            "requests_per_unit": model_specific_rpm_limit,
+                            "tokens_per_unit": model_specific_tpm_limit,
+                            "window_size": self.window_size,
+                        },
+                    )
+                )
+
+    def _handle_rate_limit_error(
+        self,
+        response: RateLimitResponse,
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """Handle rate limit exceeded error by raising HTTPException."""
+        for status in response["statuses"]:
+            if status["code"] == "OVER_LIMIT":
+                descriptor_key = status["descriptor_key"]
+                matching_descriptor = next(
+                    (desc for desc in descriptors if desc["key"] == descriptor_key),
+                    None,
+                )
+                descriptor_value = (
+                    matching_descriptor["value"]
+                    if matching_descriptor is not None
+                    else "unknown"
+                )
+
+                now = self._get_current_time().timestamp()
+                reset_time = now + self.window_size
+                reset_time_formatted = datetime.fromtimestamp(
+                    reset_time
+                ).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+                remaining_display = max(0, status["limit_remaining"])
+                rate_limit_type = status["rate_limit_type"]
+                current_limit = status["current_limit"]
+
+                detail = (
+                    f"Rate limit exceeded for {descriptor_key}: {descriptor_value}. "
+                    f"Limit type: {rate_limit_type}. "
+                    f"Current limit: {current_limit}, Remaining: {remaining_display}. "
+                    f"Limit resets at: {reset_time_formatted}"
+                )
+
+                raise HTTPException(
+                    status_code=429,
+                    detail=detail,
+                    headers={
+                        "retry-after": str(self.window_size),
+                        "rate_limit_type": str(status["rate_limit_type"]),
+                        "reset_at": reset_time_formatted,
+                    },
+                )
 
     async def async_pre_call_hook(
         self,
@@ -988,6 +1125,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Supports dynamic rate limiting based on deployment health.
         """
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
+
+        #########################################################
+        # Check if the call type has a specific rate limiter
+        # eg. for Batch APIs we need to use the batch rate limiter to read the input file and count the tokens and requests
+        #########################################################
+        call_type_specific_rate_limiter = self.get_rate_limiter_for_call_type(call_type=call_type)
+        if call_type_specific_rate_limiter:
+            return await call_type_specific_rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type=call_type,
+            )
 
         # Get rate limit types from metadata
         metadata = user_api_key_dict.metadata or {}
@@ -1019,56 +1169,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             model_has_failures=model_has_failures,
         )
 
-        if (
-            get_model_rate_limit_from_metadata(
-                user_api_key_dict, "team_metadata", "model_rpm_limit"
-            )
-            is not None
-            or get_model_rate_limit_from_metadata(
-                user_api_key_dict, "team_metadata", "model_tpm_limit"
-            )
-            is not None
-        ):
-            _tpm_limit_for_team_model = (
-                get_model_rate_limit_from_metadata(
-                    user_api_key_dict, "team_metadata", "model_tpm_limit"
-                )
-                or {}
-            )
-            _rpm_limit_for_team_model = (
-                get_model_rate_limit_from_metadata(
-                    user_api_key_dict, "team_metadata", "model_rpm_limit"
-                )
-                or {}
-            )
-            should_check_rate_limit = False
-            if requested_model in _tpm_limit_for_team_model:
-                should_check_rate_limit = True
-            elif requested_model in _rpm_limit_for_team_model:
-                should_check_rate_limit = True
-
-            if should_check_rate_limit:
-                model_specific_tpm_limit = None
-                model_specific_rpm_limit = None
-                if requested_model in _tpm_limit_for_team_model:
-                    model_specific_tpm_limit = _tpm_limit_for_team_model[
-                        requested_model
-                    ]
-                if requested_model in _rpm_limit_for_team_model:
-                    model_specific_rpm_limit = _rpm_limit_for_team_model[
-                        requested_model
-                    ]
-                descriptors.append(
-                    RateLimitDescriptor(
-                        key="model_per_team",
-                        value=f"{user_api_key_dict.team_id}:{requested_model}",
-                        rate_limit={
-                            "requests_per_unit": model_specific_rpm_limit,
-                            "tokens_per_unit": model_specific_tpm_limit,
-                            "window_size": self.window_size,
-                        },
-                    )
-                )
+        # Add team model rate limits from team_metadata
+        self._add_team_model_rate_limit_descriptor_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
 
         # Org Level Rate Limits
         descriptors.extend(
@@ -1084,42 +1190,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             if response["overall_code"] == "OVER_LIMIT":
-                # Find which descriptor hit the limit
-                for i, status in enumerate(response["statuses"]):
-                    if status["code"] == "OVER_LIMIT":
-                        descriptor = descriptors[floor(i / 2)]
-
-                        # Calculate reset time (window_start + window_size)
-                        now = datetime.now().timestamp()
-                        reset_time = now + self.window_size  # Conservative estimate
-                        reset_time_formatted = datetime.fromtimestamp(
-                            reset_time
-                        ).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-                        # Handle negative remaining values more gracefully
-                        remaining_display = max(0, status["limit_remaining"])
-
-                        # Create detailed error message
-                        rate_limit_type = status["rate_limit_type"]
-                        current_limit = status["current_limit"]
-
-                        detail = (
-                            f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. "
-                            f"Limit type: {rate_limit_type}. "
-                            f"Current limit: {current_limit}, Remaining: {remaining_display}. "
-                            f"Limit resets at: {reset_time_formatted}"
-                        )
-
-                        raise HTTPException(
-                            status_code=429,
-                            detail=detail,
-                            headers={
-                                "retry-after": str(self.window_size),
-                                "rate_limit_type": str(status["rate_limit_type"]),
-                                "reset_at": reset_time_formatted,
-                            },
-                        )
-
+                self._handle_rate_limit_error(
+                    response=response,
+                    descriptors=descriptors,
+                )
             else:
                 # add descriptors to request headers
                 data["litellm_proxy_rate_limit_response"] = response
@@ -1424,9 +1498,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
-            litellm_parent_otel_span: Union[Span, None] = (
-                _get_parent_otel_span_from_kwargs(kwargs)
-            )
+            litellm_parent_otel_span: Union[
+                Span, None
+            ] = _get_parent_otel_span_from_kwargs(kwargs)
             litellm_metadata = kwargs["litellm_params"]["metadata"]
             user_api_key = (
                 litellm_metadata.get("user_api_key") if litellm_metadata else None
@@ -1458,6 +1532,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             verbose_proxy_logger.exception(
                 f"Error in rate limit failure event: {str(e)}"
             )
+
 
     async def async_post_call_success_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, response

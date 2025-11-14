@@ -105,7 +105,7 @@ async def test_router_provider_wildcard_routing():
     print("router model list = ", router.get_model_list())
 
     response1 = await router.acompletion(
-        model="anthropic/claude-3-5-sonnet-latest",
+        model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -126,7 +126,7 @@ async def test_router_provider_wildcard_routing():
     print("response 3 = ", response3)
 
     response4 = await router.acompletion(
-        model="claude-3-5-sonnet-latest",
+        model="claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -1700,7 +1700,7 @@ async def test_router_amoderation():
         {
             "model_name": "openai-moderations",
             "litellm_params": {
-                "model": "text-moderation-stable",
+                "model": "omni-moderation-latest",
                 "api_key": os.getenv("OPENAI_API_KEY", None),
             },
         }
@@ -1709,7 +1709,7 @@ async def test_router_amoderation():
     router = Router(model_list=model_list)
     ## Test 1: user facing function
     result = await router.amoderation(
-        model="text-moderation-stable", input="this is valid good text"
+        model="omni-moderation-latest", input="this is valid good text"
     )
 
 

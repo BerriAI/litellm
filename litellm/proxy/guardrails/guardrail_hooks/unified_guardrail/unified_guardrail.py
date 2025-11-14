@@ -6,22 +6,20 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 3. Implements a way to call /applyGuardrail endpoint for `/chat/completions` + `/v1/messages` requests on async_post_call_streaming_iterator_hook
 """
 
-from typing import Any, AsyncGenerator, Literal, Union
+from typing import Any, AsyncGenerator, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms import (
-    endpoint_guardrail_translation_mappings,
-    load_guardrail_translation_mappings,
-)
+from litellm.llms import load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypes, ModelResponseStream
+from litellm.types.utils import CallTypes, CallTypesLiteral, ModelResponseStream
 
 GUARDRAIL_NAME = "unified_llm_guardrails"
+endpoint_guardrail_translation_mappings = None
 
 
 class UnifiedLLMGuardrails(CustomLogger):
@@ -45,18 +43,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         """
         Runs before the LLM API call

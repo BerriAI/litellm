@@ -556,6 +556,8 @@ async def new_team(  # noqa: PLR0915
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - prompts: Optional[List[str]] - List of allowed prompts for the team. If specified, the team will only be able to use these specific prompts.
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+
     
 
     Returns:
@@ -686,17 +688,27 @@ async def new_team(  # noqa: PLR0915
                     },
                 )
 
-            if (
-                data.max_budget is not None
-                and user_api_key_dict.max_budget is not None
-                and data.max_budget > user_api_key_dict.max_budget
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}. User role={user_api_key_dict.user_role}"
-                    },
+
+            if (data.max_budget is not None and user_api_key_dict.user_id is not None):
+                # Fetch user object to get max_budget
+                user_obj = await get_user_object(
+                    user_id=user_api_key_dict.user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
                 )
+
+                if (
+                    user_obj is not None 
+                    and user_obj.max_budget is not None
+                    and data.max_budget > user_obj.max_budget
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
+                        },
+                    )
 
             if data.models is not None and len(user_api_key_dict.models) > 0:
                 for m in data.models:
@@ -1114,6 +1126,8 @@ async def update_team(
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
     Example - update team TPM Limit
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \

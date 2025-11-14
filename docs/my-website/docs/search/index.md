@@ -2,7 +2,7 @@
 
 | Feature | Supported | 
 |---------|-----------|
-| Supported Providers | `perplexity`, `tavily`, `parallel_ai`, `exa_ai`, `google_pse`, `dataforseo` |
+| Supported Providers | `perplexity`, `tavily`, `parallel_ai`, `exa_ai`, `google_pse`, `dataforseo`, `firecrawl`, `searxng` |
 | Cost Tracking | ✅ |
 | Logging | ✅ |
 | Load Balancing | ❌ |
@@ -205,7 +205,7 @@ See the [official Perplexity Search documentation](https://docs.perplexity.ai/ap
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `query` | string or array | Yes | Search query. Can be a single string or array of strings |
-| `search_provider` | string | Yes (SDK) | The search provider to use: `"perplexity"`, `"tavily"`, `"parallel_ai"`, `"exa_ai"`, or `"google_pse"` |
+| `search_provider` | string | Yes (SDK) | The search provider to use: `"perplexity"`, `"tavily"`, `"parallel_ai"`, `"exa_ai"`, `"google_pse"`, `"dataforseo"`, `"firecrawl"`, or `"searxng"` |
 | `search_tool_name` | string | Yes (Proxy) | Name of the search tool configured in `config.yaml` |
 | `max_results` | integer | No | Maximum number of results to return (1-20). Default: 10 |
 | `search_domain_filter` | array | No | List of domains to filter results (max 20 domains) |
@@ -267,6 +267,8 @@ The response follows Perplexity's search format with the following structure:
 | Parallel AI | `PARALLEL_AI_API_KEY` | `parallel_ai` |
 | Google PSE | `GOOGLE_PSE_API_KEY`, `GOOGLE_PSE_ENGINE_ID` | `google_pse` |
 | DataForSEO | `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD` | `dataforseo` |
+| Firecrawl | `FIRECRAWL_API_KEY` | `firecrawl` |
+| SearXNG | `SEARXNG_API_BASE` (required) | `searxng` |
 
 See the individual provider documentation for detailed setup instructions and provider-specific parameters.
 

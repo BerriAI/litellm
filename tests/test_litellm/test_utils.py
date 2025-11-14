@@ -353,7 +353,7 @@ def test_anthropic_web_search_in_model_info():
 
     supported_models = [
         "anthropic/claude-3-7-sonnet-20250219",
-        "anthropic/claude-3-5-sonnet-latest",
+        "anthropic/claude-sonnet-4-5-20250929",
         "anthropic/claude-3-5-sonnet-20241022",
         "anthropic/claude-3-5-haiku-20241022",
         "anthropic/claude-3-5-haiku-latest",
@@ -548,6 +548,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_dbu_cost_per_token": {"type": "number"},
                 "annotation_cost_per_page": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
+                "code_interpreter_cost_per_session": {"type": "number"},
                 "litellm_provider": {"type": "string"},
                 "max_audio_length_hours": {"type": "number"},
                 "max_audio_per_prompt": {"type": "number"},
@@ -569,6 +570,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "audio_transcription",
                         "chat",
                         "completion",
+                        "container",
                         "embedding",
                         "image_generation",
                         "video_generation",
@@ -843,6 +845,16 @@ def test_check_provider_match():
     model_info = {"litellm_provider": "bedrock"}
     assert litellm.utils._check_provider_match(model_info, "openai") is False
 
+def test_get_provider_rerank_config():
+    """
+    Test the get_provider_rerank_config function for various providers
+    """
+    from litellm import HostedVLLMRerankConfig
+    from litellm.utils import LlmProviders, ProviderConfigManager
+
+    # Test for hosted_vllm provider
+    config = ProviderConfigManager.get_provider_rerank_config("my_model", LlmProviders.HOSTED_VLLM, 'http://localhost', [])
+    assert isinstance(config, HostedVLLMRerankConfig)
 
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
@@ -1184,7 +1196,7 @@ class TestProxyFunctionCalling:
         ), "Custom model names return False without proxy config context"
 
         # Case 2: Model name that can be resolved (matches pattern)
-        resolvable_model = "litellm_proxy/claude-3-5-sonnet-latest"
+        resolvable_model = "litellm_proxy/claude-sonnet-4-5-20250929"
         result = supports_function_calling(resolvable_model)
         assert result is True, "Resolvable model names work with fallback logic"
 
@@ -1195,7 +1207,7 @@ class TestProxyFunctionCalling:
         
         ✅ WORKS (with current fallback logic):
            - litellm_proxy/gpt-4
-           - litellm_proxy/claude-3-5-sonnet-latest
+           - litellm_proxy/claude-sonnet-4-5-20250929
            - litellm_proxy/anthropic/claude-3-haiku-20240307
            
         ❌ DOESN'T WORK (requires proxy server config):

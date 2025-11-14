@@ -30,7 +30,7 @@ class TestAnthropicResponsesAPITest(BaseResponsesAPITest):
     def get_base_completion_call_args(self):
         #litellm._turn_on_debug()
         return {
-            "model": "anthropic/claude-3-5-sonnet-latest",
+            "model": "anthropic/claude-sonnet-4-5-20250929",
         }
     
     async def test_basic_openai_responses_delete_endpoint(self, sync_mode=False):

@@ -12,6 +12,8 @@ SEARCH_PROVIDERS = [
     "google_pse",
     "parallel_ai",
     "exa_ai",
+    "firecrawl",
+    "searxng",
 ]
 
 ALLOWED_FILES_IN_LLMS_FOLDER = [

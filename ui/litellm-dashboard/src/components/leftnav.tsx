@@ -1,28 +1,28 @@
-import { Layout, Menu } from "antd";
 import {
-  KeyOutlined,
-  PlayCircleOutlined,
-  BlockOutlined,
-  BarChartOutlined,
-  TeamOutlined,
-  BankOutlined,
-  UserOutlined,
-  SettingOutlined,
   ApiOutlined,
   AppstoreOutlined,
-  DatabaseOutlined,
-  FileTextOutlined,
-  LineChartOutlined,
-  SafetyOutlined,
-  ExperimentOutlined,
-  ToolOutlined,
-  TagsOutlined,
+  BankOutlined,
+  BarChartOutlined,
   BgColorsOutlined,
+  BlockOutlined,
+  CreditCardOutlined,
+  DatabaseOutlined,
+  ExperimentOutlined,
+  FileTextOutlined,
+  KeyOutlined,
+  LineChartOutlined,
+  PlayCircleOutlined,
+  SafetyOutlined,
   SearchOutlined,
+  SettingOutlined,
+  TagsOutlined,
+  TeamOutlined,
+  ToolOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
-import { all_admin_roles, rolesWithWriteAccess, internalUserRoles, isAdminRole } from "../utils/roles";
+import { ConfigProvider, Layout, Menu } from "antd";
+import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
 import UsageIndicator from "./usage_indicator";
-import { ConfigProvider } from "antd";
 const { Sider } = Layout;
 
 // Define the props type
@@ -89,6 +89,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       icon: <UserOutlined style={{ fontSize: "18px" }} />,
       roles: all_admin_roles,
     },
+    {
+      key: "10",
+      page: "budgets",
+      label: "Budgets",
+      icon: <CreditCardOutlined style={{ fontSize: "18px" }} />,
+      roles: all_admin_roles,
+    },
     { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined style={{ fontSize: "18px" }} /> },
     {
       key: "16",
@@ -111,7 +118,12 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       icon: <ToolOutlined style={{ fontSize: "18px" }} />,
       children: [
         { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: "18px" }} /> },
-        { key: "28", page: "search-tools", label: "Search Tools", icon: <SearchOutlined style={{ fontSize: "18px" }} /> },
+        {
+          key: "28",
+          page: "search-tools",
+          label: "Search Tools",
+          icon: <SearchOutlined style={{ fontSize: "18px" }} />,
+        },
         {
           key: "21",
           page: "vector-stores",
@@ -139,13 +151,6 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
           page: "prompts",
           label: "Prompts",
           icon: <FileTextOutlined style={{ fontSize: "18px" }} />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "10",
-          page: "budgets",
-          label: "Budgets",
-          icon: <BankOutlined style={{ fontSize: "18px" }} />,
           roles: all_admin_roles,
         },
         {

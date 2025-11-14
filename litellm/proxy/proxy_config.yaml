@@ -9,6 +9,15 @@ model_list:
       model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
       aws_region_name: us-west-2
       custom_llm_provider: bedrock
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
+      custom_llm_provider: bedrock
+      aws_region_name: us-west-2
+  - model_name: runwayml/*
+    litellm_params:
+      model: runwayml/*
+
     
 
 # like MCPs/vector stores
@@ -21,3 +30,38 @@ search_tools:
     litellm_params:
       search_provider: exa_ai
       api_key: os.environ/EXA_API_KEY
+  
+
+litellm_settings:
+  max_end_user_budget_id: "2f6634cd-c631-4d3b-96c7-ad510ea06eaf"
+  # Comprehensive logging settings
+  store_audit_logs: true
+  verbose: true
+  log_level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
+  callbacks: ["s3_v2", "smtp_email"]
+  s3_callback_params:
+    s3_endpoint_url: "https://localhost:443"  # Replace with your Minio server URL and port
+    s3_aws_access_key_id: "minioadmin"
+    s3_aws_secret_access_key: "minioadmin"
+    s3_region_name: "minio"  # This can be any value for Minio
+    s3_bucket_name: "litellm-test"  # Replace with your bucket name
+    s3_use_ssl: False
+    s3_verify: False
+  cache: True
+  cache_params:
+    type: local
+  drop_params: True
+
+
+general_settings:
+  store_prompts_in_spend_logs: True
+
+
+vector_store_registry:
+  - vector_store_name: "bedrock-litellm-website-knowledgebase"
+    litellm_params:
+      vector_store_id: "T37J8R4WTM"
+      custom_llm_provider: "bedrock"
+      vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
+      vector_store_metadata:
+        source: "https://www.litellm.com/docs"

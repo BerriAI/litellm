@@ -7,8 +7,10 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    BaseVectorStoreAuthCredentials,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
+    VectorStoreIndexEndpoints,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
@@ -33,14 +35,9 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def __init__(self):
         super().__init__()
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
-        """
-        Validate and set up authentication for Vertex AI RAG API
-        """
-        litellm_params = litellm_params or GenericLiteLLMParams()
-
+    def get_auth_credentials(
+        self, litellm_params: dict
+    ) -> BaseVectorStoreAuthCredentials:
         # Get credentials and project info
         vertex_credentials = self.get_vertex_ai_credentials(dict(litellm_params))
         vertex_project = self.get_vertex_ai_project(dict(litellm_params))
@@ -52,13 +49,28 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             custom_llm_provider="vertex_ai",
         )
 
-        headers.update(
-            {
+        return {
+            "headers": {
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
-            }
-        )
+            },
+        }
 
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        return {
+            "read": [("POST", ":search")],
+            "write": [],
+        }
+
+    def validate_environment(
+        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
+    ) -> dict:
+        """
+        Validate and set up authentication for Vertex AI RAG API
+        """
+        litellm_params = litellm_params or GenericLiteLLMParams()
+        auth_headers = self.get_auth_credentials(litellm_params.model_dump())
+        headers.update(auth_headers.get("headers", {}))
         return headers
 
     def get_complete_url(
@@ -71,10 +83,12 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         """
         vertex_location = self.get_vertex_ai_location(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
-        engine_id = litellm_params.get("vertex_app_id")
         collection_id = (
             litellm_params.get("vertex_collection_id") or "default_collection"
         )
+        datastore_id = litellm_params.get("vector_store_id")
+        if not datastore_id:
+            raise ValueError("vector_store_id is required")
         if api_base:
             return api_base.rstrip("/")
 
@@ -82,7 +96,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         return (
             f"https://discoveryengine.googleapis.com/v1/"
             f"projects/{vertex_project}/locations/{vertex_location}/"
-            f"collections/{collection_id}/engines/{engine_id}/servingConfigs/default_config"
+            f"collections/{collection_id}/dataStores/{datastore_id}/servingConfigs/default_config"
         )
 
     def transform_search_vector_store_request(
