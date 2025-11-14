@@ -10,6 +10,9 @@ class AgentRegistry:
     def __init__(self):
         self.agent_list: List[AgentConfig] = []
 
+    def reset_agent_list(self):
+        self.agent_list = []
+
     def register_agent(self, agent_config: AgentConfig):
         self.agent_list.append(agent_config)
 
@@ -48,6 +51,28 @@ class AgentRegistry:
                 continue
 
             self.register_agent(agent_config=agent_config_item)
+
+    def load_agents_from_db_and_config(
+        self,
+        agent_config: Optional[List[AgentConfig]] = None,
+        db_agents: Optional[List[Dict[str, Any]]] = None,
+    ):
+        self.reset_agent_list()
+
+        if agent_config:
+            for agent_config_item in agent_config:
+                if not isinstance(agent_config_item, dict):
+                    raise ValueError("agent_config must be a list of dictionaries")
+
+                self.register_agent(agent_config=agent_config_item)
+
+        if db_agents:
+            for db_agent in db_agents:
+                if not isinstance(db_agent, dict):
+                    raise ValueError("db_agents must be a list of dictionaries")
+
+                self.register_agent(agent_config=AgentConfig(**db_agent))
+        return self.agent_list
 
     ###########################################################
     ########### DB management helpers for agents ###########

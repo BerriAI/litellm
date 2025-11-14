@@ -137,7 +137,7 @@ async def create_agent(
 
         # check for naming conflicts
         existing_agent = AGENT_REGISTRY.get_agent_by_name(
-            agent_name=request.get("agent_name")
+            agent_name=request.get("agent_name")  # type: ignore
         )
         if existing_agent is not None:
             raise HTTPException(

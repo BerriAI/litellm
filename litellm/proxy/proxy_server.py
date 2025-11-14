@@ -469,6 +469,8 @@ from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
+from litellm.types.agents import AgentConfig
+
 # import enterprise folder
 enterprise_router = APIRouter()
 try:
@@ -1059,6 +1061,7 @@ callback_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
+config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
 shared_aiohttp_session: Optional["ClientSession"] = (
@@ -3419,6 +3422,9 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="mcp"):
             await self._init_mcp_servers_in_db()
 
+        if self._should_load_db_object(object_type="agents"):
+            await self._init_agents_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="pass_through_endpoints"):
             await self._init_pass_through_endpoints_in_db()
 
@@ -3683,6 +3689,25 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(
+                    str(e)
+                )
+            )
+
+    async def _init_agents_in_db(self, prisma_client: PrismaClient):
+        from litellm.proxy.agent_endpoints.agent_registry import (
+            global_agent_registry as AGENT_REGISTRY,
+        )
+
+        try:
+            db_agents = await AGENT_REGISTRY.get_all_agents_from_db(
+                prisma_client=prisma_client
+            )
+            AGENT_REGISTRY.load_agents_from_db_and_config(
+                db_agents=db_agents, agent_config=config_agents
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_agents_in_db - {}".format(
                     str(e)
                 )
             )
