@@ -121,6 +121,13 @@ class LangfuseOtelLogger(OpenTelemetry):
                         value = str(value)
                 safe_set_attribute(span, enum_attr.value, value)
 
+        total_cost = metadata.get("hidden_params", {}).get("response_cost")
+        if total_cost is not None:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.TOTAL_COST.value,
+                total_cost
+            )
     @staticmethod
     def _set_observation_output(span: Span, response_obj):
         """Helper to set observation output attributes."""
