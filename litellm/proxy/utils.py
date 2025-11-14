@@ -3688,10 +3688,43 @@ def join_paths(base_path: str, route: str) -> str:
     return final_path
 
 
-def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
-    # Use environment variable value, otherwise use URL from request
+def get_custom_url(
+    request_base_url: str, route: Optional[str] = None, request: Optional[Any] = None
+) -> str:
+    """
+    Get custom URL for redirects, prioritizing PROXY_BASE_URL or X-Forwarded-* headers.
+    
+    Args:
+        request_base_url: Base URL from request (fallback)
+        route: Optional route to append
+        request: Optional FastAPI Request object to extract X-Forwarded-* headers
+    
+    Returns:
+        Constructed URL with proper hostname for Kubernetes/load balancer environments
+    """
+    # Use environment variable value first
     server_base_url = get_proxy_base_url()
-    if server_base_url is not None:
+    
+    # If no PROXY_BASE_URL and Request object is provided, check X-Forwarded-* headers
+    if server_base_url is None and request is not None:
+        forwarded_host = request.headers.get("X-Forwarded-Host")
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "http")
+        forwarded_port = request.headers.get("X-Forwarded-Port")
+        
+        if forwarded_host:
+            # Construct URL from X-Forwarded-* headers
+            port_suffix = ""
+            if forwarded_port and forwarded_port not in ("80", "443"):
+                # Only add port if it's not the default for the protocol
+                if forwarded_proto == "https" and forwarded_port != "443":
+                    port_suffix = f":{forwarded_port}"
+                elif forwarded_proto == "http" and forwarded_port != "80":
+                    port_suffix = f":{forwarded_port}"
+            
+            base_url = f"{forwarded_proto}://{forwarded_host}{port_suffix}"
+        else:
+            base_url = request_base_url
+    elif server_base_url is not None:
         base_url = server_base_url
     else:
         base_url = request_base_url
