@@ -134,34 +134,16 @@ class ArizePhoenixLogger(OpenTelemetry):
         pass  # suppress additional spans
 
     async def async_health_check(self):
-        """
-        Performs a health check for Arize integration.
 
-        Returns:
-            dict: Health check result with status and message
-        """
-        try:
-            # config = self.get_arize_phoenix_config()
+        config = self.get_arize_phoenix_config()
 
-            # if not config.space_key:
-            #     return {
-            #         "status": "unhealthy",
-            #         "error_message": "ARIZE_SPACE_KEY environment variable not set",
-            #     }
-
-            # if not config.api_key:
-            #     return {
-            #         "status": "unhealthy",
-            #         "error_message": "ARIZE_API_KEY environment variable not set",
-            #     }
-
-            return {
-                "status": "healthy",
-                "message": "Arize credentials are configured properly",
-            }
-
-        except Exception as e:
+        if not config.otlp_auth_headers:
             return {
                 "status": "unhealthy",
-                "error_message": f"Arize health check failed: {str(e)}",
+                "error_message": "PHOENIX_API_KEY environment variable not set",
             }
+
+        return {
+            "status": "healthy",
+            "message": "Arize-Phoenix credentials are configured properly",
+        }
