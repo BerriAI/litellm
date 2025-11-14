@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from litellm.proxy import proxy_server
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import SpecialEnums
@@ -17,6 +18,7 @@ from litellm.types.utils import SpecialEnums
 @pytest.fixture
 def responses_id_security():
     """Fixture that creates a ResponsesIDSecurity instance."""
+    setattr(proxy_server, "master_key", "test-master-key")
     return ResponsesIDSecurity()
 
 
