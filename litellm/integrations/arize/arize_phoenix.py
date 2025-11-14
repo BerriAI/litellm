@@ -113,8 +113,7 @@ class ArizePhoenixLogger(OpenTelemetry):
         end_time: Optional[Union[datetime, float]] = None,
         event_metadata: Optional[dict] = None,
     ):
-        """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
-        pass
+        pass  # suppress additional spans
 
     async def async_service_failure_hook(
         self,
@@ -125,16 +124,14 @@ class ArizePhoenixLogger(OpenTelemetry):
         end_time: Optional[Union[float, datetime]] = None,
         event_metadata: Optional[dict] = None,
     ):
-        """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
-        pass
+        pass  # suppress additional spans
 
     def create_litellm_proxy_request_started_span(
         self,
         start_time: datetime,
         headers: dict,
     ):
-        """Arize is used mainly for LLM I/O tracing, sending Proxy Server Request adds bloat to arize logs"""
-        pass
+        pass  # suppress additional spans
 
     async def async_health_check(self):
         """
