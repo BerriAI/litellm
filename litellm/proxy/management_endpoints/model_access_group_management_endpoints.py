@@ -107,19 +107,18 @@ async def update_deployments_with_access_group(
             f"Found {len(deployments)} deployments for model_name: {model_name}"
         )
         
+        # If no deployments found, this is a config model (not in DB)
+        if len(deployments) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Can't find model '{model_name}' in Database. Access group management is only supported for database models."
+                },
+            )
+        
         # Update each deployment
         for deployment in deployments:
             model_info = deployment.model_info or {}
-            
-            # Check if this is a DB model (not a config model)
-            is_db_model = model_info.get("db_model", False)
-            if not is_db_model:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"Cannot add config model '{model_name}' to access group. Access group management is only supported for database models. Config models must be managed through config.yaml."
-                    },
-                )
             
             # Add access group using helper
             updated_model_info, was_modified = add_access_group_to_deployment(
@@ -540,11 +539,7 @@ async def update_access_group(
         
         for deployment in all_deployments:
             model_info = deployment.model_info or {}
-            
-            # Skip config models - they can't have access groups added via API
-            is_db_model = model_info.get("db_model", False)
-            if not is_db_model:
-                continue
+
             
             updated_model_info, was_modified = remove_access_group_from_deployment(
                 model_info=model_info,
@@ -654,11 +649,6 @@ async def delete_access_group(
         
         for deployment in all_deployments:
             model_info = deployment.model_info or {}
-            
-            # Skip config models - they can't have access groups added via API
-            is_db_model = model_info.get("db_model", False)
-            if not is_db_model:
-                continue
             
             updated_model_info, was_modified = remove_access_group_from_deployment(
                 model_info=model_info,
