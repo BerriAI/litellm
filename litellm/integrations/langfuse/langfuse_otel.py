@@ -87,9 +87,12 @@ class LangfuseOtelLogger(OpenTelemetry):
         return metadata
 
     @staticmethod
-    def _set_metadata_attributes(span: Span, metadata: dict):
+    def _set_metadata_attributes(span: Span, metadata: dict, kwargs: dict):
         """Helper to set metadata attributes from mapping."""
         from litellm.integrations.arize._utils import safe_set_attribute
+        from litellm.integrations.langfuse.langfuse import (
+            LangFuseLogger as _LFLogger,
+        )
 
         mapping = {
             "generation_name": LangfuseSpanAttributes.GENERATION_NAME,
@@ -100,7 +103,6 @@ class LangfuseOtelLogger(OpenTelemetry):
             "mask_output": LangfuseSpanAttributes.MASK_OUTPUT,
             "trace_user_id": LangfuseSpanAttributes.TRACE_USER_ID,
             "session_id": LangfuseSpanAttributes.SESSION_ID,
-            "tags": LangfuseSpanAttributes.TAGS,
             "trace_name": LangfuseSpanAttributes.TRACE_NAME,
             "trace_id": LangfuseSpanAttributes.TRACE_ID,
             "trace_metadata": LangfuseSpanAttributes.TRACE_METADATA,
@@ -128,6 +130,17 @@ class LangfuseOtelLogger(OpenTelemetry):
                 LangfuseSpanAttributes.TOTAL_COST.value,
                 total_cost
             )
+        tags = metadata.get('tags', [])
+        tags = _LFLogger.add_default_langfuse_tags(
+            tags=tags, kwargs=kwargs, metadata=metadata
+        )
+        if len(tags) > 0:
+            try:
+                value = json.dumps(tags)
+            except Exception:
+                value = str(tags)
+            safe_set_attribute(span, LangfuseSpanAttributes.TAGS.value, value)
+
     @staticmethod
     def _set_observation_output(span: Span, response_obj):
         """Helper to set observation output attributes."""
@@ -220,7 +233,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             safe_set_attribute(span, LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value, langfuse_environment)
 
         metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
-        LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
+        LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata, kwargs=kwargs)
 
         messages = kwargs.get("messages")
         if messages:
