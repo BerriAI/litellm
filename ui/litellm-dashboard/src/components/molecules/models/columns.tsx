@@ -290,23 +290,25 @@ export const columns = (
   },
   {
     id: "actions",
-    header: "",
+    header: () => <span className="text-sm font-semibold">Actions</span>,
     cell: ({ row }) => {
       const model = row.original;
       const canEditModel = userRole === "Admin" || model.model_info?.created_by === userID;
       return (
         <div className="flex items-center justify-end gap-2 pr-4">
-          <Icon
-            icon={TrashIcon}
-            size="sm"
-            onClick={() => {
-              if (canEditModel) {
-                setSelectedModelId(model.model_info.id);
-                setEditModel(false);
-              }
-            }}
-            className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}
-          />
+          <Tooltip title="Delete model">
+            <Icon
+              icon={TrashIcon}
+              size="sm"
+              onClick={() => {
+                if (canEditModel) {
+                  setSelectedModelId(model.model_info.id);
+                  setEditModel(false);
+                }
+              }}
+              className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:text-red-600"}
+            />
+          </Tooltip>
         </div>
       );
     },
