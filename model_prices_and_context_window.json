@@ -24883,5 +24883,13 @@
         "metadata": {
             "comment": "Estimated cost based on standard TTS pricing. RunwayML uses ElevenLabs models."
         }
+    },
+    "burncloud/gpt-3.5-turbo": {
+        "litellm_provider": "burncloud",
+        "mode": "chat",
+    },
+    "burncloud/deepseek-r1": {
+        "litellm_provider": "burncloud",
+        "mode": "chat",
     }
 }
