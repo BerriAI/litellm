@@ -5,6 +5,7 @@ Endpoints here:
 - POST /model_group/new - Create a new access group with multiple model names
 """
 
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -115,7 +116,7 @@ async def update_deployments_with_access_group(
             if was_modified:
                 await prisma_client.db.litellm_proxymodeltable.update(
                     where={"model_id": deployment.model_id},
-                    data={"model_info": prisma_client.jsonify_object(updated_model_info)},
+                    data={"model_info": json.dumps(updated_model_info)},
                 )
                 
                 models_updated += 1
@@ -532,7 +533,7 @@ async def update_access_group(
             if was_modified:
                 await prisma_client.db.litellm_proxymodeltable.update(
                     where={"model_id": deployment.model_id},
-                    data={"model_info": prisma_client.jsonify_object(updated_model_info)},
+                    data={"model_info": json.dumps(updated_model_info)},
                 )
         
         # Step 2: Add access group to new model_names
@@ -637,7 +638,7 @@ async def delete_access_group(
             if was_modified:
                 await prisma_client.db.litellm_proxymodeltable.update(
                     where={"model_id": deployment.model_id},
-                    data={"model_info": prisma_client.jsonify_object(updated_model_info)},
+                    data={"model_info": json.dumps(updated_model_info)},
                 )
                 models_updated += 1
         
