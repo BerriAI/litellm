@@ -23768,6 +23768,22 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0
     },
+    "voyage/voyage-3.5": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "voyage",
+        "max_input_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0
+    },
+    "voyage/voyage-3.5-lite": {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "voyage",
+        "max_input_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0
+    },
     "voyage/voyage-code-2": {
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "voyage",

@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, List
 
 from pydantic import BaseModel, Field
 
@@ -11,3 +11,13 @@ class ModelGroupInfoProxy(ModelGroupInfo):
 
 class UpdateUsefulLinksRequest(BaseModel):
     useful_links: Dict[str, str]
+
+
+class NewModelGroupRequest(BaseModel):
+    model_group_name: str  # The access group name (e.g., "production-models")
+    model_names: List[str]  # Existing model groups to include (e.g., ["gpt-4", "claude-3"])
+
+class NewModelGroupResponse(BaseModel):
+    model_group_name: str
+    model_names: List[str]
+    models_updated: int  # Number of models updated
