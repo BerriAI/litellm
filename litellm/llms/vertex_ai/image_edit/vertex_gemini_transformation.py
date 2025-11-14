@@ -14,7 +14,6 @@ from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
-from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse, OpenAIImage
 
