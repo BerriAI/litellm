@@ -9963,6 +9963,7 @@
         "supports_function_calling": false,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -11568,6 +11569,7 @@
         "supports_audio_output": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -11670,6 +11672,7 @@
         "litellm_provider": "vertex_ai-language-models",
         "max_audio_length_hours": 8.4,
         "max_audio_per_prompt": 1,
+        "supports_reasoning": false,
         "max_images_per_prompt": 3000,
         "max_input_tokens": 32768,
         "max_output_tokens": 32768,
@@ -13849,6 +13852,113 @@
         "supports_service_tier": true,
         "supports_vision": true
     },
+    "gpt-5.1": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_priority": 2.5e-07,
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_priority": 2.5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_priority": 2e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_service_tier": true,
+        "supports_vision": true
+    },
+    "gpt-5.1-2025-11-13": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_priority": 2.5e-07,
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_priority": 2.5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_priority": 2e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_service_tier": true,
+        "supports_vision": true
+    },
+    "gpt-5.1-chat-latest": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_priority": 2.5e-07,
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_priority": 2.5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_priority": 2e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_function_calling": false,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": false,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": false,
+        "supports_vision": true
+    },
     "gpt-5-pro": {
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
@@ -14027,6 +14137,72 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 1e-05,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "gpt-5.1-codex": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_priority": 2.5e-07,
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_priority": 2.5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_priority": 2e-05,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "gpt-5.1-codex-mini": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost_priority": 4.5e-08,
+        "input_cost_per_token": 2.5e-07,
+        "input_cost_per_token_priority": 4.5e-07,
+        "litellm_provider": "openai",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 2e-06,
+        "output_cost_per_token_priority": 3.6e-06,
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -24613,7 +24789,9 @@
             "1280x720",
             "720x1280"
         ],
-        "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+        "metadata": {
+            "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+        }
     },
     "runwayml/gen4_aleph": {
         "litellm_provider": "runwayml",
@@ -24631,7 +24809,9 @@
             "1280x720",
             "720x1280"
         ],
-        "comment": "15 credits per second @ $0.01 per credit = $0.15 per second"
+        "metadata": {
+            "comment": "15 credits per second @ $0.01 per credit = $0.15 per second"
+        }
     },
     "runwayml/gen3a_turbo": {
         "litellm_provider": "runwayml",
@@ -24649,7 +24829,9 @@
             "1280x720",
             "720x1280"
         ],
-        "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+        "metadata": {
+            "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+        }
     },
     "runwayml/gen4_image": {
         "litellm_provider": "runwayml",
@@ -24668,7 +24850,9 @@
             "1280x720",
             "1920x1080"
         ],
-        "comment": "5 credits per 720p image or 8 credits per 1080p image @ $0.01 per credit. Using 5 credits ($0.05) as base cost"
+        "metadata": {
+            "comment": "5 credits per 720p image or 8 credits per 1080p image @ $0.01 per credit. Using 5 credits ($0.05) as base cost"
+        }
     },
     "runwayml/gen4_image_turbo": {
         "litellm_provider": "runwayml",
@@ -24687,6 +24871,17 @@
             "1280x720",
             "1920x1080"
         ],
-        "comment": "2 credits per image (any resolution) @ $0.01 per credit = $0.02 per image"
+        "metadata": {
+            "comment": "2 credits per image (any resolution) @ $0.01 per credit = $0.02 per image"
+        }
+    },
+    "runwayml/eleven_multilingual_v2": {
+        "litellm_provider": "runwayml",
+        "mode": "audio_speech",
+        "input_cost_per_character": 3e-07,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "metadata": {
+            "comment": "Estimated cost based on standard TTS pricing. RunwayML uses ElevenLabs models."
+        }
     }
 }
