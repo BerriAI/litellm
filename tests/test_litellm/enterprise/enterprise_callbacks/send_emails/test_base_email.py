@@ -4,12 +4,12 @@ import sys
 import unittest.mock as mock
 from unittest.mock import patch
 
+sys.path.insert(0, os.path.abspath("../../.."))
+
 import pytest
 from enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
     BaseEmailLogger,
 )
-
-sys.path.insert(0, os.path.abspath("../../.."))
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
     SendKeyCreatedEmailEvent,

@@ -252,8 +252,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         Test that _log_langfuse_v2 correctly handles None values in the usage object
         by converting them to 0, preventing validation errors.
         """
-        with patch(
-            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+        with patch.object(
+            langfuse_module,
+            "_add_prompt_to_generation_params",
             side_effect=lambda generation_params, **kwargs: generation_params,
         ) as mock_add_prompt_params:
             # Create a mock response object with usage information containing None values
