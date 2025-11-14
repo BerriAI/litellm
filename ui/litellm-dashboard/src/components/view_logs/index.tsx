@@ -791,11 +791,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
 
   // Extract guardrail information from metadata if available
   const guardrailInfo = row.original.metadata?.guardrail_information;
-  const guardrailEntries = Array.isArray(guardrailInfo)
-    ? guardrailInfo
-    : guardrailInfo
-    ? [guardrailInfo]
-    : [];
+  const guardrailEntries = Array.isArray(guardrailInfo) ? guardrailInfo : guardrailInfo ? [guardrailInfo] : [];
   const hasGuardrailData = guardrailEntries.length > 0;
 
   // Calculate total masked entities if guardrail data exists
@@ -806,18 +802,16 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
     }
     return (
       sum +
-      Object.values(maskedCounts).reduce<number>(
-        (acc, count) => (typeof count === "number" ? acc + count : acc),
-        0,
-      )
+      Object.values(maskedCounts).reduce<number>((acc, count) => (typeof count === "number" ? acc + count : acc), 0)
     );
   }, 0);
 
-  const primaryGuardrailLabel = guardrailEntries.length === 1
-    ? guardrailEntries[0]?.guardrail_name ?? "-"
-    : guardrailEntries.length > 1
-    ? `${guardrailEntries.length} guardrails`
-    : "-";
+  const primaryGuardrailLabel =
+    guardrailEntries.length === 1
+      ? guardrailEntries[0]?.guardrail_name ?? "-"
+      : guardrailEntries.length > 1
+        ? `${guardrailEntries.length} guardrails`
+        : "-";
 
   return (
     <div className="p-6 bg-gray-50 space-y-6 w-full max-w-full overflow-hidden box-border">
@@ -828,9 +822,11 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 w-full max-w-full overflow-hidden">
           <div className="space-y-2">
-            <div className="flex">
-              <span className="font-medium w-1/3">Request ID:</span>
-              <span className="font-mono text-sm">{row.original.request_id}</span>
+            <div className="flex items-start">
+              <span className="font-medium w-1/3 flex-shrink-0">Request ID:</span>
+              <span className="font-mono text-sm min-w-0 flex-1 truncate block" title={row.original.request_id}>
+                {row.original.request_id}
+              </span>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Model:</span>
