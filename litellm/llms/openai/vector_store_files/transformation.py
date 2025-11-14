@@ -108,8 +108,13 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         api_base: str,
     ) -> Tuple[str, Dict[str, Any]]:
         payload: Dict[str, Any] = _clean_dict(dict(create_request))
-        if "attributes" in payload and payload["attributes"] is not None:
-            payload["attributes"] = add_openai_metadata(payload["attributes"])
+        attributes = payload.get("attributes")
+        if isinstance(attributes, dict):
+            filtered_attributes = add_openai_metadata(attributes)
+            if filtered_attributes is not None:
+                payload["attributes"] = filtered_attributes
+            else:
+                payload.pop("attributes", None)
         url = api_base
         return url, payload
 
@@ -205,9 +210,14 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         update_request: VectorStoreFileUpdateRequest,
         api_base: str,
     ) -> Tuple[str, Dict[str, Any]]:
-        payload = dict(update_request)
-        if "attributes" in payload:
-            payload["attributes"] = add_openai_metadata(payload["attributes"])
+        payload: Dict[str, Any] = dict(update_request)
+        attributes = payload.get("attributes")
+        if isinstance(attributes, dict):
+            filtered_attributes = add_openai_metadata(attributes)
+            if filtered_attributes is not None:
+                payload["attributes"] = filtered_attributes
+            else:
+                payload.pop("attributes", None)
         return f"{api_base}/{file_id}", payload
 
     def transform_update_vector_store_file_response(

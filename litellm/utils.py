@@ -230,6 +230,7 @@ from typing import (
     Iterable,
     List,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     Type,
@@ -8038,7 +8039,7 @@ def get_non_default_transcription_params(kwargs: dict) -> dict:
     return non_default_params
 
 
-def add_openai_metadata(metadata: dict) -> dict:
+def add_openai_metadata(metadata: Optional[Mapping[str, Any]]) -> Optional[Dict[str, str]]:
     """
     Add metadata to openai optional parameters, excluding hidden params.
 
@@ -8054,10 +8055,10 @@ def add_openai_metadata(metadata: dict) -> dict:
     if metadata is None:
         return None
     # Only include non-hidden parameters
-    visible_metadata = {
-        k: v
+    visible_metadata: Dict[str, str] = {
+        str(k): v
         for k, v in metadata.items()
-        if k != "hidden_params" and isinstance(v, (str))
+        if k != "hidden_params" and isinstance(v, str)
     }
 
     # max 16 keys allowed by openai - trim down to 16

@@ -3541,6 +3541,7 @@ class BaseLLMHTTPHandler:
             BaseImageEditConfig,
             BaseImageGenerationConfig,
             BaseVectorStoreConfig,
+            BaseVectorStoreFilesConfig,
             BaseGoogleGenAIGenerateContentConfig,
             BaseAnthropicMessagesConfig,
             BaseBatchesConfig,
