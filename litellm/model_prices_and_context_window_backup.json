@@ -22957,6 +22957,12 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "vertex_ai/gemini-2.5-flash-image": {
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.039,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-generation#edit-an-image"
+    },
     "vertex_ai/imagegeneration@006": {
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
@@ -22980,6 +22986,12 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.04,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "vertex_ai/imagen-3.0-capability-001": {
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/image/edit-insert-objects"
     },
     "vertex_ai/imagen-4.0-fast-generate-001": {
         "litellm_provider": "vertex_ai-image-models",
