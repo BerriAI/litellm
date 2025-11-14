@@ -10,7 +10,13 @@ class AgentRegistry:
     def register_agent(self, agent_config: AgentConfig):
         self.agent_list.append(agent_config)
 
-    def get_agent_list(self):
+    def get_agent_list(self, agent_names: Optional[List[str]] = None):
+        if agent_names is not None:
+            return [
+                agent
+                for agent in self.agent_list
+                if agent.get("agent_name") in agent_names
+            ]
         return self.agent_list
 
     def load_agents_from_config(self, agent_config: Optional[List[AgentConfig]] = None):

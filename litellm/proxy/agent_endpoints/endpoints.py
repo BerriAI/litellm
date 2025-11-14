@@ -47,11 +47,24 @@ async def get_agents(
     ```
 
     Returns: List[AgentConfig]
+
     """
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
     try:
-        return global_agent_registry.get_agent_list()
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        ):
+            return global_agent_registry.get_agent_list()
+        key_agents = user_api_key_dict.metadata.get("agents")
+        _team_metadata = user_api_key_dict.team_metadata or {}
+        team_agents = _team_metadata.get("agents")
+        if key_agents is not None:
+            return global_agent_registry.get_agent_list(agent_names=key_agents)
+        if team_agents is not None:
+            return global_agent_registry.get_agent_list(agent_names=team_agents)
+        return []
     except HTTPException:
         raise
     except Exception as e:
