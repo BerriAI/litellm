@@ -105,6 +105,7 @@ function formatUserRole(userRole: string) {
 interface ProxySettings {
   PROXY_BASE_URL: string;
   PROXY_LOGOUT_URL: string;
+  LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
 
 const queryClient = new QueryClient();
