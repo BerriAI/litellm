@@ -94,7 +94,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
       <div className="flex justify-between items-center mb-4">
         <div className="flex-col gap-2">
           <h1 className="text-2xl font-bold">Agents</h1>
-          <p className="text-sm text-gray-600">List of agents that are available to be used in your organization. Go to AI Hub, to make agents public.</p>
+          <p className="text-sm text-gray-600">List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents public.</p>
         </div>
         <Button onClick={handleAddAgent} disabled={!accessToken}>
           + Add New Agent
