@@ -1690,13 +1690,14 @@ jobs:
           paths:
             - image_gen_coverage.xml
             - image_gen_coverage
-  logging_testing:
+  logging_testing_part1:
     docker:
       - image: cimg/python:3.11
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    resource_class: large
 
     steps:
       - checkout
@@ -1717,20 +1718,53 @@ jobs:
             pip install "mlflow==2.17.2"
             pip install "anthropic==0.52.0"
             pip install "blockbuster==1.5.24"
+            pip install "pytest-timeout==2.2.0"
+            pip install "pytest-forked==1.6.0"
+            pip install "pytest-xdist==3.5.0"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
-          name: Run tests
+          name: Run logging tests (part 1 - alerting & callbacks from test_splits.json)
           command: |
             pwd
             ls
-            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
+            # Create a script to monitor pytest processes
+            cat > /tmp/monitor_pytest.sh << 'EOF'
+            #!/bin/bash
+            while true; do
+              sleep 60
+              echo "=== PYTEST MONITOR $(date) ==="
+              echo "Active pytest processes:"
+              ps aux | grep pytest | grep -v grep || echo "No pytest processes found"
+              echo ""
+              echo "Python processes:"
+              ps aux | grep python | grep -v grep | head -20 || echo "No python processes"
+              echo ""
+              echo "Active test files being processed:"
+              lsof 2>/dev/null | grep "test_.*\.py" | head -10 || echo "Cannot determine open test files"
+              echo "================================"
+            done
+            EOF
+            chmod +x /tmp/monitor_pytest.sh
+            
+            # Start monitor in background
+            /tmp/monitor_pytest.sh &
+            MONITOR_PID=$!
+            
+            # Run tests - configuration defined in .circleci/test_splits.json
+            python .circleci/run_test_split.py logging_testing 1 --junitxml=test-results/junit-part1.xml
+            TEST_EXIT=$?
+            
+            # Kill monitor
+            kill $MONITOR_PID 2>/dev/null || true
+            
+            exit $TEST_EXIT
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml logging_coverage.xml
-            mv .coverage logging_coverage
+            mv coverage.xml logging_coverage_part1.xml
+            mv .coverage logging_coverage_part1
 
       # Store test results
       - store_test_results:
@@ -1738,8 +1772,93 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - logging_coverage.xml
-            - logging_coverage
+            - logging_coverage_part1.xml
+            - logging_coverage_part1
+
+  logging_testing_part2:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: large
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install pytest-mock
+            pip install "respx==0.22.0"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "mlflow==2.17.2"
+            pip install "anthropic==0.52.0"
+            pip install "blockbuster==1.5.24"
+            pip install "pytest-timeout==2.2.0"
+            pip install "pytest-forked==1.6.0"
+            pip install "pytest-xdist==3.5.0"
+      # Run pytest and generate JUnit XML report
+      - setup_litellm_enterprise_pip
+      - run:
+          name: Run logging tests (part 2 - remaining tests from test_splits.json)
+          command: |
+            pwd
+            ls
+            # Create a script to monitor pytest processes
+            cat > /tmp/monitor_pytest.sh << 'EOF'
+            #!/bin/bash
+            while true; do
+              sleep 60
+              echo "=== PYTEST MONITOR $(date) ==="
+              echo "Active pytest processes:"
+              ps aux | grep pytest | grep -v grep || echo "No pytest processes found"
+              echo ""
+              echo "Python processes:"
+              ps aux | grep python | grep -v grep | head -20 || echo "No python processes"
+              echo ""
+              echo "Active test files being processed:"
+              lsof 2>/dev/null | grep "test_.*\.py" | head -10 || echo "Cannot determine open test files"
+              echo "================================"
+            done
+            EOF
+            chmod +x /tmp/monitor_pytest.sh
+            
+            # Start monitor in background
+            /tmp/monitor_pytest.sh &
+            MONITOR_PID=$!
+            
+            # Run tests - configuration defined in .circleci/test_splits.json
+            python .circleci/run_test_split.py logging_testing 2 --junitxml=test-results/junit-part2.xml
+            TEST_EXIT=$?
+            
+            # Kill monitor
+            kill $MONITOR_PID 2>/dev/null || true
+            
+            exit $TEST_EXIT
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml logging_coverage_part2.xml
+            mv .coverage logging_coverage_part2
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - logging_coverage_part2.xml
+            - logging_coverage_part2
   audio_testing:
     docker:
       - image: cimg/python:3.11
@@ -3163,7 +3282,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage_part1 logging_coverage_part2 audio_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3783,7 +3902,13 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - logging_testing:
+      - logging_testing_part1:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - logging_testing_part2:
           filters:
             branches:
               only:
@@ -3812,7 +3937,8 @@ workflows:
             - litellm_utils_testing
             - pass_through_unit_testing
             - image_gen_testing
-            - logging_testing
+            - logging_testing_part1
+            - logging_testing_part2
             - audio_testing
             - litellm_router_testing
             - litellm_router_unit_testing

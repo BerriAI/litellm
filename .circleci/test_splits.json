@@ -1,0 +1,34 @@
+{
+  "logging_testing": {
+    "part1": {
+      "description": "Alerting and callback tests",
+      "test_files": [
+        "tests/logging_callback_tests/test_alerting.py",
+        "tests/logging_callback_tests/test_custom_callback_router.py",
+        "tests/logging_callback_tests/test_bedrock_knowledgebase_hook.py",
+        "tests/logging_callback_tests/test_datadog.py",
+        "tests/logging_callback_tests/test_langfuse_e2e_test.py"
+      ],
+      "resource_class": "large",
+      "parallel_workers": 8,
+      "timeout": 120
+    },
+    "part2": {
+      "description": "Remaining logging tests",
+      "test_files": [
+        "tests/logging_callback_tests"
+      ],
+      "exclude_files": [
+        "tests/logging_callback_tests/test_alerting.py",
+        "tests/logging_callback_tests/test_custom_callback_router.py",
+        "tests/logging_callback_tests/test_bedrock_knowledgebase_hook.py",
+        "tests/logging_callback_tests/test_datadog.py",
+        "tests/logging_callback_tests/test_langfuse_e2e_test.py"
+      ],
+      "resource_class": "large",
+      "parallel_workers": 8,
+      "timeout": 120
+    }
+  }
+}
+
