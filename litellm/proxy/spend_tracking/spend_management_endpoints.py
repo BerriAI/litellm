@@ -1973,8 +1973,6 @@ async def view_spend_logs(  # noqa: PLR0915
             }
 
             if api_key is not None and isinstance(api_key, str):
-                # Hash the API key before querying, consistent with other parts of the function.
-                # The database stores hashed keys, so the raw key must be transformed.
                 if api_key.startswith("sk-"):
                     hashed_token = prisma_client.hash_token(token=api_key)
                 else:
