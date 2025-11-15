@@ -14,8 +14,8 @@ import re
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
-from fastapi import HTTPException
 import httpx
+from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult
@@ -24,6 +24,7 @@ from mcp.types import Tool as MCPTool
 from litellm._logging import verbose_logger
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
@@ -42,10 +43,9 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-)
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
@@ -386,12 +386,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[
-                        base_tool_name
-                    ] = server_prefix
-                    self.tool_name_to_mcp_server_name_mapping[
-                        prefixed_tool_name
-                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
+                        server_prefix
+                    )
+                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
+                        server_prefix
+                    )
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -729,11 +729,9 @@ class MCPServerManager:
         """Discover OAuth metadata by following RFC 9728 (protected resource metadata discovery)."""
 
         try:
-            async with httpx.AsyncClient(
-                timeout=10.0, follow_redirects=False
-            ) as client:
-                response = await client.get(server_url)
-                response.raise_for_status()
+            client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+            response = await client.get(server_url)
+            response.raise_for_status()
             verbose_logger.warning(
                 "MCP OAuth discovery unexpectedly succeeded for %s; server did not challenge",
                 server_url,
