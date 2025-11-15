@@ -1,7 +1,7 @@
 from typing import Any, Coroutine, Optional, Union, cast
 
 import httpx
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from openai.types.file_deleted import FileDeleted
 
 from litellm._logging import verbose_logger
@@ -47,7 +47,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         litellm_params: Optional[dict] = None,
     ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
         openai_client: Optional[
-            Union[AzureOpenAI, AsyncAzureOpenAI]
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
         ] = self.get_azure_openai_client(
             litellm_params=litellm_params or {},
             api_key=api_key,
@@ -95,7 +95,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
     ]:
         openai_client: Optional[
-            Union[AzureOpenAI, AsyncAzureOpenAI]
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
         ] = self.get_azure_openai_client(
             litellm_params=litellm_params or {},
             api_key=api_key,
@@ -145,7 +145,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         litellm_params: Optional[dict] = None,
     ):
         openai_client: Optional[
-            Union[AzureOpenAI, AsyncAzureOpenAI]
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
         ] = self.get_azure_openai_client(
             litellm_params=litellm_params or {},
             api_key=api_key,
@@ -197,7 +197,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         litellm_params: Optional[dict] = None,
     ):
         openai_client: Optional[
-            Union[AzureOpenAI, AsyncAzureOpenAI]
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
         ] = self.get_azure_openai_client(
             litellm_params=litellm_params or {},
             api_key=api_key,
@@ -251,7 +251,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         litellm_params: Optional[dict] = None,
     ):
         openai_client: Optional[
-            Union[AzureOpenAI, AsyncAzureOpenAI]
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
         ] = self.get_azure_openai_client(
             litellm_params=litellm_params or {},
             api_key=api_key,
