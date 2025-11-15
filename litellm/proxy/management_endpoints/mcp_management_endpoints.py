@@ -68,7 +68,9 @@ if MCP_AVAILABLE:
         except AttributeError:
             redacted_server = mcp_server.copy(deep=True)  # type: ignore[attr-defined]
 
-        redacted_server.credentials = None
+        if hasattr(redacted_server, "credentials"):
+            setattr(redacted_server, "credentials", None)
+
         return redacted_server
 
     def _redact_mcp_credentials_list(

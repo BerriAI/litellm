@@ -563,8 +563,9 @@ jobs:
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
       - run:
           name: Install Python 3.13
           command: |
@@ -1770,8 +1771,9 @@ jobs:
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
       - run:
           name: Install Python 3.9
           command: |
@@ -1908,8 +1910,9 @@ jobs:
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
       - run:
           name: Install Python 3.9
           command: |
@@ -2050,8 +2053,9 @@ jobs:
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
       - run:
           name: Install Python 3.9
           command: |
@@ -2234,8 +2238,9 @@ jobs:
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
       - run:
           name: Install Python 3.9
           command: |
@@ -2342,8 +2347,9 @@ jobs:
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
       - run:
           name: Install Python 3.9
           command: |
@@ -2475,8 +2481,9 @@ jobs:
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
             sudo systemctl restart docker
       - run:
           name: Install Python 3.9
@@ -2684,8 +2691,9 @@ jobs:
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
       - run:
           name: Install Python 3.9
           command: |

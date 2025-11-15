@@ -400,6 +400,8 @@ def image_generation(  # noqa: PLR0915
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            # Forward OpenAI organization if present (set by proxy pre-call utils)
+            organization: Optional[str] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -409,6 +411,7 @@ def image_generation(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 optional_params=optional_params,
                 model_response=model_response,
+                organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
             )

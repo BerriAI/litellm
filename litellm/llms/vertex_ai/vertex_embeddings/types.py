@@ -25,12 +25,6 @@ class TextEmbeddingInput(TypedDict, total=False):
     title: Optional[str]
 
 
-class TextEmbeddingBGEInput(TypedDict, total=False):
-    prompt: str
-    task_type: Optional[TaskType]
-    title: Optional[str]
-
-
 # Fine-tuned models require a different input format
 # Ref: https://console.cloud.google.com/vertex-ai/model-garden?hl=en&project=adroit-crow-413218&pageState=(%22galleryStateKey%22:(%22f%22:(%22g%22:%5B%5D,%22o%22:%5B%5D),%22s%22:%22%22))
 class TextEmbeddingFineTunedInput(TypedDict, total=False):
@@ -50,7 +44,7 @@ class EmbeddingParameters(TypedDict, total=False):
 
 
 class VertexEmbeddingRequest(TypedDict, total=False):
-    instances: Union[List[TextEmbeddingInput], List[TextEmbeddingBGEInput], List[TextEmbeddingFineTunedInput]]
+    instances: Union[List[TextEmbeddingInput], List[TextEmbeddingFineTunedInput]]
     parameters: Optional[Union[EmbeddingParameters, TextEmbeddingFineTunedParameters]]
 
 

@@ -61,10 +61,6 @@ class VertexAIBatchPrediction(VertexLLM):
             stream=None,
             auth_header=None,
             url=default_api_base,
-            model=None,
-            vertex_project=vertex_project or project_id,
-            vertex_location=vertex_location or "us-central1",
-            vertex_api_version="v1",
         )
 
         headers = {
@@ -170,10 +166,6 @@ class VertexAIBatchPrediction(VertexLLM):
             stream=None,
             auth_header=None,
             url=default_api_base,
-            model=None,
-            vertex_project=vertex_project or project_id,
-            vertex_location=vertex_location or "us-central1",
-            vertex_api_version="v1",
         )
 
         headers = {

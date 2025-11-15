@@ -3,6 +3,7 @@ from .image_generation import (
     FalAIBaseConfig,
     FalAIBriaConfig,
     FalAIFluxProV11UltraConfig,
+    FalAIFluxSchnellConfig,
     FalAIImageGenerationConfig,
     FalAIImagen4Config,
     FalAIRecraftV3Config,
@@ -18,6 +19,7 @@ __all__ = [
     "FalAIRecraftV3Config",
     "FalAIBriaConfig",
     "FalAIFluxProV11UltraConfig",
+    "FalAIFluxSchnellConfig",
     "FalAIStableDiffusionConfig",
     "get_fal_ai_image_generation_config",
 ]

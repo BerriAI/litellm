@@ -419,15 +419,20 @@ export default function ModelInfoView({
                       alt={`${modelData.provider} logo`}
                       className="w-4 h-4"
                       onError={(e) => {
-                        // Create a div with provider initial as fallback
-                        const target = e.target as HTMLImageElement;
+                        const target = e.currentTarget as HTMLImageElement;
                         const parent = target.parentElement;
-                        if (parent) {
+                        if (!parent || !parent.contains(target)) {
+                          return;
+                        }
+
+                        try {
                           const fallbackDiv = document.createElement("div");
                           fallbackDiv.className =
                             "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
                           fallbackDiv.textContent = modelData.provider?.charAt(0) || "-";
                           parent.replaceChild(fallbackDiv, target);
+                        } catch (error) {
+                          console.error("Failed to replace provider logo fallback:", error);
                         }
                       }}
                     />
@@ -493,22 +498,14 @@ export default function ModelInfoView({
                 <Title>Model Settings</Title>
                 <div className="flex gap-2">
                   {isAutoRouter && canEditModel && !isEditing && (
-                    <TremorButton
-                      variant="primary"
-                      onClick={() => setIsAutoRouterModalOpen(true)}
-                      className="flex items-center"
-                    >
+                    <TremorButton onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
                       Edit Auto Router
                     </TremorButton>
                   )}
                   {canEditModel ? (
                     !isEditing && (
-                      <TremorButton
-                        variant="secondary"
-                        onClick={() => setIsEditing(true)}
-                        className="flex items-center"
-                      >
-                        Edit Model
+                      <TremorButton onClick={() => setIsEditing(true)} className="flex items-center">
+                        Edit Settings
                       </TremorButton>
                     )
                   ) : (

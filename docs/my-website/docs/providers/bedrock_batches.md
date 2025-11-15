@@ -40,6 +40,8 @@ model_list:
       s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
+      # Optional: Custom KMS encryption key for S3 output
+      # s3_encryption_key_id: arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012
     model_info: 
       mode: batch # 👈 SPECIFY MODE AS BATCH, to tell user this is a batch model
 ```
@@ -54,6 +56,12 @@ model_list:
 | `s3_secret_access_key` | AWS secret key for S3 bucket |
 | `aws_batch_role_arn` | IAM role ARN for Bedrock batch operations. Bedrock Batch APIs require an IAM role ARN to be set. |
 | `mode: batch` | Indicates to LiteLLM this is a batch model |
+
+**Optional Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `s3_encryption_key_id` | Custom KMS encryption key ID for S3 output data. If not specified, Bedrock uses AWS managed encryption keys. |
 
 ### 2. Create Virtual Key
 
@@ -173,6 +181,29 @@ When a `target_model_names` is specified, the file is written to the S3 bucket c
 ### What models are supported?
 
 LiteLLM only supports Bedrock Anthropic Models for Batch API. If you want other bedrock models file an issue [here](https://github.com/BerriAI/litellm/issues/new/choose).
+
+### How do I use a custom KMS encryption key?
+
+If your S3 bucket requires a custom KMS encryption key, you can specify it in your configuration using `s3_encryption_key_id`. This is useful for enterprise customers with specific encryption requirements.
+
+You can set the encryption key in 2 ways:
+
+1. **In config.yaml** (recommended):
+```yaml
+model_list:
+  - model_name: "bedrock-batch-claude"
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      s3_encryption_key_id: arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012
+      # ... other params
+```
+
+2. **As an environment variable**:
+```bash
+export AWS_S3_ENCRYPTION_KEY_ID=arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012
+```
+
+
 
 ## Further Reading
 
