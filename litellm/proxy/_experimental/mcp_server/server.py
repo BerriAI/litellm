@@ -640,8 +640,11 @@ if MCP_AVAILABLE:
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
-            allowed_mcp_servers=allowed_mcp_servers
+            allowed_mcp_servers=allowed_mcp_servers,
         )
+
+        # Track resolved MCP server for both permission checks and dispatch
+        mcp_server: Optional[MCPServer] = None
 
         # Remove prefix from tool name for logging and processing
         original_tool_name, server_name = get_server_name_prefix_tool_mcp(name)
@@ -690,9 +693,11 @@ if MCP_AVAILABLE:
         # Primary and recommended way to use external MCP servers
         #########################################################
         else:
-            mcp_server: Optional[
-                MCPServer
-            ] = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            # If we haven't already resolved the server, do it now for dispatch
+            if mcp_server is None:
+                mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(
+                    name
+                )
             if mcp_server:
                 standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
                     mcp_server.mcp_info or {}
