@@ -53,6 +53,8 @@ Agents are only available in v1.79.4-stable and above.
 
 Share pre-built agents (A2A spec) across your organization. Users can discover and use agents without rebuilding them.
 
+[**Demo Video**](https://drive.google.com/file/d/1r-_Rtiu04RW5Fwwu3_eshtA1oZtC3_DH/view?usp=sharing)
+
 ### 1. Create an agent
 
 Create an agent that follows the [A2A spec](https://a2a.dev/).
