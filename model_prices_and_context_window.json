@@ -441,6 +441,19 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-06
     },
+    "apple_foundation_models/system": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "apple_foundation_models",
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": false
+    },
     "anthropic.claude-3-5-haiku-20241022-v1:0": {
         "cache_creation_input_token_cost": 1e-06,
         "cache_read_input_token_cost": 8e-08,
