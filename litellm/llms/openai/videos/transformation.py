@@ -178,10 +178,10 @@ class OpenAIVideoConfig(BaseVideoConfig):
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{original_video_id}/content"
         
-        # Add video_id as query parameter
-        params = {"video_id": original_video_id}
-        
-        return url, params
+        # No additional data needed for GET content request
+        data: Dict[str, Any] = {}
+
+        return url, data
 
     def transform_video_remix_request(
         self,
