@@ -4007,7 +4007,8 @@ workflows:
             - litellm_utils_testing
             - pass_through_unit_testing
             - image_gen_testing
-            - logging_testing
+            - logging_testing_part1
+            - logging_testing_part2
             - audio_testing
             - litellm_router_testing
             - litellm_router_unit_testing
