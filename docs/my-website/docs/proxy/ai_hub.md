@@ -26,7 +26,7 @@ Navigate to the Model Hub page in the Admin UI (`PROXY_BASE_URL/ui/?login=succes
 
 #### 2. Select the models you want to expose
 
-Click on `Make Public` and select the models you want to expose.
+Click on `Select Models to Make Public` and select the models you want to expose.
 
 <Image img={require('../../img/make_public_modal.png')} />  
 
@@ -47,14 +47,23 @@ Go to the public url (`PROXY_BASE_URL/ui/model_hub_table`) and see available mod
 
 ## Agents
 
+:::info
+Agents are only available in v1.79.4-stable and above.
+:::
+
 Share pre-built agents (A2A spec) across your organization. Users can discover and use agents without rebuilding them.
 
-### How to use
-
-#### Step 1. Create an agent
+### 1. Create an agent
 
 Create an agent that follows the [A2A spec](https://a2a.dev/).
 
+<Tabs>
+<TabItem value="ui" label="UI">
+
+<Image img={require('../../img/add_agent.png')} />  
+
+</TabItem>
+<TabItem value="api" label="API">
 ```bash
 curl -X POST 'http://0.0.0.0:4000/v1/agents' \
 --header 'Authorization: Bearer <your-master-key>' \
@@ -117,9 +126,26 @@ curl -X POST 'http://0.0.0.0:4000/v1/agents' \
 }
 ```
 
-#### Step 2. Make agent public
+</TabItem>
+</Tabs>
+
+### 2. Make agent public
 
 Make the agent discoverable on the AI Hub.
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+Navigate to the Agents Tab on the AI Hub page 
+
+<Image img={require('../../img/ai_hub_with_agents.png')} />  
+
+Select the agents you want to make public and click on `Make Public` button.
+
+<Image img={require('../../img/make_agents_public.png')} />  
+
+</TabItem>
+<TabItem value="api" label="API">
 
 **Option 1: Make single agent public**
 
@@ -130,6 +156,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000
 ```
 
 **Option 2: Make multiple agents public**
+
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/v1/agents/make_public' \
@@ -155,9 +182,23 @@ curl -X POST 'http://0.0.0.0:4000/v1/agents/make_public' \
 }
 ```
 
-#### Step 3. View public agents
+</TabItem>
+
+</Tabs>
+
+
+
+### 3. View public agents
 
 Users can now discover the agent via the public endpoint.
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+<Image img={require('../../img/public_agent_hub.png')} />  
+
+</TabItem>
+<TabItem value="api" label="API">
 
 ```bash
 curl -X GET 'http://0.0.0.0:4000/public/agent_hub' \
@@ -192,74 +233,6 @@ curl -X GET 'http://0.0.0.0:4000/public/agent_hub' \
 ]
 ```
 
-### List all agents
-
-View all agents in your organization (admin only).
-
-```bash
-curl -X GET 'http://0.0.0.0:4000/v1/agents' \
---header 'Authorization: Bearer <your-master-key>'
-```
-
-### Get specific agent
-
-Get details for a specific agent.
-
-```bash
-curl -X GET 'http://0.0.0.0:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000' \
---header 'Authorization: Bearer <your-api-key>'
-```
-
-### Update an agent
-
-Update an existing agent.
-
-```bash
-curl -X PUT 'http://0.0.0.0:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data '{
-  "agent_name": "hello-world-agent",
-  "agent_card_params": {
-    "protocolVersion": "1.0",
-    "name": "Hello World Agent v2",
-    "description": "Updated hello world agent",
-    "url": "http://localhost:9999/",
-    "version": "2.0.0",
-    "defaultInputModes": ["text"],
-    "defaultOutputModes": ["text"],
-    "capabilities": {
-      "streaming": true
-    },
-    "skills": []
-  }
-}'
-```
-
-### Delete an agent
-
-Delete an agent from your organization.
-
-```bash
-curl -X DELETE 'http://0.0.0.0:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000' \
---header 'Authorization: Bearer <your-master-key>'
-```
-
-**Expected Response**
-
-```json
-{
-  "message": "Agent 123e4567-e89b-12d3-a456-426614174000 deleted successfully"
-}
-```
-
-## Additional Endpoints
-
-### Get supported providers
-
-Get a list of all providers supported by LiteLLM. No authentication required.
-
-```bash
-curl -s 'http://0.0.0.0:4000/public/providers' | jq
-```
+</TabItem>
+</Tabs>
 
