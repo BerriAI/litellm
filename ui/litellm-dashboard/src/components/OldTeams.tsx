@@ -755,6 +755,7 @@ const Teams: React.FC<TeamProps> = ({
                               <TableHeaderCell>Models</TableHeaderCell>
                               <TableHeaderCell>Organization</TableHeaderCell>
                               <TableHeaderCell>Info</TableHeaderCell>
+                              <TableHeaderCell>Actions</TableHeaderCell>
                             </TableRow>
                           </TableHead>
 
@@ -937,20 +938,28 @@ const Teams: React.FC<TeamProps> = ({
                                       <TableCell>
                                         {userRole == "Admin" ? (
                                           <>
-                                            <Icon
-                                              icon={PencilAltIcon}
-                                              size="sm"
-                                              onClick={() => {
-                                                setSelectedTeamId(team.team_id);
-                                                setEditTeam(true);
-                                              }}
-                                            />
-                                            <Icon
-                                              onClick={() => handleDelete(team.team_id)}
-                                              icon={TrashIcon}
-                                              size="sm"
-                                              data-testid="delete-team-button"
-                                            />
+                                            <Tooltip title="Edit team">
+                                              {" "}
+                                              <Icon
+                                                icon={PencilAltIcon}
+                                                size="sm"
+                                                className="cursor-pointer hover:text-blue-600"
+                                                onClick={() => {
+                                                  setSelectedTeamId(team.team_id);
+                                                  setEditTeam(true);
+                                                }}
+                                              />
+                                            </Tooltip>
+                                            <Tooltip title="Delete team">
+                                              {" "}
+                                              <Icon
+                                                onClick={() => handleDelete(team.team_id)}
+                                                icon={TrashIcon}
+                                                size="sm"
+                                                className="cursor-pointer hover:text-red-600"
+                                                data-testid="delete-team-button"
+                                              />
+                                            </Tooltip>
                                           </>
                                         ) : null}
                                       </TableCell>

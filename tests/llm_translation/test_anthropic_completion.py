@@ -768,6 +768,52 @@ def test_anthropic_map_openai_params_tools_and_json_schema():
     assert "Question" in json.dumps(mapped_params)
 
 
+def test_anthropic_map_openai_params_tools_with_defs():
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "create_user",
+                        "description": "Create a user from provided profile data.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user": {"$ref": "#/$defs/User"},
+                            },
+                            "required": ["user"],
+                            "$defs": {
+                                "User": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "email": {"type": "string"},
+                                    },
+                                    "required": ["name", "email"],
+                                }
+                            },
+                        },
+                    },
+                }
+            ]
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-3-5-sonnet-20240620",
+        drop_params=False,
+    )
+
+    tool = mapped_params["tools"][0]
+    assert tool["input_schema"]["properties"]["user"]["$ref"] == "#/$defs/User"
+    assert (
+        tool["input_schema"]["$defs"]["User"]["properties"]["name"]["type"] == "string"
+    )
+
+
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
 
