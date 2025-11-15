@@ -1336,6 +1336,151 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
                   </a>
                 </div>
               )}
+
+              {/* A2A Usage Example */}
+              <div>
+                <Text className="text-lg font-semibold mb-4">Usage Example (A2A Protocol)</Text>
+                
+                {/* Step 1: Retrieve Agent Card */}
+                <div className="mb-4">
+                  <Text className="text-sm font-medium mb-2 text-gray-700">Step 1: Retrieve Agent Card</Text>
+                  <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
+                    <pre className="text-xs">
+{`base_url = '${selectedAgent.url}'
+
+resolver = A2ACardResolver(
+    httpx_client=httpx_client,
+    base_url=base_url,
+    # agent_card_path uses default, extended_agent_card_path also uses default
+)
+
+# Fetch Public Agent Card and Initialize Client
+final_agent_card_to_use: AgentCard | None = None
+_public_card = (
+    await resolver.get_agent_card()
+)  # Fetches from default public path - \`/agents/{agent_id}/\`
+final_agent_card_to_use = _public_card
+
+if _public_card.supports_authenticated_extended_card:
+    try:
+        auth_headers_dict = {
+            'Authorization': 'Bearer dummy-token-for-extended-card'
+        }
+        _extended_card = await resolver.get_agent_card(
+            relative_card_path=EXTENDED_AGENT_CARD_PATH,
+            http_kwargs={'headers': auth_headers_dict},
+        )
+        final_agent_card_to_use = (
+            _extended_card  # Update to use the extended card
+        )
+    except Exception as e_extended:
+        logger.warning(
+            f'Failed to fetch extended agent card: {e_extended}. Will proceed with public card.',
+            exc_info=True,
+        )`}
+                    </pre>
+                  </div>
+                  <div className="mt-2 text-right">
+                    <button
+                      onClick={() => {
+                        const codeSnippet = `base_url = '${selectedAgent.url}'
+
+resolver = A2ACardResolver(
+    httpx_client=httpx_client,
+    base_url=base_url,
+    # agent_card_path uses default, extended_agent_card_path also uses default
+)
+
+# Fetch Public Agent Card and Initialize Client
+final_agent_card_to_use: AgentCard | None = None
+_public_card = (
+    await resolver.get_agent_card()
+)  # Fetches from default public path - \`/agents/{agent_id}/\`
+final_agent_card_to_use = _public_card
+
+if _public_card.supports_authenticated_extended_card:
+    try:
+        auth_headers_dict = {
+            'Authorization': 'Bearer dummy-token-for-extended-card'
+        }
+        _extended_card = await resolver.get_agent_card(
+            relative_card_path=EXTENDED_AGENT_CARD_PATH,
+            http_kwargs={'headers': auth_headers_dict},
+        )
+        final_agent_card_to_use = (
+            _extended_card  # Update to use the extended card
+        )
+    except Exception as e_extended:
+        logger.warning(
+            f'Failed to fetch extended agent card: {e_extended}. Will proceed with public card.',
+            exc_info=True,
+        )`;
+                        copyToClipboard(codeSnippet);
+                      }}
+                      className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
+                    >
+                      Copy to clipboard
+                    </button>
+                  </div>
+                </div>
+
+                {/* Step 2: Call the Agent */}
+                <div>
+                  <Text className="text-sm font-medium mb-2 text-gray-700">Step 2: Call the Agent</Text>
+                  <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
+                    <pre className="text-xs">
+{`client = A2AClient(
+    httpx_client=httpx_client, agent_card=final_agent_card_to_use
+)
+
+send_message_payload: dict[str, Any] = {
+    'message': {
+        'role': 'user',
+        'parts': [
+            {'kind': 'text', 'text': 'how much is 10 USD in INR?'}
+        ],
+        'messageId': uuid4().hex,
+    },
+}
+request = SendMessageRequest(
+    id=str(uuid4()), params=MessageSendParams(**send_message_payload)
+)
+
+response = await client.send_message(request)
+print(response.model_dump(mode='json', exclude_none=True))`}
+                    </pre>
+                  </div>
+                  <div className="mt-2 text-right">
+                    <button
+                      onClick={() => {
+                        const codeSnippet = `client = A2AClient(
+    httpx_client=httpx_client, agent_card=final_agent_card_to_use
+)
+
+send_message_payload: dict[str, Any] = {
+    'message': {
+        'role': 'user',
+        'parts': [
+            {'kind': 'text', 'text': 'how much is 10 USD in INR?'}
+        ],
+        'messageId': uuid4().hex,
+    },
+}
+request = SendMessageRequest(
+    id=str(uuid4()), params=MessageSendParams(**send_message_payload)
+)
+
+response = await client.send_message(request)
+print(response.model_dump(mode='json', exclude_none=True))`;
+                        copyToClipboard(codeSnippet);
+                      }}
+                      className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
+                    >
+                      Copy to clipboard
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </Modal>
