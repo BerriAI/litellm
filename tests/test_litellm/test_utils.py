@@ -42,6 +42,8 @@ def test_get_optional_params_image_gen():
     )
     assert optional_params is not None
     assert "response_format" not in optional_params
+    if 'extra_body' in optional_params:
+        assert "response_format" not in optional_params['extra_body']
     assert optional_params["n"] == 3
 
 
