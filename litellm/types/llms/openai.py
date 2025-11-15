@@ -65,6 +65,7 @@ from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     OutputFunctionToolCall,
+    OutputImageGenerationCall,
 )
 
 FileContent = Union[IO[bytes], bytes, PathLike]
@@ -1059,7 +1060,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     object: Optional[str] = None
     output: Union[
         List[Union[ResponseOutputItem, Dict]],
-        List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
+        List[Union[GenericResponseOutputItem, OutputFunctionToolCall, OutputImageGenerationCall]],
     ]
     parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
