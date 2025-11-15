@@ -16,7 +16,7 @@ LiteLLM provides image editing functionality that maps to OpenAI's `/images/edit
 | Supported operations | Create image edits | Single and multiple images supported |
 | Supported LiteLLM SDK Versions | 1.63.8+ | Gemini support requires 1.79.3+ |
 | Supported LiteLLM Proxy Versions | 1.71.1+ | Gemini support requires 1.79.3+ |
-| Supported LLM providers | **OpenAI**, **Gemini (Google AI Studio)** | Gemini supports the new `gemini-2.5-flash-image` family |
+| Supported LLM providers | **OpenAI**, **Gemini (Google AI Studio)**, **Vertex AI** | Gemini supports the new `gemini-2.5-flash-image` family. Vertex AI supports both Gemini and Imagen models. |
 
  #### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
 
@@ -198,6 +198,53 @@ for idx, image_obj in enumerate(response.data):
 ```
 
 </TabItem>
+
+<TabItem value="vertex_ai" label="Vertex AI">
+
+#### Basic Image Edit (Gemini)
+```python showLineNumbers title="Vertex AI Gemini Image Edit"
+import os
+import litellm
+
+# Set Vertex AI credentials
+os.environ["VERTEXAI_PROJECT"] = "your-gcp-project-id"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/path/to/service-account.json"
+
+response = litellm.image_edit(
+    model="vertex_ai/gemini-2.5-flash",
+    image=open("original_image.png", "rb"),
+    prompt="Add neon lights in the background",
+    size="1024x1024",
+)
+
+print(response)
+```
+
+#### Image Edit with Imagen (Supports Masks)
+```python showLineNumbers title="Vertex AI Imagen Image Edit"
+import os
+import litellm
+
+# Set Vertex AI credentials
+os.environ["VERTEXAI_PROJECT"] = "your-gcp-project-id"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/path/to/service-account.json"
+
+# Imagen supports mask for inpainting
+response = litellm.image_edit(
+    model="vertex_ai/imagen-3.0-capability-001",
+    image=open("original_image.png", "rb"),
+    mask=open("mask_image.png", "rb"),  # Optional: for inpainting
+    prompt="Turn this into watercolor style scenery",
+    n=2,  # Number of variations
+    size="1024x1024",
+)
+
+print(response)
+```
+
+</TabItem>
 </Tabs>
 
 ### LiteLLM Proxy with OpenAI SDK
@@ -299,6 +346,55 @@ curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
   -F "model=gemini-image-edit" \
   -F "image=@original_image.png" \
   -F "prompt=Add a warm golden-hour glow to the scene" \
+  -F "size=1024x1024"
+```
+
+</TabItem>
+
+<TabItem value="vertex_ai" label="Vertex AI">
+
+1. Add Vertex AI image edit models to your `config.yaml`:
+```yaml showLineNumbers title="Vertex AI Proxy Configuration"
+model_list:
+  - model_name: vertex-gemini-image-edit
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: os.environ/VERTEXAI_LOCATION
+      vertex_credentials: os.environ/GOOGLE_APPLICATION_CREDENTIALS
+
+  - model_name: vertex-imagen-image-edit
+    litellm_params:
+      model: vertex_ai/imagen-3.0-capability-001
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: os.environ/VERTEXAI_LOCATION
+      vertex_credentials: os.environ/GOOGLE_APPLICATION_CREDENTIALS
+```
+
+2. Start the LiteLLM proxy server:
+```bash showLineNumbers title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+```
+
+3. Make an image edit request:
+```bash showLineNumbers title="Vertex AI Gemini Proxy Image Edit"
+curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -F "model=vertex-gemini-image-edit" \
+  -F "image=@original_image.png" \
+  -F "prompt=Add neon lights in the background" \
+  -F "size=1024x1024"
+```
+
+4. Imagen image edit with mask:
+```bash showLineNumbers title="Vertex AI Imagen Proxy Image Edit with Mask"
+curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -F "model=vertex-imagen-image-edit" \
+  -F "image=@original_image.png" \
+  -F "mask=@mask_image.png" \
+  -F "prompt=Turn this into watercolor style scenery" \
+  -F "n=2" \
   -F "size=1024x1024"
 ```
 
