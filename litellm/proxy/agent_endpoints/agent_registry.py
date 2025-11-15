@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
 from litellm.types.agents import AgentConfig
@@ -32,8 +33,10 @@ class AgentRegistry:
 
     def get_public_agent_list(self):
         public_agent_list = []
+        if litellm.public_agent_groups is None:
+            return public_agent_list
         for agent in self.agent_list:
-            if agent.get("litellm_params", {}).get("make_public", False) is True:
+            if agent.get("agent_name") in litellm.public_agent_groups:
                 public_agent_list.append(agent)
         return public_agent_list
 

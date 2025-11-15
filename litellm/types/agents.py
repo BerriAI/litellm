@@ -158,6 +158,10 @@ class AgentCard(TypedDict, total=False):
     signatures: Optional[List[AgentCardSignature]]
 
 
+class AugmentedAgentCard(AgentCard):
+    is_public: bool
+
+
 class AgentLitellmParams(TypedDict):
     make_public: bool
 
@@ -184,3 +188,9 @@ class AgentResponse(BaseModel):
 
 class ListAgentsResponse(BaseModel):
     agents: List[AgentResponse]
+
+
+class AgentMakePublicResponse(BaseModel):
+    message: str
+    public_agent_groups: List[str]
+    updated_by: str

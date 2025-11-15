@@ -7,7 +7,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints.provider_create_metadata import (
     get_provider_create_metadata,
 )
-from litellm.types.agents import AgentCard
+from litellm.types.agents import AugmentedAgentCard
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -50,7 +50,7 @@ async def public_model_hub():
     "/public/agent_hub",
     tags=["[beta] Agents", "public"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=List[AgentCard],
+    response_model=List[AugmentedAgentCard],
 )
 async def get_agents():
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
