@@ -31,9 +31,11 @@ from litellm.utils import (
     function_to_dict,
     get_llm_provider,
     get_max_tokens,
+    get_official_api_base,
     get_supported_openai_params,
     get_token_count,
     get_valid_models,
+    is_official_llm_provider_api_base,
     trim_messages,
     validate_environment,
 )
@@ -2422,3 +2424,16 @@ def test_completion_with_no_model():
     with pytest.raises(TypeError):
         response = litellm.completion(messages=[{"role": "user", "content": "Hello, how are you?"}])
         
+def test_get_official_api_base():
+    """
+    Get the official api base for specific custom_llm_provider
+    """
+    api_base = get_official_api_base(custom_llm_provider="openai")
+    assert api_base == "https://api.openai.com/v1"
+
+def test_is_official_llm_provider_api_base():
+    """
+    Check if given url is a official url
+    """
+    assert is_official_llm_provider_api_base(custom_llm_provider="openai", api_base="https://api.openai.com/v1/")
+    assert not is_official_llm_provider_api_base(custom_llm_provider="openai", api_base="https://api.example.com/v1/")
