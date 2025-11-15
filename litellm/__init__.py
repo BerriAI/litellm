@@ -345,10 +345,7 @@ add_function_to_prompt: bool = False  # if function calling not supported by api
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
-model_cost_map_url: str = os.getenv(
-    "LITELLM_MODEL_COST_MAP_URL",
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-)
+model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
