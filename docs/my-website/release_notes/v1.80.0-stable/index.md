@@ -48,12 +48,10 @@ pip install litellm==1.80.0.rc.1
 - **🆕 RunwayML Provider** - Complete video generation, image generation, and text-to-speech support
 - **GPT-5.1 Family Support** - Day-0 support for OpenAI's latest GPT-5.1 and GPT-5.1-Codex models
 - **Prometheus OSS** - Prometheus metrics now available in open-source version
+- **Vector Store Files API** - Complete OpenAI-compatible Vector Store Files API with full CRUD operations
 - **Embeddings Performance** - O(1) lookup optimization for router embeddings with shared sessions
-- **Vector Store Files** - Stable release of vector store file management
 
 ---
-
-## New Providers
 
 ### 🆕 RunwayML
 
@@ -96,6 +94,34 @@ litellm_settings:
 
 [Get Started with Prometheus](../../docs/proxy/logging#prometheus)
 
+---
+
+### Vector Store Files API - Stable Release
+
+Complete OpenAI-compatible Vector Store Files API now stable, enabling full file lifecycle management within vector stores.
+
+**Supported Endpoints:**
+- `POST /v1/vector_stores/{vector_store_id}/files` - Create vector store file
+- `GET /v1/vector_stores/{vector_store_id}/files` - List vector store files
+- `GET /v1/vector_stores/{vector_store_id}/files/{file_id}` - Retrieve vector store file
+- `GET /v1/vector_stores/{vector_store_id}/files/{file_id}/content` - Retrieve file content
+- `DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}` - Delete vector store file
+- `DELETE /v1/vector_stores/{vector_store_id}` - Delete vector store
+
+**Quick Start:**
+
+```python
+from litellm import create_vector_store_file
+
+response = create_vector_store_file(
+    vector_store_id="vs_123",
+    file_id="file_abc"
+)
+```
+
+[Get Started with Vector Stores](../../docs/vector_stores)
+
+---
 
 ## New Models / Updated Models
 
@@ -226,8 +252,14 @@ litellm_settings:
 - **[Video Generation API](../../docs/video_generation)**
     - Allow internal users to access video generation routes - [PR #16472](https://github.com/BerriAI/litellm/pull/16472)
 
-- **[Vector Stores](../../docs/vector_stores)**
-    - Vector store files stable release - [PR #16643](https://github.com/BerriAI/litellm/pull/16643)
+- **[Vector Stores API](../../docs/vector_stores)**
+    - Vector store files stable release with complete CRUD operations - [PR #16643](https://github.com/BerriAI/litellm/pull/16643)
+      - `POST /v1/vector_stores/{vector_store_id}/files` - Create vector store file
+      - `GET /v1/vector_stores/{vector_store_id}/files` - List vector store files
+      - `GET /v1/vector_stores/{vector_store_id}/files/{file_id}` - Retrieve vector store file
+      - `GET /v1/vector_stores/{vector_store_id}/files/{file_id}/content` - Retrieve file content
+      - `DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}` - Delete vector store file
+      - `DELETE /v1/vector_stores/{vector_store_id}` - Delete vector store
     - Ensure users can access `search_results` for both stream + non-stream response - [PR #16459](https://github.com/BerriAI/litellm/pull/16459)
 
 #### Bugs
