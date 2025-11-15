@@ -1976,14 +1976,14 @@ jobs:
             sudo usermod -aG docker $USER
             docker version
       - run:
-          name: Install Python 3.9
+          name: Install Python 3.10
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
       - run:
@@ -2757,14 +2757,14 @@ jobs:
             sudo usermod -aG docker $USER
             docker version
       - run:
-          name: Install Python 3.9
+          name: Install Python 3.10
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
       - run:
