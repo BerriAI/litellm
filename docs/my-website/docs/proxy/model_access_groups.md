@@ -39,7 +39,7 @@ graph LR
 
 **Step 1. Assign model, access group in config.yaml**
 
-```yaml
+```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: gpt-4
     litellm_params:
@@ -62,7 +62,7 @@ model_list:
 
 **Create key with access group**
 
-```bash
+```bash showLineNumbers title="Create Key with Access Group"
 curl --location 'http://localhost:4000/key/generate' \
 -H 'Authorization: Bearer <your-master-key>' \
 -H 'Content-Type: application/json' \
@@ -75,7 +75,7 @@ Test Key
 <Tabs>
 <TabItem label="Allowed Access" value = "allowed">
 
-```shell
+```bash showLineNumbers title="Test Key - Allowed Access"
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-<key-from-previous-step>" \
@@ -97,7 +97,7 @@ Expect this to fail since gpt-4o is not in the `beta-models` access group
 
 :::
 
-```shell
+```bash showLineNumbers title="Test Key - Disallowed Access"
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-<key-from-previous-step>" \
@@ -119,7 +119,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 Create Team
 
-```shell
+```bash showLineNumbers title="Create Team"
 curl --location 'http://localhost:4000/team/new' \
 -H 'Authorization: Bearer sk-<key-from-previous-step>' \
 -H 'Content-Type: application/json' \
@@ -128,7 +128,7 @@ curl --location 'http://localhost:4000/team/new' \
 
 Create Key for Team 
 
-```shell
+```bash showLineNumbers title="Create Key for Team"
 curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer sk-<key-from-previous-step>' \
 --header 'Content-Type: application/json' \
@@ -141,7 +141,7 @@ Test Key
 <Tabs>
 <TabItem label="Allowed Access" value = "allowed">
 
-```shell
+```bash showLineNumbers title="Test Team Key - Allowed Access"
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-<key-from-previous-step>" \
@@ -163,7 +163,7 @@ Expect this to fail since gpt-4o is not in the `beta-models` access group
 
 :::
 
-```shell
+```bash showLineNumbers title="Test Team Key - Disallowed Access"
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-<key-from-previous-step>" \
@@ -203,7 +203,7 @@ Get a trial key [here](https://litellm.ai/#trial)
 1. Setup config.yaml
 
 
-```yaml
+```yaml showLineNumbers title="config.yaml - Wildcard Models"
 model_list:
   - model_name: openai/*
     litellm_params:
@@ -221,7 +221,7 @@ model_list:
 
 2. Generate a key with access to `default-models`
 
-```bash
+```bash showLineNumbers title="Generate Key for Wildcard Access Group"
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
@@ -235,7 +235,7 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
 <Tabs>
 <TabItem label="Successful Request" value = "success">
 
-```bash
+```bash showLineNumbers title="Test Wildcard Access - Allowed"
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-<key-from-previous-step>" \
@@ -249,7 +249,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 </TabItem>
 <TabItem value="bad-request" label="Rejected Request">
 
-```bash
+```bash showLineNumbers title="Test Wildcard Access - Rejected"
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-<key-from-previous-step>" \
