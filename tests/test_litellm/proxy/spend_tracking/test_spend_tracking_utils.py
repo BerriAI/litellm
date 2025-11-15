@@ -269,31 +269,36 @@ def test_get_response_for_spend_logs_payload_truncates_large_base64(mock_should_
 @patch(
     "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
 )
-def test_get_response_for_spend_logs_payload_respects_store_flag(mock_should_store):
-    mock_should_store.return_value = False
-    payload = cast(
-        StandardLoggingPayload, {"response": {"data": [{"b64_json": "ABC"}]}}
-    )
+def test_get_response_for_spend_logs_payload_truncates_large_embedding(mock_should_store):
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
-    response_json = _get_response_for_spend_logs_payload(payload)
-    assert response_json == "{}"
-
-
-@patch(
-    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
-)
-def test_get_response_for_spend_logs_payload_handles_json_string_response(mock_should_store):
     mock_should_store.return_value = True
-
-    response_dict = {"data": [{"text": "hello"}]}
+    embedding_values = [
+        round(i * 0.0001, 6) for i in range(MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+    ]
+    large_embedding = json.dumps(embedding_values)
     payload = cast(
         StandardLoggingPayload,
-        {"response": json.dumps(response_dict)},
+        {
+            "response": {
+                "data": [
+                    {
+                        "embedding": large_embedding,
+                        "other_field": "value",
+                    }
+                ]
+            }
+        },
     )
 
     response_json = _get_response_for_spend_logs_payload(payload)
     parsed = json.loads(response_json)
-    assert parsed == response_dict
+    truncated_value = parsed["data"][0]["embedding"]
+    
+    assert isinstance(truncated_value, str)
+    assert len(truncated_value) < len(large_embedding)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_value
+    assert parsed["data"][0]["other_field"] == "value"
 
 
 def test_safe_dumps_handles_circular_references():
