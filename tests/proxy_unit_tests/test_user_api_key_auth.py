@@ -139,6 +139,52 @@ async def test_check_blocked_team():
     await user_api_key_auth(request=request, api_key="Bearer " + user_key)
 
 
+@pytest.mark.asyncio
+async def test_team_object_has_object_permission_id():
+    """
+    Ensure the team object passed into common_checks contains the team's object_permission_id.
+    """
+    import asyncio
+    import time
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    team_id = "team-vector"
+    permission_id = "perm-vector-123"
+    user_key = "sk-12345678"
+    hashed_key = hash_token(user_key)
+
+    valid_token = UserAPIKeyAuth(
+        team_id=team_id,
+        token=hashed_key,
+        last_refreshed_at=time.time(),
+        team_object_permission_id=permission_id,
+    )
+    user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", "test-client")
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+    ) as mock_common_checks:
+        mock_common_checks.return_value = True
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+        assert mock_common_checks.await_args is not None
+        team_object = mock_common_checks.await_args.kwargs.get("team_object")
+        assert team_object is not None
+        assert team_object.object_permission_id == permission_id
+
+
 @pytest.mark.parametrize(
     "user_role, expected_role",
     [
