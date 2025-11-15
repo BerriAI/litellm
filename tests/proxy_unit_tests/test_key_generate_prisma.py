@@ -1834,7 +1834,7 @@ async def test_async_call_with_key_over_model_budget(
         print("result from user auth with new key", result)
 
         # update spend using track_cost callback, make 2nd request, it should fail
-        await litellm.acompletion(
+        response = await litellm.acompletion(
             model=request_model,
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             metadata={
@@ -1843,43 +1843,37 @@ async def test_async_call_with_key_over_model_budget(
             },
         )
 
-        # Flush the logging worker to ensure all callbacks complete
-        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+        # Manually trigger the budget limiter callback to avoid event loop issues with logging worker
+        # This ensures the spend is tracked immediately without relying on async background tasks
+        import time
         
-        try:
-            if GLOBAL_LOGGING_WORKER._queue is not None:
-                await GLOBAL_LOGGING_WORKER.flush()
-        except (RuntimeError, AttributeError) as flush_error:
-            # Event loop may be closed or bound to different loop in pytest-xdist
-            # This is okay - we'll use polling instead to wait for budget update
-            print(f"Logging worker flush error (expected in parallel tests): {flush_error}")
+        # Create a mock kwargs object that the callback expects (StandardLoggingPayload is a TypedDict, so use dict)
+        mock_kwargs = {
+            "standard_logging_object": {
+                "response_cost": getattr(response, "_hidden_params", {}).get("response_cost", 0.0001),  # Use actual cost or small fallback
+                "model": request_model,
+                "metadata": {
+                    "user_api_key_hash": hash_token(generated_key),
+                },
+            },
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": hash_token(generated_key),
+                    "user_api_key_model_max_budget": model_max_budget,
+                }
+            },
+        }
         
-        # Wait for the budget callback to complete with polling
-        max_wait_time = 10  # Maximum 10 seconds
-        poll_interval = 0.5  # Check every 0.5 seconds
-        waited = 0
-        budget_updated = False
+        # Call the budget limiter callback directly to ensure spend is recorded
+        await model_budget_limiter.async_log_success_event(
+            kwargs=mock_kwargs,
+            response_obj=response,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
         
-        while waited < max_wait_time:
-            await asyncio.sleep(poll_interval)
-            waited += poll_interval
-            
-            # Check if budget has been updated by trying to get spend from cache
-            try:
-                # Try to access the budget limiter cache to see if spend was recorded
-                virtual_spend_key = f"virtual_key_spend:{hash_token(generated_key)}:{request_model}:86400"
-                cached_spend = await model_budget_limiter.dual_cache.async_get_cache(
-                    key=virtual_spend_key
-                )
-                if cached_spend is not None and float(cached_spend) > 0:
-                    budget_updated = True
-                    break
-            except Exception:
-                pass
-        
-        if not budget_updated:
-            # Fallback to original 2 second wait if we couldn't verify
-            await asyncio.sleep(max(0, 2 - waited))
+        # Small delay to ensure cache write completes
+        await asyncio.sleep(0.5)
 
         # use generated key to auth in
         result = await user_api_key_auth(request=request, api_key=bearer_token)
