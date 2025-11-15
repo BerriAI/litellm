@@ -4,15 +4,6 @@ import Image from '@theme/IdealImage';
 
 # 📈 Prometheus metrics
 
-:::info
-
-✨ Prometheus metrics is on LiteLLM Enterprise
-
-[Enterprise Pricing](https://www.litellm.ai/#pricing)
-
-[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
-
-:::
 
 LiteLLM Exposes a `/metrics` endpoint for Prometheus to Poll
 

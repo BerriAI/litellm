@@ -292,6 +292,7 @@ class ProxyBaseLLMRequestProcessing:
         proxy_config: ProxyConfig,
         route_type: Literal[
             "acompletion",
+            "aembedding",
             "aresponses",
             "_arealtime",
             "aget_responses",
@@ -409,6 +410,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_key_dict: UserAPIKeyAuth,
         route_type: Literal[
             "acompletion",
+            "aembedding",
             "aresponses",
             "_arealtime",
             "aget_responses",
@@ -784,10 +786,12 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _get_pre_call_type(
-        route_type: Literal["acompletion", "aresponses"],
-    ) -> Literal["completion", "responses"]:
+        route_type: Literal["acompletion", "aembedding", "aresponses"],
+    ) -> Literal["completion", "embeddings", "responses"]:
         if route_type == "acompletion":
             return "completion"
+        elif route_type == "aembedding":
+            return "embeddings"
         elif route_type == "aresponses":
             return "responses"
 
