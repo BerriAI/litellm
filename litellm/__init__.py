@@ -345,7 +345,10 @@ add_function_to_prompt: bool = False  # if function calling not supported by api
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
-model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+model_cost_map_url: str = os.getenv(
+    "LITELLM_MODEL_COST_MAP_URL",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+)
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
@@ -366,6 +369,7 @@ max_ui_session_budget: Optional[float] = 10  # $10 USD budgets for UI Chat sessi
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
 max_end_user_budget: Optional[float] = None
+max_end_user_budget_id: Optional[str] = None
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
@@ -481,6 +485,7 @@ vertex_ai_ai21_models: Set = set()
 vertex_mistral_models: Set = set()
 vertex_openai_models: Set = set()
 vertex_minimax_models: Set = set()
+vertex_moonshot_models: Set = set()
 ai21_models: Set = set()
 ai21_chat_models: Set = set()
 nlp_cloud_models: Set = set()
@@ -496,6 +501,7 @@ watsonx_models: Set = set()
 gemini_models: Set = set()
 xai_models: Set = set()
 deepseek_models: Set = set()
+runwayml_models: Set = set()
 azure_ai_models: Set = set()
 jina_ai_models: Set = set()
 voyage_models: Set = set()
@@ -644,6 +650,9 @@ def add_known_models():
         elif value.get("litellm_provider") == "vertex_ai-minimax_models":
             key = key.replace("vertex_ai/", "")
             vertex_minimax_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-moonshot_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_moonshot_models.add(key)
         elif value.get("litellm_provider") == "ai21":
             if value.get("mode") == "chat":
                 ai21_chat_models.add(key)
@@ -683,6 +692,8 @@ def add_known_models():
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
+        elif value.get("litellm_provider") == "runwayml":
+            runwayml_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
             llama_models.add(key)
         elif value.get("litellm_provider") == "nscale":
@@ -826,6 +837,7 @@ model_list = list(
     | deepinfra_models
     | perplexity_models
     | set(maritalk_models)
+    | runwayml_models
     | vertex_language_models
     | watsonx_models
     | gemini_models
@@ -900,7 +912,8 @@ models_by_provider: dict = {
     | vertex_vision_models
     | vertex_language_models
     | vertex_deepseek_models
-    | vertex_minimax_models,
+    | vertex_minimax_models
+    | vertex_moonshot_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
@@ -917,6 +930,7 @@ models_by_provider: dict = {
     "xai": xai_models,
     "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
+    "runwayml": runwayml_models,
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
     "voyage": voyage_models,

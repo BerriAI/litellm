@@ -6006,6 +6006,39 @@ def speech(  # noqa: PLR0915
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
         )
+    elif custom_llm_provider == "runwayml":
+        from litellm.llms.runwayml.text_to_speech.transformation import (
+            RunwayMLTextToSpeechConfig,
+        )
+
+        # RunwayML Text-to-Speech
+        if text_to_speech_provider_config is None:
+            raise litellm.BadRequestError(
+                message="RunwayML Text-to-Speech configuration not found",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+
+        # Cast to specific RunwayML config type to access dispatch method
+        runwayml_config = cast(
+            RunwayMLTextToSpeechConfig, text_to_speech_provider_config
+        )
+
+        response = runwayml_config.dispatch_text_to_speech(  # type: ignore
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            litellm_params_dict=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            base_llm_http_handler=base_llm_http_handler,
+            aspeech=aspeech or False,
+            api_base=api_base,
+            api_key=api_key,
+            **kwargs,
+        )
 
     if response is None:
         raise Exception(

@@ -10,6 +10,7 @@ export enum ModelMode {
   RESPONSES = "responses",
   IMAGE_EDITS = "image_edits",
   ANTHROPIC_MESSAGES = "anthropic_messages",
+  EMBEDDING = "embedding",
   // add additional modes as needed
 }
 
@@ -37,6 +38,7 @@ export const litellmModeMapping: Record<ModelMode, EndpointType> = {
   [ModelMode.ANTHROPIC_MESSAGES]: EndpointType.ANTHROPIC_MESSAGES,
   [ModelMode.AUDIO_SPEECH]: EndpointType.SPEECH,
   [ModelMode.AUDIO_TRANSCRIPTION]: EndpointType.TRANSCRIPTION,
+  [ModelMode.EMBEDDING]: EndpointType.EMBEDDINGS,
 };
 
 export const getEndpointType = (mode: string): EndpointType => {

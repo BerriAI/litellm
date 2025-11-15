@@ -14,6 +14,10 @@ model_list:
       model: bedrock/*
       custom_llm_provider: bedrock
       aws_region_name: us-west-2
+  - model_name: runwayml/*
+    litellm_params:
+      model: runwayml/*
+
     
 
 # like MCPs/vector stores
@@ -29,6 +33,7 @@ search_tools:
   
 
 litellm_settings:
+  max_end_user_budget_id: "2f6634cd-c631-4d3b-96c7-ad510ea06eaf"
   # Comprehensive logging settings
   store_audit_logs: true
   verbose: true
@@ -50,3 +55,13 @@ litellm_settings:
 
 general_settings:
   store_prompts_in_spend_logs: True
+
+
+vector_store_registry:
+  - vector_store_name: "bedrock-litellm-website-knowledgebase"
+    litellm_params:
+      vector_store_id: "T37J8R4WTM"
+      custom_llm_provider: "bedrock"
+      vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
+      vector_store_metadata:
+        source: "https://www.litellm.com/docs"

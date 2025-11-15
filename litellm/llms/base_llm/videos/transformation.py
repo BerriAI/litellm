@@ -5,9 +5,9 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 import httpx
 from httpx._types import RequestFiles
 
-from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -133,6 +133,31 @@ class BaseVideoConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
         pass
+
+    async def async_transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> bytes:
+        """
+        Async transform video content download response to bytes.
+        Optional method - providers can override if they need async transformations
+        (e.g., RunwayML for downloading video from CloudFront URL).
+        
+        Default implementation falls back to sync transform_video_content_response.
+        
+        Args:
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+            
+        Returns:
+            Video content as bytes
+        """
+        # Default implementation: call sync version
+        return self.transform_video_content_response(
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
 
     @abstractmethod
     def transform_video_remix_request(
