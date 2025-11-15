@@ -1,5 +1,5 @@
 ---
-title: "v1.80.0-stable - RunwayML Provider, GPT-5.1 Support, and Agent Registration"
+title: "v1.80.0-stable - RunwayML Provider Support"
 slug: "v1-80-0"
 date: 2025-11-15T10:00:00
 authors:
@@ -139,7 +139,6 @@ response = video_generation(
     - Add support for `reasoning_effort='none'` for GPT-5.1 - [PR #16658](https://github.com/BerriAI/litellm/pull/16658)
     - Add `verbosity` parameter support for GPT-5 family models - [PR #16660](https://github.com/BerriAI/litellm/pull/16660)
     - Fix forward OpenAI organization for image generation - [PR #16607](https://github.com/BerriAI/litellm/pull/16607)
-    - Fix use GET for `/v1/videos/{video_id}/content` - [PR #16672](https://github.com/BerriAI/litellm/pull/16672)
 
 - **[Gemini (Google AI Studio + Vertex AI)](../../docs/providers/gemini)**
     - Add support for `reasoning_effort='none'` for Gemini models - [PR #16548](https://github.com/BerriAI/litellm/pull/16548)
@@ -151,7 +150,6 @@ response = video_generation(
 - **[Bedrock](../../docs/providers/bedrock)**
     - Add support for filtering knowledge base queries - [PR #16543](https://github.com/BerriAI/litellm/pull/16543)
     - Ensure correct `aws_region` is used when provided dynamically for embeddings - [PR #16547](https://github.com/BerriAI/litellm/pull/16547)
-    - Ensure users can access `search_results` for both stream + non-stream response - [PR #16459](https://github.com/BerriAI/litellm/pull/16459)
     - Add support for custom KMS encryption keys in Bedrock Batch operations - [PR #16662](https://github.com/BerriAI/litellm/pull/16662)
     - Add bearer token authentication support for AgentCore - [PR #16556](https://github.com/BerriAI/litellm/pull/16556)
     - Fix AgentCore SSE stream iterator to async for proper streaming support - [PR #16293](https://github.com/BerriAI/litellm/pull/16293)
@@ -193,17 +191,10 @@ response = video_generation(
 
 ### Bug Fixes
 
-- **[Langfuse](../../docs/proxy/logging#langfuse)**
-    - Fix handle null usage values to prevent validation errors - [PR #16396](https://github.com/BerriAI/litellm/pull/16396)
-
-- **[CloudZero](../../docs/proxy/logging)**
-    - Fix updated spend would not be sent to CloudZero - [PR #16201](https://github.com/BerriAI/litellm/pull/16201)
-
 - **General**
     - Fix sanitize null token usage in OpenAI-compatible responses - [PR #16493](https://github.com/BerriAI/litellm/pull/16493)
     - Fix apply provided timeout value to ClientTimeout.total - [PR #16395](https://github.com/BerriAI/litellm/pull/16395)
     - Fix raising wrong 429 error on wrong exception - [PR #16482](https://github.com/BerriAI/litellm/pull/16482)
-    - Fix update model_cost_map_url to use environment variable - [PR #16429](https://github.com/BerriAI/litellm/pull/16429)
     - Add new models, delete repeat models, update pricing - [PR #16491](https://github.com/BerriAI/litellm/pull/16491)
     - Update model logging format for custom LLM provider - [PR #16485](https://github.com/BerriAI/litellm/pull/16485)
 
@@ -216,9 +207,6 @@ response = video_generation(
 - **[GET /providers](../../docs/proxy/management_endpoints)**
     - Add GET list of providers endpoint - [PR #16432](https://github.com/BerriAI/litellm/pull/16432)
 
-- **[Model Access Management API](../../docs/proxy/model_access_management)**
-    - Add API Endpoint for creating model access group - [PR #16663](https://github.com/BerriAI/litellm/pull/16663)
-
 #### Features
 
 - **[Video Generation API](../../docs/video_generation)**
@@ -226,14 +214,14 @@ response = video_generation(
 
 - **[Vector Stores](../../docs/vector_stores)**
     - Vector store files stable release - [PR #16643](https://github.com/BerriAI/litellm/pull/16643)
-
-- **[Router](../../docs/routing)**
-    - Support default fallbacks for unknown models - [PR #16419](https://github.com/BerriAI/litellm/pull/16419)
+    - Ensure users can access `search_results` for both stream + non-stream response - [PR #16459](https://github.com/BerriAI/litellm/pull/16459)
 
 #### Bugs
 
+- **[Video Generation API](../../docs/video_generation)**
+    - Fix use GET for `/v1/videos/{video_id}/content` - [PR #16672](https://github.com/BerriAI/litellm/pull/16672)
+
 - **General**
-    - Fix app_roles missing from jwt payload - [PR #16448](https://github.com/BerriAI/litellm/pull/16448)
     - Fix remove generic exception handling - [PR #16599](https://github.com/BerriAI/litellm/pull/16599)
 
 ---
@@ -256,6 +244,7 @@ response = video_generation(
     - UI - Remove Description Field from LLM Credentials - [PR #16608](https://github.com/BerriAI/litellm/pull/16608)
     - UI - Add RunwayML on Admin UI supported models/providers - [PR #16606](https://github.com/BerriAI/litellm/pull/16606)
     - Infra - Migrate Add Model Fields to Backend - [PR #16620](https://github.com/BerriAI/litellm/pull/16620)
+    - Add API Endpoint for creating model access group - [PR #16663](https://github.com/BerriAI/litellm/pull/16663)
 
 - **Teams**
     - UI - Invite User Searchable Team Select - [PR #16454](https://github.com/BerriAI/litellm/pull/16454)
@@ -296,15 +285,47 @@ response = video_generation(
     - Fix /spend/logs/ui Access Control - [PR #16446](https://github.com/BerriAI/litellm/pull/16446)
     - Add pagination for /spend/logs/session/ui endpoint - [PR #16603](https://github.com/BerriAI/litellm/pull/16603)
     - Fix LiteLLM Usage shows key_hash - [PR #16471](https://github.com/BerriAI/litellm/pull/16471)
+    - Fix app_roles missing from jwt payload - [PR #16448](https://github.com/BerriAI/litellm/pull/16448)
 
 ---
 
 ## Logging / Guardrail / Prompt Management Integrations
 
+#### Prometheus Open Source
+
+Prometheus metrics are now available in the open-source version of LiteLLM, providing comprehensive observability for your AI Gateway without requiring an enterprise license.
+
+**Key Metrics Available:**
+- Request rates and latency tracking
+- Model usage and token consumption
+- Error rates and status codes
+- Cache hit/miss rates
+- Cost tracking and budget monitoring
+
+**Quick Start:**
+
+```yaml
+litellm_settings:
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
+```
+
+[Get Started with Prometheus](../../docs/proxy/logging#prometheus)
+
+---
+
 #### New Integration
 
 - **🆕 [Zscaler AI Guard](../../docs/proxy/guardrails/zscaler_ai_guard)**
     - Add Zscaler AI Guard hook for security policy enforcement - [PR #15691](https://github.com/BerriAI/litellm/pull/15691)
+
+#### Logging
+
+- **[Langfuse](../../docs/proxy/logging#langfuse)**
+    - Fix handle null usage values to prevent validation errors - [PR #16396](https://github.com/BerriAI/litellm/pull/16396)
+
+- **[CloudZero](../../docs/proxy/logging)**
+    - Fix updated spend would not be sent to CloudZero - [PR #16201](https://github.com/BerriAI/litellm/pull/16201)
 
 #### Guardrails
 
@@ -348,14 +369,18 @@ response = video_generation(
 - **Embeddings Performance**
     - Use router's O(1) lookup and shared sessions for embeddings - [PR #16344](https://github.com/BerriAI/litellm/pull/16344)
 
+- **Router Reliability**
+    - Support default fallbacks for unknown models - [PR #16419](https://github.com/BerriAI/litellm/pull/16419)
+
 - **Callback Management**
     - Add atexit handlers to flush callbacks for async completions - [PR #16487](https://github.com/BerriAI/litellm/pull/16487)
 
-- **Test Infrastructure**
-    - Fix resolve pytest module name collision for test_transformation.py files - [PR #16661](https://github.com/BerriAI/litellm/pull/16661)
+---
 
-- **Prometheus**
-    - Make Prometheus OSS - now available in open-source version - [PR #16689](https://github.com/BerriAI/litellm/pull/16689)
+## General Proxy Improvements
+
+- **Configuration Management**
+    - Fix update model_cost_map_url to use environment variable - [PR #16429](https://github.com/BerriAI/litellm/pull/16429)
 
 ---
 
@@ -377,15 +402,6 @@ response = video_generation(
 - **General Documentation**
     - Fix container api link in release page - [PR #16440](https://github.com/BerriAI/litellm/pull/16440)
     - Add softgen to projects that are using litellm - [PR #16423](https://github.com/BerriAI/litellm/pull/16423)
-
----
-
-## CI/CD
-
-- **Infrastructure**
-    - Infra - CI/CD - Bump up docker version for e2e ui testing - [PR #16506](https://github.com/BerriAI/litellm/pull/16506)
-    - Infra - Building UI for QA - [PR #16686](https://github.com/BerriAI/litellm/pull/16686)
-    - Speed up litellm mapped tests job on circle ci - [PR #16688](https://github.com/BerriAI/litellm/pull/16688)
 
 ---
 
