@@ -41,6 +41,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy.common_utils.callback_utils import normalize_callback_names
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -48,8 +49,6 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 from litellm.utils import load_credentials_from_list
-
-from litellm.proxy.common_utils.callback_utils import normalize_callback_names
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 
 if TYPE_CHECKING:
