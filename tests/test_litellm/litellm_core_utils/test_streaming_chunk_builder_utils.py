@@ -325,3 +325,32 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
+
+
+def test_cost_field_in_usage_chunks():
+    chunk1_usage = Usage(completion_tokens=1, prompt_tokens=10, total_tokens=11)
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513206,
+        model="openrouter/claude",
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))],
+        usage=chunk1_usage,
+    )
+
+    chunk2_usage = Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15)
+    setattr(chunk2_usage, "cost", 0.00025)
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513207,
+        model="openrouter/claude",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))],
+        usage=chunk2_usage,
+    )
+
+    processor = ChunkProcessor(chunks=[chunk1, chunk2])
+    usage = processor.calculate_usage(chunks=[chunk1, chunk2], model="openrouter/claude", completion_output="Hi")
+
+    assert hasattr(usage, "cost")
+    assert usage.cost == 0.00025
+    assert usage.prompt_tokens == 10
+    assert usage.completion_tokens == 5
