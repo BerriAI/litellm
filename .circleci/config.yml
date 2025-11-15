@@ -1135,15 +1135,15 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-    resource_class: large
-    parallelism: 4
+    resource_class: xlarge
 
     steps:
       - checkout
       - setup_google_dns
       - restore_cache:
           keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-litellm-deps-{{ checksum "requirements.txt" }}-{{ checksum ".circleci/config.yml" }}
+            - v2-litellm-deps-
       - run:
           name: Install Dependencies
           command: |
@@ -1166,17 +1166,15 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - ~/.cache/pip
+          key: v2-litellm-deps-{{ checksum "requirements.txt" }}-{{ checksum ".circleci/config.yml" }}
       # Run pytest and generate JUnit XML report
       - run:
           name: Run litellm tests
           command: |
             pwd
             ls
-            # Split tests across parallel containers using CircleCI test splitting
-            TESTFILES=$(circleci tests glob "tests/test_litellm/**/test_*.py" | circleci tests split --split-by=timings)
-            python -m pytest -vv $TESTFILES --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
+            python -m pytest tests/test_litellm --cov=litellm --cov-report=xml --junitxml=test-results/junit-litellm.xml --durations=10 -n 16 --maxfail=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -2719,6 +2717,9 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -2747,6 +2748,7 @@ jobs:
             pip install "langchain_mcp_adapters==0.0.5"
             pip install "langchain_openai==0.2.1"
             pip install "langgraph==0.3.18"
+            pip install "fastuuid==0.13.5"
       - run:
           name: Install dockerize
           command: |
@@ -2859,6 +2861,9 @@ jobs:
       - run:
           name: Run tests
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
             pwd
             ls
             python -m pytest -vv tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
