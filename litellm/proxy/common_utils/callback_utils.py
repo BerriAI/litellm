@@ -270,8 +270,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
         if "prometheus" in value:
             from litellm.integrations.prometheus import PrometheusLogger
 
-            if PrometheusLogger:
-                PrometheusLogger._mount_metrics_endpoint()
+            PrometheusLogger._mount_metrics_endpoint()
     else:
         litellm.callbacks = [
             get_instance_fn(
