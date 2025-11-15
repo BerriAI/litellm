@@ -14,7 +14,6 @@ import re
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
-import httpx
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
