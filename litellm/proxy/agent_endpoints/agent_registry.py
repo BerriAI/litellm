@@ -71,7 +71,7 @@ class AgentRegistry:
                 if not isinstance(db_agent, dict):
                     raise ValueError("db_agents must be a list of dictionaries")
 
-                self.register_agent(agent_config=AgentConfig(**db_agent))
+                self.register_agent(agent_config=AgentConfig(**db_agent))  # type: ignore
         return self.agent_list
 
     ###########################################################
