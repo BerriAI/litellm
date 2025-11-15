@@ -828,10 +828,13 @@ class MCPServerManager:
             return [], None
 
         try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                response = await client.get(resource_metadata_url)
-                response.raise_for_status()
-                data = response.json()
+            client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.MCP,
+                params={"timeout": 10.0, "follow_redirects": True},
+            )
+            response = await client.get(resource_metadata_url)
+            response.raise_for_status()
+            data = response.json()
         except Exception as exc:  # pragma: no cover - network issues
             verbose_logger.debug(
                 "Failed to fetch MCP OAuth metadata from %s: %s",
@@ -921,12 +924,13 @@ class MCPServerManager:
 
         for url in candidate_urls:
             try:
-                async with httpx.AsyncClient(
-                    timeout=10.0, follow_redirects=True
-                ) as client:
-                    response = await client.get(url)
-                    response.raise_for_status()
-                    data = response.json()
+                client = get_async_httpx_client(
+                    llm_provider=httpxSpecialProvider.MCP,
+                    params={"timeout": 10.0, "follow_redirects": True},
+                )
+                response = await client.get(url)
+                response.raise_for_status()
+                data = response.json()
             except Exception as exc:  # pragma: no cover - network issues
                 verbose_logger.debug(
                     "Failed to fetch authorization metadata from %s: %s",
