@@ -2569,11 +2569,11 @@ class ProxyConfig:
         litellm.credential_list = credential_list_dict
 
         ## NON-LLM CONFIGS eg. MCP tools, vector stores, etc.
-        self._init_non_llm_configs(config=config)
+        await self._init_non_llm_configs(config=config)
 
         return router, router.get_model_list(), general_settings
 
-    def _init_non_llm_configs(self, config: dict):
+    async def _init_non_llm_configs(self, config: dict):
         """
         Initialize non-LLM configs eg. MCP tools, vector stores, etc.
         """
@@ -2592,7 +2592,7 @@ class ProxyConfig:
             litellm_settings = config.get("litellm_settings", {})
             mcp_aliases = litellm_settings.get("mcp_aliases", None)
 
-            global_mcp_server_manager.load_servers_from_config(
+            await global_mcp_server_manager.load_servers_from_config(
                 mcp_servers_config, mcp_aliases
             )
 
