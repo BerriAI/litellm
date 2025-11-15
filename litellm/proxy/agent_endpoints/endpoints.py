@@ -12,6 +12,7 @@ from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -49,19 +50,34 @@ async def get_agents(
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
     try:
+        returned_agents: List[AgentResponse] = []
         if (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         ):
-            return global_agent_registry.get_agent_list()
+            returned_agents = global_agent_registry.get_agent_list()
         key_agents = user_api_key_dict.metadata.get("agents")
         _team_metadata = user_api_key_dict.team_metadata or {}
         team_agents = _team_metadata.get("agents")
         if key_agents is not None:
-            return global_agent_registry.get_agent_list(agent_names=key_agents)
+            returned_agents = global_agent_registry.get_agent_list(
+                agent_names=key_agents
+            )
         if team_agents is not None:
-            return global_agent_registry.get_agent_list(agent_names=team_agents)
-        return []
+            returned_agents = global_agent_registry.get_agent_list(
+                agent_names=team_agents
+            )
+
+        # add is_public field to each agent - we do it this way, to allow setting config agents as public
+        for agent in returned_agents:
+            if agent.litellm_params is None:
+                agent.litellm_params = {}
+            agent.litellm_params["is_public"] = (
+                litellm.public_agent_groups is not None
+                and (agent.agent_name in litellm.public_agent_groups)
+            )
+
+        return returned_agents
     except HTTPException:
         raise
     except Exception as e:

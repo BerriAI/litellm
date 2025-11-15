@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { modelHubCall, modelHubPublicModelsCall, agentHubPublicModelsCall, getProxyBaseUrl } from "./networking";
+import { modelHubCall, modelHubPublicModelsCall, getAgentsList, getProxyBaseUrl } from "./networking";
 import { getConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
@@ -114,11 +114,20 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   // Fetch Agent Hub data
   useEffect(() => {
     const fetchAgentData = async () => {
+      if (!accessToken) {
+        return;
+      }
+
       try {
         setAgentLoading(true);
-        const _agentHubData = await agentHubPublicModelsCall();
-        console.log("AgentHubData:", _agentHubData);
-        setAgentHubData(_agentHubData);
+        const response = await getAgentsList(accessToken);
+        console.log("AgentHubData:", response);
+        let agents = response.agents;
+        let agent_card_list = agents.map((agent: any) => ({
+          ...agent.agent_card_params,
+          ...agent.is_public,
+        }));
+        setAgentHubData(agent_card_list);
       } catch (error) {
         console.error("There was an error fetching the agent data", error);
       } finally {
@@ -129,7 +138,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     if (!publicPage) {
       fetchAgentData();
     }
-  }, [publicPage]);
+  }, [publicPage, accessToken]);
 
   const showModal = (model: ModelGroupInfo) => {
     setSelectedModel(model);
