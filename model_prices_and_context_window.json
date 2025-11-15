@@ -23432,6 +23432,19 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "vertex_ai/moonshotai/kimi-k2-thinking-maas": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "vertex_ai-moonshot_models",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
     "vertex_ai/mistral-medium-3": {
         "input_cost_per_token": 4e-07,
         "litellm_provider": "vertex_ai-mistral_models",
