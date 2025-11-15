@@ -64,16 +64,17 @@ Complete integration for RunwayML's Gen-4 family of models, supporting video gen
 
 **Quick Start:**
 
-```python
-from litellm import video_generation
-
-response = video_generation(
-    model="runwayml/gen4_turbo",
-    prompt="A high quality demo video of litellm ai gateway",
-    input_reference="https://example.com/image.jpg",
-    seconds=5,
-    size="1280x720"
-)
+```bash showLineNumbers title="Generate Video with RunwayML"
+curl --location 'http://localhost:4000/v1/videos' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer sk-1234' \
+--data '{
+    "model": "runwayml/gen4_turbo",
+    "prompt": "A high quality demo video of litellm ai gateway",
+    "input_reference": "https://example.com/image.jpg",
+    "seconds": 5,
+    "size": "1280x720"
+}'
 ```
 
 [Get Started with RunwayML](../../docs/providers/runwayml/videos)
@@ -110,13 +111,13 @@ Complete OpenAI-compatible Vector Store Files API now stable, enabling full file
 
 **Quick Start:**
 
-```python
-from litellm import create_vector_store_file
-
-response = create_vector_store_file(
-    vector_store_id="vs_123",
-    file_id="file_abc"
-)
+```bash showLineNumbers title="Create Vector Store File"
+curl --location 'http://localhost:4000/v1/vector_stores/vs_123/files' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer sk-1234' \
+--data '{
+    "file_id": "file_abc"
+}'
 ```
 
 [Get Started with Vector Stores](../../docs/vector_stores)
