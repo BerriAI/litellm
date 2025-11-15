@@ -285,6 +285,7 @@ const sidebars = {
           items: [
             "proxy/cost_tracking",
             "proxy/custom_pricing",
+            "proxy/sync_models_github",
             "proxy/billing",
           ],
         },
