@@ -4487,13 +4487,9 @@ class ProxyStartupEvent:
         # Prometheus Background Job
         ########################################################
         if litellm.prometheus_initialize_budget_metrics is True:
-            try:
-                from litellm.integrations.prometheus import PrometheusLogger
+            from litellm.integrations.prometheus import PrometheusLogger
 
-                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
-            except Exception:
-                PrometheusLogger = None
-
+            PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
         ########################################################
         # Key Rotation Background Job
         ########################################################

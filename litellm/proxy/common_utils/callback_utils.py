@@ -268,10 +268,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
             litellm.callbacks = imported_list  # type: ignore
 
         if "prometheus" in value:
-            try:
-                from litellm.integrations.prometheus import PrometheusLogger
-            except Exception:
-                PrometheusLogger = None
+            from litellm.integrations.prometheus import PrometheusLogger
 
             if PrometheusLogger:
                 PrometheusLogger._mount_metrics_endpoint()
