@@ -22,6 +22,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 from litellm.proxy.vector_store_endpoints.utils import (
     check_vector_store_permission,
     is_allowed_to_call_vector_store_endpoint,
+    is_allowed_to_call_vector_store_files_endpoint,
 )
 from litellm.types.utils import LlmProviders
 
@@ -58,6 +59,51 @@ async def test_router_avector_store_search_passes_correct_args():
         assert call_args[1]["vector_store_id"] == "test_store_id"
         assert call_args[1]["query"] == "test query"
         assert call_args[1]["custom_llm_provider"] == "bedrock"
+
+
+@pytest.mark.asyncio
+async def test_router_avector_store_file_list_passes_correct_args():
+    with patch(
+        "litellm.vector_store_files.main.alist",
+        new=AsyncMock(return_value={"object": "list", "data": []}),
+    ) as mock_alist:
+        router = litellm.Router(model_list=[])
+
+        result = await router.avector_store_file_list(
+            vector_store_id="test_store_id",
+            limit=5,
+            order="asc",
+            custom_llm_provider="openai",
+        )
+
+        assert result == {"object": "list", "data": []}
+        mock_alist.assert_called_once()
+        call_kwargs = mock_alist.call_args.kwargs
+        assert call_kwargs["vector_store_id"] == "test_store_id"
+        assert call_kwargs["limit"] == 5
+        assert call_kwargs["order"] == "asc"
+        assert call_kwargs["custom_llm_provider"] == "openai"
+
+
+def test_router_vector_store_file_delete_passes_correct_args():
+    with patch(
+        "litellm.vector_store_files.main.delete",
+        return_value={"deleted": True},
+    ) as mock_delete:
+        router = litellm.Router(model_list=[])
+
+        result = router.vector_store_file_delete(
+            vector_store_id="test_store_id",
+            file_id="file-123",
+            custom_llm_provider="openai",
+        )
+
+        assert result == {"deleted": True}
+        mock_delete.assert_called_once()
+        call_kwargs = mock_delete.call_args.kwargs
+        assert call_kwargs["vector_store_id"] == "test_store_id"
+        assert call_kwargs["file_id"] == "file-123"
+        assert call_kwargs["custom_llm_provider"] == "openai"
 
 
 def test_update_request_data_with_litellm_managed_vector_store_registry():
@@ -625,3 +671,94 @@ class TestIsAllowedToCallVectorStoreEndpoint:
                 )
 
         assert exc_info.value.status_code == 403
+
+
+class TestIsAllowedToCallVectorStoreFilesEndpoint:
+    def _mock_provider_config(self):
+        provider_config = MagicMock()
+        provider_config.get_vector_store_file_endpoints_by_type.return_value = {
+            "read": (("GET", "/vector_stores/{vector_store_id}/files"),),
+            "write": (
+                ("POST", "/vector_stores/{vector_store_id}/files"),
+                ("DELETE", "/vector_stores/{vector_store_id}/files/{file_id}"),
+            ),
+        }
+        return provider_config
+
+    def test_allows_access_with_permissions(self):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.url.path = "/v1/vector_stores/my-index/files"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {
+            "allowed_vector_store_indexes": [
+                {"index_name": "my-index", "index_permissions": ["read", "write"]}
+            ]
+        }
+        mock_user_api_key.team_metadata = None
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_store_files_config",
+            return_value=self._mock_provider_config(),
+        ):
+            result = is_allowed_to_call_vector_store_files_endpoint(
+                provider=LlmProviders.OPENAI,
+                vector_store_id="my-index",
+                request=mock_request,
+                user_api_key_dict=mock_user_api_key,
+            )
+
+        assert result is True
+
+    def test_raises_when_permission_missing(self):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url.path = "/v1/vector_stores/my-index/files"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {
+            "allowed_vector_store_indexes": [
+                {"index_name": "my-index", "index_permissions": ["read"]}
+            ]
+        }
+        mock_user_api_key.team_metadata = None
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_store_files_config",
+            return_value=self._mock_provider_config(),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_files_endpoint(
+                    provider=LlmProviders.OPENAI,
+                    vector_store_id="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+
+    def test_returns_none_when_provider_not_supported(self):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.url.path = "/v1/vector_stores/my-index/files"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {}
+        mock_user_api_key.team_metadata = {}
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_store_files_config",
+            return_value=None,
+        ):
+            result = is_allowed_to_call_vector_store_files_endpoint(
+                provider=LlmProviders.OPENAI,
+                vector_store_id="my-index",
+                request=mock_request,
+                user_api_key_dict=mock_user_api_key,
+            )
+
+        assert result is None
