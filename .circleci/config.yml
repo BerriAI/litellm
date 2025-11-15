@@ -1729,7 +1729,7 @@ jobs:
             pwd
             ls
             # Create a script to monitor pytest processes
-            cat > /tmp/monitor_pytest.sh << 'EOF'
+            cat > /tmp/monitor_pytest.sh \<< 'EOF'
             #!/bin/bash
             while true; do
               sleep 60
@@ -1814,7 +1814,7 @@ jobs:
             pwd
             ls
             # Create a script to monitor pytest processes
-            cat > /tmp/monitor_pytest.sh << 'EOF'
+            cat > /tmp/monitor_pytest.sh \<< 'EOF'
             #!/bin/bash
             while true; do
               sleep 60
