@@ -69,13 +69,6 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       roles: rolesWithWriteAccess,
     },
     {
-      "key": "29",
-      "page": "agents",
-      "label": "Agents",
-      "icon": <RobotOutlined style={{ fontSize: "18px" }} />,
-      "roles": rolesWithWriteAccess,
-    },
-    {
       key: "12",
       page: "new_usage",
       label: "Usage",
@@ -153,6 +146,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
           label: "Caching",
           icon: <DatabaseOutlined style={{ fontSize: "18px" }} />,
           roles: all_admin_roles,
+        },
+        {
+          "key": "29",
+          "page": "agents",
+          "label": "Agents",
+          "icon": <RobotOutlined style={{ fontSize: "18px" }} />,
+          "roles": rolesWithWriteAccess,
         },
         {
           key: "25",
