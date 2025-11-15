@@ -610,6 +610,7 @@ async def delete_end_user(
         )
         raise handle_exception_on_proxy(e)
 
+
 @router.get(
     "/customer/list",
     tags=["Customer Management"],
