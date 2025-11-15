@@ -475,6 +475,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "additional_drop_params": None,
     "messages": None,
     "reasoning_effort": None,
+    "verbosity": None,
     "thinking": None,
     "web_search_options": None,
     "service_tier": None,

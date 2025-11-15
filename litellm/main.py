@@ -390,6 +390,7 @@ async def acompletion(
     reasoning_effort: Optional[
         Literal["none", "minimal", "low", "medium", "high", "default"]
     ] = None,
+    verbosity: Optional[Literal["low", "medium", "high"]] = None,
     safety_identifier: Optional[str] = None,
     service_tier: Optional[str] = None,
     # set api_base, api_version, api_key
@@ -961,6 +962,7 @@ def completion(  # type: ignore # noqa: PLR0915
     reasoning_effort: Optional[
         Literal["none", "minimal", "low", "medium", "high", "default"]
     ] = None,
+    verbosity: Optional[Literal["low", "medium", "high"]] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
