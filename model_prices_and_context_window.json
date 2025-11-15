@@ -8515,10 +8515,18 @@
             "/v1/images/generations"
         ]
     },
+    "fal_ai/fal-ai/flux-pro/v1.1": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "fal_ai/fal-ai/flux-pro/v1.1-ultra": {
         "litellm_provider": "fal_ai",
         "mode": "image_generation",
-        "output_cost_per_image": 0.0398,
+        "output_cost_per_image": 0.06,
         "supported_endpoints": [
             "/v1/images/generations"
         ]
@@ -8527,6 +8535,30 @@
         "litellm_provider": "fal_ai",
         "mode": "image_generation",
         "output_cost_per_image": 0.003,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/bytedance/seedream/v3/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/bytedance/dreamina/v3.1/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/ideogram/v3": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
         "supported_endpoints": [
             "/v1/images/generations"
         ]
