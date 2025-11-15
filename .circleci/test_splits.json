@@ -1,13 +1,15 @@
 {
   "logging_testing": {
     "part1": {
-      "description": "Alerting and callback tests",
+      "description": "Alerting, callbacks, and S3 tests",
       "test_files": [
         "tests/logging_callback_tests/test_alerting.py",
         "tests/logging_callback_tests/test_custom_callback_router.py",
         "tests/logging_callback_tests/test_bedrock_knowledgebase_hook.py",
         "tests/logging_callback_tests/test_datadog.py",
-        "tests/logging_callback_tests/test_langfuse_e2e_test.py"
+        "tests/logging_callback_tests/test_langfuse_e2e_test.py",
+        "tests/logging_callback_tests/test_amazing_s3_logs.py",
+        "tests/logging_callback_tests/test_unit_tests_init_callbacks.py"
       ],
       "resource_class": "large",
       "parallel_workers": 8,
@@ -23,7 +25,9 @@
         "tests/logging_callback_tests/test_custom_callback_router.py",
         "tests/logging_callback_tests/test_bedrock_knowledgebase_hook.py",
         "tests/logging_callback_tests/test_datadog.py",
-        "tests/logging_callback_tests/test_langfuse_e2e_test.py"
+        "tests/logging_callback_tests/test_langfuse_e2e_test.py",
+        "tests/logging_callback_tests/test_amazing_s3_logs.py",
+        "tests/logging_callback_tests/test_unit_tests_init_callbacks.py"
       ],
       "resource_class": "large",
       "parallel_workers": 8,
