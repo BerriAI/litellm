@@ -1770,7 +1770,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
     ],
 )
 @pytest.mark.flaky(retries=3, delay=2)
-async def test_call_with_key_over_model_budget(
+async def test_async_call_with_key_over_model_budget(
     prisma_client, request_model, should_pass
 ):
     # 12. Make a call with a key over budget, expect to fail
@@ -1843,6 +1843,12 @@ async def test_call_with_key_over_model_budget(
             },
         )
 
+        # Flush the logging worker to ensure all callbacks complete
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+        
+        if GLOBAL_LOGGING_WORKER._queue is not None:
+            await GLOBAL_LOGGING_WORKER.flush()
+        
         # Wait for the budget callback to complete with polling
         max_wait_time = 10  # Maximum 10 seconds
         poll_interval = 0.5  # Check every 0.5 seconds
