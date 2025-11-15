@@ -285,6 +285,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     router as mcp_management_router,
 )
+from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+    router as model_access_group_management_router,
+)
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
     _add_team_model_to_db,
@@ -292,9 +295,6 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
-)
-from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
-    router as model_access_group_management_router,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
@@ -2241,9 +2241,7 @@ class ProxyConfig:
                                     verbose_proxy_logger.debug(
                                         "mounting metrics endpoint"
                                     )
-                                    PrometheusLogger._mount_metrics_endpoint(
-                                        premium_user
-                                    )
+                                    PrometheusLogger._mount_metrics_endpoint()
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
@@ -5065,14 +5063,12 @@ async def embeddings(  # noqa: PLR0915
                 # Use router's O(1) lookup instead of O(N) iteration through llm_model_list
                 deployment = llm_router.get_deployment(model_id=data["model"])
                 if deployment is not None:
-                    litellm_model = deployment.get("litellm_params", {}).get("model", "")
+                    litellm_params = deployment.get("litellm_params", {}) or {}
+                    litellm_model = litellm_params.get("model", "")
                     # Check if this provider supports token arrays
-                    supports_token_arrays = (
-                        litellm_model in litellm.open_ai_embedding_models
-                        or any(
-                            litellm_model.startswith(provider)
-                            for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
-                        )
+                    supports_token_arrays = litellm_model in litellm.open_ai_embedding_models or any(
+                        litellm_model.startswith(provider)
+                        for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
                     )
                     if not supports_token_arrays:
                         # non-openai/azure embedding model called with token input - decode tokens
@@ -5085,7 +5081,7 @@ async def embeddings(  # noqa: PLR0915
 
         # Use unified request processor (same as chat/completions and responses)
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
-        
+
         # Process the request with all optimizations (shared sessions, network tuning, etc.)
         response = await base_llm_response_processor.base_process_llm_request(
             request=request,
@@ -5105,7 +5101,7 @@ async def embeddings(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
-        
+
         return response
     except Exception as e:
         # Use unified error handler
