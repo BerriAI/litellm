@@ -520,6 +520,51 @@ class TestListMCPServers:
             assert mock_server.credentials == {"auth_value": "top-secret"}
             assert result.status == "healthy"
 
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_handles_missing_credentials_field(self):
+        mock_server = generate_mock_mcp_server_db_record(
+            server_id="server-2", alias="Server 2"
+        )
+        # Simulate ORM object without credentials attribute (e.g., older schema)
+        delattr(mock_server, "credentials")
+
+        mock_prisma_client = MagicMock()
+        mock_health_result = {
+            "status": "healthy",
+            "last_health_check": datetime.now().isoformat(),
+            "error": None,
+        }
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=mock_prisma_client,
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            AsyncMock(return_value=mock_server),
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+            AsyncMock(return_value=mock_health_result),
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+            return_value=True,
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                server_id="server-2", user_api_key_dict=mock_user_auth
+            )
+
+            assert result.server_id == "server-2"
+            # credentials attribute should still be absent and no exception raised
+            assert not hasattr(result, "credentials")
+            assert result.status == "healthy"
+
 
 class TestMCPHealthCheckEndpoints:
     """Test MCP health check endpoints"""

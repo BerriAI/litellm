@@ -3,11 +3,17 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.public_endpoints.provider_create_metadata import (
+    get_provider_create_metadata,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
-from litellm.types.proxy.public_endpoints.public_endpoints import PublicModelHubInfo
+from litellm.types.proxy.public_endpoints.public_endpoints import (
+    PublicModelHubInfo,
+    ProviderCreateInfo,
+)
 from litellm.types.utils import LlmProviders
 
 router = APIRouter()
@@ -74,3 +80,16 @@ async def get_supported_providers() -> List[str]:
     """
 
     return sorted(provider.value for provider in LlmProviders)
+
+
+@router.get(
+    "/public/providers/fields",
+    tags=["public", "providers"],
+    response_model=List[ProviderCreateInfo],
+)
+async def get_provider_fields() -> List[ProviderCreateInfo]:
+    """
+    Return provider metadata required by the dashboard create-model flow.
+    """
+
+    return get_provider_create_metadata()

@@ -31,9 +31,16 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        {
+          type: "category",
+          "label": "Contributing to Guardrails",
+          items: [
+            "adding_provider/simple_guardrail_tutorial",
+            "adding_provider/adding_guardrail_support",
+          ]
+        },
         "proxy/guardrails/test_playground",
         ...[
-          "adding_provider/adding_guardrail_support",
           "proxy/guardrails/aim_security",
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
@@ -130,7 +137,11 @@ const sidebars = {
             "proxy/release_cycle",
           ],
         },
-        "proxy/demo",
+        {
+          "type": "link",
+          "label": "Demo LiteLLM Cloud",
+          "href": "https://www.litellm.ai/cloud"
+        },
         {
           type: "category",
           label: "Admin UI",
@@ -248,6 +259,7 @@ const sidebars = {
           items: [
             "proxy/model_access_guide",
             "proxy/model_access",
+            "proxy/model_access_groups",
             "proxy/team_model_add"
           ]
         },
@@ -273,6 +285,7 @@ const sidebars = {
           items: [
             "proxy/cost_tracking",
             "proxy/custom_pricing",
+            "proxy/sync_models_github",
             "proxy/billing",
           ],
         },
@@ -581,6 +594,7 @@ const sidebars = {
           type: "category",
           label: "RunwayML",
           items: [
+            "providers/runwayml/images",
             "providers/runwayml/videos",
           ]
         },
