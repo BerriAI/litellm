@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.utils import get_server_name_prefix_tool_mcp
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse, ToolParam
@@ -68,16 +69,24 @@ class LiteLLM_Proxy_MCP_Handler:
     async def _get_mcp_tools_from_manager(
         user_api_key_auth: Any,
         mcp_tools_with_litellm_proxy: Optional[Iterable[ToolParam]],
-    ) -> List[MCPTool]:
+    ) -> tuple[List[MCPTool], List[str]]:
         """
         Get available tools from the MCP server manager.
 
         Args:
             user_api_key_auth: User authentication info for access control
             mcp_tools_with_litellm_proxy: ToolParam objects with server_url starting with "litellm_proxy"
+
+        Returns:
+            List of MCP tools
+            List names of allowed MCP servers
         """
         from litellm.proxy._experimental.mcp_server.server import (
             _get_tools_from_mcp_servers,
+            _get_allowed_mcp_servers_from_mcp_server_names,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
         )
 
         mcp_servers: List[str] = []
@@ -92,15 +101,40 @@ class LiteLLM_Proxy_MCP_Handler:
                 ):
                     mcp_servers.append(server_url.split("/")[-1])
 
-        return await _get_tools_from_mcp_servers(
+        tools = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=None,
             mcp_servers=mcp_servers,
             mcp_server_auth_headers=None,
         )
+        allowed_mcp_server_ids = (
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+        )
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(
+            allowed_mcp_server_ids
+        )
+
+        allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
+            mcp_servers=mcp_servers,
+            allowed_mcp_servers=allowed_mcp_servers,
+        )
+
+        server_names: List[str] = []
+        for server in allowed_mcp_servers:
+            if server is None:
+                continue
+            server_name = getattr(server, "server_name", None) or getattr(
+                server, "alias", None
+            ) or getattr(server, "name", None)
+            if isinstance(server_name, str):
+                server_names.append(server_name)
+
+        return tools, server_names
 
     @staticmethod
-    def _deduplicate_mcp_tools(mcp_tools: List[Any]) -> List[Any]:
+    def _deduplicate_mcp_tools(
+        mcp_tools: List[MCPTool], allowed_mcp_servers: List[str]
+    ) -> tuple[List[MCPTool], dict[str, str]]:
         """
         Deduplicate MCP tools by name, keeping the first occurrence of each tool.
 
@@ -109,28 +143,34 @@ class LiteLLM_Proxy_MCP_Handler:
 
         Returns:
             List of deduplicated MCP tools
+            The returned dictionary maps each tool_name to the server_name
         """
         seen_names = set()
         deduplicated_tools = []
+        tool_server_map: dict[str, str] = {}
 
         for tool in mcp_tools:
-            tool_name = (
-                getattr(tool, "name", None)
-                if hasattr(tool, "name")
-                else tool.get("name")
-                if isinstance(tool, dict)
-                else None
-            )
+            if isinstance(tool, dict):
+                tool_name = tool.get("name")
+            else:
+                tool_name = getattr(tool, "name", None)
+
             if tool_name and tool_name not in seen_names:
                 seen_names.add(tool_name)
                 deduplicated_tools.append(tool)
+                if len(allowed_mcp_servers) == 1:
+                    tool_server_map[tool_name] = allowed_mcp_servers[0]
+                else:
+                    tool_server_map[tool_name], _ = get_server_name_prefix_tool_mcp(
+                        tool_name
+                    )
 
-        return deduplicated_tools
+        return deduplicated_tools, tool_server_map
 
     @staticmethod
     def _filter_mcp_tools_by_allowed_tools(
-        mcp_tools: List[Any], mcp_tools_with_litellm_proxy: List[ToolParam]
-    ) -> List[Any]:
+        mcp_tools: List[MCPTool], mcp_tools_with_litellm_proxy: List[ToolParam]
+    ) -> List[MCPTool]:
         """Filter MCP tools based on allowed_tools parameter from the original tool configs."""
         # Collect all allowed tool names from all MCP tool configs
         allowed_tool_names = set()
@@ -147,13 +187,11 @@ class LiteLLM_Proxy_MCP_Handler:
         # Filter tools based on allowed names
         filtered_tools = []
         for mcp_tool in mcp_tools:
-            tool_name = (
-                getattr(mcp_tool, "name", None)
-                if hasattr(mcp_tool, "name")
-                else mcp_tool.get("name")
-                if isinstance(mcp_tool, dict)
-                else None
-            )
+            if isinstance(mcp_tool, dict):
+                tool_name = mcp_tool.get("name")
+            else:
+                tool_name = getattr(mcp_tool, "name", None)
+
             if tool_name and tool_name in allowed_tool_names:
                 filtered_tools.append(mcp_tool)
 
@@ -162,13 +200,9 @@ class LiteLLM_Proxy_MCP_Handler:
     @staticmethod
     async def _process_mcp_tools_to_openai_format(
         user_api_key_auth: Any, mcp_tools_with_litellm_proxy: List[ToolParam]
-    ) -> List[Any]:
+    ) -> tuple[List[Any], dict[str, str]]:
         """
-        Centralized method to process MCP tools through the complete pipeline:
-        1. Fetch tools from MCP manager
-        2. Filter based on allowed_tools parameter
-        3. Deduplicate tools by name
-        4. Transform to OpenAI format
+        Centralized method to process MCP tools through the complete pipeline.
 
         Args:
             user_api_key_auth: User authentication info for access control
@@ -176,40 +210,26 @@ class LiteLLM_Proxy_MCP_Handler:
 
         Returns:
             List of tools in OpenAI format ready to be sent to the LLM
+            The returned dictionary maps each tool_name to the server_name
         """
-        if not mcp_tools_with_litellm_proxy:
-            return []
-
-        # Step 1: Fetch MCP tools from manager
-        mcp_tools_fetched = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
-            user_api_key_auth=user_api_key_auth,
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        (
+            deduplicated_mcp_tools,
+            tool_server_map,
+        ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+            user_api_key_auth,
+            mcp_tools_with_litellm_proxy,
         )
 
-        # Step 2: Filter tools based on allowed_tools parameter
-        filtered_mcp_tools = (
-            LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-                mcp_tools=mcp_tools_fetched,
-                mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-            )
-        )
-
-        # Step 3: Deduplicate tools after filtering
-        deduplicated_mcp_tools = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
-            filtered_mcp_tools
-        )
-
-        # Step 4: Transform to OpenAI format
         openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
             deduplicated_mcp_tools
         )
 
-        return openai_tools
+        return openai_tools, tool_server_map
 
     @staticmethod
     async def _process_mcp_tools_without_openai_transform(
         user_api_key_auth: Any, mcp_tools_with_litellm_proxy: List[ToolParam]
-    ) -> List[Any]:
+    ) -> tuple[List[Any], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
         This is useful for cases where we need the original MCP tool objects (e.g., for events).
@@ -222,10 +242,13 @@ class LiteLLM_Proxy_MCP_Handler:
             List of filtered and deduplicated MCP tools in their original format
         """
         if not mcp_tools_with_litellm_proxy:
-            return []
+            return [], {}
 
         # Step 1: Fetch MCP tools from manager
-        mcp_tools_fetched = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+        (
+            mcp_tools_fetched,
+            allowed_mcp_servers,
+        ) = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
             user_api_key_auth=user_api_key_auth,
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         )
@@ -239,11 +262,14 @@ class LiteLLM_Proxy_MCP_Handler:
         )
 
         # Step 3: Deduplicate tools after filtering
-        deduplicated_mcp_tools = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
-            filtered_mcp_tools
+        (
+            deduplicated_mcp_tools,
+            tool_server_map,
+        ) = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+            filtered_mcp_tools, allowed_mcp_servers
         )
 
-        return deduplicated_mcp_tools
+        return deduplicated_mcp_tools, tool_server_map
 
     @staticmethod
     def _transform_mcp_tools_to_openai(mcp_tools: List[Any]) -> List[Any]:
@@ -371,7 +397,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     async def _execute_tool_calls(
-        tool_calls: List[Any], user_api_key_auth: Any
+        tool_server_map: dict[str, str], tool_calls: List[Any], user_api_key_auth: Any
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -402,7 +428,10 @@ class LiteLLM_Proxy_MCP_Handler:
                 # Import here to avoid circular import
                 from litellm.proxy.proxy_server import proxy_logging_obj
 
+                server_name = tool_server_map[tool_name]
+
                 result = await global_mcp_server_manager.call_tool(
+                    server_name=server_name,
                     name=tool_name,
                     arguments=parsed_arguments,
                     user_api_key_auth=user_api_key_auth,
@@ -497,8 +526,10 @@ class LiteLLM_Proxy_MCP_Handler:
                     else:
                         assistant_message_content.append(content)
 
-        # Add assistant message with content and function calls
-        if assistant_message_content or function_calls:
+        # Add assistant message only if there's actual content (not empty)
+        # For example, gemini requires that function call turns come immediately after user turns,
+        # so we should not add empty assistant messages
+        if assistant_message_content:
             follow_up_input.append(
                 {
                     "type": "message",
@@ -507,9 +538,9 @@ class LiteLLM_Proxy_MCP_Handler:
                 }
             )
 
-            # Add function calls after assistant message
-            for function_call in function_calls:
-                follow_up_input.append(function_call)
+        # Add function calls (these can come directly after user message for LLM)
+        for function_call in function_calls:
+            follow_up_input.append(function_call)
 
         # Add tool results (function call outputs)
         for tool_result in tool_results:
@@ -549,6 +580,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_discovery_events: List[Any],
         call_params: Dict[str, Any],
         previous_response_id: Optional[str],
+        tool_server_map: dict[str, str],
         **kwargs,
     ) -> Any:
         """
@@ -577,6 +609,7 @@ class LiteLLM_Proxy_MCP_Handler:
         return MCPEnhancedStreamingIterator(
             base_iterator=None,  # Will be created internally
             mcp_events=mcp_discovery_events,  # Pre-generated MCP discovery events
+            tool_server_map=tool_server_map,
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
             user_api_key_auth=kwargs.get("user_api_key_auth"),
             original_request_params=request_params,

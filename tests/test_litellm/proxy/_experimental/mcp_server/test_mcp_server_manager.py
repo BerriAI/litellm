@@ -8,12 +8,14 @@ from fastapi import HTTPException
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../../../")
 
+import httpx
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
 )
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp import MCPAuth
+from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPOAuthMetadata
 
 
 class TestMCPServerManager:
@@ -217,6 +219,133 @@ class TestMCPServerManager:
 
         assert len(result) == 1
         assert result[0].name == "github_tool_1"
+
+    @pytest.mark.asyncio
+    async def test_fetch_oauth_metadata_from_resource_returns_servers_and_scopes(self):
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_servers": [
+                "https://auth1.example.com",
+                "https://auth2.example.com",
+            ],
+            "scopes_supported": ["read", "write"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        async_client_context = MagicMock()
+        async_client_context.__aenter__ = AsyncMock(return_value=mock_client)
+        async_client_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.httpx.AsyncClient",
+            return_value=async_client_context,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://protected.example.com/.well-known/oauth"
+            )
+
+        assert servers == [
+            "https://auth1.example.com",
+            "https://auth2.example.com",
+        ]
+        assert scopes == ["read", "write"]
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_falls_back_to_origin_when_no_auth_servers(self):
+        manager = MCPServerManager()
+        server_url = "https://example.com/public/mcp"
+
+        request = httpx.Request("GET", server_url)
+        response_obj = httpx.Response(
+            status_code=401,
+            request=request,
+            headers={"WWW-Authenticate": 'Bearer scope="read"'},
+        )
+
+        def raise_http_error():
+            raise httpx.HTTPStatusError(
+                "unauthorized", request=request, response=response_obj
+            )
+
+        response_obj.raise_for_status = MagicMock(side_effect=raise_http_error)
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=response_obj)
+
+        async_client_context = MagicMock()
+        async_client_context.__aenter__ = AsyncMock(return_value=mock_client)
+        async_client_context.__aexit__ = AsyncMock(return_value=None)
+
+        mock_metadata = MCPOAuthMetadata(
+            scopes=None,
+            authorization_url="https://example.com/auth",
+            token_url="https://example.com/token",
+            registration_url=None,
+        )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.httpx.AsyncClient",
+            return_value=async_client_context,
+        ), patch.object(
+            manager,
+            "_fetch_oauth_metadata_from_resource",
+            AsyncMock(return_value=([], None)),
+        ), patch.object(
+            manager,
+            "_attempt_well_known_discovery",
+            AsyncMock(return_value=([], None)),
+        ), patch.object(
+            manager,
+            "_fetch_authorization_server_metadata",
+            AsyncMock(return_value=mock_metadata),
+        ) as mock_fetch_auth:
+            result = await manager._descovery_metadata(server_url)
+
+        mock_fetch_auth.assert_awaited_once_with(["https://example.com"])
+        assert result is mock_metadata
+        assert result.scopes == ["read"]
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_overrides_discovery_metadata(self):
+        manager = MCPServerManager()
+
+        discovered_metadata = MCPOAuthMetadata(
+            scopes=["discovered"],
+            authorization_url="https://discovered.example.com/auth",
+            token_url="https://discovered.example.com/token",
+            registration_url="https://discovered.example.com/register",
+        )
+
+        async def fake_discovery(server_url: str):
+            assert server_url == "https://example.com/mcp"
+            return discovered_metadata
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        config = {
+            "example": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "scopes": ["config"],
+                "authorization_url": "https://config.example.com/auth",
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.scopes == ["config"]  # config overrides discovery
+        assert server.authorization_url == "https://config.example.com/auth"
+        assert server.token_url == "https://discovered.example.com/token"
+        assert (
+            server.registration_url == "https://discovered.example.com/register"
+        )
 
     @pytest.mark.asyncio
     async def test_list_tools_handles_missing_server_alias(self):
@@ -453,7 +582,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="allowed_tool",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -482,7 +611,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="blocked_tool",
                 arguments={"param": "value"},
-                server_name_from_prefix="test-server",
+                server_name="test-server",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
@@ -529,7 +658,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="allowed_tool",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -558,7 +687,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="banned_tool",
                 arguments={"param": "value"},
-                server_name_from_prefix="test-server",
+                server_name="test-server",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
@@ -605,7 +734,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="any_tool",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -644,7 +773,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="tool2",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -655,7 +784,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="tool3",
                 arguments={"param": "value"},
-                server_name_from_prefix="test-server",
+                server_name="test-server",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
@@ -992,9 +1121,9 @@ class TestMCPServerManager:
 
         # Should succeed
         await manager.pre_call_tool_check(
+            server_name="Test Server",
             name="read_wiki_structure",
             arguments={"repoName": "facebook/react"},
-            server_name_from_prefix="test",
             user_api_key_auth=user_auth,
             proxy_logging_obj=proxy_logging,
             server=server,
@@ -1038,9 +1167,9 @@ class TestMCPServerManager:
         # Should fail with 403
         with pytest.raises(HTTPException) as exc_info:
             await manager.pre_call_tool_check(
+                server_name="Test Server",
                 name="ask_question",
                 arguments={"question": "test"},
-                server_name_from_prefix="test",
                 user_api_key_auth=user_auth,
                 proxy_logging_obj=proxy_logging,
                 server=server,
@@ -1186,7 +1315,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="getpetbyid",
             arguments={"petId": "1"},
-            server_name_from_prefix="my_api_mcp",
+            server_name="my_api_mcp",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -1196,7 +1325,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="findpetsbystatus",
             arguments={"status": "available"},
-            server_name_from_prefix="my_api_mcp",
+            server_name="my_api_mcp",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -1207,7 +1336,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="deletepet",
                 arguments={"petId": "1"},
-                server_name_from_prefix="my_api_mcp",
+                server_name="my_api_mcp",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
@@ -1245,6 +1374,7 @@ class TestMCPServerManager:
         # Register the server and map a tool to it
         manager.registry = {"test-server": server}
         manager.tool_name_to_mcp_server_name_mapping["test_tool"] = "test-server"
+        manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = "test-server"
 
         # Create mock client that tracks context manager usage
         mock_client = MagicMock()
@@ -1302,6 +1432,7 @@ class TestMCPServerManager:
 
         # Call the tool
         result = await manager.call_tool(
+            server_name="test-server",
             name="test_tool",
             arguments={"param": "value"},
             user_api_key_auth=user_api_key_auth,
