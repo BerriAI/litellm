@@ -47,7 +47,6 @@ pip install litellm==1.80.0.rc.1
 
 - **🆕 RunwayML Provider** - Complete video generation, image generation, and text-to-speech support
 - **GPT-5.1 Family Support** - Day-0 support for OpenAI's latest GPT-5.1 and GPT-5.1-Codex models
-- **Agent Registration (A2A Spec)** - Support for agent registration and discovery following the Agent-to-Agent specification
 - **Prometheus OSS** - Prometheus metrics now available in open-source version
 - **Embeddings Performance** - O(1) lookup optimization for router embeddings with shared sessions
 - **Vector Store Files** - Stable release of vector store file management
@@ -82,6 +81,21 @@ response = video_generation(
 [Get Started with RunwayML](../../docs/providers/runwayml/videos)
 
 ---
+
+### Prometheus Metrics - Open Source
+
+Prometheus metrics are now available in the open-source version of LiteLLM, providing comprehensive observability for your AI Gateway without requiring an enterprise license.
+
+**Quick Start:**
+
+```yaml
+litellm_settings:
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
+```
+
+[Get Started with Prometheus](../../docs/proxy/logging#prometheus)
+
 
 ## New Models / Updated Models
 
@@ -291,28 +305,6 @@ response = video_generation(
 
 ## Logging / Guardrail / Prompt Management Integrations
 
-#### Prometheus Open Source
-
-Prometheus metrics are now available in the open-source version of LiteLLM, providing comprehensive observability for your AI Gateway without requiring an enterprise license.
-
-**Key Metrics Available:**
-- Request rates and latency tracking
-- Model usage and token consumption
-- Error rates and status codes
-- Cache hit/miss rates
-- Cost tracking and budget monitoring
-
-**Quick Start:**
-
-```yaml
-litellm_settings:
-  success_callback: ["prometheus"]
-  failure_callback: ["prometheus"]
-```
-
-[Get Started with Prometheus](../../docs/proxy/logging#prometheus)
-
----
 
 #### New Integration
 
