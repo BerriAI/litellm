@@ -419,10 +419,9 @@ curl -X PUT 'http://localhost:4000/access_group/production-models/update' \
 ```
 
 The API key from Step 4 now automatically has access to `gemini-pro` without any changes to the key itself.
+### API Reference - Access Group Management
 
-:::info API Reference
 For complete API documentation including all endpoints, parameters, and response schemas, see the [Access Group Management API Reference](https://litellm-api.up.railway.app/#/model%20management/create_model_group_access_group_new_post).
-:::
 
 ## Managing Access Groups via UI
 

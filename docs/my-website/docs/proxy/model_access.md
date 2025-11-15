@@ -219,4 +219,8 @@ When `include_metadata=true` is specified, the response includes fallback inform
 | `include_metadata` | boolean | Include additional model metadata including fallbacks |
 | `fallback_type` | string | Filter fallbacks by type: `general`, `context_window`, or `content_policy` |
 
+## Advanced: Model Access Groups
+
+For advanced use cases, use [Model Access Groups](./model_access_groups) to dynamically group multiple models and manage access without restarting the proxy.
+
 ## [Role Based Access Control (RBAC)](./jwt_auth_arch)
