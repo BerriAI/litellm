@@ -8,7 +8,6 @@
 import os
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
-from urllib.parse import urlencode
 
 import httpx
 
