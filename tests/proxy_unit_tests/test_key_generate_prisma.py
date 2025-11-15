@@ -1843,7 +1843,32 @@ async def test_call_with_key_over_model_budget(
             },
         )
 
-        await asyncio.sleep(2)
+        # Wait for the budget callback to complete with polling
+        max_wait_time = 10  # Maximum 10 seconds
+        poll_interval = 0.5  # Check every 0.5 seconds
+        waited = 0
+        budget_updated = False
+        
+        while waited < max_wait_time:
+            await asyncio.sleep(poll_interval)
+            waited += poll_interval
+            
+            # Check if budget has been updated by trying to get spend from cache
+            try:
+                # Try to access the budget limiter cache to see if spend was recorded
+                virtual_spend_key = f"virtual_key_spend:{hash_token(generated_key)}:{request_model}:86400"
+                cached_spend = await model_budget_limiter.dual_cache.async_get_cache(
+                    key=virtual_spend_key
+                )
+                if cached_spend is not None and float(cached_spend) > 0:
+                    budget_updated = True
+                    break
+            except Exception:
+                pass
+        
+        if not budget_updated:
+            # Fallback to original 2 second wait if we couldn't verify
+            await asyncio.sleep(max(0, 2 - waited))
 
         # use generated key to auth in
         result = await user_api_key_auth(request=request, api_key=bearer_token)
