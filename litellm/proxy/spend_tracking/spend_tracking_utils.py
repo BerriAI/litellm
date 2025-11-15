@@ -655,8 +655,6 @@ def _get_response_for_spend_logs_payload(
         if response_obj is None:
             return "{}"
 
-        # If the response is a JSON string, attempt to parse it so downstream
-        # consumers always get structured JSON instead of a double-encoded string.
         parsed_response: Any = response_obj
         if isinstance(response_obj, str):
             try:
