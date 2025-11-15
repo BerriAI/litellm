@@ -517,10 +517,13 @@ export function KeyEditView({
         <KeyLifecycleSettings
           form={form}
           autoRotationEnabled={autoRotationEnabled}
-          onAutoRotationChange={setAutoRotationEnabled}
+          onAutoRotationChange={setAutoRotationEnabled}q
           rotationInterval={rotationInterval}
           onRotationIntervalChange={setRotationInterval}
         />
+        <Form.Item name="duration" hidden initialValue="">
+          <Input />
+        </Form.Item>
       </div>
 
       {/* Hidden form field for token */}
