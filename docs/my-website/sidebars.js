@@ -315,8 +315,8 @@ const sidebars = {
           type: "category",
           label: "/batches",
           items: [
-            "batches",
             "proxy/managed_batches",
+            { type: "doc", id: "batches", label: "Batches" }
           ]
         },
         "containers",
