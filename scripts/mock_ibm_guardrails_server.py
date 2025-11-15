@@ -234,8 +234,8 @@ async def root():
 
 @app.post("/api/v1/text/contents")
 async def text_detection(
-    detector_id: str,  # query parameter
     request: TextDetectionRequest,
+    detector_id: str = Header(None),  # query parameter
     authorization: Optional[str] = Header(None),
 ):
     """
@@ -243,6 +243,7 @@ async def text_detection(
 
     Args:
         request: Detection request with content and detector ID
+        detector_id: ID of detector
         authorization: Bearer token for authentication
 
     Returns:
