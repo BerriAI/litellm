@@ -112,13 +112,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       icon: <SafetyOutlined style={{ fontSize: "18px" }} />,
       roles: all_admin_roles,
     },
+    { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: "18px" }} /> },
     {
       key: "26",
       page: "tools",
       label: "Tools",
       icon: <ToolOutlined style={{ fontSize: "18px" }} />,
       children: [
-        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: "18px" }} /> },
         {
           key: "28",
           page: "search-tools",

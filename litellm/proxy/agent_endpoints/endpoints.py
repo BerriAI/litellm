@@ -29,7 +29,7 @@ router = APIRouter()
     "/v1/agents",
     tags=["[beta] Agents"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=List[AgentConfig],
+    response_model=List[AgentResponse],
 )
 async def get_agents(
     request: Request,
@@ -43,7 +43,7 @@ async def get_agents(
       -H "Authorization: Bearer your-key" \
     ```
 
-    Returns: List[AgentConfig]
+    Returns: List[AgentResponse]
 
     """
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
@@ -154,12 +154,12 @@ async def create_agent(
             agent=request, prisma_client=prisma_client, created_by=created_by
         )
 
-        agent_name = result.get("agent_name", "Unknown")
-        agent_id = result.get("agent_id", "Unknown")
+        agent_name = result.agent_name
+        agent_id = result.agent_id
 
         # Also register in memory
         try:
-            AGENT_REGISTRY.register_agent(agent_config=request)
+            AGENT_REGISTRY.register_agent(agent_config=result)
             verbose_proxy_logger.info(
                 f"Successfully registered agent '{agent_name}' (ID: {agent_id}) in memory"
             )
@@ -168,7 +168,7 @@ async def create_agent(
                 f"Failed to register agent '{agent_name}' (ID: {agent_id}) in memory: {reg_error}"
             )
 
-        return AgentResponse(**result)
+        return result
 
     except HTTPException:
         raise
@@ -205,14 +205,14 @@ async def get_agent_by_id(agent_id: str):
                 where={"agent_id": agent_id}
             )
             if agent is not None:
-                agent = dict(agent)
+                agent = AgentResponse(**agent.model_dump())  # type: ignore
 
         if agent is None:
             raise HTTPException(
                 status_code=404, detail=f"Agent with ID {agent_id} not found"
             )
 
-        return AgentResponse(**agent)
+        return agent
     except HTTPException:
         raise
     except Exception as e:
@@ -295,13 +295,13 @@ async def update_agent(
         # deregister in memory
         AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))  # type: ignore
         # register in memory
-        AGENT_REGISTRY.register_agent(agent_config=request)
+        AGENT_REGISTRY.register_agent(agent_config=result)
 
         verbose_proxy_logger.info(
             f"Successfully updated agent '{existing_agent.get('agent_name')}' (ID: {agent_id}) in memory"
         )
 
-        return AgentResponse(**result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -521,7 +521,7 @@ async def make_agent_public(
                 where={"agent_id": agent_id}
             )
             if agent is not None:
-                agent = dict(agent)
+                agent = AgentResponse(**agent.model_dump())  # type: ignore
 
             if agent is None:
                 raise HTTPException(
@@ -531,12 +531,12 @@ async def make_agent_public(
         if litellm.public_agent_groups is None:
             litellm.public_agent_groups = []
         # handle duplicates
-        if agent.get("agent_name") in litellm.public_agent_groups:
+        if agent.agent_name in litellm.public_agent_groups:
             raise HTTPException(
                 status_code=400,
-                detail=f"Agent with name {agent.get('agent_name')} already in public agent groups",
+                detail=f"Agent with name {agent.agent_name} already in public agent groups",
             )
-        litellm.public_agent_groups.append(agent.get("agent_name"))  # type: ignore
+        litellm.public_agent_groups.append(agent.agent_name)
 
         # Load existing config
         config = await proxy_config.get_config()

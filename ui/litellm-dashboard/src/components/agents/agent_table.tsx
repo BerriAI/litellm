@@ -34,7 +34,6 @@ const AgentTable: React.FC<AgentTableProps> = ({
       <TableHead>
         <TableRow>
           <TableHeaderCell>Agent Name</TableHeaderCell>
-          <TableHeaderCell>Model</TableHeaderCell>
           <TableHeaderCell>Description</TableHeaderCell>
           <TableHeaderCell>Created At</TableHeaderCell>
           {isAdmin && <TableHeaderCell>Actions</TableHeaderCell>}
@@ -45,9 +44,6 @@ const AgentTable: React.FC<AgentTableProps> = ({
           <TableRow key={agent.agent_id} className="hover:bg-gray-50 cursor-pointer">
             <TableCell onClick={() => onAgentClick(agent.agent_id)}>
               {agent.agent_name}
-            </TableCell>
-            <TableCell onClick={() => onAgentClick(agent.agent_id)}>
-              {agent.litellm_params?.model || "N/A"}
             </TableCell>
             <TableCell onClick={() => onAgentClick(agent.agent_id)}>
               {agent.agent_card_params?.description || "No description"}
