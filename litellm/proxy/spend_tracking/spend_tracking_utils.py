@@ -655,17 +655,10 @@ def _get_response_for_spend_logs_payload(
         if response_obj is None:
             return "{}"
 
-        parsed_response: Any = response_obj
-        if isinstance(response_obj, str):
-            try:
-                parsed_response = json.loads(response_obj)
-            except (TypeError, ValueError):
-                parsed_response = response_obj
-
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
-            {"response": parsed_response}
+            {"response": response_obj}
         )
-        sanitized_response = sanitized_wrapper.get("response", parsed_response)
+        sanitized_response = sanitized_wrapper.get("response", response_obj)
 
         if sanitized_response is None:
             return "{}"
