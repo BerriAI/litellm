@@ -8523,10 +8523,34 @@
             "/v1/images/generations"
         ]
     },
+    "fal_ai/fal-ai/flux/schnell": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.003,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "fal_ai/fal-ai/imagen4/preview": {
         "litellm_provider": "fal_ai",
         "mode": "image_generation",
         "output_cost_per_image": 0.0398,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/imagen4/preview/fast": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/imagen4/preview/ultra": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
         "supported_endpoints": [
             "/v1/images/generations"
         ]
@@ -23744,6 +23768,22 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0
     },
+    "voyage/voyage-3.5": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "voyage",
+        "max_input_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0
+    },
+    "voyage/voyage-3.5-lite": {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "voyage",
+        "max_input_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0
+    },
     "voyage/voyage-code-2": {
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "voyage",
@@ -24789,7 +24829,9 @@
             "1280x720",
             "720x1280"
         ],
-        "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+        "metadata": {
+            "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+        }
     },
     "runwayml/gen4_aleph": {
         "litellm_provider": "runwayml",
@@ -24807,7 +24849,9 @@
             "1280x720",
             "720x1280"
         ],
-        "comment": "15 credits per second @ $0.01 per credit = $0.15 per second"
+        "metadata": {
+            "comment": "15 credits per second @ $0.01 per credit = $0.15 per second"
+        }
     },
     "runwayml/gen3a_turbo": {
         "litellm_provider": "runwayml",
@@ -24825,7 +24869,9 @@
             "1280x720",
             "720x1280"
         ],
-        "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+        "metadata": {
+            "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+        }
     },
     "runwayml/gen4_image": {
         "litellm_provider": "runwayml",
@@ -24844,7 +24890,9 @@
             "1280x720",
             "1920x1080"
         ],
-        "comment": "5 credits per 720p image or 8 credits per 1080p image @ $0.01 per credit. Using 5 credits ($0.05) as base cost"
+        "metadata": {
+            "comment": "5 credits per 720p image or 8 credits per 1080p image @ $0.01 per credit. Using 5 credits ($0.05) as base cost"
+        }
     },
     "runwayml/gen4_image_turbo": {
         "litellm_provider": "runwayml",
@@ -24863,6 +24911,17 @@
             "1280x720",
             "1920x1080"
         ],
-        "comment": "2 credits per image (any resolution) @ $0.01 per credit = $0.02 per image"
+        "metadata": {
+            "comment": "2 credits per image (any resolution) @ $0.01 per credit = $0.02 per image"
+        }
+    },
+    "runwayml/eleven_multilingual_v2": {
+        "litellm_provider": "runwayml",
+        "mode": "audio_speech",
+        "input_cost_per_character": 3e-07,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "metadata": {
+            "comment": "Estimated cost based on standard TTS pricing. RunwayML uses ElevenLabs models."
+        }
     }
 }

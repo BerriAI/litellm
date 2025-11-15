@@ -545,9 +545,7 @@ export default function KeyInfoView({
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
                 {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
-                  <Button variant="light" onClick={() => setIsEditing(true)}>
-                    Edit Settings
-                  </Button>
+                  <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
                 )}
               </div>
 
