@@ -38,7 +38,6 @@ Features:
 - **Control Guardrails per API Key**
 - **Custom Branding**
     - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
-    - ✅ [Public Model Hub](#public-model-hub)
     - ✅ [Custom Email Branding](./email.md#customizing-email-branding)
 
 
@@ -905,9 +904,11 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 '
 ```
 
-## Public Model Hub 
+## Public AI Hub 
 
-Share a public page of available models for users
+Share a public page of available models and agents for users
+
+[Learn more](./ai_hub.md)
 
 <Image img={require('../../img/model_hub.png')} style={{ width: '900px', height: 'auto' }}/>
 
