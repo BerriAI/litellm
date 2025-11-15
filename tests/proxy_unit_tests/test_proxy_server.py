@@ -545,17 +545,22 @@ def test_embedding(mock_aembedding, client_no_auth):
             "input": ["good morning from litellm"],
         }
 
-        pre_call_return_value = {
-            **test_data,
-            "metadata": {"source": "unit-test"},
-            "proxy_server_request": {"path": "/v1/embeddings"},
-            "secret_fields": [],
-        }
+        async def _pre_call_hook_side_effect(**kwargs):
+            data = kwargs["data"]
+            metadata = {**(data.get("metadata") or {}), "source": "unit-test"}
+            data["metadata"] = metadata
+            proxy_request = {**(data.get("proxy_server_request") or {})}
+            proxy_request["path"] = "/v1/embeddings"
+            data["proxy_server_request"] = proxy_request
+            return data
+
+        async def _post_call_success_side_effect(**kwargs):
+            return kwargs["response"]
 
         with patch.object(
             litellm.proxy.proxy_server.proxy_logging_obj,
             "pre_call_hook",
-            new=AsyncMock(return_value=pre_call_return_value),
+            new=AsyncMock(side_effect=_pre_call_hook_side_effect),
         ) as mock_pre_call_hook, patch.object(
             litellm.proxy.proxy_server.proxy_logging_obj,
             "during_call_hook",
@@ -563,7 +568,7 @@ def test_embedding(mock_aembedding, client_no_auth):
         ) as mock_during_hook, patch.object(
             litellm.proxy.proxy_server.proxy_logging_obj,
             "post_call_success_hook",
-            new=AsyncMock(return_value=None),
+            new=AsyncMock(side_effect=_post_call_success_side_effect),
         ):
             response = client_no_auth.post("/v1/embeddings", json=test_data)
 
@@ -571,6 +576,9 @@ def test_embedding(mock_aembedding, client_no_auth):
             model="azure/text-embedding-ada-002",
             input=["good morning from litellm"],
             specific_deployment=True,
+            litellm_call_id=mock.ANY,
+            litellm_logging_obj=mock.ANY,
+            request_timeout=mock.ANY,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
@@ -580,6 +588,9 @@ def test_embedding(mock_aembedding, client_no_auth):
         print(len(result["data"][0]["embedding"]))
         assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
 
+        call_metadata = mock_aembedding.call_args.kwargs["metadata"]
+        assert call_metadata.get("source") == "unit-test"
+
         pre_call_kwargs = mock_pre_call_hook.await_args_list[0].kwargs
         assert (
             pre_call_kwargs.get("call_type") == "aembedding"
@@ -587,8 +598,8 @@ def test_embedding(mock_aembedding, client_no_auth):
 
         during_call_kwargs = mock_during_hook.await_args_list[0].kwargs
         assert (
-            during_call_kwargs.get("call_type") == "aembedding"
-        ), f"expected during_call_hook to receive call_type='aembedding', got {during_call_kwargs.get('call_type')}"
+            during_call_kwargs.get("call_type") == "embeddings"
+        ), f"expected during_call_hook to receive call_type='embeddings', got {during_call_kwargs.get('call_type')}"
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
@@ -609,11 +620,15 @@ def test_bedrock_embedding(mock_aembedding, client_no_auth):
         mock_aembedding.assert_called_once_with(
             model="amazon-embeddings",
             input=["good morning from litellm"],
+            litellm_call_id=mock.ANY,
+            litellm_logging_obj=mock.ANY,
+            request_timeout=mock.ANY,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
         )
         assert response.status_code == 200
+        print(response.status_code, response.text)
         result = response.json()
         print(len(result["data"][0]["embedding"]))
         assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
@@ -2401,3 +2416,61 @@ def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content
         error_calls = [call[0][0] for call in mock_logger.error.call_args_list]
         assert any("Path exists:" in call for call in error_calls)
         assert mock_logger.info.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_update_config_success_callback_normalization():
+    """
+    Ensure success_callback values are normalized to lowercase when updating config.
+    This prevents delete_callback (which searches lowercase) from failing on mixed case inputs like 'SQS'.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import ConfigYAML
+
+    # Ensure feature is enabled and prisma_client is set
+    setattr(proxy_server, "store_model_in_db", True)
+    setattr(proxy_server, "proxy_logging_obj", MagicMock())
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_config = MagicMock()
+            self.db.litellm_config.upsert = AsyncMock()
+
+        # proxy_server.update_config expects this to be sync returning a dict
+        def jsonify_object(self, obj):
+            return obj
+
+    setattr(proxy_server, "prisma_client", MockPrisma())
+
+    class MockProxyConfig:
+        def __init__(self):
+            self.saved_config = None
+
+        async def get_config(self):
+            # Existing config has one lowercase callback already
+            return {"litellm_settings": {"success_callback": ["langfuse"]}}
+
+        async def save_config(self, new_config: dict):
+            self.saved_config = new_config
+
+        async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):
+            return None
+
+    mock_proxy_config = MockProxyConfig()
+    setattr(proxy_server, "proxy_config", mock_proxy_config)
+
+    # Update config with mixed-case callbacks - expect normalization to lowercase
+    config_update = ConfigYAML(litellm_settings={"success_callback": ["SQS", "sQs"]})
+    await proxy_server.update_config(config_update)
+
+    saved = mock_proxy_config.saved_config
+    assert saved is not None, "save_config was not called"
+    callbacks = saved["litellm_settings"]["success_callback"]
+
+    # Deduped and normalized
+    assert "sqs" in callbacks
+    assert "SQS" not in callbacks
+    assert "sQs" not in callbacks
+    # Existing callback should still be present
+    assert "langfuse" in callbacks
