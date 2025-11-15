@@ -26,6 +26,7 @@ import { Tab, TabGroup, TabList, TabPanels, TabPanel, Switch } from "@tremor/rea
 import AuditLogs from "./audit_logs";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { truncateString } from "@/utils/textUtils";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -813,6 +814,8 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
         ? `${guardrailEntries.length} guardrails`
         : "-";
 
+  const truncatedRequestId = truncateString(row.original.request_id, 64);
+
   return (
     <div className="p-6 bg-gray-50 space-y-6 w-full max-w-full overflow-hidden box-border">
       {/* Combined Info Card */}
@@ -822,11 +825,15 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 w-full max-w-full overflow-hidden">
           <div className="space-y-2">
-            <div className="flex items-start">
-              <span className="font-medium w-1/3 flex-shrink-0">Request ID:</span>
-              <span className="font-mono text-sm min-w-0 flex-1 truncate block" title={row.original.request_id}>
-                {row.original.request_id}
-              </span>
+            <div className="flex">
+              <span className="font-medium w-1/3">Request ID:</span>
+              {row.original.request_id.length > 64 ? (
+                <Tooltip title={row.original.request_id}>
+                  <span className="font-mono text-sm">{truncatedRequestId}</span>
+                </Tooltip>
+              ) : (
+                <span className="font-mono text-sm">{row.original.request_id}</span>
+              )}
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Model:</span>

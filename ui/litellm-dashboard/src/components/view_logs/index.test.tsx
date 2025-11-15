@@ -46,4 +46,18 @@ describe("Request Viewer", () => {
     const { getByText } = render(<RequestViewer row={createRow()} />);
     expect(getByText("Request Details")).toBeInTheDocument();
   });
+
+  it("should truncate the request id if it is longer than 64 characters", () => {
+    const LONG_REQUEST_ID = "a".repeat(128);
+    const TRUNCATED_REQUEST_ID = `${"a".repeat(64)}...`;
+    const { getByText } = render(
+      <RequestViewer
+        row={createRow({
+          request_id: LONG_REQUEST_ID,
+        })}
+      />,
+    );
+
+    expect(getByText(TRUNCATED_REQUEST_ID)).toBeInTheDocument();
+  });
 });
