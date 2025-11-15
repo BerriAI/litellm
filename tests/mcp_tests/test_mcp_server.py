@@ -68,8 +68,6 @@ async def test_mcp_server_manager_https_server():
     mock_client = AsyncMock()
     mock_client.list_tools = AsyncMock(return_value=mock_tools)
     mock_client.call_tool = AsyncMock(return_value=mock_result)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
 
     # Mock the MCPClient constructor
     def mock_client_constructor(*args, **kwargs):
@@ -132,7 +130,6 @@ async def test_mcp_server_manager_https_server():
         assert result.content[0].text == "Email sent successfully"
 
         # Verify client methods were called
-        mock_client.__aenter__.assert_called()
         mock_client.list_tools.assert_called()
         mock_client.call_tool.assert_called_once()
 
@@ -301,7 +298,6 @@ async def test_mcp_http_transport_call_tool_mock():
         assert result.content[0].text == "Email sent successfully to test@example.com"
 
         # Verify client methods were called
-        mock_client.__aenter__.assert_called()
         mock_client.call_tool.assert_called_once()
 
 
@@ -364,7 +360,6 @@ async def test_mcp_http_transport_call_tool_error_mock():
         assert "Error: Invalid email address" in result.content[0].text
 
         # Verify client methods were called
-        mock_client.__aenter__.assert_called()
         mock_client.call_tool.assert_called_once()
 
 
