@@ -31,6 +31,7 @@ Get your API key from [fal.ai](https://fal.ai/).
 
 | Model Name | Description | Documentation |
 |------------|-------------|---------------|
+| `fal_ai/fal-ai/flux-pro/v1.1` | FLUX Pro v1.1 - Balanced speed and quality | [Docs ↗](https://fal.ai/models/fal-ai/flux-pro/v1.1) |
 | `fal_ai/flux/schnell` | Flux Schnell - Low-latency generation with `image_size` support | [Docs ↗](https://fal.ai/models/fal-ai/flux/schnell) |
 | `fal_ai/fal-ai/bytedance/seedream/v3/text-to-image` | ByteDance Seedream v3 - Text-to-image with `image_size` control | [Docs ↗](https://fal.ai/models/fal-ai/bytedance/seedream/v3/text-to-image) |
 | `fal_ai/fal-ai/bytedance/dreamina/v3.1/text-to-image` | ByteDance Dreamina v3.1 - Text-to-image with `image_size` control | [Docs ↗](https://fal.ai/models/fal-ai/bytedance/dreamina/v3.1/text-to-image) |

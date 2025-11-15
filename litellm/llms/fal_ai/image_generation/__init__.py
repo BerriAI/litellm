@@ -3,6 +3,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 )
 
 from .bria_transformation import FalAIBriaConfig
+from .flux_pro_v11_transformation import FalAIFluxProV11Config
 from .flux_pro_v11_ultra_transformation import FalAIFluxProV11UltraConfig
 from .flux_schnell_transformation import FalAIFluxSchnellConfig
 from .imagen4_transformation import FalAIImagen4Config
@@ -21,6 +22,7 @@ __all__ = [
     "FalAIImagen4Config",
     "FalAIRecraftV3Config",
     "FalAIBriaConfig",
+    "FalAIFluxProV11Config",
     "FalAIFluxProV11UltraConfig",
     "FalAIFluxSchnellConfig",
     "FalAIStableDiffusionConfig",
@@ -49,8 +51,10 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
         return FalAIRecraftV3Config()
     elif "bria" in model_lower:
         return FalAIBriaConfig()
-    elif "flux-pro" in model_lower and "ultra" in model_lower:
-        return FalAIFluxProV11UltraConfig()
+    elif "flux-pro" in model_lower:
+        if "ultra" in model_lower:
+            return FalAIFluxProV11UltraConfig()
+        return FalAIFluxProV11Config()
     elif "flux/schnell" in model_lower or "flux-schnell" in model_lower or "schnell" in model_lower:
         return FalAIFluxSchnellConfig()
     elif "bytedance/seedream" in model_lower:
