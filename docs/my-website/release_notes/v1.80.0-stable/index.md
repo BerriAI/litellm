@@ -35,7 +35,7 @@ ghcr.io/berriai/litellm:v1.80.0.rc.1
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.80.0.rc.1
+pip install litellm==1.80.0
 ```
 
 </TabItem>
