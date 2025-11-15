@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, Iterable, List, Optional, Union
 
 from pydantic import BaseModel
 from typing_extensions import Literal, Required, TypedDict
@@ -282,6 +282,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     top_k: Optional[int]
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
+    context_management: Optional[Dict[str, Any]]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
