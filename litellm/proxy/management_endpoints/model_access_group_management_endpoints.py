@@ -6,7 +6,7 @@ Endpoints here:
 """
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -251,8 +251,6 @@ async def create_model_group(
     from litellm.proxy.proxy_server import (
         llm_router,
         prisma_client,
-        proxy_config,
-        proxy_logging_obj,
     )
     
     verbose_proxy_logger.debug(
