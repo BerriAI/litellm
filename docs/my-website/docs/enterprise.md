@@ -16,7 +16,7 @@ Get free 7-day trial key [here](https://www.litellm.ai/enterprise#trial)
 
 Includes all enterprise features.
 
-<Image img={require('../img/enterprise_vs_oss.png')} />
+<Image img={require('../img/enterprise_vs_oss_2.png')} />
 
 [**Procurement available via AWS / Azure Marketplace**](./data_security.md#legalcompliance-faqs)
 
