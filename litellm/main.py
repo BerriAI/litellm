@@ -185,6 +185,7 @@ from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
+from .llms.zai.chat.transformation import ZaiChatConfig
 from .llms.petals.completion import handler as petals_handler
 from .llms.predibase.chat.handler import PredibaseChatCompletion
 from .llms.replicate.chat.handler import completion as replicate_chat_completion
@@ -285,13 +286,13 @@ heroku_transformation = HerokuChatConfig()
 oci_transformation = OCIChatConfig()
 ovhcloud_transformation = OVHCloudChatConfig()
 lemonade_transformation = LemonadeChatConfig()
+zai_transformation = ZaiChatConfig()
 
 MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
 ####### COMPLETION ENDPOINTS ################
 
 
 class LiteLLM:
-
     def __init__(
         self,
         *,
@@ -1132,7 +1133,6 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
-
         (
             model,
             messages,
@@ -2106,7 +2106,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             try:
                 if use_base_llm_http_handler:
-
                     response = base_llm_http_handler.completion(
                         model=model,
                         messages=messages,
@@ -3190,9 +3189,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -3540,7 +3539,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
         elif custom_llm_provider == "gradient_ai":
-
             api_base = litellm.api_base or api_base
             response = base_llm_http_handler.completion(
                 model=model,
@@ -3588,6 +3586,34 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             pass
+        elif custom_llm_provider == "zai":
+            api_key = (
+                api_key
+                or litellm.zai_key
+                or get_secret_str("ZAI_API_KEY")
+                or litellm.api_key
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=zai_transformation,
+            )
+
+            pass
         elif custom_llm_provider == "lemonade":
             api_key = (
                 api_key
@@ -3613,6 +3639,29 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=encoding,
                 stream=stream,
                 provider_config=lemonade_transformation,
+            )
+
+            pass
+        elif custom_llm_provider == "zai":
+            api_key = api_key or litellm.api_key or get_secret_str("ZAI_API_KEY")
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=zai_transformation,
             )
 
             pass
@@ -5272,9 +5321,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -6343,9 +6392,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         thinking_blocks = [
             chunk
@@ -6356,9 +6405,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = (
-                processor.get_combined_thinking_content(thinking_blocks)
-            )
+            response["choices"][0]["message"][
+                "thinking_blocks"
+            ] = processor.get_combined_thinking_content(thinking_blocks)
 
         reasoning_chunks = [
             chunk
@@ -6369,9 +6418,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         annotation_chunks = [
             chunk

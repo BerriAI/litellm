@@ -369,6 +369,8 @@ def get_llm_provider(  # noqa: PLR0915
         # bytez models
         elif model.startswith("bytez/"):
             custom_llm_provider = "bytez"
+        elif model.startswith("zai/"):
+            custom_llm_provider = "zai"
         elif model.startswith("lemonade/"):
             custom_llm_provider = "lemonade"
         elif model.startswith("heroku/"):
