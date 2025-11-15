@@ -132,11 +132,6 @@ def prisma_client():
     ### add connection pool + pool timeout args
     params = {"connection_limit": 100, "pool_timeout": 60}
     database_url = os.getenv("DATABASE_URL")
-    
-    # If DATABASE_URL is not set, use a default test database URL
-    if not database_url:
-        database_url = "postgresql://postgres:postgres@localhost:5432/circle_test"
-    
     modified_url = append_query_params(database_url, params)
     os.environ["DATABASE_URL"] = modified_url
 
