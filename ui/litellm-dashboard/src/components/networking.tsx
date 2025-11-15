@@ -5310,6 +5310,36 @@ export const patchPromptCall = async (accessToken: string, promptId: string, pro
   }
 };
 
+export const createAgentCall = async (accessToken: string, agentData: any) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...agentData,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Create agent response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create agent:", error);
+    throw error;
+  }
+};
+
 export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails` : `/guardrails`;
@@ -6419,6 +6449,33 @@ export const resetEmailEventSettings = async (accessToken: string) => {
 export { type UserInfo } from "./view_users/types"; // Re-export UserInfo
 export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
 
+export const deleteAgentCall = async (accessToken: string, agentId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}` : `/v1/agents/${agentId}`;
+
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Delete agent response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete agent:", error);
+    throw error;
+  }
+};
+
 export const deleteGuardrailCall = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
@@ -6500,6 +6557,33 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
     return data;
   } catch (error) {
     console.error("Failed to get guardrail provider specific parameters:", error);
+    throw error;
+  }
+};
+
+export const getAgentInfo = async (accessToken: string, agentId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}` : `/v1/agents/${agentId}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get agent info");
+    }
+
+    const data = await response.json();
+    console.log("Agent info response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get agent info:", error);
     throw error;
   }
 };

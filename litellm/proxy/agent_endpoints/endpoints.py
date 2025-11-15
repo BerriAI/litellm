@@ -15,7 +15,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.agents import AgentConfig, AgentMakePublicResponse, AgentResponse
+from litellm.types.agents import (
+    AgentConfig,
+    AgentMakePublicResponse,
+    AgentResponse,
+    PatchAgentRequest,
+)
 
 router = APIRouter()
 
@@ -297,6 +302,95 @@ async def update_agent(
         )
 
         return AgentResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch(
+    "/v1/agents/{agent_id}",
+    tags=["[beta] Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=AgentResponse,
+)
+async def patch_agent(
+    agent_id: str,
+    request: PatchAgentRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update an existing agent
+
+    Example Request:
+    ```bash
+    curl -X PUT "http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "agent": {
+                "agent_name": "updated-agent",
+                "agent_card_params": {
+                    "protocolVersion": "1.0",
+                    "name": "Updated Agent",
+                    "description": "Updated description",
+                    "url": "http://localhost:9999/",
+                    "version": "1.1.0",
+                    "defaultInputModes": ["text"],
+                    "defaultOutputModes": ["text"],
+                    "capabilities": {
+                        "streaming": true
+                    },
+                    "skills": []
+                },
+                "litellm_params": {
+                    "make_public": false
+                }
+            }
+        }'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+
+    try:
+        # Check if agent exists
+        existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
+            where={"agent_id": agent_id}
+        )
+        if existing_agent is not None:
+            existing_agent = dict(existing_agent)
+
+        if existing_agent is None:
+            raise HTTPException(
+                status_code=404, detail=f"Agent with ID {agent_id} not found"
+            )
+
+        # Get the user ID from the API key auth
+        updated_by = user_api_key_dict.user_id or "unknown"
+
+        result = await AGENT_REGISTRY.patch_agent_in_db(
+            agent_id=agent_id,
+            agent=request,
+            prisma_client=prisma_client,
+            updated_by=updated_by,
+        )
+
+        # deregister in memory
+        AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))  # type: ignore
+        # register in memory
+        AGENT_REGISTRY.register_agent(agent_config=result)
+
+        verbose_proxy_logger.info(
+            f"Successfully updated agent '{existing_agent.get('agent_name')}' (ID: {agent_id}) in memory"
+        )
+
+        return result
     except HTTPException:
         raise
     except Exception as e:

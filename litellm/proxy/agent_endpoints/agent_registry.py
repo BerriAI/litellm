@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
-from litellm.types.agents import AgentConfig
+from litellm.types.agents import AgentConfig, PatchAgentRequest
 
 
 class AgentRegistry:
@@ -139,6 +139,63 @@ class AgentRegistry:
             return dict(deleted_agent)
         except Exception as e:
             raise Exception(f"Error deleting agent from DB: {str(e)}")
+
+    async def patch_agent_in_db(
+        self,
+        agent_id: str,
+        agent: PatchAgentRequest,
+        prisma_client: PrismaClient,
+        updated_by: str,
+    ) -> AgentConfig:
+        """
+        Patch an agent in the database.
+
+        Get the existing agent from the database and patch it with the new values.
+
+        Args:
+            agent_id: The ID of the agent to patch
+            agent: The new agent values to patch
+            prisma_client: The Prisma client to use
+            updated_by: The user ID of the user who is patching the agent
+
+        Returns:
+            The patched agent
+        """
+        try:
+
+            existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
+                where={"agent_id": agent_id}
+            )
+            if existing_agent is not None:
+                existing_agent = dict(existing_agent)
+
+            if existing_agent is None:
+                raise Exception(f"Agent with ID {agent_id} not found")
+
+            augment_agent = {**existing_agent, **agent}
+            update_data = {}
+            if augment_agent.get("agent_name"):
+                update_data["agent_name"] = augment_agent.get("agent_name")
+            if augment_agent.get("litellm_params"):
+                update_data["litellm_params"] = safe_dumps(
+                    augment_agent.get("litellm_params")
+                )
+            if augment_agent.get("agent_card_params"):
+                update_data["agent_card_params"] = safe_dumps(
+                    augment_agent.get("agent_card_params")
+                )
+            # Patch agent in DB
+            patched_agent = await prisma_client.db.litellm_agentstable.update(
+                where={"agent_id": agent_id},
+                data={
+                    **update_data,
+                    "updated_by": updated_by,
+                    "updated_at": datetime.now(timezone.utc),
+                },
+            )
+            return AgentConfig(**patched_agent.model_dump())  # type: ignore
+        except Exception as e:
+            raise Exception(f"Error patching agent in DB: {str(e)}")
 
     async def update_agent_in_db(
         self,

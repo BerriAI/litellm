@@ -12,6 +12,7 @@ import {
   KeyOutlined,
   LineChartOutlined,
   PlayCircleOutlined,
+  RobotOutlined,
   SafetyOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -66,6 +67,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       label: "Models + Endpoints",
       icon: <BlockOutlined style={{ fontSize: "18px" }} />,
       roles: rolesWithWriteAccess,
+    },
+    {
+      "key": "29",
+      "page": "agents",
+      "label": "Agents",
+      "icon": <RobotOutlined style={{ fontSize: "18px" }} />,
+      "roles": rolesWithWriteAccess,
     },
     {
       key: "12",

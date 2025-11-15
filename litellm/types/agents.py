@@ -168,6 +168,12 @@ class AgentConfig(TypedDict, total=False):
     litellm_params: Dict[str, Any]  # allow for any future litellm params
 
 
+class PatchAgentRequest(TypedDict, total=False):
+    agent_name: str
+    agent_card_params: AgentCard
+    litellm_params: Dict[str, Any]
+
+
 # Request/Response models for CRUD endpoints
 
 
