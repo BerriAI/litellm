@@ -1,5 +1,6 @@
 import React from "react";
-import { Table, TableHead, TableRow, TableHeaderCell, TableBody, TableCell, Button } from "@tremor/react";
+import { Table, TableHead, TableRow, TableHeaderCell, TableBody, TableCell, Button, Icon } from "@tremor/react";
+import { TrashIcon } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
 import { Agent } from "./types";
 
@@ -65,16 +66,20 @@ const AgentTable: React.FC<AgentTableProps> = ({
             </TableCell>
             {isAdmin && (
               <TableCell>
-                <Button
-                  size="xs"
-                  color="red"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteClick(agent.agent_id, agent.agent_name);
-                  }}
-                >
-                  Delete
-                </Button>
+                <div className="flex space-x-2">
+                  <Tooltip title="Delete agent">
+                    <Icon
+                      icon={TrashIcon}
+                      size="sm"
+                      className="cursor-pointer text-red-500 hover:text-red-700"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteClick(agent.agent_id, agent.agent_name);
+                      }}
+                      aria-label="Delete agent"
+                    />
+                  </Tooltip>
+                </div>
               </TableCell>
             )}
           </TableRow>
