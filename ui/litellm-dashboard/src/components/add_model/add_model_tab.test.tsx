@@ -19,6 +19,15 @@ vi.mock("../networking", async () => {
     modelAvailableCall: vi.fn().mockResolvedValue({
       data: [{ id: "model-group-1" }, { id: "model-group-2" }],
     }),
+    getProviderCreateMetadata: vi.fn().mockResolvedValue([
+      {
+        provider: "OpenAI",
+        provider_display_name: "OpenAI",
+        litellm_provider: "openai",
+        default_model_placeholder: "gpt-3.5-turbo",
+        credential_fields: [],
+      },
+    ]),
   };
 });
 

@@ -45,3 +45,22 @@ def test_get_provider_fields_returns_metadata():
     credential_keys = {field["key"] for field in openai_fields["credential_fields"]}
     assert {"api_base", "api_key"}.issubset(credential_keys)
 
+    # Every provider exposed by `/public/providers` (i.e. every LlmProviders value)
+    # should have a corresponding entry in `/public/providers/fields`.
+    expected_litellm_providers = {provider.value for provider in LlmProviders}
+    actual_litellm_providers = {item["litellm_provider"] for item in payload}
+    assert expected_litellm_providers.issubset(actual_litellm_providers)
+
+    # Sanity check for runwayml specifically – it should be present and use the
+    # default API base + API key credential fields at minimum.
+    runway_entries = [
+        item for item in payload if item["litellm_provider"] == "runwayml"
+    ]
+    assert (
+        len(runway_entries) >= 1
+    ), "Expected runwayml provider metadata in /public/providers/fields"
+    runway_credential_keys = {
+        field["key"] for field in runway_entries[0]["credential_fields"]
+    }
+    assert {"api_base", "api_key"}.issubset(runway_credential_keys)
+
