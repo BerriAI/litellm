@@ -45,7 +45,8 @@
     ]
   },
   "engines": {
-    "node": ">=16.14"
+    "node": ">=16.14",
+    "npm": ">=8.3.0"
   },
   "overrides": {
     "webpack-dev-server": ">=5.2.1",
