@@ -100,7 +100,7 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
     {
       key: "16",
       page: "model-hub-table",
-      label: "Model Hub",
+      label: "AI Hub",
       icon: <AppstoreOutlined style={{ fontSize: "18px" }} />,
     },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: "18px" }} /> },

@@ -8,7 +8,7 @@ import PublicModelHub from "./public_model_hub";
 import MakeModelPublicForm from "./make_model_public_form";
 import ModelFilters from "./model_filters";
 import UsefulLinksManagement from "./useful_links_management";
-import { Card, Text, Title, Button, Badge } from "@tremor/react";
+import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { Modal } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Table as TableInstance } from "@tanstack/react-table";
@@ -189,12 +189,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     <div className="w-full mx-4 h-[75vh]">
       {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
+          {/* Header with Title, Description and URL */}
           <div className="flex justify-between items-center mb-6">
             <div className="flex flex-col items-start">
-              <Title className="text-center">Model Hub</Title>
+              <Title className="text-center">AI Hub</Title>
               {isAdminRole(userRole || "") ? (
                 <p className="text-sm text-gray-600">
-                  Make models public for developers to know what models are available on the proxy.
+                  Make models and agents public for developers to know what's available.
                 </p>
               ) : (
                 <p className="text-sm text-gray-600">A list of all public model names personally available to you.</p>
@@ -228,26 +229,51 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
             </div>
           )}
 
-          {/* Model Filters and Table */}
-          <Card>
-            {/* Filters */}
-            <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
+          {/* Tab System for Model Hub and Agent Hub */}
+          <TabGroup>
+            <TabList className="mb-4">
+              <Tab>Model Hub</Tab>
+              <Tab>Agent Hub</Tab>
+            </TabList>
 
-            {/* Model Table */}
-            <ModelDataTable
-              columns={modelHubColumns(showModal, copyToClipboard, publicPage)}
-              data={filteredData}
-              isLoading={loading}
-              table={tableRef}
-              defaultSorting={[{ id: "model_group", desc: false }]}
-            />
-          </Card>
+            <TabPanels>
+              {/* Model Hub Tab */}
+              <TabPanel>
+                {/* Model Filters and Table */}
+                <Card>
+                  {/* Filters */}
+                  <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
 
-          <div className="mt-4 text-center space-y-2">
-            <Text className="text-sm text-gray-600">
-              Showing {filteredData.length} of {modelHubData?.length || 0} models
-            </Text>
-          </div>
+                  {/* Model Table */}
+                  <ModelDataTable
+                    columns={modelHubColumns(showModal, copyToClipboard, publicPage)}
+                    data={filteredData}
+                    isLoading={loading}
+                    table={tableRef}
+                    defaultSorting={[{ id: "model_group", desc: false }]}
+                  />
+                </Card>
+
+                <div className="mt-4 text-center space-y-2">
+                  <Text className="text-sm text-gray-600">
+                    Showing {filteredData.length} of {modelHubData?.length || 0} models
+                  </Text>
+                </div>
+              </TabPanel>
+
+              {/* Agent Hub Tab */}
+              <TabPanel>
+                <Card>
+                  <div className="p-8 text-center">
+                    <Title>Agent Hub</Title>
+                    <Text className="mt-4 text-gray-600">
+                      Agent Hub coming soon - manage and deploy AI agents here.
+                    </Text>
+                  </div>
+                </Card>
+              </TabPanel>
+            </TabPanels>
+          </TabGroup>
         </div>
       ) : (
         <Card className="mx-auto max-w-xl mt-10">
