@@ -9,13 +9,14 @@ from fastapi import HTTPException
 sys.path.insert(0, "../../../../../")
 
 import httpx
+
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
 )
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp import MCPAuth
-from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPOAuthMetadata
+from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 
 
 class TestMCPServerManager:
@@ -237,13 +238,9 @@ class TestMCPServerManager:
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        async_client_context = MagicMock()
-        async_client_context.__aenter__ = AsyncMock(return_value=mock_client)
-        async_client_context.__aexit__ = AsyncMock(return_value=None)
-
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.httpx.AsyncClient",
-            return_value=async_client_context,
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
         ):
             servers, scopes = await manager._fetch_oauth_metadata_from_resource(
                 "https://protected.example.com/.well-known/oauth"
@@ -277,10 +274,6 @@ class TestMCPServerManager:
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=response_obj)
 
-        async_client_context = MagicMock()
-        async_client_context.__aenter__ = AsyncMock(return_value=mock_client)
-        async_client_context.__aexit__ = AsyncMock(return_value=None)
-
         mock_metadata = MCPOAuthMetadata(
             scopes=None,
             authorization_url="https://example.com/auth",
@@ -289,8 +282,8 @@ class TestMCPServerManager:
         )
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.httpx.AsyncClient",
-            return_value=async_client_context,
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
         ), patch.object(
             manager,
             "_fetch_oauth_metadata_from_resource",
