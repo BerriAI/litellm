@@ -128,7 +128,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
         let agent_card_list = agents.map((agent: any) => ({
           agent_id: agent.agent_id,
           ...agent.agent_card_params,
-          is_public: agent.is_public,
+          is_public: agent.litellm_params.is_public,
         }));
         setAgentHubData(agent_card_list);
       } catch (error) {

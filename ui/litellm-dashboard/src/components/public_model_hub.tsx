@@ -1383,7 +1383,19 @@ if _public_card.supports_authenticated_extended_card:
                   <div className="mt-2 text-right">
                     <button
                       onClick={() => {
-                        const codeSnippet = `base_url = '${selectedAgent.url}'
+                        const codeSnippet = `from a2a.client import A2ACardResolver, A2AClient
+from a2a.types import (
+    AgentCard,
+    MessageSendParams,
+    SendMessageRequest,
+    SendStreamingMessageRequest,
+)
+from a2a.utils.constants import (
+    AGENT_CARD_WELL_KNOWN_PATH,
+    EXTENDED_AGENT_CARD_PATH,
+)
+
+base_url = '${selectedAgent.url}'
 
 resolver = A2ACardResolver(
     httpx_client=httpx_client,
