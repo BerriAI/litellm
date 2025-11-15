@@ -637,7 +637,7 @@ files = [
     {file = "cffi-1.17.1-cp39-cp39-win_amd64.whl", hash = "sha256:d016c76bdd850f3c626af19b0542c9677ba156e4ee4fccfdd7848803533ef662"},
     {file = "cffi-1.17.1.tar.gz", hash = "sha256:1c39c6016c32bc48dd54561950ebd6836e1670f2ae46128f67cf49e789c52824"},
 ]
-markers = {main = "(platform_python_implementation != \"PyPy\" or extra == \"proxy\") and python_version < \"3.14\"", dev = "python_version < \"3.14\" and platform_python_implementation != \"PyPy\"", proxy-dev = "python_version < \"3.14\" and platform_python_implementation != \"PyPy\""}
+markers = {main = "(platform_python_implementation != \"PyPy\" or extra == \"proxy\") and python_version < \"3.10\"", dev = "python_version < \"3.10\" and platform_python_implementation != \"PyPy\"", proxy-dev = "python_version < \"3.10\" and platform_python_implementation != \"PyPy\""}
 
 [package.dependencies]
 pycparser = "*"
@@ -735,7 +735,7 @@ files = [
     {file = "cffi-2.0.0-cp39-cp39-win_amd64.whl", hash = "sha256:b882b3df248017dba09d6b16defe9b5c407fe32fc7c65a9c69798e6175601be9"},
     {file = "cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529"},
 ]
-markers = {main = "(platform_python_implementation != \"PyPy\" or extra == \"proxy\") and python_version >= \"3.14\"", dev = "python_version >= \"3.14\" and platform_python_implementation != \"PyPy\"", proxy-dev = "python_version >= \"3.14\" and platform_python_implementation != \"PyPy\""}
+markers = {main = "(platform_python_implementation != \"PyPy\" or extra == \"proxy\") and python_version >= \"3.10\"", dev = "python_version >= \"3.10\" and platform_python_implementation != \"PyPy\"", proxy-dev = "python_version >= \"3.10\" and platform_python_implementation != \"PyPy\""}
 
 [package.dependencies]
 pycparser = {version = "*", markers = "implementation_name != \"PyPy\""}
@@ -2194,7 +2194,7 @@ files = [
     {file = "grpcio-1.70.0-cp39-cp39-win_amd64.whl", hash = "sha256:a31d7e3b529c94e930a117b2175b2efd179d96eb3c7a21ccb0289a8ab05b645c"},
     {file = "grpcio-1.70.0.tar.gz", hash = "sha256:8d1584a68d5922330025881e63a6c1b54cc8117291d382e4fa69339b6d914c56"},
 ]
-markers = {main = "python_version < \"3.14\" and extra == \"extra-proxy\"", dev = "python_version < \"3.14\"", proxy-dev = "python_version < \"3.14\""}
+markers = {main = "python_version < \"3.10\" and extra == \"extra-proxy\"", dev = "python_version < \"3.10\"", proxy-dev = "python_version < \"3.10\""}
 
 [package.extras]
 protobuf = ["grpcio-tools (>=1.70.0)"]
@@ -2269,7 +2269,7 @@ files = [
     {file = "grpcio-1.76.0-cp39-cp39-win_amd64.whl", hash = "sha256:acab0277c40eff7143c2323190ea57b9ee5fd353d8190ee9652369fae735668a"},
     {file = "grpcio-1.76.0.tar.gz", hash = "sha256:7be78388d6da1a25c0d5ec506523db58b18be22d9c37d8d3a32c08be4987bd73"},
 ]
-markers = {main = "python_version >= \"3.14\" and extra == \"extra-proxy\"", dev = "python_version >= \"3.14\"", proxy-dev = "python_version >= \"3.14\""}
+markers = {main = "python_version >= \"3.10\" and extra == \"extra-proxy\"", dev = "python_version >= \"3.10\"", proxy-dev = "python_version >= \"3.10\""}
 
 [package.dependencies]
 typing-extensions = ">=4.12,<5.0"
@@ -2997,15 +2997,15 @@ files = [
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.4"
+version = "0.4.5"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_proxy_extras-0.4.4-py3-none-any.whl", hash = "sha256:73584acaf77de9be448a7ace38dcec92ea2da7dd9e4bb37f455e5c5fdf8eb1ab"},
-    {file = "litellm_proxy_extras-0.4.4.tar.gz", hash = "sha256:2c1b02d18ddf93a1b9f3a3c13d30952925ee319bfba59c8c2ca12f9b78bf93f5"},
+    {file = "litellm_proxy_extras-0.4.5-py3-none-any.whl", hash = "sha256:917954c2f6d2f940bea8355695d8a17057816f126e898a4fca73b9d56cee09e6"},
+    {file = "litellm_proxy_extras-0.4.5.tar.gz", hash = "sha256:ad79a4061e06f9a9127e517d153dfbb8a1a91de11873a633de5a984cbcd40070"},
 ]
 
 [[package]]
@@ -4648,7 +4648,7 @@ files = [
     {file = "pycparser-2.23-py3-none-any.whl", hash = "sha256:e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934"},
     {file = "pycparser-2.23.tar.gz", hash = "sha256:78816d4f24add8f10a06d6f05b4d424ad9e96cfebf68a4ddc99c65c0720d00c2"},
 ]
-markers = {main = "(platform_python_implementation != \"PyPy\" or extra == \"proxy\") and (python_version < \"3.14\" or implementation_name != \"PyPy\")", dev = "platform_python_implementation != \"PyPy\" and (python_version < \"3.14\" or implementation_name != \"PyPy\")", proxy-dev = "platform_python_implementation != \"PyPy\" and (python_version < \"3.14\" or implementation_name != \"PyPy\")"}
+markers = {main = "(platform_python_implementation != \"PyPy\" or extra == \"proxy\") and (implementation_name != \"PyPy\" or python_version < \"3.10\")", dev = "platform_python_implementation != \"PyPy\" and (implementation_name != \"PyPy\" or python_version < \"3.10\")", proxy-dev = "platform_python_implementation != \"PyPy\" and (implementation_name != \"PyPy\" or python_version < \"3.10\")"}
 
 [[package]]
 name = "pydantic"
@@ -7091,4 +7091,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "39b2e6a0a4c7711806e649e70c7ee5544d0a00e2be19010a4b2581734004db17"
+content-hash = "379f28b7fb636334a23c75722bd6cda173c8e717384e7491e75057a9862fce38"
