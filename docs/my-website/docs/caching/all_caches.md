@@ -289,6 +289,8 @@ litellm.cache = Cache(
     similarity_threshold=0.7, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
     qdrant_quantization_config ="binary", # can be one of 'binary', 'product' or 'scalar' quantizations that is supported by qdrant
     qdrant_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
+    qdrant_semantic_cache_embedding_dimensions=1536, # dimensions of the embedding model - auto-detected if not provided
+    qdrant_distance_metric="Cosine", # distance metric for similarity calculations (Cosine, Dot, Euclid)
 )
 
 response1 = completion(
@@ -626,6 +628,8 @@ def __init__(
     qdrant_collection_name: Optional[str] = None,
     qdrant_quantization_config: Optional[str] = None,
     qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
+    qdrant_semantic_cache_embedding_dimensions: Optional[int] = None, # auto-detected if not provided
+    qdrant_distance_metric: str = "Cosine", # distance metric for similarity calculations
 
     **kwargs
 ):
