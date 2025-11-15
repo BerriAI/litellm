@@ -14,6 +14,7 @@ import litellm
 from litellm.types.videos.main import VideoObject, VideoResponse
 from litellm.videos.main import video_generation, avideo_generation, video_status, avideo_status
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.cost_calculator import default_video_cost_calculator
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.integrations.custom_logger import CustomLogger
@@ -711,6 +712,52 @@ class TestVideoLogging:
             assert payload["response_cost"] is not None
             # Note: Cost calculation may not work in test environment due to mocking
             # The important thing is that the logging payload is created and recognized
+
+
+def test_openai_transform_video_content_request_empty_params():
+    """OpenAI content transform should return empty params to ensure GET is used."""
+    config = OpenAIVideoConfig()
+    url, params = config.transform_video_content_request(
+        video_id="video_123",
+        api_base="https://api.openai.com/v1/videos",
+        litellm_params={},
+        headers={},
+    )
+
+    assert url == "https://api.openai.com/v1/videos/video_123/content"
+    assert params == {}
+
+
+def test_video_content_handler_uses_get_for_openai():
+    """HTTP handler must use GET (not POST) for OpenAI content download."""
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = b"mp4-bytes"
+    mock_client.get.return_value = mock_response
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        return_value=mock_client,
+    ):
+        result = handler.video_content_handler(
+            video_id="video_abc",
+            video_content_provider_config=config,
+            custom_llm_provider="openai",
+            litellm_params={"api_base": "https://api.openai.com/v1"},
+            logging_obj=MagicMock(),
+            timeout=5.0,
+            api_key="sk-test",
+            _is_async=False,
+        )
+
+    assert result == b"mp4-bytes"
+    mock_client.get.assert_called_once()
+    assert not mock_client.post.called
+    called_url = mock_client.get.call_args.kwargs["url"]
+    assert called_url == "https://api.openai.com/v1/videos/video_abc/content"
 
 
 if __name__ == "__main__":
