@@ -3,12 +3,12 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock
+import json
 
 from litellm.caching.redis_cache import RedisCache
 
@@ -199,3 +199,179 @@ async def test_async_lpop_with_float_redis_version(
             
             # Verify the method completed without error
             assert result is not None
+
+
+@pytest.mark.skipif(
+    os.environ.get("SKIP_REDIS_TESTS") == "true",
+    reason="Redis not installed or tests skipped"
+)
+def test_get_cache_logic_normalizes_scheduler_queue(monkeypatch, redis_no_ping):
+    """
+    Test that _get_cache_logic properly normalizes scheduler queue data
+    when ast.literal_eval returns mixed types (tuples and lists).
+    
+    This addresses the issue: https://github.com/BerriAI/litellm/issues/14817
+    """
+    try:
+        import redis  # noqa: F401
+    except ImportError:
+        pytest.skip("Redis not installed")
+    
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    
+    # Simulate corrupted queue data that would come from Redis
+    # This simulates what happens when ast.literal_eval converts strings back to mixed types
+    corrupted_queue_str = "[(5, 'request-1'), [3, 'request-2'], (1, 'request-3')]"
+    
+    # Convert to bytes as Redis would return
+    cached_response = corrupted_queue_str.encode("utf-8")
+    
+    # Call _get_cache_logic which should normalize the data
+    result = redis_cache._get_cache_logic(cached_response)
+    
+    # Verify the result is a list
+    assert isinstance(result, list)
+    assert len(result) == 3
+    
+    # Verify all items are normalized to (int, str) tuples
+    for item in result:
+        assert isinstance(item, tuple), f"Expected tuple, got {type(item)}"
+        assert len(item) == 2
+        assert isinstance(item[0], int), f"Priority should be int, got {type(item[0])}"
+        assert isinstance(item[1], str), f"Request ID should be str, got {type(item[1])}"
+    
+    # Verify the data is correct
+    assert (5, "request-1") in result
+    assert (3, "request-2") in result
+    assert (1, "request-3") in result
+
+
+@pytest.mark.skipif(
+    os.environ.get("SKIP_REDIS_TESTS") == "true",
+    reason="Redis not installed or tests skipped"
+)
+def test_get_cache_logic_handles_invalid_queue_items(monkeypatch, redis_no_ping):
+    """
+    Test that _get_cache_logic gracefully handles invalid queue items
+    and skips them without crashing.
+    """
+    try:
+        import redis  # noqa: F401
+    except ImportError:
+        pytest.skip("Redis not installed")
+    
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    
+    # Simulate queue with various invalid items
+    invalid_queue_str = "[(5, 'valid-1'), ('not-int', 'invalid'), (3,), [2, 'valid-2'], 'not-tuple', (1, 'valid-3')]"
+    cached_response = invalid_queue_str.encode("utf-8")
+    
+    # Call _get_cache_logic - should not raise exception
+    result = redis_cache._get_cache_logic(cached_response)
+    
+    # Verify only valid items are kept
+    assert isinstance(result, list)
+    assert len(result) == 3  # Only 3 valid items
+    
+    # Verify all returned items are valid
+    for item in result:
+        assert isinstance(item, tuple)
+        assert len(item) == 2
+        assert isinstance(item[0], int)
+        assert isinstance(item[1], str)
+    
+    # Verify the correct items were kept
+    assert (5, "valid-1") in result
+    assert (2, "valid-2") in result
+    assert (1, "valid-3") in result
+
+
+@pytest.mark.skipif(
+    os.environ.get("SKIP_REDIS_TESTS") == "true",
+    reason="Redis not installed or tests skipped"
+)
+def test_get_cache_logic_handles_json_serialized_queue(monkeypatch, redis_no_ping):
+    """
+    Test that _get_cache_logic properly handles JSON-serialized queue data
+    (the normal case when json.loads succeeds).
+    """
+    try:
+        import redis  # noqa: F401
+    except ImportError:
+        pytest.skip("Redis not installed")
+    
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    
+    # Simulate properly JSON-serialized queue
+    queue_data = [[5, "request-1"], [3, "request-2"], [1, "request-3"]]
+    json_str = json.dumps(queue_data)
+    cached_response = json_str.encode("utf-8")
+    
+    # Call _get_cache_logic
+    result = redis_cache._get_cache_logic(cached_response)
+    
+    # JSON loads will return lists, but they should be normalized to tuples
+    assert isinstance(result, list)
+    assert len(result) == 3
+    
+    # Verify items are normalized
+    for item in result:
+        assert isinstance(item, tuple)
+        assert len(item) == 2
+        assert isinstance(item[0], int)
+        assert isinstance(item[1], str)
+
+
+@pytest.mark.skipif(
+    os.environ.get("SKIP_REDIS_TESTS") == "true",
+    reason="Redis not installed or tests skipped"
+)
+def test_get_cache_logic_returns_none_for_none_input(monkeypatch, redis_no_ping):
+    """
+    Test that _get_cache_logic returns None when input is None.
+    """
+    try:
+        import redis  # noqa: F401
+    except ImportError:
+        pytest.skip("Redis not installed")
+    
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    
+    result = redis_cache._get_cache_logic(None)
+    assert result is None
+
+
+@pytest.mark.skipif(
+    os.environ.get("SKIP_REDIS_TESTS") == "true",
+    reason="Redis not installed or tests skipped"
+)
+def test_get_cache_logic_handles_non_queue_data(monkeypatch, redis_no_ping):
+    """
+    Test that _get_cache_logic doesn't break non-queue cached data
+    (e.g., regular dictionaries, strings, etc.).
+    """
+    try:
+        import redis  # noqa: F401
+    except ImportError:
+        pytest.skip("Redis not installed")
+    
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    
+    # Test with a regular dictionary
+    dict_data = {"key": "value", "number": 42}
+    json_str = json.dumps(dict_data)
+    cached_response = json_str.encode("utf-8")
+    
+    result = redis_cache._get_cache_logic(cached_response)
+    assert result == dict_data
+    
+    # Test with a string
+    string_data = "just a string"
+    cached_response = json.dumps(string_data).encode("utf-8")
+    result = redis_cache._get_cache_logic(cached_response)
+    assert result == string_data
