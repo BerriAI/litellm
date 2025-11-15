@@ -1144,6 +1144,7 @@ class UpdateUserRequestNoUserIDorEmail(
     password: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
+    user_alias: Optional[str] = None
     user_role: Optional[
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
