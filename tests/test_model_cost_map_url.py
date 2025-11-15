@@ -1,9 +1,16 @@
 import importlib
 import sys
+import pytest
 
 
+@pytest.mark.forked
 def test_model_cost_map_url_from_env(monkeypatch):
-    """Ensure `LITELLM_MODEL_COST_MAP_URL` env var is picked up on import and used by get_model_cost_map."""
+    """
+    Ensure `LITELLM_MODEL_COST_MAP_URL` env var is picked up on import and used by get_model_cost_map.
+    
+    This test reloads the litellm module, so it runs in a forked process to avoid
+    affecting other tests running in parallel.
+    """
     test_url = "https://example.com/test_model_cost_map.json"
 
     # A minimal model cost map we expect to be loaded
