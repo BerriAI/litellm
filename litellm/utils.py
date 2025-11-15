@@ -3383,6 +3383,7 @@ def get_optional_params(  # noqa: PLR0915
     drop_params=None,
     allowed_openai_params: Optional[List[str]] = None,
     reasoning_effort=None,
+    verbosity=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
@@ -7811,6 +7812,12 @@ class ProviderConfigManager:
                 )
 
                 return AzureAVATextToSpeechConfig()
+        elif litellm.LlmProviders.RUNWAYML == provider:
+            from litellm.llms.runwayml.text_to_speech.transformation import (
+                RunwayMLTextToSpeechConfig,
+            )
+
+            return RunwayMLTextToSpeechConfig()
         return None
 
     @staticmethod
