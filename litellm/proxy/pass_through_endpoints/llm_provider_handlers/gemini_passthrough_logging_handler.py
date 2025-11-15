@@ -18,8 +18,9 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from ..success_handler import PassThroughEndpointLogging
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    from ..success_handler import PassThroughEndpointLogging
 else:
     PassThroughEndpointLogging = Any
     EndpointType = Any
@@ -193,7 +194,7 @@ class GeminiPassthroughLoggingHandler:
         kwargs["custom_llm_provider"] = custom_llm_provider
 
         # pretty print standard logging object
-        verbose_proxy_logger.debug("kwargs= %s", json.dumps(kwargs, indent=4))
+        verbose_proxy_logger.debug("kwargs= %s", kwargs)
 
         # set litellm_call_id to logging response object
         litellm_model_response.id = logging_obj.litellm_call_id
