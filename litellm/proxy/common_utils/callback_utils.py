@@ -269,7 +269,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
 
         if "prometheus" in value:
             try:
-                from litellm_enterprise.integrations.prometheus import PrometheusLogger
+                from litellm.integrations.prometheus import PrometheusLogger
             except Exception:
                 PrometheusLogger = None
 

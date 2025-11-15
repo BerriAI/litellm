@@ -2230,12 +2230,9 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                try:
-                                    from litellm_enterprise.integrations.prometheus import (
-                                        PrometheusLogger,
-                                    )
-                                except Exception:
-                                    PrometheusLogger = None
+                                from litellm.integrations.prometheus import (
+                                    PrometheusLogger,
+                                )
 
                                 if PrometheusLogger is not None:
                                     verbose_proxy_logger.debug(
@@ -4491,7 +4488,7 @@ class ProxyStartupEvent:
         ########################################################
         if litellm.prometheus_initialize_budget_metrics is True:
             try:
-                from litellm_enterprise.integrations.prometheus import PrometheusLogger
+                from litellm.integrations.prometheus import PrometheusLogger
 
                 PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
             except Exception:
