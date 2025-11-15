@@ -1770,7 +1770,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
     ],
 )
 @pytest.mark.flaky(retries=3, delay=2)
-async def test_async_call_with_key_over_model_budget(
+async def test_aasync_call_with_key_over_model_budget(
     prisma_client, request_model, should_pass
 ):
     # 12. Make a call with a key over budget, expect to fail
@@ -1779,15 +1779,9 @@ async def test_async_call_with_key_over_model_budget(
     await litellm.proxy.proxy_server.prisma_client.connect()
     verbose_proxy_logger.setLevel(logging.DEBUG)
 
-    # init model max budget limiter
-    from litellm.proxy.hooks.model_max_budget_limiter import (
-        _PROXY_VirtualKeyModelMaxBudgetLimiter,
-    )
-
-    model_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
-        dual_cache=DualCache()
-    )
-    litellm.callbacks.append(model_budget_limiter)
+    # Use the proxy server's existing budget limiter instead of creating a new one
+    # This ensures the budget limiter's cache is shared between the callback and auth checks
+    from litellm.proxy.proxy_server import model_max_budget_limiter
 
     try:
         # set budget for chatgpt-v-3 to 0.000001, expect the next request to fail
@@ -1865,7 +1859,7 @@ async def test_async_call_with_key_over_model_budget(
         }
         
         # Call the budget limiter callback directly to ensure spend is recorded
-        await model_budget_limiter.async_log_success_event(
+        await model_max_budget_limiter.async_log_success_event(
             kwargs=mock_kwargs,
             response_obj=response,
             start_time=time.time(),
@@ -1910,8 +1904,6 @@ async def test_async_call_with_key_over_model_budget(
             else:
                 # Re-raise if it's an unexpected exception
                 raise
-    finally:
-        litellm.callbacks.remove(model_budget_limiter)
 
 
 @pytest.mark.asyncio()
