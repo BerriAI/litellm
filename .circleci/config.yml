@@ -1135,10 +1135,15 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    resource_class: large
+    parallelism: 4
 
     steps:
       - checkout
       - setup_google_dns
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Install Dependencies
           command: |
@@ -1159,13 +1164,19 @@ jobs:
             pip install "semantic_router==0.1.10"
             pip install "fastapi-offline==1.7.3"
       - setup_litellm_enterprise_pip
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       # Run pytest and generate JUnit XML report
       - run:
           name: Run litellm tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
+            # Split tests across parallel containers using CircleCI test splitting
+            TESTFILES=$(circleci tests glob "tests/test_litellm/**/test_*.py" | circleci tests split --split-by=timings)
+            python -m pytest -vv $TESTFILES --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
