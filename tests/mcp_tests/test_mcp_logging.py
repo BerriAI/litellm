@@ -66,7 +66,7 @@ async def test_mcp_cost_tracking():
     
     with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
         # Load the server config
-        local_mcp_server_manager.load_servers_from_config(
+        await local_mcp_server_manager.load_servers_from_config(
             mcp_servers_config={
                 "zapier_gmail_server": {
                     "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
@@ -166,7 +166,7 @@ async def test_mcp_cost_tracking_per_tool():
     
     with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
         # Load the server config with per-tool costs
-        local_mcp_server_manager.load_servers_from_config(
+        await local_mcp_server_manager.load_servers_from_config(
             mcp_servers_config={
                 "test_server": {
                     "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
@@ -310,7 +310,7 @@ async def test_mcp_tool_call_hook():
     
     with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
         # Load the server config
-        local_mcp_server_manager.load_servers_from_config(
+        await local_mcp_server_manager.load_servers_from_config(
             mcp_servers_config={
                 "zapier_gmail_server": {
                     "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
