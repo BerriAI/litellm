@@ -17,11 +17,17 @@ class AnthropicMessagesToolChoice(TypedDict, total=False):
     disable_parallel_tool_use: bool  # default is false
 
 
-class AnthropicInputSchema(TypedDict, total=False):
-    type: Optional[str]
-    properties: Optional[dict]
-    additionalProperties: Optional[bool]
-    required: Optional[List[str]]
+AnthropicInputSchema = TypedDict(
+    "AnthropicInputSchema",
+    {
+        "type": Optional[str],
+        "properties": Optional[dict],
+        "additionalProperties": Optional[bool],
+        "required": Optional[List[str]],
+        "$defs": Optional[Dict],
+    },
+    total=False,
+)
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
