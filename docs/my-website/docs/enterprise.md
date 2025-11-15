@@ -40,7 +40,7 @@ Self-Managed Enterprise deployments require our team to understand your exact ne
 
 ### How does deployment with Enterprise License work? 
 
-You just deploy [our docker image](https://docs.litellm.ai/docs/proxy/deploy) and get an enterprise license key to add to your environment to unlock additional functionality (SSO, Prometheus metrics, etc.). 
+You just deploy [our docker image](https://docs.litellm.ai/docs/proxy/deploy) and get an enterprise license key to add to your environment to unlock additional functionality (SSO, etc.). 
 
 ```env
 LITELLM_LICENSE="eyJ..."
