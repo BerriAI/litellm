@@ -643,21 +643,25 @@ if MCP_AVAILABLE:
             allowed_mcp_servers=allowed_mcp_servers
         )
 
-        server_name: Optional[str]
-        if len(allowed_mcp_servers) == 1:
-            original_tool_name, server_name = name, allowed_mcp_servers[0].server_name
-        else:
-            # Remove prefix from tool name for logging and processing
-            original_tool_name, server_name = get_server_name_prefix_tool_mcp(name)
+        # Remove prefix from tool name for logging and processing
+        original_tool_name, server_name = get_server_name_prefix_tool_mcp(name)
 
-        if not server_name or not MCPRequestHandler.is_tool_allowed(
-            allowed_mcp_servers=[server.name for server in allowed_mcp_servers],
-            server_name=server_name,
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
-            )
+        # If tool name is unprefixed, resolve its server so we can enforce permissions
+        if not server_name:
+            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            if mcp_server:
+                server_name = mcp_server.name
+
+        # Only enforce server-level permissions when we can resolve a server
+        if server_name:
+            if not MCPRequestHandler.is_tool_allowed(
+                allowed_mcp_servers=[server.name for server in allowed_mcp_servers],
+                server_name=server_name,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
+                )
 
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
             _get_standard_logging_mcp_tool_call(
