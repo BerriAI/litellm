@@ -41,20 +41,8 @@ class PrometheusLogger(CustomLogger):
         try:
             from prometheus_client import Counter, Gauge, Histogram
 
-            from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
-
-            if premium_user is not True:
-                verbose_logger.warning(
-                    f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise\n🚨 {CommonProxyErrors.not_premium_user.value}"
-                )
-                self.litellm_not_a_premium_user_metric = Counter(
-                    name="litellm_not_a_premium_user_metric",
-                    documentation=f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise. 🚨 {CommonProxyErrors.not_premium_user.value}",
-                )
-                return
 
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
@@ -2184,9 +2172,6 @@ class PrometheusLogger(CustomLogger):
 
         It emits the current remaining budget metrics for all Keys and Teams.
         """
-        from enterprise.litellm_enterprise.integrations.prometheus import (
-            PrometheusLogger,
-        )
         from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
         from litellm.integrations.custom_logger import CustomLogger
 
@@ -2213,25 +2198,18 @@ class PrometheusLogger(CustomLogger):
             )
 
     @staticmethod
-    def _mount_metrics_endpoint(premium_user: bool):
+    def _mount_metrics_endpoint():
         """
         Mount the Prometheus metrics endpoint with optional authentication.
 
         Args:
-            premium_user (bool): Whether the user is a premium user
             require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
                                         Defaults to False.
         """
         from prometheus_client import make_asgi_app
 
         from litellm._logging import verbose_proxy_logger
-        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import app
-
-        if premium_user is not True:
-            verbose_proxy_logger.warning(
-                f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
-            )
 
         # Create metrics ASGI app
         if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
