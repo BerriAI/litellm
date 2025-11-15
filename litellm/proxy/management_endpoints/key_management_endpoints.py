@@ -2069,7 +2069,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if duration is None:  # allow tokens that never expire
         expires = None
     else:
-        expires = get_budget_reset_time(budget_duration=duration)
+        duration_s = duration_in_seconds(duration=duration)
+        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
@@ -3525,7 +3526,7 @@ async def key_health(
     Checks:
     - If key based logging is configured correctly - sends a test log
 
-    Usage 
+    Usage
 
     Pass the key in the request header
 
