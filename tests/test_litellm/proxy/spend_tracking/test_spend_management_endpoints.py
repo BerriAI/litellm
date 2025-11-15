@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import litellm
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
-from litellm.proxy.proxy_server import app, prisma_client
+from litellm.proxy.proxy_server import app
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.router import Router
 from litellm.types.utils import BudgetConfig
@@ -25,11 +25,14 @@ from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, Member
 from litellm.proxy.spend_tracking import spend_management_endpoints
 import litellm.proxy.proxy_server as ps
 
+
 @pytest.mark.asyncio
 async def test_is_admin_view_safe_true(monkeypatch):
     # Force underlying check to return True
     monkeypatch.setattr(
-        spend_management_endpoints, "_user_has_admin_view", lambda user_api_key_dict: True
+        spend_management_endpoints,
+        "_user_has_admin_view",
+        lambda user_api_key_dict: True,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
     assert spend_management_endpoints._is_admin_view_safe(auth) is True
@@ -39,7 +42,9 @@ async def test_is_admin_view_safe_true(monkeypatch):
 async def test_is_admin_view_safe_false(monkeypatch):
     # Force underlying check to return False
     monkeypatch.setattr(
-        spend_management_endpoints, "_user_has_admin_view", lambda user_api_key_dict: False
+        spend_management_endpoints,
+        "_user_has_admin_view",
+        lambda user_api_key_dict: False,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     assert spend_management_endpoints._is_admin_view_safe(auth) is False
@@ -97,7 +102,9 @@ async def test_can_team_member_view_log_team_not_found(monkeypatch):
     prisma = MockPrisma()
     # Even if admin check would return True, no team means False
     monkeypatch.setattr(
-        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: True
+        spend_management_endpoints,
+        "_is_user_team_admin",
+        lambda user_api_key_dict, team_obj: True,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     allowed = await spend_management_endpoints._can_team_member_view_log(
@@ -126,7 +133,9 @@ async def test_can_team_member_view_log_not_admin(monkeypatch):
 
     prisma = MockPrisma()
     monkeypatch.setattr(
-        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: False
+        spend_management_endpoints,
+        "_is_user_team_admin",
+        lambda user_api_key_dict, team_obj: False,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     allowed = await spend_management_endpoints._can_team_member_view_log(
@@ -155,7 +164,9 @@ async def test_can_team_member_view_log_admin(monkeypatch):
 
     prisma = MockPrisma()
     monkeypatch.setattr(
-        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: True
+        spend_management_endpoints,
+        "_is_user_team_admin",
+        lambda user_api_key_dict, team_obj: True,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     allowed = await spend_management_endpoints._can_team_member_view_log(
@@ -184,6 +195,7 @@ def test_can_user_view_spend_log_false_without_user_id():
 def test_can_user_view_spend_log_false_for_other_roles():
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
     assert spend_management_endpoints._can_user_view_spend_log(auth) is False
+
 
 ignored_keys = [
     "request_id",
@@ -419,14 +431,34 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(client, monkeypatch):
+async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(
+    client, monkeypatch
+):
     """
     Internal users should only be able to view their own spend even if user_id is not provided.
     """
     # Mock spend logs for 2 users
     mock_spend_logs = [
-        {"id": "log1", "request_id": "req1", "api_key": "sk-test-key", "user": "internal_user_1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
-        {"id": "log2", "request_id": "req2", "api_key": "sk-test-key", "user": "internal_user_2", "team_id": "team1", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "internal_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "internal_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
     ]
 
     # Prisma client mock that filters by "user" where condition
@@ -458,7 +490,9 @@ async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(client, m
     )
 
     try:
-        start_date = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        start_date = (
+            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+        ).strftime("%Y-%m-%d %H:%M:%S")
         end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         # No user_id provided; should auto-scope to authenticated internal user's own id
@@ -484,8 +518,26 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
     """
     # Mock spend logs for two teams
     mock_spend_logs = [
-        {"id": "log1", "request_id": "req1", "api_key": "sk-test-key", "user": "member1", "team_id": "team_admin_team", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
-        {"id": "log2", "request_id": "req2", "api_key": "sk-test-key", "user": "member2", "team_id": "team_other", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "member1",
+            "team_id": "team_admin_team",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "member2",
+            "team_id": "team_other",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
     ]
 
     class MockDB:
@@ -505,11 +557,14 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
+
             # Team lookup for RBAC check
             class TeamTable:
                 def __init__(self):
                     # user "admin_user" is team admin
-                    self.members_with_roles = [Member(user_id="admin_user", role="admin")]
+                    self.members_with_roles = [
+                        Member(user_id="admin_user", role="admin")
+                    ]
 
             async def find_unique(where: dict):
                 if where == {"team_id": "team_admin_team"}:
@@ -529,12 +584,18 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
     )
 
     try:
-        start_date = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        start_date = (
+            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+        ).strftime("%Y-%m-%d %H:%M:%S")
         end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         response = client.get(
             "/spend/logs/ui",
-            params={"team_id": "team_admin_team", "start_date": start_date, "end_date": end_date},
+            params={
+                "team_id": "team_admin_team",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
             headers={"Authorization": "Bearer sk-test"},
         )
 
@@ -545,6 +606,7 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
         assert data["data"][0]["team_id"] == "team_admin_team"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_pagination(client, monkeypatch):
@@ -1834,3 +1896,72 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
     assert "spend" in data[0]
     assert "users" in data[0]
     assert "models" in data[0]
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_with_api_key_and_dates_returns_data_after_fix(
+    client, monkeypatch
+):
+    """
+    issue #16481.
+    - A mock DB is set up to return data ONLY if the api_key is hashed.
+    - If the api_key is not hashed (the buggy behavior), the mock DB returns [].
+    - The test asserts that the endpoint returns a NON-EMPTY list, proving the key was hashed.
+    """
+    raw_api_key = "sk-my-raw-key-12345"
+    hashed_api_key = f"hashed-{raw_api_key}"
+
+    # Define the mock Prisma client with conditional logic
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = self
+
+        async def group_by(self, *args, **kwargs):
+            where_clause = kwargs.get("where", {})
+
+            # simulates the real database behavior
+            if where_clause.get("api_key") == hashed_api_key:
+                # If the key is correctly hashed, return data
+                return [
+                    {
+                        "api_key": hashed_api_key,
+                        "user": "test-user",
+                        "model": "gpt-4",
+                        "startTime": "2024-01-01T12:00:00.000Z",
+                        "_sum": {"spend": 0.01},
+                    }
+                ]
+            else:
+                # If the key is NOT hashed (or is wrong), return an empty list
+                return []
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+        def hash_token(self, token: str) -> str:
+            return f"hashed-{token}"
+
+    #  Apply the monkeypatch
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    # Make the API call that triggers the bug condition
+    start_date = "2024-01-01"
+    end_date = "2024-01-02"
+
+    response = client.get(
+        "/spend/logs",
+        params={
+            "api_key": raw_api_key,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    # Assert the response was successful AND contains data
+    assert response.status_code == 200
+    data = response.json()
+
+    assert len(data) > 0
+    assert "spend" in data[0]

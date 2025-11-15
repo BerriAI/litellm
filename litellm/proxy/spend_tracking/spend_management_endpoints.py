@@ -1973,7 +1973,14 @@ async def view_spend_logs(  # noqa: PLR0915
             }
 
             if api_key is not None and isinstance(api_key, str):
-                filter_query["api_key"] = api_key  # type: ignore
+                # Hash the API key before querying, consistent with other parts of the function.
+                # The database stores hashed keys, so the raw key must be transformed.
+                if api_key.startswith("sk-"):
+                    hashed_token = prisma_client.hash_token(token=api_key)
+                else:
+                    hashed_token = api_key
+                filter_query["api_key"] = hashed_token  # type: ignore
+
             elif request_id is not None and isinstance(request_id, str):
                 filter_query["request_id"] = request_id  # type: ignore
             elif user_id is not None and isinstance(user_id, str):
@@ -3095,7 +3102,11 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
     user_role = user_api_key_dict.user_role
     user_id = user_api_key_dict.user_id
-    return user_role in (
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-    ) and user_id is not None
+    return (
+        user_role
+        in (
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        )
+        and user_id is not None
+    )
