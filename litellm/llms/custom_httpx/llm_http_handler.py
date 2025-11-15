@@ -38,7 +38,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
-from .http_handler import SHARED_REALTIME_SSL_CONTEXT
+from .http_handler import get_shared_realtime_ssl_context
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -3596,11 +3596,12 @@ class BaseLLMHTTPHandler:
         )
 
         try:
+            ssl_context = get_shared_realtime_ssl_context()
             async with websockets.connect(  # type: ignore
                 url,
                 extra_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-                ssl=SHARED_REALTIME_SSL_CONTEXT,
+                ssl=ssl_context,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket,
