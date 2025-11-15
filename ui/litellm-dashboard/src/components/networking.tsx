@@ -1903,6 +1903,17 @@ export const modelHubPublicModelsCall = async () => {
   return response.json();
 };
 
+export const agentHubPublicModelsCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/agent_hub` : `/public/agent_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
+};
+
 export const modelHubCall = async (accessToken: string) => {
   /**
    * Get all models on proxy

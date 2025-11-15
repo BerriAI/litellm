@@ -1,15 +1,17 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { modelHubCall, modelHubPublicModelsCall, getProxyBaseUrl } from "./networking";
+import { modelHubCall, modelHubPublicModelsCall, agentHubPublicModelsCall, getProxyBaseUrl } from "./networking";
 import { getConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
+import { agentHubColumns, AgentHubData } from "./agent_hub_table_columns";
 import PublicModelHub from "./public_model_hub";
 import MakeModelPublicForm from "./make_model_public_form";
 import ModelFilters from "./model_filters";
 import UsefulLinksManagement from "./useful_links_management";
 import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { Modal } from "antd";
+import { CopyOutlined } from "@ant-design/icons";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Table as TableInstance } from "@tanstack/react-table";
 import { Copy } from "lucide-react";
@@ -51,8 +53,14 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [selectedModel, setSelectedModel] = useState<null | ModelGroupInfo>(null);
   const [filteredData, setFilteredData] = useState<ModelGroupInfo[]>([]);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
+  // Agent Hub state
+  const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
+  const [agentLoading, setAgentLoading] = useState<boolean>(true);
+  const [selectedAgent, setSelectedAgent] = useState<null | AgentHubData>(null);
+  const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
   const router = useRouter();
   const tableRef = useRef<TableInstance<any>>(null);
+  const agentTableRef = useRef<TableInstance<any>>(null);
 
   useEffect(() => {
     const fetchData = async (accessToken: string) => {
@@ -103,9 +111,34 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     }
   }, [accessToken, publicPage]);
 
+  // Fetch Agent Hub data
+  useEffect(() => {
+    const fetchAgentData = async () => {
+      try {
+        setAgentLoading(true);
+        const _agentHubData = await agentHubPublicModelsCall();
+        console.log("AgentHubData:", _agentHubData);
+        setAgentHubData(_agentHubData);
+      } catch (error) {
+        console.error("There was an error fetching the agent data", error);
+      } finally {
+        setAgentLoading(false);
+      }
+    };
+
+    if (!publicPage) {
+      fetchAgentData();
+    }
+  }, [publicPage]);
+
   const showModal = (model: ModelGroupInfo) => {
     setSelectedModel(model);
     setIsModalVisible(true);
+  };
+
+  const showAgentModal = (agent: AgentHubData) => {
+    setSelectedAgent(agent);
+    setIsAgentModalVisible(true);
   };
 
   const goToPublicModelPage = () => {
@@ -125,12 +158,16 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     setIsModalVisible(false);
     setIsPublicPageModalVisible(false);
     setSelectedModel(null);
+    setIsAgentModalVisible(false);
+    setSelectedAgent(null);
   };
 
   const handleCancel = () => {
     setIsModalVisible(false);
     setIsPublicPageModalVisible(false);
     setSelectedModel(null);
+    setIsAgentModalVisible(false);
+    setSelectedAgent(null);
   };
 
   const copyToClipboard = (text: string) => {
@@ -264,13 +301,21 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               {/* Agent Hub Tab */}
               <TabPanel>
                 <Card>
-                  <div className="p-8 text-center">
-                    <Title>Agent Hub</Title>
-                    <Text className="mt-4 text-gray-600">
-                      Agent Hub coming soon - manage and deploy AI agents here.
-                    </Text>
-                  </div>
+                  {/* Agent Table */}
+                  <ModelDataTable
+                    columns={agentHubColumns(showAgentModal, copyToClipboard, publicPage)}
+                    data={agentHubData || []}
+                    isLoading={agentLoading}
+                    table={agentTableRef}
+                    defaultSorting={[{ id: "name", desc: false }]}
+                  />
                 </Card>
+
+                <div className="mt-4 text-center space-y-2">
+                  <Text className="text-sm text-gray-600">
+                    Showing {agentHubData?.length || 0} agent{agentHubData?.length !== 1 ? "s" : ""}
+                  </Text>
+                </div>
               </TabPanel>
             </TabPanels>
           </TabGroup>
@@ -451,6 +496,145 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)`}
               </SyntaxHighlighter>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Agent Details Modal */}
+      <Modal
+        title={selectedAgent?.name || "Agent Details"}
+        width={1000}
+        visible={isAgentModalVisible}
+        footer={null}
+        onOk={handleOk}
+        onCancel={handleCancel}
+      >
+        {selectedAgent && (
+          <div className="space-y-6">
+            {/* Agent Overview */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Agent Overview</Text>
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <Text className="font-medium">Name:</Text>
+                  <Text>{selectedAgent.name}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Version:</Text>
+                  <Badge color="blue">v{selectedAgent.version}</Badge>
+                </div>
+                <div>
+                  <Text className="font-medium">Protocol Version:</Text>
+                  <Text>{selectedAgent.protocolVersion}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">URL:</Text>
+                  <div className="flex items-center space-x-2">
+                    <Text className="truncate">{selectedAgent.url}</Text>
+                    <CopyOutlined
+                      onClick={() => copyToClipboard(selectedAgent.url)}
+                      className="cursor-pointer text-gray-500 hover:text-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div>
+                <Text className="font-medium">Description:</Text>
+                <Text className="mt-1">{selectedAgent.description}</Text>
+              </div>
+            </div>
+
+            {/* Capabilities */}
+            {selectedAgent.capabilities && Object.keys(selectedAgent.capabilities).length > 0 && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Capabilities</Text>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(selectedAgent.capabilities)
+                    .filter(([_, value]) => value === true)
+                    .map(([key]) => (
+                      <Badge key={key} color="green">
+                        {key}
+                      </Badge>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* Input/Output Modes */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Input/Output Modes</Text>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Text className="font-medium">Input Modes:</Text>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {selectedAgent.defaultInputModes?.map((mode) => (
+                      <Badge key={mode} color="blue">
+                        {mode}
+                      </Badge>
+                    )) || <Text>Not specified</Text>}
+                  </div>
+                </div>
+                <div>
+                  <Text className="font-medium">Output Modes:</Text>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {selectedAgent.defaultOutputModes?.map((mode) => (
+                      <Badge key={mode} color="purple">
+                        {mode}
+                      </Badge>
+                    )) || <Text>Not specified</Text>}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Skills */}
+            {selectedAgent.skills && selectedAgent.skills.length > 0 && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Skills</Text>
+                <div className="space-y-4">
+                  {selectedAgent.skills.map((skill) => (
+                    <div key={skill.id} className="border border-gray-200 rounded p-4">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <Text className="font-medium text-base">{skill.name}</Text>
+                          <Text className="text-xs text-gray-500">ID: {skill.id}</Text>
+                        </div>
+                        {skill.tags && skill.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {skill.tags.map((tag) => (
+                              <Badge key={tag} color="purple" size="xs">
+                                {tag}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <Text className="text-sm mb-2">{skill.description}</Text>
+                      {skill.examples && skill.examples.length > 0 && (
+                        <div>
+                          <Text className="text-xs font-medium text-gray-700">Examples:</Text>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {skill.examples.map((example, idx) => (
+                              <Badge key={idx} color="gray" size="xs">
+                                {example}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Additional Properties */}
+            {selectedAgent.supportsAuthenticatedExtendedCard && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Additional Features</Text>
+                <Badge color="green">Supports Authenticated Extended Card</Badge>
+              </div>
+            )}
           </div>
         )}
       </Modal>
