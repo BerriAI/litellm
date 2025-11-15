@@ -23440,7 +23440,7 @@
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_web_search": true
