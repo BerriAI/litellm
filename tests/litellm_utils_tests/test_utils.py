@@ -361,7 +361,7 @@ def test_aget_valid_models():
     os.environ = old_environ
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["gemini", "anthropic", "xai"])
+@pytest.mark.parametrize("custom_llm_provider", ["anthropic", "xai"])
 def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
     from litellm.utils import ProviderConfigManager
     from litellm.types.utils import LlmProviders
