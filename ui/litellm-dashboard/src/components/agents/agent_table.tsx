@@ -1,5 +1,6 @@
 import React from "react";
 import { Table, TableHead, TableRow, TableHeaderCell, TableBody, TableCell, Button } from "@tremor/react";
+import { Tooltip } from "antd";
 import { Agent } from "./types";
 
 interface AgentTableProps {
@@ -41,14 +42,23 @@ const AgentTable: React.FC<AgentTableProps> = ({
       </TableHead>
       <TableBody>
         {agentsList.map((agent) => (
-          <TableRow key={agent.agent_id} className="hover:bg-gray-50 cursor-pointer">
-            <TableCell onClick={() => onAgentClick(agent.agent_id)}>
-              {agent.agent_name}
+          <TableRow key={agent.agent_id}>
+            <TableCell>
+              <Tooltip title={agent.agent_name || ""}>
+                <Button
+                  size="xs"
+                  variant="light"
+                  className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                  onClick={() => onAgentClick(agent.agent_id)}
+                >
+                  {agent.agent_name || ""}
+                </Button>
+              </Tooltip>
             </TableCell>
-            <TableCell onClick={() => onAgentClick(agent.agent_id)}>
+            <TableCell>
               {agent.agent_card_params?.description || "No description"}
             </TableCell>
-            <TableCell onClick={() => onAgentClick(agent.agent_id)}>
+            <TableCell>
               {agent.created_at
                 ? new Date(agent.created_at).toLocaleDateString()
                 : "N/A"}

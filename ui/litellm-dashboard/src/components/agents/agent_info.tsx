@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title } from "@tremor/react";
-import { Button as TremorButton } from "@tremor/react";
-import { Form, Input, Button as AntButton, message, Spin, Collapse, Switch, Descriptions } from "antd";
-import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
+import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabPanel, TabPanels, Grid } from "@tremor/react";
+import { Form, Input, Button as AntButton, message, Spin, Descriptions } from "antd";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { getAgentInfo, patchAgentCall } from "../networking";
 import { Agent } from "./types";
-
-const { Panel } = Collapse;
+import AgentFormFields from "./agent_form_fields";
+import { buildAgentDataFromForm, parseAgentForForm } from "./agent_config";
 
 interface AgentInfoViewProps {
   agentId: string;
@@ -38,31 +37,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     try {
       const data = await getAgentInfo(accessToken, agentId);
       setAgent(data);
-      
-      // Parse skills to handle tags and examples as comma-separated strings for form
-      const skills = data.agent_card_params?.skills?.map((skill: any) => ({
-        ...skill,
-        tags: skill.tags,
-        examples: skill.examples || [],
-      })) || [];
-
-      form.setFieldsValue({
-        agent_name: data.agent_name,
-        name: data.agent_card_params?.name,
-        description: data.agent_card_params?.description,
-        url: data.agent_card_params?.url,
-        version: data.agent_card_params?.version,
-        protocolVersion: data.agent_card_params?.protocolVersion,
-        streaming: data.agent_card_params?.capabilities?.streaming,
-        pushNotifications: data.agent_card_params?.capabilities?.pushNotifications,
-        stateTransitionHistory: data.agent_card_params?.capabilities?.stateTransitionHistory,
-        skills: skills,
-        iconUrl: data.agent_card_params?.iconUrl,
-        documentationUrl: data.agent_card_params?.documentationUrl,
-        supportsAuthenticatedExtendedCard: data.agent_card_params?.supportsAuthenticatedExtendedCard,
-        model: data.litellm_params?.model,
-        make_public: data.litellm_params?.make_public,
-      });
+      form.setFieldsValue(parseAgentForForm(data));
     } catch (error) {
       console.error("Error fetching agent info:", error);
       message.error("Failed to load agent information");
@@ -76,36 +51,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
 
     setIsSaving(true);
     try {
-      const updateData = {
-        agent_name: values.agent_name,
-        agent_card_params: {
-          protocolVersion: values.protocolVersion || "1.0",
-          name: values.name,
-          description: values.description,
-          url: values.url,
-          version: values.version || "1.0.0",
-          defaultInputModes: agent.agent_card_params?.defaultInputModes || ["text"],
-          defaultOutputModes: agent.agent_card_params?.defaultOutputModes || ["text"],
-          capabilities: {
-            streaming: values.streaming !== false,
-            ...(values.pushNotifications !== undefined && { pushNotifications: values.pushNotifications }),
-            ...(values.stateTransitionHistory !== undefined && { stateTransitionHistory: values.stateTransitionHistory }),
-          },
-          skills: values.skills || [],
-          ...(values.iconUrl && { iconUrl: values.iconUrl }),
-          ...(values.documentationUrl && { documentationUrl: values.documentationUrl }),
-          ...(values.supportsAuthenticatedExtendedCard !== undefined && { 
-            supportsAuthenticatedExtendedCard: values.supportsAuthenticatedExtendedCard 
-          }),
-        },
-        ...(values.model || values.make_public !== undefined ? {
-          litellm_params: {
-            ...(values.model && { model: values.model }),
-            ...(values.make_public !== undefined && { make_public: values.make_public }),
-          }
-        } : {}),
-      };
-
+      const updateData = buildAgentDataFromForm(values, agent);
       await patchAgentCall(accessToken, agentId, updateData);
       message.success("Agent updated successfully");
       setIsEditing(false);
@@ -120,271 +66,152 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
 
   if (isLoading) {
     return (
-      <Card>
+      <div className="p-4">
         <div className="flex justify-center items-center h-64">
           <Spin size="large" />
         </div>
-      </Card>
+      </div>
     );
   }
 
   if (!agent) {
     return (
-      <Card>
+      <div className="p-4">
         <div className="text-center">Agent not found</div>
         <TremorButton onClick={onClose} className="mt-4">
           Back to Agents List
         </TremorButton>
-      </Card>
+      </div>
     );
   }
 
+  // Format date helper function
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return "-";
+    const date = new Date(dateString);
+    return date.toLocaleString();
+  };
+
   return (
-    <Card>
-      <div className="flex justify-between items-center mb-4">
-        <Title>Agent Details</Title>
-        <TremorButton onClick={onClose} variant="secondary">
-          Back to List
+    <div className="p-4">
+      <div>
+        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+          Back to Agents
         </TremorButton>
+        <Title>{agent.agent_name || "Unnamed Agent"}</Title>
+        <Text className="text-gray-500 font-mono">{agent.agent_id}</Text>
       </div>
 
-      {!isEditing ? (
-        <div>
-          <Descriptions bordered column={1}>
-            <Descriptions.Item label="Agent ID">{agent.agent_id}</Descriptions.Item>
-            <Descriptions.Item label="Agent Name">{agent.agent_name}</Descriptions.Item>
-            <Descriptions.Item label="Display Name">{agent.agent_card_params?.name}</Descriptions.Item>
-            <Descriptions.Item label="Description">{agent.agent_card_params?.description}</Descriptions.Item>
-            <Descriptions.Item label="URL">{agent.agent_card_params?.url}</Descriptions.Item>
-            <Descriptions.Item label="Version">{agent.agent_card_params?.version}</Descriptions.Item>
-            <Descriptions.Item label="Protocol Version">{agent.agent_card_params?.protocolVersion}</Descriptions.Item>
-            <Descriptions.Item label="Streaming">{agent.agent_card_params?.capabilities?.streaming ? 'Yes' : 'No'}</Descriptions.Item>
-            <Descriptions.Item label="Skills">
-              {agent.agent_card_params?.skills?.length || 0} skills configured
-            </Descriptions.Item>
-            {agent.litellm_params?.model && (
-              <Descriptions.Item label="Model">{agent.litellm_params.model}</Descriptions.Item>
-            )}
-            {agent.created_at && (
-              <Descriptions.Item label="Created At">{new Date(agent.created_at).toLocaleString()}</Descriptions.Item>
-            )}
-            {agent.updated_at && (
-              <Descriptions.Item label="Updated At">{new Date(agent.updated_at).toLocaleString()}</Descriptions.Item>
-            )}
-          </Descriptions>
+      <TabGroup>
+        <TabList className="mb-4">
+          <Tab key="overview">Overview</Tab>
+          {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
+        </TabList>
 
-          {isAdmin && (
-            <div style={{ marginTop: 16 }}>
-              <AntButton type="primary" onClick={() => setIsEditing(true)}>
-                Edit Agent
-              </AntButton>
-            </div>
-          )}
-        </div>
-      ) : (
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={handleUpdate}
-        >
-          <Form.Item label="Agent ID">
-            <Input value={agent.agent_id} disabled />
-          </Form.Item>
+        <TabPanels>
+          {/* Overview Panel */}
+          <TabPanel>
+            <Descriptions bordered column={1}>
+              <Descriptions.Item label="Agent ID">{agent.agent_id}</Descriptions.Item>
+              <Descriptions.Item label="Agent Name">{agent.agent_name}</Descriptions.Item>
+              <Descriptions.Item label="Display Name">{agent.agent_card_params?.name || "-"}</Descriptions.Item>
+              <Descriptions.Item label="Description">{agent.agent_card_params?.description || "-"}</Descriptions.Item>
+              <Descriptions.Item label="URL">{agent.agent_card_params?.url || "-"}</Descriptions.Item>
+              <Descriptions.Item label="Version">{agent.agent_card_params?.version || "-"}</Descriptions.Item>
+              <Descriptions.Item label="Protocol Version">{agent.agent_card_params?.protocolVersion || "-"}</Descriptions.Item>
+              <Descriptions.Item label="Streaming">
+                {agent.agent_card_params?.capabilities?.streaming ? "Yes" : "No"}
+              </Descriptions.Item>
+              {agent.agent_card_params?.capabilities?.pushNotifications && (
+                <Descriptions.Item label="Push Notifications">Yes</Descriptions.Item>
+              )}
+              {agent.agent_card_params?.capabilities?.stateTransitionHistory && (
+                <Descriptions.Item label="State Transition History">Yes</Descriptions.Item>
+              )}
+              <Descriptions.Item label="Skills">
+                {agent.agent_card_params?.skills?.length || 0} configured
+              </Descriptions.Item>
+              {agent.litellm_params?.model && (
+                <Descriptions.Item label="Model">{agent.litellm_params.model}</Descriptions.Item>
+              )}
+              {agent.litellm_params?.make_public !== undefined && (
+                <Descriptions.Item label="Make Public">{agent.litellm_params.make_public ? "Yes" : "No"}</Descriptions.Item>
+              )}
+              {agent.agent_card_params?.iconUrl && (
+                <Descriptions.Item label="Icon URL">{agent.agent_card_params.iconUrl}</Descriptions.Item>
+              )}
+              {agent.agent_card_params?.documentationUrl && (
+                <Descriptions.Item label="Documentation URL">{agent.agent_card_params.documentationUrl}</Descriptions.Item>
+              )}
+              <Descriptions.Item label="Created At">{formatDate(agent.created_at)}</Descriptions.Item>
+              <Descriptions.Item label="Updated At">{formatDate(agent.updated_at)}</Descriptions.Item>
+            </Descriptions>
 
-          <Form.Item
-            label="Agent Name"
-            name="agent_name"
-            rules={[{ required: true, message: "Please enter an agent name" }]}
-          >
-            <Input />
-          </Form.Item>
-
-          <Collapse defaultActiveKey={['basic']} style={{ marginBottom: 16 }}>
-            <Panel header="Basic Information" key="basic">
-              <Form.Item
-                label="Display Name"
-                name="name"
-                rules={[{ required: true, message: "Required" }]}
-              >
-                <Input />
-              </Form.Item>
-
-              <Form.Item
-                label="Description"
-                name="description"
-                rules={[{ required: true, message: "Required" }]}
-              >
-                <Input.TextArea rows={3} />
-              </Form.Item>
-
-              <Form.Item
-                label="URL"
-                name="url"
-                rules={[{ required: true, message: "Required" }]}
-              >
-                <Input />
-              </Form.Item>
-
-              <Form.Item label="Version" name="version">
-                <Input />
-              </Form.Item>
-
-              <Form.Item label="Protocol Version" name="protocolVersion">
-                <Input />
-              </Form.Item>
-            </Panel>
-
-            <Panel header="Skills" key="skills">
-              <Form.List name="skills">
-                {(fields, { add, remove }) => (
-                  <>
-                    {fields.map((field, index) => (
-                      <div key={field.key} style={{ marginBottom: 16, padding: 16, border: '1px solid #d9d9d9', borderRadius: 4 }}>
-                        <Form.Item
-                          {...field}
-                          label="Skill ID"
-                          name={[field.name, 'id']}
-                          rules={[{ required: true, message: 'Required' }]}
-                        >
-                          <Input />
-                        </Form.Item>
-                        <Form.Item
-                          {...field}
-                          label="Skill Name"
-                          name={[field.name, 'name']}
-                          rules={[{ required: true, message: 'Required' }]}
-                        >
-                          <Input />
-                        </Form.Item>
-                        <Form.Item
-                          {...field}
-                          label="Description"
-                          name={[field.name, 'description']}
-                          rules={[{ required: true, message: 'Required' }]}
-                        >
-                          <Input.TextArea rows={2} />
-                        </Form.Item>
-                        <Form.Item
-                          {...field}
-                          label="Tags (comma-separated)"
-                          name={[field.name, 'tags']}
-                          rules={[{ required: true, message: 'Required' }]}
-                          getValueFromEvent={(e) => e.target.value.split(',').map((s: string) => s.trim())}
-                          getValueProps={(value) => ({ value: Array.isArray(value) ? value.join(', ') : value })}
-                        >
-                          <Input />
-                        </Form.Item>
-                        <Form.Item
-                          {...field}
-                          label="Examples (comma-separated)"
-                          name={[field.name, 'examples']}
-                          getValueFromEvent={(e) => e.target.value.split(',').map((s: string) => s.trim()).filter((s: string) => s)}
-                          getValueProps={(value) => ({ value: Array.isArray(value) ? value.join(', ') : '' })}
-                        >
-                          <Input />
-                        </Form.Item>
-                        <AntButton 
-                          type="link" 
-                          danger 
-                          onClick={() => remove(field.name)}
-                          icon={<MinusCircleOutlined />}
-                        >
-                          Remove Skill
-                        </AntButton>
+            {agent.agent_card_params?.skills && agent.agent_card_params.skills.length > 0 && (
+              <div style={{ marginTop: 24 }}>
+                <Title>Skills</Title>
+                <Descriptions bordered column={1} style={{ marginTop: 16 }}>
+                  {agent.agent_card_params.skills.map((skill: any, index: number) => (
+                    <Descriptions.Item label={skill.name || `Skill ${index + 1}`} key={index}>
+                      <div>
+                        <div><strong>ID:</strong> {skill.id}</div>
+                        <div><strong>Description:</strong> {skill.description}</div>
+                        <div><strong>Tags:</strong> {Array.isArray(skill.tags) ? skill.tags.join(", ") : skill.tags}</div>
+                        {skill.examples && skill.examples.length > 0 && (
+                          <div><strong>Examples:</strong> {Array.isArray(skill.examples) ? skill.examples.join(", ") : skill.examples}</div>
+                        )}
                       </div>
-                    ))}
-                    <AntButton 
-                      type="dashed" 
-                      onClick={() => add()} 
-                      icon={<PlusOutlined />}
-                      style={{ width: '100%' }}
-                    >
-                      Add Skill
-                    </AntButton>
-                  </>
+                    </Descriptions.Item>
+                  ))}
+                </Descriptions>
+              </div>
+            )}
+          </TabPanel>
+
+          {/* Settings Panel (only for admins) */}
+          {isAdmin && (
+            <TabPanel>
+              <Card>
+                <div className="flex justify-between items-center mb-4">
+                  <Title>Agent Settings</Title>
+                  {!isEditing && (
+                    <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                  )}
+                </div>
+
+                {isEditing ? (
+                  <Form
+                    form={form}
+                    layout="vertical"
+                    onFinish={handleUpdate}
+                  >
+                    <Form.Item label="Agent ID">
+                      <Input value={agent.agent_id} disabled />
+                    </Form.Item>
+
+                    <AgentFormFields showAgentName={true} />
+
+                    <div className="flex justify-end gap-2 mt-6">
+                      <AntButton onClick={() => {
+                        setIsEditing(false);
+                        fetchAgentInfo();
+                      }}>
+                        Cancel
+                      </AntButton>
+                      <TremorButton loading={isSaving}>
+                        Save Changes
+                      </TremorButton>
+                    </div>
+                  </Form>
+                ) : (
+                  <Text>Click "Edit Settings" to modify agent configuration.</Text>
                 )}
-              </Form.List>
-            </Panel>
-
-            <Panel header="Capabilities" key="capabilities">
-              <Form.Item
-                label="Streaming"
-                name="streaming"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-
-              <Form.Item
-                label="Push Notifications"
-                name="pushNotifications"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-
-              <Form.Item
-                label="State Transition History"
-                name="stateTransitionHistory"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </Panel>
-
-            <Panel header="Optional Settings" key="optional">
-              <Form.Item label="Icon URL" name="iconUrl">
-                <Input />
-              </Form.Item>
-
-              <Form.Item label="Documentation URL" name="documentationUrl">
-                <Input />
-              </Form.Item>
-
-              <Form.Item
-                label="Supports Authenticated Extended Card"
-                name="supportsAuthenticatedExtendedCard"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </Panel>
-
-            <Panel header="LiteLLM Parameters" key="litellm">
-              <Form.Item label="Model (Optional)" name="model">
-                <Input />
-              </Form.Item>
-
-              <Form.Item
-                label="Make Public"
-                name="make_public"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </Panel>
-          </Collapse>
-
-          <Form.Item>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <AntButton
-                type="primary"
-                htmlType="submit"
-                loading={isSaving}
-              >
-                Save Changes
-              </AntButton>
-              <AntButton onClick={() => {
-                setIsEditing(false);
-                fetchAgentInfo();
-              }}>
-                Cancel
-              </AntButton>
-            </div>
-          </Form.Item>
-        </Form>
-      )}
-    </Card>
+              </Card>
+            </TabPanel>
+          )}
+        </TabPanels>
+      </TabGroup>
+    </div>
   );
 };
 
