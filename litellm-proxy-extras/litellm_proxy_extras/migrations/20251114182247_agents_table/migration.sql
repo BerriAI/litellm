@@ -1,6 +1,3 @@
--- AlterTable
-ALTER TABLE "LiteLLM_DailyTagSpend" ADD COLUMN     "request_id" TEXT;
-
 -- CreateTable
 CREATE TABLE "LiteLLM_AgentsTable" (
     "agent_id" TEXT NOT NULL,
