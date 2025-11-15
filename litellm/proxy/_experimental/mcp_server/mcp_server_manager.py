@@ -47,7 +47,11 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPAuth, MCPStdioConfig
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPOAuthMetadata, MCPServer
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPInfo,
+    MCPOAuthMetadata,
+    MCPServer,
+)
 
 
 def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
@@ -195,11 +199,7 @@ class MCPServerManager:
             )
 
             auth_type = server_config.get("auth_type", None)
-            if (
-                server_url
-                and auth_type is not None
-                and auth_type == MCPAuth.oauth2
-            ):
+            if server_url and auth_type is not None and auth_type == MCPAuth.oauth2:
                 mcp_oauth_metadata = await self._descovery_metadata(
                     server_url=server_url,
                 )
@@ -729,7 +729,9 @@ class MCPServerManager:
         """Discover OAuth metadata by following RFC 9728 (protected resource metadata discovery)."""
 
         try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                timeout=10.0, follow_redirects=False
+            ) as client:
                 response = await client.get(server_url)
                 response.raise_for_status()
             verbose_logger.warning(
@@ -746,10 +748,9 @@ class MCPServerManager:
 
             header_value: Optional[str] = None
             if exc.response is not None:
-                header_value = (
-                    exc.response.headers.get("WWW-Authenticate")
-                    or exc.response.headers.get("www-authenticate")
-                )
+                header_value = exc.response.headers.get(
+                    "WWW-Authenticate"
+                ) or exc.response.headers.get("www-authenticate")
 
             resource_metadata_url, scopes = self._parse_www_authenticate_header(
                 header_value
@@ -761,7 +762,9 @@ class MCPServerManager:
                 (
                     authorization_servers,
                     resource_scopes,
-                ) = await self._fetch_oauth_metadata_from_resource(resource_metadata_url)
+                ) = await self._fetch_oauth_metadata_from_resource(
+                    resource_metadata_url
+                )
             else:
                 (
                     authorization_servers,
@@ -815,8 +818,8 @@ class MCPServerManager:
         resource_metadata_url = params.get("resource_metadata")
 
         scope_value = params.get("scope")
-        scopes = [s for s in (scope_value.split() if scope_value else []) if s]
-        scopes = scopes or None
+        scopes_list = [s for s in (scope_value.split() if scope_value else []) if s]
+        scopes = scopes_list or None
 
         return resource_metadata_url, scopes
 
@@ -872,13 +875,14 @@ class MCPServerManager:
 
         candidate_urls: List[str] = []
         if path:
-            candidate_urls.append(
-                f"{base}/.well-known/oauth-protected-resource/{path}"
-            )
+            candidate_urls.append(f"{base}/.well-known/oauth-protected-resource/{path}")
         candidate_urls.append(f"{base}/.well-known/oauth-protected-resource")
 
         for url in candidate_urls:
-            authorization_servers, scopes = await self._fetch_oauth_metadata_from_resource(url)
+            (
+                authorization_servers,
+                scopes,
+            ) = await self._fetch_oauth_metadata_from_resource(url)
             if authorization_servers:
                 return authorization_servers, scopes
 
@@ -912,16 +916,16 @@ class MCPServerManager:
             candidate_urls.append(
                 f"{base}/.well-known/oauth-authorization-server/{path}"
             )
-            candidate_urls.append(
-                f"{base}/.well-known/openid-configuration/{path}"
-            )
+            candidate_urls.append(f"{base}/.well-known/openid-configuration/{path}")
         candidate_urls.append(f"{base}/.well-known/oauth-authorization-server")
         candidate_urls.append(f"{base}/.well-known/openid-configuration")
         candidate_urls.append(issuer_url.rstrip("/"))
 
         for url in candidate_urls:
             try:
-                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                async with httpx.AsyncClient(
+                    timeout=10.0, follow_redirects=True
+                ) as client:
                     response = await client.get(url)
                     response.raise_for_status()
                     data = response.json()
@@ -991,6 +995,7 @@ class MCPServerManager:
                     f"Client operation failed for {server_name}: {str(e)}"
                 )
                 return []
+
         try:
             return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
         except asyncio.TimeoutError:
