@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "./llm_calls/fetch_models";
@@ -118,18 +118,64 @@ describe("ChatUI", () => {
       expect(getByText("Test Key")).toBeInTheDocument();
     });
 
-    await waitFor(() => {
-      expect(getByText("Model 1")).toBeInTheDocument();
-    });
+    // Open the "Select Model" dropdown (AntD renders options in a portal)
+    const selectModelLabel = getByText("Select Model");
+    const modelSelect = selectModelLabel.parentElement?.querySelector(".ant-select-selector");
+    expect(modelSelect).toBeTruthy();
 
-    const selectComponent = container.querySelectorAll(".ant-select-selector")[1];
-    expect(selectComponent).toBeTruthy();
-
-    fireEvent.mouseDown(selectComponent!);
+    fireEvent.mouseDown(modelSelect!);
 
     await waitFor(() => {
       const model1Label = screen.getAllByText("Model 1");
       expect(model1Label.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("shows only chat-compatible models when chat endpoint is selected", async () => {
+    vi.mocked(fetchModelsModule.fetchAvailableModels).mockResolvedValueOnce([
+      { model_group: "ChatModel", mode: "chat" },
+      { model_group: "SpeechModel", mode: "audio_speech" },
+      { model_group: "ImageModel", mode: "image_generation" },
+      { model_group: "ResponsesModel", mode: "responses" },
+    ]);
+
+    const { getByText, baseElement } = render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText("Test Key")).toBeInTheDocument();
+    });
+
+    // Open endpoint selector and explicitly select /v1/chat/completions
+    const endpointTypeText = getByText("Endpoint Type");
+    const endpointSelect = endpointTypeText.parentElement?.querySelector(".ant-select-selector");
+    expect(endpointSelect).toBeTruthy();
+    act(() => {
+      fireEvent.mouseDown(endpointSelect!);
+      fireEvent.click(screen.getByText("/v1/chat/completions"));
+    });
+
+    // Open model selector
+    const selectModelLabel = getByText("Select Model");
+    const modelSelect = selectModelLabel.parentElement?.querySelector(".ant-select-selector");
+    expect(modelSelect).toBeTruthy();
+    act(() => {
+      fireEvent.mouseDown(modelSelect!);
+    });
+
+    await waitFor(() => {
+      // Chat-compatible: ChatModel should be visible
+      expect(screen.getAllByText("ChatModel").length).toBeGreaterThan(0);
+      expect(screen.queryByText("SpeechModel")).toBeNull();
+      expect(screen.queryByText("ImageModel")).toBeNull();
+      expect(screen.queryByText("ResponsesModel")).toBeNull();
     });
   });
 });

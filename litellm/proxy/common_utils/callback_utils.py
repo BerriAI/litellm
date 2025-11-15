@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Iterable
 
 import litellm
 from litellm import get_secret
@@ -408,3 +408,7 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
         "variables": env_vars_dict,
         "type": callback_type
     }
+def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
+    if callbacks is None:
+        return []
+    return [c.lower() if isinstance(c, str) else c for c in callbacks]

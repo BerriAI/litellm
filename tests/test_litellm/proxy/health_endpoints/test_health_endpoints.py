@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -16,6 +16,7 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     db_health_cache,
+    health_services_endpoint,
 )
 
 
@@ -97,3 +98,31 @@ async def test_db_health_readiness_check_with_error_and_flag_off(prisma_error):
 
         # Verify that the raised exception is the same
         assert excinfo.value == prisma_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,error_message",
+    [
+        ("healthy", ""),
+        ("unhealthy", "queue not reachable"),
+    ],
+)
+async def test_health_services_endpoint_sqs(status, error_message):
+    """
+    Verify the /health/services SQS branch returns expected status and message
+    based on SQSLogger.async_health_check().
+    """
+    with patch("litellm.integrations.sqs.SQSLogger") as MockSQSLogger:
+        mock_instance = MagicMock()
+        mock_instance.async_health_check = AsyncMock(
+            return_value={"status": status, "error_message": error_message}
+        )
+        MockSQSLogger.return_value = mock_instance
+
+        result = await health_services_endpoint(service="sqs")
+
+        assert result["status"] == status
+        assert result["message"] == error_message
+        mock_instance.async_health_check.assert_awaited_once()
+

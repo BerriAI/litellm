@@ -37,6 +37,8 @@ LiteLLM manages:
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
 - Set Budgets & Rate limits per project, api key, model [LiteLLM Proxy Server (LLM Gateway)](https://docs.litellm.ai/docs/simple_proxy)
 
+LiteLLM Performance: **8ms P95 latency** at 1k RPS (See benchmarks [here](https://docs.litellm.ai/docs/benchmarks))
+
 [**Jump to LiteLLM Proxy (LLM Gateway) Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#litellm-proxy-server-llm-gateway---docs) <br>
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-providers-docs)
 
@@ -132,11 +134,15 @@ print(response)
 
 ## Streaming ([Docs](https://docs.litellm.ai/docs/completion/stream))
 
-liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
+LiteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 Streaming is supported for all models (Bedrock, Huggingface, TogetherAI, Azure, OpenAI, etc.)
 
 ```python
 from litellm import completion
+
+messages = [{"content": "Hello, how are you?", "role": "user"}]
+
+# gpt-4o
 response = completion(model="openai/gpt-4o", messages=messages, stream=True)
 for part in response:
     print(part.choices[0].delta.content or "")

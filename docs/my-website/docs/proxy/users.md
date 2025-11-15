@@ -127,7 +127,7 @@ curl 'http://0.0.0.0:4000/team/new' \
 --data-raw '{
   "team_alias": "my-new-team_4",
   "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}],
-  "budget_duration": 10s,
+  "budget_duration": "30s",
 }'
 ```
 
@@ -253,7 +253,7 @@ curl 'http://0.0.0.0:4000/user/new' \
 --data-raw '{
   "team_id": "core-infra", # [OPTIONAL]
   "max_budget": 10,
-  "budget_duration": 10s,
+  "budget_duration": "30s",
 }'
 ```
 
@@ -334,7 +334,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --data-raw '{
   "team_id": "core-infra", # [OPTIONAL]
   "max_budget": 10,
-  "budget_duration": 10s,
+  "budget_duration": "30s",
 }'
 ```
 
@@ -495,7 +495,7 @@ curl 'http://0.0.0.0:4000/user/new' \
 --header 'Content-Type: application/json' \
 --data-raw '{
   "max_budget": 10,
-  "budget_duration": 10s, # 👈 KEY CHANGE
+  "budget_duration": "30s", # 👈 KEY CHANGE
 }'
 ```
 </TabItem>
@@ -507,7 +507,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Content-Type: application/json' \
 --data-raw '{
   "max_budget": 10,
-  "budget_duration": 10s, # 👈 KEY CHANGE
+  "budget_duration": "30s", # 👈 KEY CHANGE
 }'
 ```
 
@@ -520,7 +520,7 @@ curl 'http://0.0.0.0:4000/team/new' \
 --header 'Content-Type: application/json' \
 --data-raw '{
   "max_budget": 10,
-  "budget_duration": 10s, # 👈 KEY CHANGE
+  "budget_duration": "30s", # 👈 KEY CHANGE
 }'
 ```
 </TabItem>

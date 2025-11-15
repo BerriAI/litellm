@@ -205,6 +205,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None
+    s3_encryption_key_id: Optional[str] = None
     gcs_bucket_name: Optional[str] = None
 
     # Vector Store Params
@@ -262,6 +263,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         auto_router_embedding_model: Optional[str] = None,
         # Batch/File API Params
         s3_bucket_name: Optional[str] = None,
+        s3_encryption_key_id: Optional[str] = None,
         gcs_bucket_name: Optional[str] = None,
         **params,
     ):

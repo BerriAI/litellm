@@ -152,32 +152,27 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             )
         )
 
-        try:
-            completion_response = await litellm.acompletion(**completion_kwargs)
+        completion_response = await litellm.acompletion(**completion_kwargs)
 
-            if stream:
-                transformed_stream = (
-                    ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
-                        completion_response,
-                        model=model,
-                    )
+        if stream:
+            transformed_stream = (
+                ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
+                    completion_response,
+                    model=model,
                 )
-                if transformed_stream is not None:
-                    return transformed_stream
-                raise ValueError("Failed to transform streaming response")
-            else:
-                anthropic_response = (
-                    ANTHROPIC_ADAPTER.translate_completion_output_params(
-                        cast(ModelResponse, completion_response)
-                    )
-                )
-                if anthropic_response is not None:
-                    return anthropic_response
-                raise ValueError("Failed to transform response to Anthropic format")
-        except Exception as e:  # noqa: BLE001
-            raise ValueError(
-                f"Error calling litellm.acompletion for non-Anthropic model: {str(e)}"
             )
+            if transformed_stream is not None:
+                return transformed_stream
+            raise ValueError("Failed to transform streaming response")
+        else:
+            anthropic_response = (
+                ANTHROPIC_ADAPTER.translate_completion_output_params(
+                    cast(ModelResponse, completion_response)
+                )
+            )
+            if anthropic_response is not None:
+                return anthropic_response
+            raise ValueError("Failed to transform response to Anthropic format")
 
     @staticmethod
     def anthropic_messages_handler(
@@ -239,29 +234,24 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             )
         )
 
-        try:
-            completion_response = litellm.completion(**completion_kwargs)
+        completion_response = litellm.completion(**completion_kwargs)
 
-            if stream:
-                transformed_stream = (
-                    ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
-                        completion_response,
-                        model=model,
-                    )
+        if stream:
+            transformed_stream = (
+                ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
+                    completion_response,
+                    model=model,
                 )
-                if transformed_stream is not None:
-                    return transformed_stream
-                raise ValueError("Failed to transform streaming response")
-            else:
-                anthropic_response = (
-                    ANTHROPIC_ADAPTER.translate_completion_output_params(
-                        cast(ModelResponse, completion_response)
-                    )
-                )
-                if anthropic_response is not None:
-                    return anthropic_response
-                raise ValueError("Failed to transform response to Anthropic format")
-        except Exception as e:  # noqa: BLE001
-            raise ValueError(
-                f"Error calling litellm.completion for non-Anthropic model: {str(e)}"
             )
+            if transformed_stream is not None:
+                return transformed_stream
+            raise ValueError("Failed to transform streaming response")
+        else:
+            anthropic_response = (
+                ANTHROPIC_ADAPTER.translate_completion_output_params(
+                    cast(ModelResponse, completion_response)
+                )
+            )
+            if anthropic_response is not None:
+                return anthropic_response
+            raise ValueError("Failed to transform response to Anthropic format")

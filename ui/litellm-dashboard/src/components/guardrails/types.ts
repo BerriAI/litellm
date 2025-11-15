@@ -31,4 +31,10 @@ export interface Guardrail {
   guardrail_info: Record<string, any> | null;
   created_at?: string;
   updated_at?: string;
+  guardrail_definition_location: GuardrailDefinitionLocation;
+}
+
+export enum GuardrailDefinitionLocation {
+  DB = "db",
+  CONFIG = "config",
 }

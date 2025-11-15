@@ -49,6 +49,8 @@ from litellm.types.utils import (
 from litellm.utils import load_credentials_from_list
 from litellm.proxy.common_utils.callback_utils import process_callback
 
+from litellm.proxy.common_utils.callback_utils import normalize_callback_names
+
 if TYPE_CHECKING:
     from aiohttp import ClientSession
     from opentelemetry.trace import Span as _Span
@@ -291,6 +293,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
+)
+from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+    router as model_access_group_management_router,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
@@ -2806,11 +2811,6 @@ class ProxyConfig:
         """
         import base64
 
-        if master_key is None or not isinstance(master_key, str):
-            raise Exception(
-                f"Master key is not initialized or formatted. master_key={master_key}"
-            )
-
         if llm_router is None:
             return 0
 
@@ -2822,13 +2822,9 @@ class ProxyConfig:
                 # decrypt values
                 for k, v in _litellm_params.items():
                     if isinstance(v, str):
-                        # decrypt value
-                        _value = decrypt_value_helper(value=v, key=k)
-                        if _value is None:
-                            raise Exception("Unable to decrypt value={}".format(v))
-                        # sanity check if string > size 0
-                        if len(_value) > 0:
-                            _litellm_params[k] = _value
+                        # decrypt value - returns original value if decryption fails or no key is set
+                        _value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+                        _litellm_params[k] = _value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
             else:
@@ -3372,11 +3368,6 @@ class ProxyConfig:
         global llm_router, llm_model_list, master_key, general_settings
 
         try:
-            if master_key is None or not isinstance(master_key, str):
-                raise ValueError(
-                    f"Master key is not initialized or formatted. master_key={master_key}"
-                )
-
             # Only load models from DB if "models" is in supported_db_objects (or if supported_db_objects is not set)
             if self._should_load_db_object(object_type="models"):
                 new_models = await self._get_models_from_db(prisma_client=prisma_client)
@@ -5025,40 +5016,11 @@ async def embeddings(  # noqa: PLR0915
     global proxy_logging_obj
     data: Any = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
+        # Use shared request body reading helper (same as chat/completions)
+        data = await _read_request_body(request=request)
 
-        verbose_proxy_logger.debug(
-            "Request received by LiteLLM:\n%s",
-            json.dumps(data, indent=4),
-        )
-
-        # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
-            request=request,
-            general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-        )
-
-        data["model"] = (
-            general_settings.get("embedding_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or model  # for azure deployments
-            or data.get("model", None)  # default passed in http request
-        )
-        if user_model:
-            data["model"] = user_model
-
-        ### MODEL ALIAS MAPPING ###
-        # check if model name in model alias map
-        # get the actual model name
-        if data["model"] in litellm.model_alias_map:
-            data["model"] = litellm.model_alias_map[data["model"]]
-
+        ### HANDLE TOKEN ARRAY INPUT DECODING ###
+        # This must happen BEFORE base_process_llm_request() since it modifies the input
         router_model_names = llm_router.model_names if llm_router is not None else []
         if (
             "input" in data
@@ -5068,126 +5030,61 @@ async def embeddings(  # noqa: PLR0915
             and isinstance(data["input"][0][0], int)
         ):  # check if array of tokens passed in
             # check if provider accept list of tokens as input - e.g. for langchain integration
-            if llm_model_list is not None and data["model"] in router_model_names:
-                for m in llm_model_list:
-                    if m["model_name"] == data["model"]:
-                        if m["litellm_params"][
-                            "model"
-                        ] in litellm.open_ai_embedding_models or any(
-                            m["litellm_params"]["model"].startswith(provider)
+            if llm_router is not None and data.get("model") in router_model_names:
+                # Use router's O(1) lookup instead of O(N) iteration through llm_model_list
+                deployment = llm_router.get_deployment(model_id=data["model"])
+                if deployment is not None:
+                    litellm_model = deployment.get("litellm_params", {}).get("model", "")
+                    # Check if this provider supports token arrays
+                    supports_token_arrays = (
+                        litellm_model in litellm.open_ai_embedding_models
+                        or any(
+                            litellm_model.startswith(provider)
                             for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
-                        ):
-                            pass
-                        else:
-                            # non-openai/azure embedding model called with token input
-                            input_list = []
-                            for i in data["input"]:
-                                input_list.append(
-                                    litellm.decode(model="gpt-3.5-turbo", tokens=i)
-                                )
-                            data["input"] = input_list
-                            break
+                        )
+                    )
+                    if not supports_token_arrays:
+                        # non-openai/azure embedding model called with token input - decode tokens
+                        input_list = []
+                        for i in data["input"]:
+                            input_list.append(
+                                litellm.decode(model="gpt-3.5-turbo", tokens=i)
+                            )
+                        data["input"] = input_list
 
-        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-        data = await proxy_logging_obj.pre_call_hook(
+        # Use unified request processor (same as chat/completions and responses)
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        
+        # Process the request with all optimizations (shared sessions, network tuning, etc.)
+        response = await base_llm_response_processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            data=data,
-            call_type=CallTypes.aembedding.value,
-        )
-
-        tasks = []
-        tasks.append(
-            proxy_logging_obj.during_call_hook(
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                call_type="aembedding",
-            )
-        )
-
-        ## ROUTE TO CORRECT ENDPOINT ##
-        llm_call = await route_request(
-            data=data,
             route_type="aembedding",
+            proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
             user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
         )
-        tasks.append(llm_call)
-
-        # wait for call to end
-        llm_responses = asyncio.gather(
-            *tasks
-        )  # run the moderation check in parallel to the actual llm api call
-
-        responses = await llm_responses
-
-        response = responses[1]
-
-        ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
-        )
-
-        ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-        response_cost = hidden_params.get("response_cost", None) or ""
-        litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
-        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
-
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                call_id=litellm_call_id,
-                request_data=data,
-                hidden_params=hidden_params,
-                **additional_headers,
-            )
-        )
-        await check_response_size_is_safe(response=response)
-
+        
         return response
     except Exception as e:
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        # Use unified error handler
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        raise await base_llm_response_processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
         )
-        litellm_debug_info = getattr(e, "litellm_debug_info", "")
-        verbose_proxy_logger.debug(
-            "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
-            e,
-            litellm_debug_info,
-        )
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.embeddings(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        if isinstance(e, HTTPException):
-            message = get_error_message_str(e)
-            raise ProxyException(
-                message=message,
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg = f"{str(e)}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                openai_code=getattr(e, "code", None),
-                code=getattr(e, "status_code", 500),
-            )
 
 
 @router.post(
@@ -9068,9 +8965,10 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 if isinstance(
                     config["litellm_settings"]["success_callback"], list
                 ) and isinstance(updated_litellm_settings["success_callback"], list):
+                    updated_success_callbacks_normalized = normalize_callback_names(updated_litellm_settings["success_callback"])
                     combined_success_callback = (
                         config["litellm_settings"]["success_callback"]
-                        + updated_litellm_settings["success_callback"]
+                        + updated_success_callbacks_normalized
                     )
                     combined_success_callback = list(set(combined_success_callback))
                     config["litellm_settings"][
@@ -10145,6 +10043,7 @@ app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
+app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)

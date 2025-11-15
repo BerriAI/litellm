@@ -967,6 +967,10 @@ async def test_vertex_ai_partner_model_detection():
     assert VertexAIPartnerModels.is_vertex_partner_model("meta/llama-3.1-405b")
     # Test Minimax models
     assert VertexAIPartnerModels.is_vertex_partner_model("minimaxai/minimax-m2-maas")
+    # Test Moonshot models
+    assert VertexAIPartnerModels.is_vertex_partner_model(
+        "moonshotai/kimi-k2-thinking-maas"
+    )
 
     # Test Gemini models (should NOT be detected as partner model)
     assert not VertexAIPartnerModels.is_vertex_partner_model("gemini-1.5-pro")
@@ -988,4 +992,17 @@ def test_vertex_ai_minimax_uses_openai_handler():
 
     assert VertexAIPartnerModels.should_use_openai_handler(
         "minimaxai/minimax-m2-maas"
+    )
+
+
+def test_vertex_ai_moonshot_uses_openai_handler():
+    """
+    Ensure Moonshot partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "moonshotai/kimi-k2-thinking-maas"
     )

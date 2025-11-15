@@ -4,9 +4,13 @@ Sambanova Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-from typing import Optional, Union
+from typing import Any, Coroutine, List, Literal, Optional, Union, overload
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    handle_messages_with_content_list_to_str_conversion,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.types.llms.openai import AllMessageValues
 
 
 class SambanovaConfig(OpenAIGPTConfig):
@@ -92,3 +96,30 @@ class SambanovaConfig(OpenAIGPTConfig):
             elif param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
+
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
+    ) -> List[AllMessageValues]:
+        ...
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        """
+        Transform messages to handle content list conversion.
+        
+        SambaNova API doesn't support content as a list - only string content.
+        This converts content lists like [{"type": "text", "text": "..."}] to strings.
+        """
+        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        return messages

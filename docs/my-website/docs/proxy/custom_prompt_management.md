@@ -173,6 +173,28 @@ curl -X POST http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+### Using the LiteLLM SDK Directly
+
+If you call `litellm.completion()` from a Python script (without going through the proxy), register your custom prompt manager before making the request:
+
+```python
+
+import litellm
+from custom_prompt import prompt_management
+
+litellm.callbacks = [prompt_management]
+litellm.use_litellm_proxy = True
+
+response = litellm.completion(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "hi"}],
+    prompt_id="1234",
+    prompt_variables={"user_message": "hi"},
+)
+```
+
+> **Note:** `litellm.callbacks = [prompt_management]` (or equivalently `litellm.logging_callback_manager.add_litellm_callback(prompt_management)`) is required in SDK scripts. The proxy reads `callbacks` from `config.yaml` automatically, but standalone scripts do not.
+
 The request will be transformed from:
 ```json
 {

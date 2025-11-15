@@ -337,6 +337,48 @@ def test_openai_max_retries_0(mock_get_openai_client):
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
 
 
+@patch("litellm.main.openai_chat_completions._get_openai_client")
+def test_openai_image_generation_forwards_organization(mock_get_openai_client):
+    """Ensure organization flows to OpenAI client for image generation."""
+
+    class _DummyImages:
+        def generate(self, **kwargs):  # type: ignore
+            class _Resp:
+                def model_dump(self_inner):  # minimal OpenAI ImagesResponse shape
+                    return {
+                        "created": 123,
+                        "data": [{"url": "http://example.com/image.png"}],
+                        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                    }
+
+            return _Resp()
+
+    class _DummyClient:
+        def __init__(self):
+            self.api_key = "sk-test"
+
+            class _BaseURL:
+                _uri_reference = "https://api.openai.com/v1"
+
+            self._base_url = _BaseURL()
+            self.images = _DummyImages()
+
+    mock_get_openai_client.return_value = _DummyClient()
+
+    org = "org_test_123"
+    resp = litellm.image_generation(
+        model="gpt-image-1",
+        prompt="A cute baby sea otter",
+        organization=org,
+    )
+
+    # Assert organization forwarded into OpenAI client factory
+    assert mock_get_openai_client.call_args.kwargs.get("organization") == org
+
+    # Basic sanity on response shape
+    assert hasattr(resp, "data") and len(resp.data) == 1
+
+
 @pytest.mark.parametrize("model", ["o1", "o3-mini"])
 def test_o1_parallel_tool_calls(model):
     litellm.completion(

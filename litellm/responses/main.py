@@ -167,11 +167,12 @@ async def aresponses_api_with_mcp(
     user_api_key_auth = kwargs.get("user_api_key_auth")
 
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
-    original_mcp_tools = (
-        await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
-            user_api_key_auth=user_api_key_auth,
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-        )
+    (
+        original_mcp_tools,
+        tool_server_map,
+    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+        user_api_key_auth=user_api_key_auth,
+        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         original_mcp_tools
@@ -230,6 +231,7 @@ async def aresponses_api_with_mcp(
             mcp_discovery_events=mcp_discovery_events,
             call_params=call_params,
             previous_response_id=previous_response_id,
+            tool_server_map=tool_server_map,
             **kwargs,
         )
 
@@ -274,7 +276,9 @@ async def aresponses_api_with_mcp(
                 "user_api_key_auth"
             )
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-                tool_calls=tool_calls, user_api_key_auth=user_api_key_auth
+                tool_server_map=tool_server_map,
+                tool_calls=tool_calls,
+                user_api_key_auth=user_api_key_auth,
             )
 
             if tool_results:
@@ -320,13 +324,18 @@ async def aresponses_api_with_mcp(
                     )
 
                     final_response = MCPEnhancedStreamingIterator(
-                        base_iterator=final_response, mcp_events=tool_execution_events
+                        tool_server_map=tool_server_map,
+                        base_iterator=final_response,
+                        mcp_events=tool_execution_events,
                     )
 
                 # Add custom output elements to the final response (for non-streaming)
                 elif isinstance(final_response, ResponsesAPIResponse):
                     # Fetch MCP tools again for output elements (without OpenAI transformation)
-                    mcp_tools_for_output = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+                    (
+                        mcp_tools_for_output,
+                        _,
+                    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
                         user_api_key_auth=user_api_key_auth,
                         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
                     )

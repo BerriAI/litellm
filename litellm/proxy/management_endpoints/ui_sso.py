@@ -564,10 +564,12 @@ def apply_user_info_values_to_sso_user_defined_values(
     if user_info is not None and user_info.user_id is not None:
         user_defined_values["user_id"] = user_info.user_id
 
-    if user_info is None or user_info.user_role is None:
-        user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-    else:
-        user_defined_values["user_role"] = user_info.user_role
+    # Check if user_role already exists in user_defined_values (from JWT/SSO response)
+    if user_defined_values.get("user_role") is None:
+        if user_info is None or user_info.user_role is None:
+            user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        else:
+            user_defined_values["user_role"] = user_info.user_role
 
     # Preserve the user's existing models from the database
     if user_info is not None and hasattr(user_info, "models") and user_info.models:
@@ -1581,7 +1583,7 @@ class SSOAuthenticationHandler:
                 user_id=user_id,
                 user_email=user_email,
                 max_budget=max_internal_user_budget,
-                user_role=None,
+                user_role=user_role,
                 budget_duration=internal_user_budget_duration,
             )
 

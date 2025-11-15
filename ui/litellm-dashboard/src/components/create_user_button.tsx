@@ -26,6 +26,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { useQueryClient } from "@tanstack/react-query";
 import NotificationsManager from "./molecules/notifications_manager";
+import TeamDropdown from "./common_components/team_dropdown";
 
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {
@@ -201,19 +202,9 @@ const Createuser: React.FC<CreateuserProps> = ({
               ))}
           </Select2>
         </Form.Item>
-        <Form.Item label="Team ID" name="team_id">
-          <Select placeholder="Select Team ID" style={{ width: "100%" }}>
-            {teams ? (
-              teams.map((team: any) => (
-                <Option key={team.team_id} value={team.team_id}>
-                  {team.team_alias}
-                </Option>
-              ))
-            ) : (
-              <Option key="default" value={null}>
-                Default Team
-              </Option>
-            )}
+        <Form.Item label="Team" name="team_id">
+          <Select placeholder="Select Team" style={{ width: "100%" }}>
+            <TeamDropdown teams={teams} />
           </Select>
         </Form.Item>
 
@@ -275,24 +266,12 @@ const Createuser: React.FC<CreateuserProps> = ({
           </Form.Item>
 
           <Form.Item
-            label="Team ID"
+            label="Team"
             className="gap-2"
             name="team_id"
             help="If selected, user will be added as a 'user' role to the team."
           >
-            <Select placeholder="Select Team ID" style={{ width: "100%" }}>
-              {teams ? (
-                teams.map((team: any) => (
-                  <Option key={team.team_id} value={team.team_id}>
-                    {team.team_alias}
-                  </Option>
-                ))
-              ) : (
-                <Option key="default" value={null}>
-                  Default Team
-                </Option>
-              )}
-            </Select>
+            <TeamDropdown teams={teams} />
           </Form.Item>
 
           <Form.Item label="Metadata" name="metadata">

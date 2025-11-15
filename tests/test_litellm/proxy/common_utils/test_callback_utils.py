@@ -7,6 +7,7 @@ sys.path.insert(
 
 from litellm.proxy.common_utils.callback_utils import (
     get_remaining_tokens_and_requests_from_request_data,
+    normalize_callback_names,
 )
 
 from unittest.mock import patch
@@ -74,3 +75,13 @@ def test_process_callback_with_no_required_env_vars(mock_get_env_vars):
     assert result["name"] == "another_callback"
     assert result["type"] == "output"
     assert result["variables"] == {}
+
+
+def test_normalize_callback_names_none_returns_empty_list():
+    assert normalize_callback_names(None) == []
+    assert normalize_callback_names([]) == []
+
+
+def test_normalize_callback_names_lowercases_strings():
+    assert normalize_callback_names(["SQS", "S3", "CUSTOM_CALLBACK"]) == ["sqs", "s3", "custom_callback"]
+

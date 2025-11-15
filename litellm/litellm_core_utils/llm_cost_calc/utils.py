@@ -640,6 +640,7 @@ class CostCalculatorUtils:
         n: Optional[int] = None,
         size: Optional[str] = None,
         optional_params: Optional[dict] = None,
+        call_type: Optional[str] = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -713,6 +714,18 @@ class CostCalculatorUtils:
                 image_response=completion_response,
             )
         elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
+            if call_type in (
+                CallTypes.image_edit.value,
+                CallTypes.aimage_edit.value,
+            ):
+                from litellm.llms.gemini.image_edit.cost_calculator import (
+                    cost_calculator as gemini_image_edit_cost_calculator,
+                )
+
+                return gemini_image_edit_cost_calculator(
+                    model=model,
+                    image_response=completion_response,
+                )
             from litellm.llms.gemini.image_generation.cost_calculator import (
                 cost_calculator as gemini_image_cost_calculator,
             )
@@ -732,6 +745,15 @@ class CostCalculatorUtils:
             )
 
             return fal_ai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.RUNWAYML.value:
+            from litellm.llms.runwayml.cost_calculator import (
+                cost_calculator as runwayml_image_cost_calculator,
+            )
+
+            return runwayml_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
             )

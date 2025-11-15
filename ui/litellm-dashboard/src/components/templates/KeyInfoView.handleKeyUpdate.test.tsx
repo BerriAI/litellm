@@ -43,6 +43,7 @@ vi.mock("@/utils/dataUtils", () => ({
 vi.mock("../key_info_utils", () => ({
   extractLoggingSettings: () => ({}),
   formatMetadataForDisplay: (m: any) => JSON.stringify(m, null, 2),
+  stripTagsFromMetadata: (m: any) => m,
 }));
 vi.mock("../callback_info_helpers", () => ({
   callback_map: {},

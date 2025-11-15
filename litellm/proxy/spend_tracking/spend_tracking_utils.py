@@ -274,8 +274,8 @@ def get_logging_payload(  # noqa: PLR0915
         end_user_id = end_user_id or standard_logging_payload["metadata"].get(
             "user_api_key_end_user_id"
         )
-    else:
-        api_key = ""
+    # BUG FIX: Don't overwrite api_key when standard_logging_payload is None
+    # The api_key was already extracted from metadata (line 243) and hashed (lines 256-259)
     request_tags = (
         json.dumps(metadata.get("tags", []))
         if isinstance(metadata.get("tags", []), list)
