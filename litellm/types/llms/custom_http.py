@@ -22,6 +22,7 @@ class httpxSpecialProvider(str, Enum):
     PromptFactory = "prompt_factory"
     SSO_HANDLER = "sso_handler"
     Search = "search"
+    MCP = "mcp"
 
 
 VerifyTypes = Union[str, bool, ssl.SSLContext]
