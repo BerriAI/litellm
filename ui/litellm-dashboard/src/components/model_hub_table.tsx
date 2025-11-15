@@ -7,6 +7,7 @@ import { modelHubColumns } from "./model_hub_table_columns";
 import { agentHubColumns, AgentHubData } from "./agent_hub_table_columns";
 import PublicModelHub from "./public_model_hub";
 import MakeModelPublicForm from "./make_model_public_form";
+import MakeAgentPublicForm from "./make_agent_public_form";
 import ModelFilters from "./model_filters";
 import UsefulLinksManagement from "./useful_links_management";
 import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
@@ -55,6 +56,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
+  const [isMakeAgentPublicModalVisible, setIsMakeAgentPublicModalVisible] = useState(false);
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
   const [selectedAgent, setSelectedAgent] = useState<null | AgentHubData>(null);
   const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
@@ -124,8 +126,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
         console.log("AgentHubData:", response);
         let agents = response.agents;
         let agent_card_list = agents.map((agent: any) => ({
+          agent_id: agent.agent_id,
           ...agent.agent_card_params,
-          ...agent.is_public,
+          is_public: agent.is_public,
         }));
         setAgentHubData(agent_card_list);
       } catch (error) {
@@ -161,6 +164,15 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
     // Show the modal for selecting models to make public
     setIsMakePublicModalVisible(true);
+  };
+
+  const handleMakeAgentPublicPage = () => {
+    if (!accessToken) {
+      return;
+    }
+
+    // Show the modal for selecting agents to make public
+    setIsMakeAgentPublicModalVisible(true);
   };
 
   const handleOk = () => {
@@ -219,6 +231,27 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     }
   };
 
+  const handleMakeAgentPublicSuccess = () => {
+    // Refresh the agent hub data after successful public operation
+    if (accessToken) {
+      const fetchAgentData = async () => {
+        try {
+          const response = await getAgentsList(accessToken);
+          let agents = response.agents;
+          let agent_card_list = agents.map((agent: any) => ({
+            agent_id: agent.agent_id,
+            ...agent.agent_card_params,
+            is_public: agent.is_public,
+          }));
+          setAgentHubData(agent_card_list);
+        } catch (error) {
+          console.error("Error refreshing agent data:", error);
+        }
+      };
+      fetchAgentData();
+    }
+  };
+
   const handleFilteredDataChange = useCallback((newFilteredData: ModelGroupInfo[]) => {
     setFilteredData(newFilteredData);
   }, []);
@@ -259,12 +292,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   <Copy size={16} className="text-gray-600" />
                 </button>
               </div>
-
-              {publicPage == false && isAdminRole(userRole || "") && (
-                <Button className="ml-4" onClick={() => handleMakePublicPage()}>
-                  Make Public
-                </Button>
-              )}
             </div>
           </div>
 
@@ -287,6 +314,15 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <TabPanel>
                 {/* Model Filters and Table */}
                 <Card>
+                  {/* Header with Make Public Button */}
+                  {publicPage == false && isAdminRole(userRole || "") && (
+                    <div className="flex justify-end mb-4">
+                      <Button onClick={() => handleMakePublicPage()}>
+                        Select Models to Make Public
+                      </Button>
+                    </div>
+                  )}
+                  
                   {/* Filters */}
                   <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
 
@@ -310,6 +346,15 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               {/* Agent Hub Tab */}
               <TabPanel>
                 <Card>
+                  {/* Header with Make Public Button */}
+                  {publicPage == false && isAdminRole(userRole || "") && (
+                    <div className="flex justify-end mb-4">
+                      <Button onClick={() => handleMakeAgentPublicPage()}>
+                        Select Agents to Make Public
+                      </Button>
+                    </div>
+                  )}
+
                   {/* Agent Table */}
                   <ModelDataTable
                     columns={agentHubColumns(showAgentModal, copyToClipboard, publicPage)}
@@ -655,6 +700,15 @@ print(response.choices[0].message.content)`}
         accessToken={accessToken || ""}
         modelHubData={modelHubData || []}
         onSuccess={handleMakePublicSuccess}
+      />
+
+      {/* Make Agent Public Form */}
+      <MakeAgentPublicForm
+        visible={isMakeAgentPublicModalVisible}
+        onClose={() => setIsMakeAgentPublicModalVisible(false)}
+        accessToken={accessToken || ""}
+        agentHubData={agentHubData || []}
+        onSuccess={handleMakeAgentPublicSuccess}
       />
     </div>
   );

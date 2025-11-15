@@ -4,6 +4,7 @@ import { Tooltip, Tag } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
 
 export interface AgentHubData {
+  agent_id?: string;
   protocolVersion: string;
   name: string;
   description: string;
