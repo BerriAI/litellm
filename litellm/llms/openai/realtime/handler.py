@@ -11,7 +11,7 @@ from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
-from ....litellm_core_utils.realtime_ssl import SHARED_REALTIME_SSL_CONTEXT
+from ....llms.custom_httpx.http_handler import SHARED_REALTIME_SSL_CONTEXT
 from ..openai import OpenAIChatCompletion
 
 

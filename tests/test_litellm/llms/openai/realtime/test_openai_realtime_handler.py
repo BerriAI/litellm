@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from litellm.litellm_core_utils.realtime_ssl import SHARED_REALTIME_SSL_CONTEXT
+from litellm.llms.custom_httpx.http_handler import SHARED_REALTIME_SSL_CONTEXT
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")

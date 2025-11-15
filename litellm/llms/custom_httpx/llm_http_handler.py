@@ -22,7 +22,6 @@ import litellm.types.utils
 from litellm._logging import verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
-from litellm.litellm_core_utils.realtime_ssl import SHARED_REALTIME_SSL_CONTEXT
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -39,6 +38,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from .http_handler import SHARED_REALTIME_SSL_CONTEXT
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )

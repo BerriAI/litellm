@@ -183,6 +183,11 @@ def get_ssl_configuration(
     return ssl_verify
 
 
+# Shared SSL configuration reused by realtime websocket handlers so TLS settings
+# stay aligned with our HTTP client logic (env overrides, custom CA bundles, etc.)
+SHARED_REALTIME_SSL_CONTEXT: Union[bool, str, ssl.SSLContext] = get_ssl_configuration()
+
+
 def mask_sensitive_info(error_message):
     # Find the start of the key parameter
     if isinstance(error_message, str):

@@ -18,7 +18,7 @@ from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..utils import client as wrapper_client
-from ..litellm_core_utils.realtime_ssl import SHARED_REALTIME_SSL_CONTEXT
+from ..llms.custom_httpx.http_handler import SHARED_REALTIME_SSL_CONTEXT
 
 azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
