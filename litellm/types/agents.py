@@ -162,14 +162,10 @@ class AugmentedAgentCard(AgentCard):
     is_public: bool
 
 
-class AgentLitellmParams(TypedDict):
-    make_public: bool
-
-
 class AgentConfig(TypedDict, total=False):
     agent_name: Required[str]
     agent_card_params: Required[AgentCard]
-    litellm_params: AgentLitellmParams
+    litellm_params: Dict[str, Any]  # allow for any future litellm params
 
 
 # Request/Response models for CRUD endpoints
