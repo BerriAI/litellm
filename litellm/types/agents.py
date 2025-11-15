@@ -196,3 +196,7 @@ class AgentMakePublicResponse(BaseModel):
     message: str
     public_agent_groups: List[str]
     updated_by: str
+
+
+class MakeAgentsPublicRequest(BaseModel):
+    agent_ids: List[str]

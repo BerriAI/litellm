@@ -6495,10 +6495,40 @@ export const makeAgentPublicCall = async (accessToken: string, agentId: string) 
     }
 
     const data = await response.json();
-    console.log("Delete agent response:", data);
+    console.log("Make agent public response:", data);
     return data;
   } catch (error) {
-    console.error("Failed to delete agent:", error);
+    console.error("Failed to make agent public:", error);
+    throw error;
+  }
+};
+
+export const makeAgentsPublicCall = async (accessToken: string, agentIds: string[]) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/make_public` : `/v1/agents/make_public`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent_ids: agentIds,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Make agents public response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to make agents public:", error);
     throw error;
   }
 };

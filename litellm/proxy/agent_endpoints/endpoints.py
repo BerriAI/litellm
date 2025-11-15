@@ -20,6 +20,7 @@ from litellm.types.agents import (
     AgentConfig,
     AgentMakePublicResponse,
     AgentResponse,
+    MakeAgentsPublicRequest,
     PatchAgentRequest,
 )
 
@@ -547,15 +548,127 @@ async def make_agent_public(
         if litellm.public_agent_groups is None:
             litellm.public_agent_groups = []
         # handle duplicates
-        if agent.agent_name in litellm.public_agent_groups:
+        if agent.agent_id in litellm.public_agent_groups:
             raise HTTPException(
                 status_code=400,
                 detail=f"Agent with name {agent.agent_name} already in public agent groups",
             )
-        litellm.public_agent_groups.append(agent.agent_name)
+        litellm.public_agent_groups.append(agent.agent_id)
 
         # Load existing config
         config = await proxy_config.get_config()
+
+        # Update config with new settings
+        if "litellm_settings" not in config or config["litellm_settings"] is None:
+            config["litellm_settings"] = {}
+
+        config["litellm_settings"]["public_agent_groups"] = litellm.public_agent_groups
+
+        # Save the updated config
+        await proxy_config.save_config(new_config=config)
+
+        verbose_proxy_logger.debug(
+            f"Updated public agent groups to: {litellm.public_agent_groups} by user: {user_api_key_dict.user_id}"
+        )
+
+        return {
+            "message": "Successfully updated public agent groups",
+            "public_agent_groups": litellm.public_agent_groups,
+            "updated_by": user_api_key_dict.user_id,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error making agent public: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/v1/agents/make_public",
+    tags=["[beta] Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=AgentMakePublicResponse,
+)
+async def make_agents_public(
+    request: MakeAgentsPublicRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Make multiple agents publicly discoverable
+
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/agents/make_public" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "agent_ids": ["123e4567-e89b-12d3-a456-426614174000", "123e4567-e89b-12d3-a456-426614174001"]
+        }'
+    ```
+
+    Example Response:
+    ```json
+    {
+        "agent_id": "123e4567-e89b-12d3-a456-426614174000",
+        "agent_name": "my-custom-agent",
+        "litellm_params": {
+            "make_public": true
+        },
+        "agent_card_params": {...},
+        "created_at": "2025-11-15T10:30:00Z",
+        "updated_at": "2025-11-15T10:35:00Z",
+        "created_by": "user123",
+        "updated_by": "user123"
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+
+    try:
+        # Update the public model groups
+        import litellm
+        from litellm.proxy.agent_endpoints.agent_registry import (
+            global_agent_registry as AGENT_REGISTRY,
+        )
+        from litellm.proxy.proxy_server import proxy_config
+
+        # Load existing config
+        config = await proxy_config.get_config()
+        # Check if user has admin permissions
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins can update public model groups. Your role={}".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+
+        if litellm.public_agent_groups is None:
+            litellm.public_agent_groups = []
+
+        for agent_id in request.agent_ids:
+            agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
+            if agent is None:
+                # check if agent exists in DB
+                agent = await prisma_client.db.litellm_agentstable.find_unique(
+                    where={"agent_id": agent_id}
+                )
+                if agent is not None:
+                    agent = AgentResponse(**agent.model_dump())  # type: ignore
+
+                if agent is None:
+                    raise HTTPException(
+                        status_code=404, detail=f"Agent with ID {agent_id} not found"
+                    )
+
+        litellm.public_agent_groups = request.agent_ids
 
         # Update config with new settings
         if "litellm_settings" not in config or config["litellm_settings"] is None:

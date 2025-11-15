@@ -36,7 +36,7 @@ class AgentRegistry:
         if litellm.public_agent_groups is None:
             return public_agent_list
         for agent in self.agent_list:
-            if agent.agent_name in litellm.public_agent_groups:
+            if agent.agent_id in litellm.public_agent_groups:
                 public_agent_list.append(agent)
         return public_agent_list
 

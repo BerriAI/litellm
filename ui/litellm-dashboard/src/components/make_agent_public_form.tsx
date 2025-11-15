@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { Modal, Form, Steps, Button, Checkbox } from "antd";
 import { Text, Title, Badge } from "@tremor/react";
-import { makeAgentPublicCall } from "./networking";
+import { makeAgentsPublicCall } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
 import { AgentHubData } from "./agent_hub_table_columns";
 
@@ -91,12 +91,8 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
     try {
       const agentIdsToMakePublic = Array.from(selectedAgents);
       
-      // Make API calls for each agent
-      const promises = agentIdsToMakePublic.map((agentId) => 
-        makeAgentPublicCall(accessToken, agentId)
-      );
-      
-      await Promise.all(promises);
+      // Make batch API call for all agents
+      await makeAgentsPublicCall(accessToken, agentIdsToMakePublic);
 
       NotificationsManager.success(`Successfully made ${agentIdsToMakePublic.length} agent(s) public!`);
       handleClose();
