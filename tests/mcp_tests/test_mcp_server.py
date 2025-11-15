@@ -24,7 +24,7 @@ mcp_server_manager = MCPServerManager()
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Local only test")
 async def test_mcp_server_manager():
-    mcp_server_manager.load_servers_from_config(
+    await mcp_server_manager.load_servers_from_config(
         {
             "zapier_mcp_server": {
                 "url": os.environ.get("ZAPIER_MCP_SERVER_URL"),
@@ -79,7 +79,7 @@ async def test_mcp_server_manager_https_server():
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
         mock_client_constructor,
     ):
-        mcp_server_manager.load_servers_from_config(
+        await mcp_server_manager.load_servers_from_config(
             {
                 "zapier_mcp_server": {
                     "url": "https://test-mcp-server.com/mcp",
@@ -189,7 +189,7 @@ async def test_mcp_http_transport_list_tools_mock():
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
-        test_manager.load_servers_from_config(
+        await test_manager.load_servers_from_config(
             {
                 "test_http_server": {
                     "url": "https://test-mcp-server.com/mcp",
@@ -266,7 +266,7 @@ async def test_mcp_http_transport_call_tool_mock():
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
-        test_manager.load_servers_from_config(
+        await test_manager.load_servers_from_config(
             {
                 "test_http_server": {
                     "url": "https://test-mcp-server.com/mcp",
@@ -333,7 +333,7 @@ async def test_mcp_http_transport_call_tool_error_mock():
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
-        test_manager.load_servers_from_config(
+        await test_manager.load_servers_from_config(
             {
                 "test_http_server": {
                     "url": "https://test-mcp-server.com/mcp",
@@ -376,7 +376,7 @@ async def test_mcp_http_transport_tool_not_found():
     test_manager = MCPServerManager()
 
     # Load server config
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "test_http_server": {
                 "url": "https://test-mcp-server.com/mcp",
@@ -699,7 +699,7 @@ async def test_list_tools_rest_api_success():
             mock_client_constructor,
         ):
             # Load server config into global manager
-            global_mcp_server_manager.load_servers_from_config(
+            await global_mcp_server_manager.load_servers_from_config(
                 {
                     "test_server": {
                         "url": "https://test-server.com/mcp",
@@ -878,7 +878,7 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
     test_manager = MCPServerManager()
 
     # Setup two servers in the config
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "server_a": {
                 "url": "https://server-a.com/mcp",
@@ -944,12 +944,13 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         assert tools[0].name.startswith(f"{expected_prefix}-")
 
 
-def test_mcp_server_manager_access_groups_from_config():
+@pytest.mark.asyncio
+async def test_mcp_server_manager_access_groups_from_config():
     """
     Test that access_groups are loaded from config and can be resolved.
     """
     test_manager = MCPServerManager()
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "config_server": {
                 "url": "https://config-mcp-server.com/mcp",
@@ -986,15 +987,15 @@ def test_mcp_server_manager_access_groups_from_config():
     # Should find config_server for group-a, both for group-b, other_server for group-c
     import asyncio
 
-    server_ids_a = asyncio.run(
-        MCPRequestHandler._get_mcp_servers_from_access_groups(["group-a"])
-    )
-    server_ids_b = asyncio.run(
-        MCPRequestHandler._get_mcp_servers_from_access_groups(["group-b"])
-    )
-    server_ids_c = asyncio.run(
-        MCPRequestHandler._get_mcp_servers_from_access_groups(["group-c"])
-    )
+    server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+        "group-a"
+    ])
+    server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+        "group-b"
+    ])
+    server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+        "group-c"
+    ])
     assert any(config_server.server_id == sid for sid in server_ids_a)
     assert set(server_ids_b) == set(
         [
@@ -1009,7 +1010,7 @@ def test_mcp_server_manager_access_groups_from_config():
     )
 
 
-def test_mcp_server_manager_config_integration_with_database():
+async def test_mcp_server_manager_config_integration_with_database():
     """
     Test that config-based servers properly integrate with database servers,
     specifically testing access_groups and description fields.
@@ -1020,7 +1021,7 @@ def test_mcp_server_manager_config_integration_with_database():
     test_manager = MCPServerManager()
 
     # Test 1: Load config with access_groups and description
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "config_server_with_groups": {
                 "url": "https://config-server.com/mcp",
@@ -1081,10 +1082,8 @@ def test_mcp_server_manager_config_integration_with_database():
     # Test the method (this tests our second fix)
     import asyncio
 
-    servers_list = asyncio.run(
-        test_manager.get_all_mcp_servers_with_health_and_teams(
-            user_api_key_auth=mock_user_auth
-        )
+    servers_list = await test_manager.get_all_mcp_servers_with_health_and_teams(
+        user_api_key_auth=mock_user_auth
     )
 
     # Verify we have the config server properly converted
@@ -1536,7 +1535,7 @@ async def test_mcp_protocol_version_passed_to_client():
         mock_client_constructor,
     ):
         # Load a test server
-        test_manager.load_servers_from_config(
+        await test_manager.load_servers_from_config(
             {
                 "test_server": {
                     "url": "https://test-server.com/mcp",
@@ -2423,7 +2422,7 @@ async def test_mcp_server_manager_with_access_groups_integration():
     test_manager = MCPServerManager()
 
     # Load servers with access groups
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "staff_server": {
                 "url": "https://staff-server.com/mcp",
@@ -2470,7 +2469,7 @@ async def test_get_allowed_mcp_servers_returns_registry_for_admin():
     )
 
     test_manager = MCPServerManager()
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "alpha_server": {
                 "url": "https://alpha.server/mcp",
@@ -2505,7 +2504,7 @@ async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permi
     )
 
     test_manager = MCPServerManager()
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "alpha_server": {
                 "url": "https://alpha.server/mcp",

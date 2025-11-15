@@ -211,11 +211,12 @@ mcp_servers:
   oauth2_example:
     url: "https://my-mcp-server.com/mcp"
     auth_type: "oauth2"         # 👈 KEY CHANGE
-    authorization_url: "https://my-mcp-server.com/oauth/authorize" # optional for client-credentials
-    token_url: "https://my-mcp-server.com/oauth/token"             # required
+    authorization_url: "https://my-mcp-server.com/oauth/authorize" # optional override
+    token_url: "https://my-mcp-server.com/oauth/token"             # optional override
+    registration_url: "https://my-mcp-server.com/oauth/register"   # optional override
     client_id: os.environ/OAUTH_CLIENT_ID
     client_secret: os.environ/OAUTH_CLIENT_SECRET
-    scopes: ["tool.read", "tool.write"] # optional
+    scopes: ["tool.read", "tool.write"] # optional override
 
   bearer_example:
     url: "https://my-mcp-server.com/mcp"
@@ -325,6 +326,10 @@ mcp_servers:
 | `spec_path` | Yes | Path or URL to your OpenAPI specification file (JSON or YAML) |
 | `auth_type` | No | Authentication type: `none`, `api_key`, `bearer_token`, `basic`, `authorization` |
 | `auth_value` | No | Authentication value (required if `auth_type` is set) |
+| `authorization_url` | No | For `auth_type: oauth2`. Optional override; if omitted LiteLLM auto-discovers it. |
+| `token_url` | No | For `auth_type: oauth2`. Optional override; if omitted LiteLLM auto-discovers it. |
+| `registration_url` | No | For `auth_type: oauth2`. Optional override; if omitted LiteLLM auto-discovers it. |
+| `scopes` | No | For `auth_type: oauth2`. Optional override; if omitted LiteLLM uses the scopes advertised by the server. |
 | `description` | No | Optional description for the MCP server |
 | `allowed_tools` | No | List of specific tools to allow (see [MCP Tool Filtering](#mcp-tool-filtering)) |
 | `disallowed_tools` | No | List of specific tools to block (see [MCP Tool Filtering](#mcp-tool-filtering)) |
@@ -1224,16 +1229,9 @@ mcp_servers:
   github_mcp:
     url: "https://api.githubcopilot.com/mcp"
     auth_type: oauth2
-    authorization_url: https://github.com/login/oauth/authorize
-    token_url: https://github.com/login/oauth/access_token
     client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
     client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
-    scopes: ["public_repo", "user:email"]
 ```
-
-**Note**  
-In the future, users will only need to specify the `url` of the MCP server.
-LiteLLM will automatically resolve the corresponding `authorization_url`, `token_url`, and `registration_url` based on the MCP server metadata (e.g., `.well-known/oauth-authorization-server` or `oauth-protected-resource`).
 
 [**See Claude Code Tutorial**](./tutorials/claude_responses_api#connecting-mcp-servers)
 
