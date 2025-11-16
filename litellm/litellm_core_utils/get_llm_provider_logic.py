@@ -255,6 +255,11 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
+                    elif (
+                        endpoint == "ai.burncloud.com" or endpoint == "b.burncloud.com"
+                    ):
+                        custom_llm_provider = "burncloud"
+                        dynamic_api_key = get_secret_str("BURNCLOUD_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -506,7 +511,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         if api_base is None:
             api_base = litellm.BasetenConfig.get_api_base_for_model(model)
         else:
-            api_base = api_base or get_secret_str("BASETEN_API_BASE") or "https://inference.baseten.co/v1"
+            api_base = (
+                api_base
+                or get_secret_str("BASETEN_API_BASE")
+                or "https://inference.baseten.co/v1"
+            )
         dynamic_api_key = api_key or get_secret_str("BASETEN_API_KEY")
     elif custom_llm_provider == "sambanova":
         api_base = (
@@ -804,6 +813,9 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.ClarifaiConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "burncloud":
+        api_base = api_base or get_secret("BURNCLOUD_API_BASE")  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("BURNCLOUD_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

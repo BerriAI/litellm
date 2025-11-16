@@ -381,6 +381,7 @@ LITELLM_CHAT_PROVIDERS = [
     "wandb",
     "ovhcloud",
     "lemonade",
+    "burncloud",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -520,6 +521,8 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "ai.burncloud.com",
+    "b.burncloud.com",
 ]
 
 
@@ -567,6 +570,7 @@ openai_compatible_providers: List = [
     "wandb",
     "cometapi",
     "clarifai",
+    "burncloud",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
