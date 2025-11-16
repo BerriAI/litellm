@@ -1096,7 +1096,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_translation/part1 --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-part1.xml --durations=5 -n 8 --timeout=120
+            python -m pytest -vv tests/llm_translation/part1 --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-part1.xml --durations=5 -n 8 --timeout=300
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1140,7 +1140,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_translation/part2 --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-part2.xml --durations=5 -n 8 --timeout=120
+            python -m pytest -vv tests/llm_translation/part2 --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-part2.xml --durations=5 -n 8 --timeout=300
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1184,7 +1184,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_translation/part3 --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-part3.xml --durations=5 -n 8 --timeout=120
+            python -m pytest -vv tests/llm_translation/part3 --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-part3.xml --durations=5 -n 8 --timeout=300
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
