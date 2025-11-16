@@ -89,8 +89,12 @@ MAX_TOKEN_TRIMMING_ATTEMPTS = int(
     os.getenv("MAX_TOKEN_TRIMMING_ATTEMPTS", 10)
 )  # Maximum number of attempts to trim the message
 
-RUNWAYML_DEFAULT_API_VERSION = str(os.getenv("RUNWAYML_DEFAULT_API_VERSION", "2024-11-06"))
-RUNWAYML_POLLING_TIMEOUT = int(os.getenv("RUNWAYML_POLLING_TIMEOUT", 600))  # 10 minutes default for image generation
+RUNWAYML_DEFAULT_API_VERSION = str(
+    os.getenv("RUNWAYML_DEFAULT_API_VERSION", "2024-11-06")
+)
+RUNWAYML_POLLING_TIMEOUT = int(
+    os.getenv("RUNWAYML_POLLING_TIMEOUT", 600)
+)  # 10 minutes default for image generation
 
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
@@ -480,6 +484,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "additional_drop_params": None,
     "messages": None,
     "reasoning_effort": None,
+    "verbosity": None,
     "thinking": None,
     "web_search_options": None,
     "service_tier": None,
@@ -1114,6 +1119,7 @@ SECRET_MANAGER_REFRESH_INTERVAL = int(
 )
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
+    "public_agent_groups",
     "public_model_groups",
     "public_model_groups_links",
 ]

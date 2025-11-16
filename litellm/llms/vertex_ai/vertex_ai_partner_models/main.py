@@ -39,6 +39,7 @@ class PartnerModelPrefixes(str, Enum):
     QWEN_PREFIX = "qwen"
     GPT_OSS_PREFIX = "openai/gpt-oss-"
     MINIMAX_PREFIX = "minimaxai/"
+    MOONSHOT_PREFIX = "moonshotai/"
 
 
 class VertexAIPartnerModels(VertexBase):
@@ -64,6 +65,7 @@ class VertexAIPartnerModels(VertexBase):
             or model.startswith(PartnerModelPrefixes.QWEN_PREFIX)
             or model.startswith(PartnerModelPrefixes.GPT_OSS_PREFIX)
             or model.startswith(PartnerModelPrefixes.MINIMAX_PREFIX)
+            or model.startswith(PartnerModelPrefixes.MOONSHOT_PREFIX)
         ):
             return True
         return False
@@ -76,6 +78,7 @@ class VertexAIPartnerModels(VertexBase):
             PartnerModelPrefixes.QWEN_PREFIX,
             PartnerModelPrefixes.GPT_OSS_PREFIX,
             PartnerModelPrefixes.MINIMAX_PREFIX,
+            PartnerModelPrefixes.MOONSHOT_PREFIX,
         ]
         if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
             return True

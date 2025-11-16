@@ -145,6 +145,8 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ) -> Tuple[str, Dict]:
         url = api_base  # Base URL for creating vector stores
         metadata = vector_store_create_optional_params.get("metadata", None)
+        metadata_payload = add_openai_metadata(metadata)
+
         typed_request_body = VectorStoreCreateRequest(
             name=vector_store_create_optional_params.get("name", None),
             file_ids=vector_store_create_optional_params.get("file_ids", None),
@@ -154,7 +156,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             chunking_strategy=vector_store_create_optional_params.get(
                 "chunking_strategy", None
             ),
-            metadata=add_openai_metadata(metadata) if metadata is not None else None,
+            metadata=metadata_payload,
         )
 
         dict_request_body = cast(dict, typed_request_body)

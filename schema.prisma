@@ -54,6 +54,19 @@ model LiteLLM_ProxyModelTable {
   updated_by String
 }
 
+
+// Agents on proxy
+model LiteLLM_AgentsTable {
+  agent_id String @id @default(uuid())
+  agent_name String @unique
+  litellm_params Json?
+  agent_card_params Json
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+}
+
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
     organization_alias  String

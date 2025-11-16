@@ -27,6 +27,7 @@ import CacheDashboard from "@/components/cache_dashboard";
 import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
+import AgentsPanel from "@/components/agents";
 import PromptsPanel from "@/components/prompts";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
@@ -415,6 +416,8 @@ export default function CreateKeyPage() {
                   <BudgetPanel accessToken={accessToken} />
                 ) : page == "guardrails" ? (
                   <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
+                ) : page == "agents" ? (
+                  <AgentsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "prompts" ? (
                   <PromptsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "transform-request" ? (
@@ -476,6 +479,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     teams={(teams as Team[]) ?? []}
+                    organizations={(organizations as Organization[]) ?? []}
                     premiumUser={premiumUser}
                   />
                 ) : (

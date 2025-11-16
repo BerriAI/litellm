@@ -4,10 +4,17 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.public_endpoints.provider_create_metadata import (
+    get_provider_create_metadata,
+)
+from litellm.types.agents import AgentCard
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
-from litellm.types.proxy.public_endpoints.public_endpoints import PublicModelHubInfo
+from litellm.types.proxy.public_endpoints.public_endpoints import (
+    ProviderCreateInfo,
+    PublicModelHubInfo,
+)
 from litellm.types.utils import LlmProviders
 
 router = APIRouter()
@@ -37,6 +44,28 @@ async def public_model_hub():
         )
 
     return model_groups
+
+
+@router.get(
+    "/public/agent_hub",
+    tags=["[beta] Agents", "public"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=List[AgentCard],
+)
+async def get_agents():
+    import litellm
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+    agents = global_agent_registry.get_public_agent_list()
+
+    if litellm.public_agent_groups is None:
+        return []
+    agent_card_list = [
+        agent.agent_card_params
+        for agent in agents
+        if agent.agent_id in litellm.public_agent_groups
+    ]
+    return agent_card_list
 
 
 @router.get(
@@ -74,3 +103,16 @@ async def get_supported_providers() -> List[str]:
     """
 
     return sorted(provider.value for provider in LlmProviders)
+
+
+@router.get(
+    "/public/providers/fields",
+    tags=["public", "providers"],
+    response_model=List[ProviderCreateInfo],
+)
+async def get_provider_fields() -> List[ProviderCreateInfo]:
+    """
+    Return provider metadata required by the dashboard create-model flow.
+    """
+
+    return get_provider_create_metadata()
