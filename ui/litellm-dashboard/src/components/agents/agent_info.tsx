@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabPanel, TabPanels, Grid } from "@tremor/react";
+import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabPanel, TabPanels} from "@tremor/react";
 import { Form, Input, Button as AntButton, message, Spin, Descriptions } from "antd";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { getAgentInfo, patchAgentCall } from "../networking";
@@ -204,7 +204,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                     </div>
                   </Form>
                 ) : (
-                  <Text>Click "Edit Settings" to modify agent configuration.</Text>
+                  <Text>Click &quot;Edit Settings&quot; to modify agent configuration.</Text>
                 )}
               </Card>
             </TabPanel>

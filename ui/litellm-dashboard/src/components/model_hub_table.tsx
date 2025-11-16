@@ -274,7 +274,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <Title className="text-center">AI Hub</Title>
               {isAdminRole(userRole || "") ? (
                 <p className="text-sm text-gray-600">
-                  Make models and agents public for developers to know what's available.
+                  Make models and agents public for developers to know what&apos;s available.
                 </p>
               ) : (
                 <p className="text-sm text-gray-600">A list of all public model names personally available to you.</p>

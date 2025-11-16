@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Modal, Form, Steps, Button, Checkbox } from "antd";
 import { Text, Title, Badge } from "@tremor/react";
 import { makeAgentsPublicCall } from "./networking";
