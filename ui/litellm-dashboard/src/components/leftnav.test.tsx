@@ -41,9 +41,10 @@ describe("Sidebar (leftnav)", () => {
       "Internal Users",
       "Budgets",
       "API Reference",
-      "Model Hub",
+      "AI Hub",
       "Logs",
       "Guardrails",
+      "MCP Servers",
       "Tools",
       "Experimental",
       "Settings",
@@ -54,15 +55,15 @@ describe("Sidebar (leftnav)", () => {
     });
   });
 
-  it("expands a nested tab to reveal its children (Tools > MCP Servers)", async () => {
+  it("expands a nested tab to reveal its children (Tools > Search Tools)", async () => {
     const { getByText, queryByText } = render(<Sidebar {...defaultProps} />);
 
-    expect(queryByText("MCP Servers")).not.toBeInTheDocument();
+    expect(queryByText("Search Tools")).not.toBeInTheDocument();
     act(() => {
       fireEvent.click(getByText("Tools"));
     });
     await waitFor(() => {
-      expect(getByText("MCP Servers")).toBeInTheDocument();
+      expect(getByText("Search Tools")).toBeInTheDocument();
     });
   });
 });
