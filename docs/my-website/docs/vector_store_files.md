@@ -1,4 +1,4 @@
-# /vector_stores/{vector_store_id}/files
+# /vector_stores/\{vector_store_id\}/files
 
 Vector store files represent the individual files that live inside a vector store.
 
