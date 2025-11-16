@@ -931,6 +931,7 @@ async def get_ui_settings(request: Request):
 
     _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
     _logout_url = os.getenv("PROXY_LOGOUT_URL", None)
+    _api_doc_base_url = os.getenv("LITELLM_UI_API_DOC_BASE_URL", None)
     _is_sso_enabled = _has_user_setup_sso()
     disable_expensive_db_queries = (
         proxy_state.get_proxy_state_variable("spend_logs_row_count")
@@ -944,6 +945,7 @@ async def get_ui_settings(request: Request):
     return {
         "PROXY_BASE_URL": _proxy_base_url,
         "PROXY_LOGOUT_URL": _logout_url,
+        "LITELLM_UI_API_DOC_BASE_URL": _api_doc_base_url,
         "DEFAULT_TEAM_DISABLED": default_team_disabled,
         "SSO_ENABLED": _is_sso_enabled,
         "NUM_SPEND_LOGS_ROWS": proxy_state.get_proxy_state_variable(
