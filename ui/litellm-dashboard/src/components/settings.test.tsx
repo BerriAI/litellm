@@ -1,10 +1,11 @@
 import { render, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { alertingSettingsCall, getCallbacksCall } from "./networking";
+import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
 import Settings from "./settings";
 
 vi.mock("./networking", () => ({
   getCallbacksCall: vi.fn(),
+  getCallbackConfigsCall: vi.fn(),
   setCallbacksCall: vi.fn(),
   serviceHealthCheck: vi.fn(),
   deleteCallback: vi.fn(),
@@ -65,6 +66,7 @@ describe("Settings", () => {
     premiumUser: false,
   };
   const mockGetCallbacksCall = vi.mocked(getCallbacksCall);
+  const mockGetCallbackConfigsCall = vi.mocked(getCallbackConfigsCall);
   const mockAlertingSettingsCall = vi.mocked(alertingSettingsCall);
 
   beforeEach(() => {
@@ -74,6 +76,7 @@ describe("Settings", () => {
       available_callbacks: [],
       alerts: [],
     });
+    mockGetCallbackConfigsCall.mockResolvedValue([]);
     mockAlertingSettingsCall.mockResolvedValue([]);
   });
 
@@ -92,6 +95,14 @@ describe("Settings", () => {
       expect(getByText("Alerting Types")).toBeInTheDocument();
       expect(getByText("Alerting Settings")).toBeInTheDocument();
       expect(getByText("Email Alerts")).toBeInTheDocument();
+    });
+  });
+
+  it("should load callback configs from the backend when access token is provided", async () => {
+    render(<Settings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockGetCallbackConfigsCall).toHaveBeenCalledWith(defaultProps.accessToken);
     });
   });
 });
