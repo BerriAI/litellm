@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
+from fastapi.responses import RedirectResponse
 
 from litellm._uuid import uuid
 
@@ -2191,3 +2192,131 @@ class TestPKCEFunctionality:
                 assert "code_challenge=" in updated_location
                 assert "code_challenge_method=S256" in updated_location
                 assert f"state={test_state}" in updated_location
+
+
+@pytest.mark.asyncio
+async def test_microsoft_debug_flow_forwards_disable_team_creation_flag():
+    """
+    Ensure MicrosoftSSOHandler.get_microsoft_callback_response forwards
+    return_raw_sso_response=True as disable_service_principal_team_creation=True
+    to get_user_groups_from_graph_api.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import MicrosoftSSOHandler
+
+    mock_request = MagicMock(spec=Request)
+    with patch.dict(os.environ, {"MICROSOFT_CLIENT_SECRET": "secret", "MICROSOFT_TENANT": "tenant"}):
+        # Patch verify_and_process to avoid network
+        with patch(
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
+            new=AsyncMock(return_value={}),
+        ):
+            # Patch group fetcher to capture kwargs
+            with patch(
+                "litellm.proxy.management_endpoints.ui_sso.MicrosoftSSOHandler.get_user_groups_from_graph_api",
+                new=AsyncMock(return_value=[]),
+            ) as mock_groups:
+                await MicrosoftSSOHandler.get_microsoft_callback_response(
+                    request=mock_request,
+                    microsoft_client_id="client",
+                    redirect_url="http://redirect",
+                    return_raw_sso_response=True,
+                )
+                # Assert flag propagated
+                assert mock_groups.await_args is not None
+                kwargs = mock_groups.await_args.kwargs
+                assert kwargs.get("disable_service_principal_team_creation") is True
+
+
+@pytest.mark.asyncio
+async def test_get_user_groups_service_principal_creation_disabled():
+    """
+    When disable_service_principal_team_creation=True:
+    - Service principal groups are READ (for filtering)
+    - Litellm team creation is NOT invoked
+    """
+    from litellm.proxy.management_endpoints.ui_sso import MicrosoftSSOHandler
+
+    # Mock Graph API /me/memberOf groups to include intersection with SP groups
+    me_member_of = {
+        "@odata.context": "...",
+        "value": [
+            {"@odata.type": "#microsoft.graph.group", "id": "g2", "displayName": "G2"},
+            {"@odata.type": "#microsoft.graph.group", "id": "extra", "displayName": "Extra"},
+        ],
+    }
+
+    async def mock_get(*args, **kwargs):
+        mock = MagicMock()
+        mock.json.return_value = me_member_of
+        return mock
+
+    with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_client, patch.dict(
+        os.environ, {"MICROSOFT_SERVICE_PRINCIPAL_ID": "sp-id"}, clear=False
+    ):
+        mock_client.return_value = MagicMock()
+        mock_client.return_value.get = mock_get
+
+        # Service principal returns g1 and g2; intersection with me_member_of -> g2
+        with patch.object(
+            MicrosoftSSOHandler,
+            "get_group_ids_from_service_principal",
+            new=AsyncMock(return_value=(
+                ["g1", "g2"],
+                [
+                    MicrosoftServicePrincipalTeam(principalId="g1", principalDisplayName="G1"),
+                    MicrosoftServicePrincipalTeam(principalId="g2", principalDisplayName="G2"),
+                ],
+            )),
+        ), patch.object(
+            MicrosoftSSOHandler,
+            "create_litellm_teams_from_service_principal_team_ids",
+            new=AsyncMock(),
+        ) as mock_create:
+            result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
+                access_token="token",
+                disable_service_principal_team_creation=True,
+            )
+
+            # Should filter to intersection and avoid creation
+            assert result == ["g2"]
+            mock_create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_debug_sso_login_appends_prompt_param_to_authorization_url():
+    """
+    Verify that /sso/debug/login appends the prompt query param to the IdP authorization URL.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import debug_sso_login, SSOAuthenticationHandler
+    from fastapi.responses import RedirectResponse
+
+    # Mock request with prompt query param
+    mock_request = MagicMock(spec=Request)
+    mock_request.query_params = {"prompt": "select_account"}
+    mock_request.base_url = "https://test.litellm.ai/"
+
+    # Prepare a base authorization URL returned by the SSO provider (no prompt param yet)
+    initial_auth_location = "https://auth.example.com/authorize?state=abc&client_id=foo"
+    redirect = RedirectResponse(url=initial_auth_location)
+
+    with patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "test-google-id"}, clear=False):
+        # premium_user must be True for debug login when client ids are set
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            # Avoid relying on request URL; just return a fixed callback URL
+            with patch.object(
+                SSOAuthenticationHandler, "get_redirect_url_for_sso", return_value="https://test.litellm.ai/sso/debug/callback"
+            ):
+                # Return our crafted redirect response from the SSO login redirect
+                with patch.object(
+                    SSOAuthenticationHandler, "get_sso_login_redirect", new=AsyncMock(return_value=redirect)
+                ):
+                    result = await debug_sso_login(request=mock_request)
+
+                    assert result is not None
+                    assert "location" in result.headers
+                    location = str(result.headers["location"])
+
+                    # prompt should be appended while preserving existing params
+                    assert "prompt=select_account" in location
+                    assert "state=abc" in location
+                    assert "client_id=foo" in location
