@@ -4017,7 +4017,8 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        str_so_far = ""
+        # Use a list to accumulate response segments to avoid O(n^2) string concatenation
+        str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
@@ -4033,12 +4034,12 @@ async def async_data_generator(
                 user_api_key_dict=user_api_key_dict,
                 response=chunk,
                 data=request_data,
-                str_so_far=str_so_far,
+                str_so_far="".join(str_so_far_parts),
             )
 
             if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                 response_str = litellm.get_response_string(response_obj=chunk)
-                str_so_far += response_str
+                str_so_far_parts.append(response_str)
 
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
