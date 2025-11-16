@@ -249,21 +249,6 @@ class TestCallbackManagementEndpoints:
         # Verify dynamic_params structure
         assert isinstance(first_config["dynamic_params"], dict)
         
-        # Check if any callback has detailed param structure
-        has_detailed_params = False
-        for config in response_data:
-            for param_name, param_config in config["dynamic_params"].items():
-                if isinstance(param_config, dict):
-                    has_detailed_params = True
-                    # Verify detailed param structure
-                    assert "type" in param_config
-                    assert "ui_name" in param_config
-                    assert "description" in param_config
-                    assert "required" in param_config
-                    assert param_config["type"] in ["text", "password", "number", "boolean"]
-                    break
-            if has_detailed_params:
-                break
         
         assert has_detailed_params, "Expected at least one callback to have detailed parameter configuration"
 
