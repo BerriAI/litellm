@@ -15,6 +15,7 @@ from litellm.constants import (
     REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
     REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
     REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
     REDIS_UPDATE_BUFFER_KEY,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -22,6 +23,7 @@ from litellm.proxy._types import (
     DailyTagSpendTransaction,
     DailyTeamSpendTransaction,
     DailyUserSpendTransaction,
+    DailyOrganizationSpendTransaction,
     DBSpendUpdateTransactions,
 )
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
@@ -104,6 +106,7 @@ class RedisUpdateBuffer:
         spend_update_queue: SpendUpdateQueue,
         daily_spend_update_queue: DailySpendUpdateQueue,
         daily_team_spend_update_queue: DailySpendUpdateQueue,
+        daily_org_spend_update_queue: DailySpendUpdateQueue,
         daily_tag_spend_update_queue: DailySpendUpdateQueue,
     ):
         """
@@ -166,6 +169,9 @@ class RedisUpdateBuffer:
         daily_team_spend_update_transactions = (
             await daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
+        daily_org_spend_update_transactions = (
+            await daily_org_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        )
         daily_tag_spend_update_transactions = (
             await daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
@@ -193,6 +199,12 @@ class RedisUpdateBuffer:
             transactions=daily_team_spend_update_transactions,
             redis_key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
             service_type=ServiceTypes.REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE,
+        )
+
+        await self._store_transactions_in_redis(
+            transactions=daily_org_spend_update_transactions,
+            redis_key=REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
+            service_type=ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE,
         )
 
         await self._store_transactions_in_redis(
@@ -324,6 +336,30 @@ class RedisUpdateBuffer:
         ]
         return cast(
             Dict[str, DailyTeamSpendTransaction],
+            DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+                list_of_daily_spend_update_transactions
+            ),
+        )
+
+    async def get_all_daily_org_spend_update_transactions_from_redis_buffer(
+        self,
+    ) -> Optional[Dict[str, DailyOrganizationSpendTransaction]]: 
+        """
+        Gets all the daily organization spend update transactions from Redis
+        """
+        if self.redis_cache is None:
+            return None
+        list_of_transactions = await self.redis_cache.async_lpop(
+            key=REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
+            count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+        )
+        if list_of_transactions is None:
+            return None
+        list_of_daily_spend_update_transactions = [
+            json.loads(transaction) for transaction in list_of_transactions
+        ]
+        return cast(
+            Dict[str, DailyOrganizationSpendTransaction], 
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),
