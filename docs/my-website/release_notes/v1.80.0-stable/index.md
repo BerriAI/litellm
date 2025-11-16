@@ -97,7 +97,7 @@ litellm_settings:
 
 ---
 
-### Vector Store Files API - Stable Release
+### Vector Store Files API
 
 Complete OpenAI-compatible Vector Store Files API now stable, enabling full file lifecycle management within vector stores.
 
@@ -120,7 +120,28 @@ curl --location 'http://localhost:4000/v1/vector_stores/vs_123/files' \
 }'
 ```
 
-[Get Started with Vector Stores](../../docs/vector_stores)
+[Get Started with Vector Stores](../../docs/vector_store_files)
+
+---
+
+## New Providers and Endpoints
+
+### New Providers
+
+| Provider | Supported Endpoints | Description |
+| -------- | ------------------- | ----------- |
+| **[RunwayML](../../docs/providers/runwayml/videos)** | `/v1/videos`, `/v1/images/generations`, `/v1/audio/speech` | Gen-4 video generation, image generation, and text-to-speech |
+
+### New LLM API Endpoints
+
+| Endpoint | Method | Description | Documentation |
+| -------- | ------ | ----------- | ------------- |
+| `/v1/vector_stores/{vector_store_id}/files` | POST | Create vector store file | [Docs](../../docs/vector_store_files) |
+| `/v1/vector_stores/{vector_store_id}/files` | GET | List vector store files | [Docs](../../docs/vector_store_files) |
+| `/v1/vector_stores/{vector_store_id}/files/{file_id}` | GET | Retrieve vector store file | [Docs](../../docs/vector_store_files) |
+| `/v1/vector_stores/{vector_store_id}/files/{file_id}/content` | GET | Retrieve file content | [Docs](../../docs/vector_store_files) |
+| `/v1/vector_stores/{vector_store_id}/files/{file_id}` | DELETE | Delete vector store file | [Docs](../../docs/vector_store_files) |
+| `/v1/vector_stores/{vector_store_id}` | DELETE | Delete vector store | [Docs](../../docs/vector_store_files) |
 
 ---
 
