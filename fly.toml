@@ -12,11 +12,12 @@ swap_size_mb = 512
   memory = 256
 
 [build]
-  dockerfile = "docker/Dockerfile.non_root"
+  dockerfile = "deploy/Dockerfile.ghcr_base"
 
 [env]
   # Set non-root flag
   LITELLM_NON_ROOT = "true"
+  NODE_ENV = "production"
 
 [http_service]
   internal_port = 4000
@@ -33,4 +34,3 @@ swap_size_mb = 512
   path = "/health/liveliness"
   protocol = "http"
   timeout = "10s"
-
