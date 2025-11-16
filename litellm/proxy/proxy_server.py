@@ -5305,7 +5305,7 @@ async def audio_speech(
 
         # Printing each chunk size
         async def generate(_response: HttpxBinaryResponseContent):
-            _generator = await _response.aiter_bytes(chunk_size=1024)
+            _generator = await _response.aiter_bytes(chunk_size=4096)
             async for chunk in _generator:
                 yield chunk
 
