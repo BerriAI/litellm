@@ -6,7 +6,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
-from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    AnthropicMessagesRequest,
+)
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -32,6 +35,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "tools",
             "tool_choice",
             "thinking",
+            "context_management",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
@@ -70,6 +74,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
+
+        headers = self._update_headers_with_optional_anthropic_beta(
+            headers=headers,
+            context_management=optional_params.get("context_management"),
+        )
 
         return headers, api_base
 
@@ -142,3 +151,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             request_body=request_body,
             litellm_logging_obj=litellm_logging_obj,
         )
+
+    @staticmethod
+    def _update_headers_with_optional_anthropic_beta(
+        headers: dict, context_management: Optional[Dict]
+    ) -> dict:
+        if context_management is None:
+            return headers
+
+        existing_beta = headers.get("anthropic-beta")
+        beta_value = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+        if existing_beta is None:
+            headers["anthropic-beta"] = beta_value
+        elif beta_value not in [beta.strip() for beta in existing_beta.split(",")]:
+            headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
+        return headers

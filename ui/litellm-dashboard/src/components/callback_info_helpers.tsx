@@ -7,7 +7,7 @@ interface CallbackConfig {
   description: string;
 }
 
-const asset_logos_folder = "/ui/assets/logos/";
+const asset_logos_folder = "../ui/assets/logos/";
 
 export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {

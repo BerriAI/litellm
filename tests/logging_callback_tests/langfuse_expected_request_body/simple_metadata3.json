@@ -19,7 +19,8 @@
                     "content": "Hello! How can I assist you today?",
                     "role": "assistant",
                     "tool_calls": null,
-                    "function_call": null
+                    "function_call": null,
+                    "provider_specific_fields": null
                 },
                 "tags": []
             },
@@ -74,7 +75,8 @@
                     "content": "Hello! How can I assist you today?",
                     "role": "assistant",
                     "tool_calls": null,
-                    "function_call": null
+                    "function_call": null,
+                    "provider_specific_fields": null
                 },
                 "level": "DEFAULT",
                 "id": "time-09-56-38-784548_chatcmpl-438c8727-86b3-44d9-9b46-42330922cf50",

@@ -259,6 +259,7 @@ const sidebars = {
           items: [
             "proxy/model_access_guide",
             "proxy/model_access",
+            "proxy/model_access_groups",
             "proxy/team_model_add"
           ]
         },
@@ -284,6 +285,7 @@ const sidebars = {
           items: [
             "proxy/cost_tracking",
             "proxy/custom_pricing",
+            "proxy/sync_models_github",
             "proxy/billing",
           ],
         },
@@ -366,6 +368,7 @@ const sidebars = {
           ]
         },
         "videos",
+        "vector_store_files",
         {
           type: "category",
           label: "/mcp - Model Context Protocol",
@@ -495,7 +498,6 @@ const sidebars = {
             "providers/vertex_ai/videos",
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
-            "providers/vertex_embedding",
             "providers/vertex_image",
             "providers/vertex_batch",
             "providers/vertex_ocr",

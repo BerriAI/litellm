@@ -40,6 +40,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy.common_utils.callback_utils import normalize_callback_names
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -47,8 +48,6 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 from litellm.utils import load_credentials_from_list
-
-from litellm.proxy.common_utils.callback_utils import normalize_callback_names
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -175,6 +174,8 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 from litellm.proxy._types import *
+from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_router
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -284,6 +285,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     router as mcp_management_router,
 )
+from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+    router as model_access_group_management_router,
+)
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
     _add_team_model_to_db,
@@ -375,6 +379,9 @@ from litellm.proxy.utils import (
     update_spend,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
+from litellm.proxy.vector_store_files_endpoints.endpoints import (
+    router as vector_store_files_router,
+)
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
@@ -467,6 +474,8 @@ from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
+
+from litellm.types.agents import AgentConfig
 
 # import enterprise folder
 enterprise_router = APIRouter()
@@ -1057,6 +1066,7 @@ callback_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
+config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
 shared_aiohttp_session: Optional["ClientSession"] = (
@@ -2222,20 +2232,15 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                try:
-                                    from litellm_enterprise.integrations.prometheus import (
-                                        PrometheusLogger,
-                                    )
-                                except Exception:
-                                    PrometheusLogger = None
+                                from litellm.integrations.prometheus import (
+                                    PrometheusLogger,
+                                )
 
                                 if PrometheusLogger is not None:
                                     verbose_proxy_logger.debug(
                                         "mounting metrics endpoint"
                                     )
-                                    PrometheusLogger._mount_metrics_endpoint(
-                                        premium_user
-                                    )
+                                    PrometheusLogger._mount_metrics_endpoint()
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
@@ -2568,11 +2573,11 @@ class ProxyConfig:
         litellm.credential_list = credential_list_dict
 
         ## NON-LLM CONFIGS eg. MCP tools, vector stores, etc.
-        self._init_non_llm_configs(config=config)
+        await self._init_non_llm_configs(config=config)
 
         return router, router.get_model_list(), general_settings
 
-    def _init_non_llm_configs(self, config: dict):
+    async def _init_non_llm_configs(self, config: dict):
         """
         Initialize non-LLM configs eg. MCP tools, vector stores, etc.
         """
@@ -2580,6 +2585,11 @@ class ProxyConfig:
         mcp_tools_config = config.get("mcp_tools", None)
         if mcp_tools_config:
             global_mcp_tool_registry.load_tools_from_config(mcp_tools_config)
+
+        ## AGENTS
+        agent_config = config.get("agent_list", None)
+        if agent_config:
+            global_agent_registry.load_agents_from_config(agent_config)  # type: ignore
 
         mcp_servers_config = config.get("mcp_servers", None)
         if mcp_servers_config:
@@ -2591,7 +2601,7 @@ class ProxyConfig:
             litellm_settings = config.get("litellm_settings", {})
             mcp_aliases = litellm_settings.get("mcp_aliases", None)
 
-            global_mcp_server_manager.load_servers_from_config(
+            await global_mcp_server_manager.load_servers_from_config(
                 mcp_servers_config, mcp_aliases
             )
 
@@ -2817,7 +2827,9 @@ class ProxyConfig:
                 for k, v in _litellm_params.items():
                     if isinstance(v, str):
                         # decrypt value - returns original value if decryption fails or no key is set
-                        _value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+                        _value = decrypt_value_helper(
+                            value=v, key=k, return_original_value=True
+                        )
                         _litellm_params[k] = _value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
@@ -3410,6 +3422,9 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="mcp"):
             await self._init_mcp_servers_in_db()
 
+        if self._should_load_db_object(object_type="agents"):
+            await self._init_agents_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="pass_through_endpoints"):
             await self._init_pass_through_endpoints_in_db()
 
@@ -3674,6 +3689,25 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(
+                    str(e)
+                )
+            )
+
+    async def _init_agents_in_db(self, prisma_client: PrismaClient):
+        from litellm.proxy.agent_endpoints.agent_registry import (
+            global_agent_registry as AGENT_REGISTRY,
+        )
+
+        try:
+            db_agents = await AGENT_REGISTRY.get_all_agents_from_db(
+                prisma_client=prisma_client
+            )
+            AGENT_REGISTRY.load_agents_from_db_and_config(
+                db_agents=db_agents, agent_config=config_agents
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_agents_in_db - {}".format(
                     str(e)
                 )
             )
@@ -4455,13 +4489,9 @@ class ProxyStartupEvent:
         # Prometheus Background Job
         ########################################################
         if litellm.prometheus_initialize_budget_metrics is True:
-            try:
-                from litellm_enterprise.integrations.prometheus import PrometheusLogger
+            from litellm.integrations.prometheus import PrometheusLogger
 
-                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
-            except Exception:
-                PrometheusLogger = None
-
+            PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
         ########################################################
         # Key Rotation Background Job
         ########################################################
@@ -5028,14 +5058,12 @@ async def embeddings(  # noqa: PLR0915
                 # Use router's O(1) lookup instead of O(N) iteration through llm_model_list
                 deployment = llm_router.get_deployment(model_id=data["model"])
                 if deployment is not None:
-                    litellm_model = deployment.get("litellm_params", {}).get("model", "")
+                    litellm_params = deployment.get("litellm_params", {}) or {}
+                    litellm_model = litellm_params.get("model", "")
                     # Check if this provider supports token arrays
-                    supports_token_arrays = (
-                        litellm_model in litellm.open_ai_embedding_models
-                        or any(
-                            litellm_model.startswith(provider)
-                            for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
-                        )
+                    supports_token_arrays = litellm_model in litellm.open_ai_embedding_models or any(
+                        litellm_model.startswith(provider)
+                        for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
                     )
                     if not supports_token_arrays:
                         # non-openai/azure embedding model called with token input - decode tokens
@@ -5048,7 +5076,7 @@ async def embeddings(  # noqa: PLR0915
 
         # Use unified request processor (same as chat/completions and responses)
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
-        
+
         # Process the request with all optimizations (shared sessions, network tuning, etc.)
         response = await base_llm_response_processor.base_process_llm_request(
             request=request,
@@ -5068,7 +5096,7 @@ async def embeddings(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
-        
+
         return response
     except Exception as e:
         # Use unified error handler
@@ -8959,7 +8987,9 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 if isinstance(
                     config["litellm_settings"]["success_callback"], list
                 ) and isinstance(updated_litellm_settings["success_callback"], list):
-                    updated_success_callbacks_normalized = normalize_callback_names(updated_litellm_settings["success_callback"])
+                    updated_success_callbacks_normalized = normalize_callback_names(
+                        updated_litellm_settings["success_callback"]
+                    )
                     combined_success_callback = (
                         config["litellm_settings"]["success_callback"]
                         + updated_success_callbacks_normalized
@@ -10056,6 +10086,7 @@ app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(vector_store_router)
+app.include_router(vector_store_files_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
@@ -10085,6 +10116,7 @@ app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
+app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
@@ -10092,6 +10124,7 @@ app.include_router(cache_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
+app.include_router(agent_endpoints_router)
 ########################################################
 # MCP Server
 ########################################################
