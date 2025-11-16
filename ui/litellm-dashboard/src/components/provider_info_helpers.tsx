@@ -86,7 +86,7 @@ export const provider_map: Record<string, string> = {
   Infinity: "infinity",
 };
 
-const asset_logos_folder = "/ui/assets/logos/";
+const asset_logos_folder = "../ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
   [Providers.AIML]: `${asset_logos_folder}aiml_api.svg`,

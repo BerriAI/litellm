@@ -16,14 +16,16 @@ from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheCont
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from litellm.integrations.bitbucket import BitBucketPromptManager
-from litellm.integrations.gitlab import GitLabPromptManager
 from litellm.integrations.braintrust_logging import BraintrustLogger
+from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
+from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
+from litellm.integrations.gitlab import GitLabPromptManager
 from litellm.integrations.humanloop import HumanloopLogger
 from litellm.integrations.lago import LagoLogger
 from litellm.integrations.langfuse.langfuse_prompt_management import (
@@ -36,13 +38,7 @@ from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.posthog import PostHogLogger
-
-try:
-    from litellm_enterprise.integrations.prometheus import PrometheusLogger
-except Exception:
-    PrometheusLogger = None
-from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
-from litellm.integrations.dotprompt import DotpromptManager
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.sqs import SQSLogger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (

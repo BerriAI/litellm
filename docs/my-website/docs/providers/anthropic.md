@@ -953,6 +953,30 @@ except Exception as e:
 
 s/o @[Shekhar Patnaik](https://www.linkedin.com/in/patnaikshekhar) for requesting this!
 
+### Context Management (Beta)
+
+Anthropic’s [context editing](https://docs.claude.com/en/docs/build-with-claude/context-editing) API lets you automatically clear older tool results or thinking blocks. LiteLLM now forwards the native `context_management` payload when you call Anthropic models, and automatically attaches the required `context-management-2025-06-27` beta header.
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Summarize the latest tool results"}],
+    context_management={
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 30000},
+                "keep": {"type": "tool_uses", "value": 3},
+                "clear_at_least": {"type": "input_tokens", "value": 5000},
+                "exclude_tools": ["web_search"],
+            }
+        ]
+    },
+)
+```
+
 ### Anthropic Hosted Tools (Computer, Text Editor, Web Search, Memory)
 
 

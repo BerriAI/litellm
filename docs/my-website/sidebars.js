@@ -368,6 +368,7 @@ const sidebars = {
           ]
         },
         "videos",
+        "vector_store_files",
         {
           type: "category",
           label: "/mcp - Model Context Protocol",
