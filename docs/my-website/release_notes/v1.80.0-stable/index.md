@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.80.0-stable - RunwayML Provider Support"
+title: "[Preview] v1.80.0-stable - Agent Hub Support"
 slug: "v1-80-0"
 date: 2025-11-15T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.0.rc.1
+ghcr.io/berriai/litellm:v1.80.0.rc.2
 ```
 
 </TabItem>
@@ -45,13 +45,28 @@ pip install litellm==1.80.0
 
 ## Key Highlights
 
-- **🆕 RunwayML Provider** - Complete video generation, image generation, and text-to-speech support
+- **🆕 Agent Hub Support** - Register and make agents public for your organization
+- **RunwayML Provider** - Complete video generation, image generation, and text-to-speech support
 - **GPT-5.1 Family Support** - Day-0 support for OpenAI's latest GPT-5.1 and GPT-5.1-Codex models
 - **Prometheus OSS** - Prometheus metrics now available in open-source version
 - **Vector Store Files API** - Complete OpenAI-compatible Vector Store Files API with full CRUD operations
 - **Embeddings Performance** - O(1) lookup optimization for router embeddings with shared sessions
 
 ---
+
+### Agent Hub 
+
+<Image img={require('../../img/agent_hub_clean.png')} />  
+
+This release adds support for registering and making agents public for your organization. This is great for **Proxy Admins** who want a central place to make agents built in their organization, discoverable to their users. 
+
+Here's the flow: 
+1. Add agent to litellm. 
+2. Make it public. 
+3. Allow anyone to discover it on the public AI Hub page.
+
+[**Get Started with Agent Hub**](../../docs/proxy/ai_hub)
+
 
 ### Performance – `/embeddings` 13× Lower p95 Latency
 
