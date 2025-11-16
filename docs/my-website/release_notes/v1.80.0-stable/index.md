@@ -53,6 +53,32 @@ pip install litellm==1.80.0
 
 ---
 
+### Performance – `/embeddings` 13× Lower p95 Latency
+
+This update significantly improves `/embeddings` latency by routing it through the same optimized pipeline as `/chat/completions`, benefiting from all previously applied networking optimizations.
+
+### Results
+
+| Metric | Before | After | Improvement |
+| --- | --- | --- | --- |
+| p95 latency | 5,700 ms | **430 ms** | −92% (~13× faster)** |
+| p99 latency | 7,200 ms | **780 ms** | −89% |
+| Average latency | 844 ms | **262 ms** | −69% |
+| Median latency | 290 ms | **230 ms** | −21% |
+| RPS | 1,216.7 | **1,219.7** | **+0.25%** |
+
+### Test Setup
+
+| Category | Specification |
+| --- | --- |
+| **Load Testing** | Locust: 1,000 concurrent users, 500 ramp-up |
+| **System** | 4 vCPUs, 8 GB RAM, 4 workers, 4 instances |
+| **Database** | PostgreSQL (Redis unused) |
+| **Configuration** | [config.yaml](https://gist.github.com/AlexsanderHamir/550791675fd752befcac6a9e44024652) |
+| **Load Script** | [no_cache_hits.py](https://gist.github.com/AlexsanderHamir/99d673bf74cdd81fd39f59fa9048f2e8) |
+
+---
+
 ### 🆕 RunwayML
 
 Complete integration for RunwayML's Gen-4 family of models, supporting video generation, image generation, and text-to-speech.
