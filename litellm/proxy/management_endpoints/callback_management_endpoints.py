@@ -3,7 +3,6 @@ Endpoints for managing callbacks
 """
 import json
 import os
-from typing import List
 
 from fastapi import APIRouter, Depends
 
