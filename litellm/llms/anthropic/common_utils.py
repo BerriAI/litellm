@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool
+from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool, ANTHROPIC_HOSTED_TOOLS
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
 
@@ -72,6 +72,17 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return tool["type"]
         return None
 
+    def is_web_search_tool_used(
+        self, tools: Optional[List[AllAnthropicToolsValues]]
+    ) -> bool:
+        """Returns True if web_search tool is used"""
+        if tools is None:
+            return False
+        for tool in tools:
+            if "type" in tool and tool["type"].startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
+                return True
+        return False
+
     def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
         """
         Set to true if media passed into messages.
@@ -122,6 +133,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         pdf_used: bool = False,
         file_id_used: bool = False,
         mcp_server_used: bool = False,
+        web_search_tool_used: bool = False,
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
@@ -149,9 +161,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
 
-        # Don't send any beta headers to Vertex, Vertex has failed requests when they are sent
+        # Don't send any beta headers to Vertex, except web search which is required
         if is_vertex_request is True:
-            pass
+            # Vertex AI requires web search beta header for web search to work
+            if web_search_tool_used:
+                from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
 
@@ -182,6 +197,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
         pdf_used = self.is_pdf_used(messages=messages)
         file_id_used = self.is_file_id_used(messages=messages)
+        web_search_tool_used = self.is_web_search_tool_used(tools=tools)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
@@ -191,6 +207,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             pdf_used=pdf_used,
             api_key=api_key,
             file_id_used=file_id_used,
+            web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
