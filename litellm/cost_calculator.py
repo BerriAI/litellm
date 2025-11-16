@@ -133,6 +133,25 @@ def _cost_per_token_custom_pricing_helper(
     return None
 
 
+def _transcription_usage_has_token_details(
+    usage_block: Optional[Usage],
+) -> bool:
+    if usage_block is None:
+        return False
+
+    prompt_tokens_val = getattr(usage_block, "prompt_tokens", 0) or 0
+    completion_tokens_val = getattr(usage_block, "completion_tokens", 0) or 0
+    prompt_details = getattr(usage_block, "prompt_tokens_details", None)
+
+    if prompt_details is not None:
+        audio_token_count = getattr(prompt_details, "audio_tokens", 0) or 0
+        text_token_count = getattr(prompt_details, "text_tokens", 0) or 0
+        if audio_token_count > 0 or text_token_count > 0:
+            return True
+
+    return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
+
+
 def cost_per_token(  # noqa: PLR0915
     model: str = "",
     prompt_tokens: int = 0,
@@ -324,19 +343,18 @@ def cost_per_token(  # noqa: PLR0915
             usage=usage_block, model=model, custom_llm_provider=custom_llm_provider
         )
     elif call_type == "atranscription" or call_type == "transcription":
-
-        if model == "gpt-4o-mini-transcribe":
+        if _transcription_usage_has_token_details(usage_block):
             return openai_cost_per_token(
-                model=model,
+                model=model_without_prefix,
                 usage=usage_block,
                 service_tier=service_tier,
             )
-        else:
-            return openai_cost_per_second(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                duration=audio_transcription_file_duration,
-            )
+
+        return openai_cost_per_second(
+            model=model_without_prefix,
+            custom_llm_provider=custom_llm_provider,
+            duration=audio_transcription_file_duration,
+        )
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing
         from litellm.search import search_provider_cost_per_query
