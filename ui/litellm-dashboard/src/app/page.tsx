@@ -42,6 +42,7 @@ import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldTeams from "@/components/OldTeams";
 import { SearchTools } from "@/components/search_tools";
+import CustomersView from "@/components/customers_view";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -461,6 +462,12 @@ export default function CreateKeyPage() {
                     accessToken={accessToken}
                     allTeams={(teams as Team[]) ?? []}
                     premiumUser={premiumUser}
+                  />
+                ) : page == "customers" ? (
+                  <CustomersView
+                    accessToken={accessToken}
+                    userRole={userRole}
+                    userID={userID}
                   />
                 ) : page == "mcp-servers" ? (
                   <MCPServers accessToken={accessToken} userRole={userRole} userID={userID} />

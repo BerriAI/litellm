@@ -19,6 +19,7 @@ import {
   ExperimentOutlined,
   ToolOutlined,
   TagsOutlined,
+  ShoppingOutlined,
 } from "@ant-design/icons";
 // import {
 //   all_admin_roles,
@@ -93,6 +94,8 @@ const routeFor = (slug: string): string => {
       return "organizations";
     case "users":
       return "users";
+    case "customers":
+      return "customers";
     case "api_ref":
       return "api-reference";
     case "model-hub-table":
@@ -183,6 +186,13 @@ const menuItems: MenuItemCfg[] = [
       page: "users",
       label: "Internal Users",
       icon: <UserOutlined style={{ fontSize: 18 }} />,
+      roles: all_admin_roles,
+    },
+    {
+      key: "27",
+      page: "customers",
+      label: "Customers",
+      icon: <ShoppingOutlined style={{ fontSize: 18 }} />,
       roles: all_admin_roles,
     },
     { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined style={{ fontSize: 18 }} /> },

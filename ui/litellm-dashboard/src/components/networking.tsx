@@ -7466,6 +7466,103 @@ export const perUserAnalyticsCall = async (
   }
 };
 
+export const customerSpendCall = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string,
+  endUserId?: string,
+  alias?: string,
+  page: number = 1,
+  pageSize: number = 50,
+) => {
+  /**
+   * Get spend report for customers/end users over a specified time period
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/customer/spend` : `/customer/spend`;
+
+    const queryParams = new URLSearchParams();
+    if (startDate) queryParams.append("start_date", startDate);
+    if (endDate) queryParams.append("end_date", endDate);
+    if (endUserId) queryParams.append("end_user_id", endUserId);
+    if (alias) queryParams.append("alias", alias);
+    queryParams.append("page", page.toString());
+    queryParams.append("page_size", pageSize.toString());
+
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch customer spend:", error);
+    throw error;
+  }
+};
+
+export const customerSpendDetailCall = async (
+  accessToken: string,
+  endUserId: string,
+  startDate?: string,
+  endDate?: string,
+) => {
+  /**
+   * Get detailed spend information for a specific customer, including model breakdown
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/customer/${encodeURIComponent(endUserId)}/spend`
+      : `/customer/${encodeURIComponent(endUserId)}/spend`;
+
+    const queryParams = new URLSearchParams();
+    if (startDate) queryParams.append("start_date", startDate);
+    if (endDate) queryParams.append("end_date", endDate);
+
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch customer spend detail:", error);
+    throw error;
+  }
+};
+
 const deriveErrorMessage = (errorData: any): string => {
   return (
     (errorData?.error && (errorData.error.message || errorData.error)) ||

@@ -1,16 +1,19 @@
 """
 CUSTOMER MANAGEMENT
 
-All /customer management endpoints 
+All /customer management endpoints
 
-/customer/new   
+/customer/new
 /customer/info
 /customer/update
 /customer/delete
+/customer/spend - List all customers with aggregated spend (paginated)
+/customer/{end_user_id}/spend - Get detailed spend for a specific customer with model breakdown
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
 from typing import List, Optional
+from datetime import datetime
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -674,3 +677,403 @@ async def list_end_user(
             )
         )
         raise handle_exception_on_proxy(e)
+
+@router.get(
+    "/customer/spend",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.get(
+    "/end_user/spend",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_customer_spend_report(
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format. If not provided, returns all-time spend.",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="End date in YYYY-MM-DD format. If not provided, uses current date.",
+    ),
+    end_user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific end user ID. If not provided, returns spend for all end users.",
+    ),
+    alias: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by customer alias. If not provided, returns spend for all end users.",
+    ),
+    page: int = fastapi.Query(
+        default=1,
+        ge=1,
+        description="Page number (starts at 1).",
+    ),
+    page_size: int = fastapi.Query(
+        default=50,
+        ge=1,
+        le=1000,
+        description="Number of results per page (max 1000).",
+    ),
+):
+    """
+    [Admin-only] Get spend report for customers/ end users over a specified time period.
+
+    This endpoint aggregates spend data from LiteLLM_SpendLogs and joins it with
+    the LiteLLM_EndUserTable to include user aliases.
+
+    Parameters:
+    - start_date: Optional[str] - Start date for the report in YYYY-MM-DD format
+    - end_date: Optional[str] - End date for the report in YYYY-MM-DD format
+    - end_user_id: Optional[str] - Filter by specific end user ID
+    - alias: Optional[str] - Filter by customer alias
+    - page: int - Page number (default: 1, min: 1)
+    - page_size: int - Number of results per page (default: 50, min: 1, max: 1000)
+
+    Returns:
+    A paginated list of end user spend records with:
+    - end_user_id: The end user ID
+    - alias: The admin-facing alias for the end user (null if not set)
+    - total_spend: Total spend for the end user
+    - total_requests: Total number of requests
+    - total_tokens: Total tokens used
+    - total_prompt_tokens: Total prompt tokens used
+    - total_completion_tokens: Total completion tokens used
+
+    Response also includes pagination metadata:
+    - total_customers: Total number of customers matching the criteria
+    - page: Current page number
+    - page_size: Number of results per page
+    - total_pages: Total number of pages
+
+    Example curl:
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/spend?start_date=2024-01-01&end_date=2024-12-31&page=1&page_size=50' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+
+    Example with specific end user:
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/spend?end_user_id=user-123' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+
+    Example with alias filter:
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/spend?alias=acme-corp' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+
+    Example with pagination:
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/spend?page=2&page_size=100' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Admin-only endpoint. Your user role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    # Build query parameters and filters
+    date_query_params = []
+    user_query_params = []
+    date_filter_conditions = []
+
+    # Add date range filters
+    if start_date is not None:
+        date_filter_conditions.append(f'sl."startTime" >= ${len(date_query_params) + 1}::timestamp')
+        date_query_params.append(datetime.strptime(start_date, "%Y-%m-%d"))
+
+    if end_date is not None:
+        end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
+        end_datetime = end_datetime.replace(hour=23, minute=59, second=59)
+        date_filter_conditions.append(f'sl."startTime" <= ${len(date_query_params) + 1}::timestamp')
+        date_query_params.append(end_datetime)
+
+    # Build date filter SQL fragment for JOIN
+    date_filter_sql = (
+        " AND " + " AND ".join(date_filter_conditions) if date_filter_conditions else ""
+    )
+
+    # Add user filter
+    user_filter_conditions = []
+    if end_user_id is not None and end_user_id.strip():
+        user_filter_conditions.append(f"eu.user_id = ${len(user_query_params) + 1}")  # Exact match for user_id
+        user_query_params.append(end_user_id)
+    if alias is not None and alias.strip():
+        user_filter_conditions.append(f"eu.alias ILIKE ${len(user_query_params) + 1}")  # Partial match for alias
+        user_query_params.append(f"%{alias}%")
+
+    user_filter_sql = ""
+    if user_filter_conditions:
+        user_filter_sql = "WHERE " + " AND ".join(user_filter_conditions)  # Changed to AND
+
+    # Get total count for pagination (only uses user filters, not date filters)
+    count_query = f"""
+        SELECT COUNT(*) as total
+        FROM "LiteLLM_EndUserTable" eu
+        {user_filter_sql}
+    """
+    count_result = await prisma_client.db.query_raw(count_query, *user_query_params)
+    total_customers = int(count_result[0]["total"]) if count_result else 0
+
+    total_pages = (total_customers + page_size - 1) // page_size if total_customers > 0 else 0
+    offset = (page - 1) * page_size
+
+    # Get paginated customer spend
+    # Combine parameters: date params first (used in JOIN), then user params (used in WHERE), then pagination
+    all_query_params = date_query_params + user_query_params
+
+    # Adjust user filter parameter indices if there are date parameters
+    if date_query_params and user_filter_conditions:
+        # Rebuild user filter with adjusted indices
+        user_filter_conditions_adjusted = []
+        param_offset = len(date_query_params)
+        if end_user_id is not None and end_user_id.strip():
+            user_filter_conditions_adjusted.append(f"eu.user_id = ${param_offset + 1}")
+            param_offset += 1
+        if alias is not None and alias.strip():
+            user_filter_conditions_adjusted.append(f"eu.alias ILIKE ${param_offset + 1}")
+        user_filter_sql = "WHERE " + " AND ".join(user_filter_conditions_adjusted)
+
+    report_query = f"""
+        SELECT
+            eu.user_id as end_user_id,
+            eu.alias,
+            COALESCE(SUM(sl.spend), 0) as total_spend,
+            COALESCE(COUNT(sl.request_id), 0) as total_requests,
+            COALESCE(SUM(sl.total_tokens), 0) as total_tokens,
+            COALESCE(SUM(sl.prompt_tokens), 0) as total_prompt_tokens,
+            COALESCE(SUM(sl.completion_tokens), 0) as total_completion_tokens
+        FROM "LiteLLM_EndUserTable" eu
+        LEFT JOIN "LiteLLM_SpendLogs" sl
+            ON eu.user_id = sl.end_user{date_filter_sql}
+        {user_filter_sql}
+        GROUP BY eu.user_id, eu.alias
+        ORDER BY total_spend DESC
+        LIMIT ${len(all_query_params) + 1} OFFSET ${len(all_query_params) + 2}
+    """
+
+    rows = await prisma_client.db.query_raw(
+        report_query, *all_query_params, page_size, offset
+    )
+
+    # Format results
+    result = []
+    for row in rows:
+        if row["end_user_id"] is None:
+            continue
+        result.append({
+            "end_user_id": row["end_user_id"],
+            "alias": row["alias"],
+            "total_spend": float(row["total_spend"] or 0.0),
+            "total_requests": int(row["total_requests"] or 0),
+            "total_tokens": int(row["total_tokens"] or 0),
+            "total_prompt_tokens": int(row["total_prompt_tokens"] or 0),
+            "total_completion_tokens": int(row["total_completion_tokens"] or 0),
+        })
+
+    return {
+        "spend_report": result,
+        "total_customers": total_customers,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "date_range": {
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    }
+
+
+@router.get(
+    "/customer/{end_user_id}/spend",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_customer_spend_detail(
+    end_user_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format. If not provided, returns all-time spend.",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="End date in YYYY-MM-DD format. If not provided, uses current date.",
+    ),
+):
+    """
+    [Admin-only] Get detailed spend information for a specific customer, including model breakdown.
+
+    This endpoint provides comprehensive spend analytics for a single end user,
+    including aggregated totals and per-model breakdowns.
+
+    Parameters:
+    - end_user_id: str (path parameter) - The end user ID to get spend details for
+    - start_date: Optional[str] - Start date for the report in YYYY-MM-DD format
+    - end_date: Optional[str] - End date for the report in YYYY-MM-DD format
+
+    Returns:
+    Detailed spend information including:
+    - end_user_id: The end user ID
+    - alias: The admin-facing alias for the end user
+    - total_spend: Total spend for the end user
+    - total_requests: Total number of requests
+    - total_tokens: Total tokens used
+    - total_prompt_tokens: Total prompt tokens used
+    - total_completion_tokens: Total completion tokens used
+    - spend_by_model: Array of per-model spend breakdowns with:
+        - model: Model name
+        - total_spend: Spend for this model
+        - total_requests: Number of requests for this model
+        - total_tokens: Total tokens for this model
+        - total_prompt_tokens: Prompt tokens for this model
+        - total_completion_tokens: Completion tokens for this model
+
+    Example curl:
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/user-123/spend?start_date=2024-01-01&end_date=2024-12-31' \\
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Admin-only endpoint. Your user role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    # Check if end user exists
+    end_user = await prisma_client.db.litellm_endusertable.find_unique(
+        where={"user_id": end_user_id}
+    )
+
+    if end_user is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"End user with ID '{end_user_id}' not found"},
+        )
+
+    # Build where conditions for spend logs
+    where_conditions = {"end_user": end_user_id}
+
+    if start_date is not None or end_date is not None:
+        where_conditions["startTime"] = {}
+
+        if start_date is not None:
+            where_conditions["startTime"]["gte"] = datetime.strptime(
+                start_date, "%Y-%m-%d"
+            )
+
+        if end_date is not None:
+            end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
+            end_datetime = end_datetime.replace(hour=23, minute=59, second=59)
+            where_conditions["startTime"]["lte"] = end_datetime
+
+    # Get total spend aggregation using Prisma
+    total_aggregation = await prisma_client.db.litellm_spendlogs.group_by(
+        by=["end_user"],
+        where=where_conditions,
+        sum={
+            "spend": True,
+            "total_tokens": True,
+            "prompt_tokens": True,
+            "completion_tokens": True,
+        },
+        count={"_all": True},
+    )
+
+    # Get per-model spend breakdown using Prisma
+    model_aggregations = await prisma_client.db.litellm_spendlogs.group_by(
+        by=["model"],
+        where=where_conditions,
+        sum={
+            "spend": True,
+            "total_tokens": True,
+            "prompt_tokens": True,
+            "completion_tokens": True,
+        },
+        count={"_all": True},
+    )
+
+    # Format total spend
+    if total_aggregation and len(total_aggregation) > 0:
+        total = total_aggregation[0]
+        total_spend = float(total["_sum"]["spend"] or 0.0)
+        total_requests = total["_count"]["_all"]
+        total_tokens = total["_sum"]["total_tokens"] or 0
+        total_prompt_tokens = total["_sum"]["prompt_tokens"] or 0
+        total_completion_tokens = total["_sum"]["completion_tokens"] or 0
+    else:
+        # No spend logs found for this user in the date range
+        total_spend = 0.0
+        total_requests = 0
+        total_tokens = 0
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+
+    # Format model breakdown
+    spend_by_model = []
+    for agg in model_aggregations:
+        spend_by_model.append({
+            "model": agg["model"] or "unknown",
+            "total_spend": float(agg["_sum"]["spend"] or 0.0),
+            "total_requests": agg["_count"]["_all"],
+            "total_tokens": agg["_sum"]["total_tokens"] or 0,
+            "total_prompt_tokens": agg["_sum"]["prompt_tokens"] or 0,
+            "total_completion_tokens": agg["_sum"]["completion_tokens"] or 0,
+        })
+
+    # Sort by spend descending
+    spend_by_model.sort(key=lambda x: x["total_spend"], reverse=True)
+
+    return {
+        "end_user_id": end_user_id,
+        "alias": end_user.alias,
+        "total_spend": total_spend,
+        "total_requests": total_requests,
+        "total_tokens": total_tokens,
+        "total_prompt_tokens": total_prompt_tokens,
+        "total_completion_tokens": total_completion_tokens,
+        "spend_by_model": spend_by_model,
+        "date_range": {
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    }

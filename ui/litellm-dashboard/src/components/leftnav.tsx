@@ -19,6 +19,7 @@ import {
   TeamOutlined,
   ToolOutlined,
   UserOutlined,
+  ShoppingOutlined,
 } from "@ant-design/icons";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
@@ -104,6 +105,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       icon: <AppstoreOutlined style={{ fontSize: "18px" }} />,
     },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: "18px" }} /> },
+    {
+      key: "29",
+      page: "customers",
+      label: "Customers",
+      icon: <ShoppingOutlined style={{ fontSize: "18px" }} />,
+      roles: [...all_admin_roles, ...internalUserRoles],
+    },
     {
       key: "11",
       page: "guardrails",
