@@ -386,6 +386,8 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "lemonade"
         elif model.startswith("clarifai/"):
             custom_llm_provider = "clarifai"
+        elif model.startswith("sap/"):
+            custom_llm_provider = "sap"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
