@@ -22,6 +22,10 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
+
+# Import from part3 since test_rerank.py is located there
+import sys
+sys.path.insert(0, os.path.abspath("../part3"))
 from test_rerank import assert_response_shape
 import litellm
 
