@@ -26,7 +26,7 @@ Vector store support currently works **only with OpenAI vector stores and OpenAI
 
 ## Create vector store file
 
-`POST http://localhost:4000/v1/vector_stores/{vector_store_id}/files`
+<code>POST http://localhost:4000/v1/vector_stores/&#123;vector_store_id&#125;/files</code>
 
 ```python
 from openai import OpenAI
@@ -53,7 +53,7 @@ print(vector_store_file)
 
 ## List vector store files
 
-`GET http://localhost:4000/v1/vector_stores/{vector_store_id}/files`
+<code>GET http://localhost:4000/v1/vector_stores/&#123;vector_store_id&#125;/files</code>
 
 Parameters:
 
@@ -72,7 +72,7 @@ print(vector_store_files)
 
 ## Retrieve vector store file
 
-`GET http://localhost:4000/v1/vector_stores/{vector_store_id}/files/{file_id}`
+<code>GET http://localhost:4000/v1/vector_stores/&#123;vector_store_id&#125;/files/&#123;file_id&#125;</code>
 
 ```python
 vector_store_file = client.vector_stores.files.retrieve(
@@ -84,7 +84,7 @@ print(vector_store_file)
 
 ## Delete vector store file
 
-`DELETE http://localhost:4000/v1/vector_stores/{vector_store_id}/files/{file_id}`
+<code>DELETE http://localhost:4000/v1/vector_stores/&#123;vector_store_id&#125;/files/&#123;file_id&#125;</code>
 
 ```python
 deleted_vector_store_file = client.vector_stores.files.delete(
@@ -101,14 +101,14 @@ When you need raw content chunks or attribute updates, call the LiteLLM Proxy di
 ### Retrieve file content
 
 ```bash
-curl -X GET "http://localhost:4000/v1/vector_stores/{vector_store_id}/files/{file_id}/content" \
+curl -X GET "http://localhost:4000/v1/vector_stores/\{vector_store_id\}/files/\{file_id\}/content" \
   -H "Authorization: Bearer sk-1234"
 ```
 
 ### Update file attributes
 
 ```bash
-curl -X POST "http://localhost:4000/v1/vector_stores/{vector_store_id}/files/{file_id}" \
+curl -X POST "http://localhost:4000/v1/vector_stores/\{vector_store_id\}/files/\{file_id\}" \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
