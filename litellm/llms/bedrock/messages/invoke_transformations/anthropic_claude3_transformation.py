@@ -128,7 +128,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 3. `model` is not allowed in request body for bedrock invoke
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
-            
+
         # 4. Handle anthropic_beta from user headers
         anthropic_beta_list = get_anthropic_beta_from_headers(headers)
         if anthropic_beta_list:

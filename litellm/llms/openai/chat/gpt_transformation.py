@@ -160,6 +160,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "web_search_options",
             "service_tier",
             "safety_identifier",
+            "prompt_cache_key",
         ]  # works across all models
 
         model_specific_params = []
