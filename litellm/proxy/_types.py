@@ -339,6 +339,12 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores",
         "/vector_stores/{vector_store_id}/search",
         "/v1/vector_stores/{vector_store_id}/search",
+        "/vector_stores/{vector_store_id}/files",
+        "/v1/vector_stores/{vector_store_id}/files",
+        "/vector_stores/{vector_store_id}/files/{file_id}",
+        "/v1/vector_stores/{vector_store_id}/files/{file_id}",
+        "/vector_stores/{vector_store_id}/files/{file_id}/content",
+        "/v1/vector_stores/{vector_store_id}/files/{file_id}/content",
         # search
         "/search",
         "/v1/search",
@@ -1144,6 +1150,7 @@ class UpdateUserRequestNoUserIDorEmail(
     password: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
+    user_alias: Optional[str] = None
     user_role: Optional[
         Literal[
             LitellmUserRoles.PROXY_ADMIN,

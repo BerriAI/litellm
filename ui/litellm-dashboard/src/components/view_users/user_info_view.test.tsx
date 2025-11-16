@@ -7,6 +7,7 @@ vi.mock("../networking", () => {
     user_id: "user-123",
     user_info: {
       user_email: "test@example.com",
+      user_alias: "Test Alias",
       user_role: "admin",
       teams: [],
       models: [],
@@ -40,12 +41,19 @@ describe("UserInfoView", () => {
     possibleUIRoles: null,
   };
 
-  it("renders loading state and then the user email", async () => {
+  it("should render the loading state and then the user email", async () => {
     const { getByText, findAllByText } = render(<UserInfoView {...defaultProps} />);
 
     expect(getByText("Loading user data...")).toBeInTheDocument();
 
     const emails = await findAllByText("test@example.com");
     expect(emails.length).toBeGreaterThan(0);
+  });
+
+  it("should render the user alias", async () => {
+    const { findAllByText } = render(<UserInfoView {...defaultProps} />);
+
+    const aliases = await findAllByText("Test Alias");
+    expect(aliases.length).toBeGreaterThan(0);
   });
 });

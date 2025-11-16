@@ -379,6 +379,9 @@ from litellm.proxy.utils import (
     update_spend,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
+from litellm.proxy.vector_store_files_endpoints.endpoints import (
+    router as vector_store_files_router,
+)
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
@@ -2233,20 +2236,15 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                try:
-                                    from litellm_enterprise.integrations.prometheus import (
-                                        PrometheusLogger,
-                                    )
-                                except Exception:
-                                    PrometheusLogger = None
+                                from litellm.integrations.prometheus import (
+                                    PrometheusLogger,
+                                )
 
                                 if PrometheusLogger is not None:
                                     verbose_proxy_logger.debug(
                                         "mounting metrics endpoint"
                                     )
-                                    PrometheusLogger._mount_metrics_endpoint(
-                                        premium_user
-                                    )
+                                    PrometheusLogger._mount_metrics_endpoint()
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
@@ -4495,13 +4493,9 @@ class ProxyStartupEvent:
         # Prometheus Background Job
         ########################################################
         if litellm.prometheus_initialize_budget_metrics is True:
-            try:
-                from litellm_enterprise.integrations.prometheus import PrometheusLogger
+            from litellm.integrations.prometheus import PrometheusLogger
 
-                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
-            except Exception:
-                PrometheusLogger = None
-
+            PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
         ########################################################
         # Key Rotation Background Job
         ########################################################
@@ -10096,6 +10090,7 @@ app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(vector_store_router)
+app.include_router(vector_store_files_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)

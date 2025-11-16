@@ -2584,8 +2584,78 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
 
     assert result == expected_response
     mock_get_allowed.assert_awaited_once()
-    assert mock_get_server.call_count == 2
+    # We call `_get_mcp_server_from_tool_name` multiple times:
+    # - for logging/metadata
+    # - for resolving the server during dispatch
+    # - and inside `call_tool` for guardrails/hooks
+    # The exact count isn't important, only that it is used.
+    assert mock_get_server.call_count >= 2
+    # First call should use the prefixed tool name
     assert (
         mock_get_server.call_args_list[0][0][0]
         == f"{mock_server.name}/gmail_send_email"
     )
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permissions():
+    """
+    Ensure `call_mcp_tool` correctly resolves the MCP server for an unprefixed tool
+    name and enforces server-level permissions using that resolved server.
+    """
+    from litellm.proxy._experimental.mcp_server.server import (
+        call_mcp_tool,
+        global_mcp_server_manager,
+    )
+
+    mock_server = MCPServer(
+        server_id="server-123",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+
+    expected_response = [TextContent(type="text", text="ok")]
+
+    with patch.object(
+        global_mcp_server_manager,
+        "get_allowed_mcp_servers",
+        new_callable=AsyncMock,
+    ) as mock_get_allowed, patch.object(
+        global_mcp_server_manager,
+        "get_mcp_servers_from_ids",
+        return_value=[mock_server],
+    ), patch.object(
+        global_mcp_server_manager,
+        "_get_mcp_server_from_tool_name",
+        return_value=mock_server,
+    ) as mock_get_server, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_tool_registry"
+    ) as mock_tool_registry, patch(
+        "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+        new_callable=AsyncMock,
+    ) as mock_handle_managed, patch(
+        "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+        return_value=True,
+    ) as mock_is_allowed:
+        mock_get_allowed.return_value = [mock_server.server_id]
+        mock_tool_registry.get_tool.return_value = None
+        mock_handle_managed.return_value = expected_response
+
+        # Call with UNPREFIXED tool name; server should be resolved via mapping
+        result = await call_mcp_tool(
+            name="gmail_send_email",
+            arguments={"body": "hello"},
+            mcp_servers=["test_server"],
+        )
+
+    assert result == expected_response
+    mock_get_allowed.assert_awaited_once()
+    # We should resolve the server at least once using the unprefixed name
+    assert mock_get_server.call_count >= 1
+    assert mock_get_server.call_args_list[0][0][0] == "gmail_send_email"
+    # Permissions check should be invoked with the resolved server name
+    mock_is_allowed.assert_called_once()

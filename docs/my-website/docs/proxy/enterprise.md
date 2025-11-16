@@ -32,10 +32,7 @@ Features:
     - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
     - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
     - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
-- **Prometheus Metrics**
-    - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](prometheus)
-    - ✅ [`x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens` for LLM APIs on Prometheus](prometheus#✨-enterprise-llm-remaining-requests-and-remaining-tokens)
-- **Control Guardrails per API Key**
+- **Control Guardrails per API Key/Team**
 - **Custom Branding**
     - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
     - ✅ [Custom Email Branding](./email.md#customizing-email-branding)
