@@ -381,6 +381,7 @@ LITELLM_CHAT_PROVIDERS = [
     "wandb",
     "ovhcloud",
     "lemonade",
+    "burncloud",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
