@@ -41,3 +41,7 @@ Object.defineProperty(HTMLAnchorElement.prototype, "click", {
   writable: true,
   value: vi.fn(),
 });
+
+if (!document.getAnimations) {
+  document.getAnimations = () => [];
+}
