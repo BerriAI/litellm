@@ -81,7 +81,7 @@ def test_hyperbolic_models_configuration():
     import os
     
     # Load model configuration directly from the JSON file
-    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
+    json_path = os.path.join(os.path.dirname(__file__), "../../../model_prices_and_context_window.json")
     with open(json_path, 'r') as f:
         model_data = json.load(f)
     
