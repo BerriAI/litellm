@@ -69,10 +69,6 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
   && rm -f *.whl \
   && rm -rf /wheels
 
-# Remove test files and keys from dependencies
-RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
-    find /usr/lib -type d -path "*/tornado/test" -delete
-
 # Install semantic_router and aurelio-sdk using script
 RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
 
@@ -80,6 +76,7 @@ RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
 RUN pip uninstall jwt -y && \
   pip uninstall PyJWT -y && \
   pip install PyJWT==2.9.0 --no-cache-dir
+
 
 # Set Prisma cache directories
 ENV PRISMA_BINARY_CACHE_DIR=/nonexistent
@@ -107,6 +104,12 @@ RUN PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__f
   [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u $LITELLM_PROXY_EXTRAS_PATH || true && \
   chmod -R g+w $PRISMA_PATH /tmp/litellm_ui && \
   [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true
+
+# Remove test files and keys from dependencies (after all package installations)
+RUN find /home/nonroot -type f -path "*/tornado/test/*" -delete 2>/dev/null || true && \
+find /usr/lib -type f -path "*/tornado/test/*" -delete && \
+find /home/nonroot -type d -path "*/tornado/test" -delete 2>/dev/null || true && \
+find /usr/lib -type d -path "*/tornado/test" -delete
 
 # Switch to non-root user
 USER nobody
