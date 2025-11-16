@@ -49,6 +49,9 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl 
 RUN chmod +x docker/entrypoint.sh
 RUN chmod +x docker/prod_entrypoint.sh
 
+# Copy the configuration file into the container at /app
+COPY config.yaml .
+
 EXPOSE 4000/tcp
 
 # Set your entrypoint and command

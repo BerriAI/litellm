@@ -16,8 +16,10 @@ swap_size_mb = 512
 
 [env]
   # Set non-root flag
-  LITELLM_NON_ROOT = "true"
+  LITELLM_NON_ROOT = "True"
   NODE_ENV = "production"
+  DISABLE_ADMIN_UI = "True"
+  NO_REDOC = "True"
 
 [http_service]
   internal_port = 4000
