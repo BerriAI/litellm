@@ -540,7 +540,6 @@ async def test_oauth2_headers_passed_to_mcp_client():
         )
         # Return a mock client that doesn't actually connect
         mock_client = MagicMock()
-        mock_client.disconnect = AsyncMock()
         return mock_client
 
     # Mock _fetch_tools_with_timeout to avoid actual network calls
