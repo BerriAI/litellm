@@ -8,6 +8,7 @@ import asyncio
 import os
 import sys
 import time
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -20,6 +21,24 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
     _PROXY_DynamicRateLimitHandlerV3 as DynamicRateLimitHandler,
 )
+
+
+class TimeController:
+    def __init__(self):
+        self._current = datetime.utcnow()
+
+    def now(self) -> datetime:
+        return self._current
+
+    def advance(self, seconds: float) -> None:
+        self._current += timedelta(seconds=seconds)
+
+
+@pytest.fixture
+def time_controller(monkeypatch):
+    controller = TimeController()
+    monkeypatch.setattr(time, "time", lambda: controller.now().timestamp())
+    return controller
 
 
 @pytest.mark.asyncio
@@ -195,7 +214,7 @@ async def test_concurrent_priority_requests():
 
 
 @pytest.mark.asyncio
-async def test_100_concurrent_priority_requests():
+async def test_100_concurrent_priority_requests(time_controller):
     """
     Stress test: 100 concurrent requests with mixed priorities over 10 seconds.
 
@@ -211,7 +230,9 @@ async def test_100_concurrent_priority_requests():
     litellm.priority_reservation = {"high": 0.9, "low": 0.1}
 
     dual_cache = DualCache()
-    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler = DynamicRateLimitHandler(
+        internal_usage_cache=dual_cache, time_provider=time_controller.now
+    )
 
     model = "stress-test-model"
     total_tpm = 1000
@@ -307,7 +328,8 @@ async def test_100_concurrent_priority_requests():
 
         # Add small delay between batches to spread over ~10 seconds
         if batch_idx < len(batches) - 1:  # Don't sleep after last batch
-            await asyncio.sleep(1.0)  # 1 second between batches
+            await asyncio.sleep(0)
+            time_controller.advance(1.0)  # simulate 1s passing between batches
 
     end_time = time.time()
     total_duration = end_time - start_time

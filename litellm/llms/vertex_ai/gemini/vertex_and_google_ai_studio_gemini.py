@@ -46,6 +46,8 @@ from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
     ChatCompletionResponseMessage,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -218,11 +220,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     
     def _supports_penalty_parameters(self, model: str) -> bool:
         unsupported_models = ["gemini-2.5-pro-preview-06-05"]
-
-        for pattern in unsupported_models:
-            if model in pattern:
-                return False
-
+        if model in unsupported_models:
+            return False
         return True
 
     def get_supported_openai_params(self, model: str) -> List[str]:
@@ -414,7 +413,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
             if "type" in tool:
-                del tool["type"]  # type: ignore
+                tool = {k: tool[k] for k in tool if k != "type"}
 
             tool_name = list(tool.keys())[0] if len(tool.keys()) == 1 else None
             if tool_name and (
@@ -566,6 +565,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "disable":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
+                "includeThoughts": False,
+            }
+        elif reasoning_effort == "none":
+            return {
+                "thinkingBudget": 0,
                 "includeThoughts": False,
             }
         else:
@@ -1023,7 +1027,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=part["functionCall"]["name"],
-                    arguments=json.dumps(part["functionCall"]["args"]),
+                    arguments=json.dumps(part["functionCall"]["args"], ensure_ascii=False),
                 )
                 if is_function_call is True:
                     function = _function_chunk
@@ -1298,6 +1302,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         from litellm.types.utils import Delta, StreamingChoices
 
+        annotations = chat_completion_message.get("annotations")  # type: ignore
         # create a streaming choice object
         choice = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -1310,6 +1315,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool_calls=tools,
                 images=image_response,
                 function_call=functions,
+                annotations=annotations,  # type: ignore
             ),
             logprobs=chat_completion_logprobs,
             enhancements=None,
@@ -1358,11 +1364,68 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
 
     @staticmethod
-    def _process_candidates(
+    def _convert_grounding_metadata_to_annotations(
+        grounding_metadata: List[dict],
+        content_text: Optional[str],
+    ) -> List[ChatCompletionAnnotation]:
+        """
+        Convert Vertex AI grounding metadata to OpenAI-style annotations.
+        """
+
+        annotations: List[ChatCompletionAnnotation] = []
+
+        
+        for metadata in grounding_metadata:
+            # Extract groundingSupports - these map text segments to sources
+            grounding_supports = metadata.get("groundingSupports", [])
+            grounding_chunks = metadata.get("groundingChunks", [])
+
+            # Build a map of chunk indices to web URIs
+            chunk_to_uri_map: Dict[int, Dict[str, str]] = {}
+            for idx, chunk in enumerate(grounding_chunks):
+                if "web" in chunk:
+                    web_data = chunk["web"]
+                    chunk_to_uri_map[idx] = {
+                        "url": web_data.get("uri", ""),
+                        "title": web_data.get("title", ""),
+                    }
+
+            # Process each grounding support to create annotations
+            for support in grounding_supports:
+                segment = support.get("segment", {})
+                start_index = segment.get("startIndex")
+                end_index = segment.get("endIndex")
+                
+                # Get the chunk indices for this support
+                chunk_indices = support.get("groundingChunkIndices", [])
+                
+                if start_index is not None and end_index is not None and chunk_indices:
+                    # Use the first chunk's URL for the annotation
+                    first_chunk_idx = chunk_indices[0]
+                    if first_chunk_idx in chunk_to_uri_map:
+                        uri_info = chunk_to_uri_map[first_chunk_idx]
+                        
+                        url_citation: ChatCompletionAnnotationURLCitation = {
+                            "start_index": start_index,
+                            "end_index": end_index,
+                            "url": uri_info["url"],
+                            "title": uri_info["title"],
+                        }
+                        
+                        annotation: ChatCompletionAnnotation = {
+                            "type": "url_citation",
+                            "url_citation": url_citation,
+                        }
+                        annotations.append(annotation)
+        return annotations
+
+    @staticmethod
+    def _process_candidates(  # noqa: PLR0915
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
-    ) -> Tuple[List[dict], List[dict], List, List]:
+        cumulative_tool_call_index: int = 0,
+    ) -> Tuple[List[dict], List[dict], List, List, int]:
         """
         Helper method to process candidates and extract metadata
 
@@ -1371,6 +1434,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata: List[dict]
             safety_ratings: List
             citation_metadata: List
+            cumulative_tool_call_index: int
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             is_function_call,
@@ -1386,7 +1450,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_logprobs: Optional[ChoiceLogprobs] = None
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
-        cumulative_tool_call_index: int = 0
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
 
         for idx, candidate in enumerate(_candidates):
@@ -1446,6 +1509,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
+
+                if candidate_grounding_metadata:
+                    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+                        grounding_metadata=candidate_grounding_metadata,
+                        content_text=content,
+                    )
+                    if annotations:
+                        chat_completion_message["annotations"] = annotations  # type: ignore
                 (
                     functions,
                     tools,
@@ -1498,6 +1569,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata,
             safety_ratings,
             citation_metadata,
+            cumulative_tool_call_index,
         )
 
     def transform_response(
@@ -1598,6 +1670,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    _,  # cumulative_tool_call_index not needed in non-streaming
                 ) = VertexGeminiConfig._process_candidates(
                     _candidates, model_response, logging_obj.optional_params
                 )
@@ -1675,13 +1748,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         messages: List[AllMessageValues],
         optional_params: Dict,
         litellm_params: Dict,
-        api_key: Optional[str] = None,
+        api_key: Optional[Union[str, Dict]] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
         default_headers = {
             "Content-Type": "application/json",
         }
-        if api_key is not None:
+        if isinstance(api_key, dict):
+            default_headers.update(api_key)
+        elif api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
         if headers is not None:
             default_headers.update(headers)
@@ -2212,6 +2287,7 @@ class ModelResponseIterator:
         self.sent_first_chunk = False
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
+        self.cumulative_tool_call_index: int = 0
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -2233,8 +2309,12 @@ class ModelResponseIterator:
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    self.cumulative_tool_call_index,
                 ) = VertexGeminiConfig._process_candidates(
-                    _candidates, model_response, self.logging_obj.optional_params
+                    _candidates,
+                    model_response,
+                    self.logging_obj.optional_params,
+                    cumulative_tool_call_index=self.cumulative_tool_call_index,
                 )
 
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore

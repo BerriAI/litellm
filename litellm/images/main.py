@@ -342,6 +342,8 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.RECRAFT,
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
+            litellm.LlmProviders.FAL_AI,
+            litellm.LlmProviders.RUNWAYML,
         ):
             if image_generation_config is None:
                 raise ValueError(
@@ -398,6 +400,8 @@ def image_generation(  # noqa: PLR0915
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            # Forward OpenAI organization if present (set by proxy pre-call utils)
+            organization: Optional[str] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -407,6 +411,7 @@ def image_generation(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 optional_params=optional_params,
                 model_response=model_response,
+                organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
             )
@@ -710,6 +715,16 @@ def image_edit(
 
         # add images / or return a single image
         images = image if isinstance(image, list) else [image]
+
+        headers_from_kwargs = kwargs.get("headers")
+        merged_extra_headers: Dict[str, Any] = {}
+        if isinstance(headers_from_kwargs, dict):
+            merged_extra_headers.update(headers_from_kwargs)
+        if isinstance(extra_headers, dict):
+            merged_extra_headers.update(extra_headers)
+
+        if merged_extra_headers:
+            extra_headers = dict(merged_extra_headers)
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)

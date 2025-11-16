@@ -11,6 +11,9 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+    AnthropicMessagesConfig,
+)
 from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
 
 
@@ -138,7 +141,7 @@ def test_extract_response_content_with_citations():
         "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
         "type": "message",
         "role": "assistant",
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "content": [
             {"type": "text", "text": "According to the documents, "},
             {
@@ -326,7 +329,7 @@ def test_transform_response_with_prefix_prompt():
         "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
         "type": "message",
         "role": "assistant",
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "content": [{"type": "text", "text": " The grass is green."}],
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -364,3 +367,150 @@ def test_get_supported_params_thinking():
     config = AnthropicConfig()
     params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
     assert "thinking" in params
+
+
+def test_anthropic_memory_tool_auto_adds_beta_header():
+    """
+    Tests that LiteLLM automatically adds the required 'anthropic-beta' header
+    when the memory tool is present, and the user has NOT provided a beta header.
+    """
+
+    config = AnthropicConfig()
+    memory_tool = [{"type": "memory_20250818", "name": "memory"}]
+    messages = [{"role": "user", "content": "Remember this."}]
+
+    headers = {}
+    optional_params = {"tools": memory_tool}
+
+    config.transform_request(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert "anthropic-beta" in headers
+    assert headers["anthropic-beta"] == "context-management-2025-06-27"
+
+
+def _sample_context_management_payload():
+    return {
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 30000},
+                "keep": {"type": "tool_uses", "value": 3},
+                "clear_at_least": {"type": "input_tokens", "value": 5000},
+                "exclude_tools": ["web_search"],
+                "clear_tool_inputs": False,
+            }
+        ]
+    }
+
+
+def test_anthropic_messages_validate_adds_beta_header():
+    config = AnthropicMessagesConfig()
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        optional_params={"context_management": _sample_context_management_payload()},
+        litellm_params={},
+    )
+    assert headers["anthropic-beta"] == "context-management-2025-06-27"
+
+
+def test_anthropic_messages_transform_includes_context_management():
+    config = AnthropicMessagesConfig()
+    payload = _sample_context_management_payload()
+    headers = {
+        "x-api-key": "test",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 512,
+            "context_management": payload,
+        },
+        litellm_params={},
+        headers=headers,
+    )
+    assert result["context_management"] == payload
+
+
+def test_anthropic_chat_headers_add_context_management_beta():
+    config = AnthropicConfig()
+    headers = config.update_headers_with_optional_anthropic_beta(
+        headers={},
+        optional_params={"context_management": _sample_context_management_payload()},
+    )
+    assert headers["anthropic-beta"] == "context-management-2025-06-27"
+
+
+def test_anthropic_chat_transform_request_includes_context_management():
+    config = AnthropicConfig()
+    headers = {}
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "context_management": _sample_context_management_payload(),
+            "max_tokens": 256,
+        },
+        litellm_params={},
+        headers=headers,
+    )
+    assert result["context_management"] == _sample_context_management_payload()
+
+
+def test_transform_parsed_response_includes_context_management_metadata():
+    import httpx
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+    context_management_payload = {
+        "applied_edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "cleared_tool_uses": 2,
+                "cleared_input_tokens": 5000,
+            }
+        ]
+    }
+    completion_response = {
+        "id": "msg_context_management_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-20250514",
+        "content": [{"type": "text", "text": "Done."}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 5,
+        },
+        "context_management": context_management_payload,
+    }
+    raw_response = httpx.Response(
+        status_code=200,
+        headers={},
+    )
+    model_response = ModelResponse()
+
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+    assert result.__dict__.get("context_management") == context_management_payload
+    provider_fields = result.choices[0].message.provider_specific_fields
+    assert provider_fields and provider_fields["context_management"] == context_management_payload

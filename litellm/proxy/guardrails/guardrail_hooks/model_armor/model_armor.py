@@ -56,6 +56,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         api_endpoint: Optional[str] = None,
         **kwargs,
     ):
+        # Set supported event hooks if not already provided
+        if "event_hook" not in kwargs:
+            kwargs["event_hook"] = [
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.during_call,
+                GuardrailEventHooks.post_call,
+            ]
+        
         # Initialize parent classes first
         super().__init__(**kwargs)
         VertexBase.__init__(self)
@@ -226,7 +234,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 }
             }
 
-    def _should_block_content(self, armor_response: dict, allow_sanitization: bool = False) -> bool:
+    def _should_block_content(
+        self, armor_response: dict, allow_sanitization: bool = False
+    ) -> bool:
         """Check if Model Armor response indicates content should be blocked, including both inspectResult and deidentifyResult."""
         sanitization_result = armor_response.get("sanitizationResult", {})
         filter_results = sanitization_result.get("filterResults", {})
@@ -413,11 +423,15 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 #   fail_on_error=False) we still want the correct status reflected.
                 metadata["_model_armor_status"] = (
                     "blocked"
-                    if self._should_block_content(armor_response, allow_sanitization=self.mask_request_content)
+                    if self._should_block_content(
+                        armor_response, allow_sanitization=self.mask_request_content
+                    )
                     else "success"
                 )
             # Check if content should be blocked
-            if self._should_block_content(armor_response, allow_sanitization=self.mask_request_content):
+            if self._should_block_content(
+                armor_response, allow_sanitization=self.mask_request_content
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -446,6 +460,109 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 "Model Armor pre-call error: %s", str(e), exc_info=True
             )
             # Depending on configuration, either fail or continue
+            if self.optional_params.get("fail_on_error", True):
+                raise
+
+        # Add guardrail to headers
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
+
+        return data
+
+    @log_guardrail_information
+    async def async_moderation_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "responses",
+            "mcp_call",
+            "anthropic_messages",
+        ],
+    ) -> Union[Exception, str, dict, None]:
+        """During-call hook to sanitize user prompts in parallel with LLM call."""
+        verbose_proxy_logger.debug("Inside Model Armor Moderation Hook")
+
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        event_type = GuardrailEventHooks.during_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return data
+
+        messages = data.get("messages")
+        if not messages:
+            verbose_proxy_logger.warning(
+                "Model Armor: not running guardrail. No messages in data"
+            )
+            return data
+
+        # Extract content from messages
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_last_user_message,
+        )
+
+        content = get_last_user_message(messages)
+        if not content:
+            return data
+
+        # Make Model Armor request
+        try:
+            armor_response = await self.make_model_armor_request(
+                content=content,
+                source="user_prompt",
+                request_data=data,
+            )
+
+            # Store the armor response for logging
+            if isinstance(data, dict):
+                metadata = data.setdefault("metadata", {})
+                metadata["_model_armor_response"] = armor_response
+                metadata["_model_armor_status"] = (
+                    "blocked"
+                    if self._should_block_content(
+                        armor_response, allow_sanitization=self.mask_request_content
+                    )
+                    else "success"
+                )
+
+            # Check if content should be blocked
+            if self._should_block_content(
+                armor_response, allow_sanitization=self.mask_request_content
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Content blocked by Model Armor",
+                        "model_armor_response": armor_response,
+                    },
+                )
+
+            # If mask_request_content is enabled, update messages with sanitized content
+            if self.mask_request_content:
+                sanitized_content = self._get_sanitized_content(armor_response)
+                if sanitized_content and sanitized_content != content:
+                    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                        set_last_user_message,
+                    )
+
+                    data["messages"] = set_last_user_message(
+                        messages, sanitized_content
+                    )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Model Armor moderation error: %s", str(e), exc_info=True
+            )
             if self.optional_params.get("fail_on_error", True):
                 raise
 
@@ -498,12 +615,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 metadata["_model_armor_response"] = armor_response
                 metadata["_model_armor_status"] = (
                     "blocked"
-                    if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
+                    if self._should_block_content(
+                        armor_response, allow_sanitization=self.mask_response_content
+                    )
                     else "success"
                 )
 
             # Check if content should be blocked
-            if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content):
+            if self._should_block_content(
+                armor_response, allow_sanitization=self.mask_response_content
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail={

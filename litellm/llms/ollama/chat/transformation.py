@@ -188,7 +188,7 @@ class OllamaChatConfig(BaseConfig):
                 if model.startswith("gpt-oss"):
                     optional_params["think"] = value
                 else:
-                    optional_params["think"] = True
+                    optional_params["think"] = value in {"low", "medium", "high"}
             ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 ## CHECK IF MODEL SUPPORTS TOOL CALLING ##

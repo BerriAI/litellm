@@ -1,6 +1,9 @@
 import os
 from typing import List, Literal
 
+DEFAULT_HEALTH_CHECK_PROMPT = str(
+    os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm")
+)
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(
     os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview")
 )
@@ -17,7 +20,9 @@ DEFAULT_SQS_FLUSH_INTERVAL_SECONDS = int(
 DEFAULT_NUM_WORKERS_LITELLM_PROXY = int(
     os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
 )
-DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
+DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(
+    os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1)
+)
 DEFAULT_SQS_BATCH_SIZE = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
 SQS_SEND_MESSAGE_ACTION = "SendMessage"
 SQS_API_VERSION = "2012-11-05"
@@ -84,6 +89,12 @@ MAX_TOKEN_TRIMMING_ATTEMPTS = int(
     os.getenv("MAX_TOKEN_TRIMMING_ATTEMPTS", 10)
 )  # Maximum number of attempts to trim the message
 
+RUNWAYML_DEFAULT_API_VERSION = str(
+    os.getenv("RUNWAYML_DEFAULT_API_VERSION", "2024-11-06")
+)
+RUNWAYML_POLLING_TIMEOUT = int(
+    os.getenv("RUNWAYML_POLLING_TIMEOUT", 600)
+)  # 10 minutes default for image generation
 
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
@@ -93,28 +104,35 @@ AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 
+# WebSocket constants
+# Default to None (unlimited) to match OpenAI's official agents SDK behavior
+# https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
+_max_size_env = os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
+REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES = (
+    int(_max_size_env) if _max_size_env is not None else None
+)
+
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
 # This balances performance with broad compatibility
 DEFAULT_SSL_CIPHERS = os.getenv(
     "LITELLM_SSL_CIPHERS",
     # Priority 1: TLS 1.3 ciphers (fastest, ~50ms handshake)
-    "TLS_AES_256_GCM_SHA384:"           # Fastest observed in testing
-    "TLS_AES_128_GCM_SHA256:"           # Slightly faster than 256-bit
-    "TLS_CHACHA20_POLY1305_SHA256:"     # Fast on ARM/mobile
+    "TLS_AES_256_GCM_SHA384:"  # Fastest observed in testing
+    "TLS_AES_128_GCM_SHA256:"  # Slightly faster than 256-bit
+    "TLS_CHACHA20_POLY1305_SHA256:"  # Fast on ARM/mobile
     # Priority 2: TLS 1.2 ECDHE+GCM (fast, ~100ms handshake, widely supported)
     "ECDHE-RSA-AES256-GCM-SHA384:"
     "ECDHE-RSA-AES128-GCM-SHA256:"
     "ECDHE-ECDSA-AES256-GCM-SHA384:"
     "ECDHE-ECDSA-AES128-GCM-SHA256:"
     # Priority 3: Additional modern ciphers (good balance)
-    "ECDHE-RSA-CHACHA20-POLY1305:"
-    "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    "ECDHE-RSA-CHACHA20-POLY1305:" "ECDHE-ECDSA-CHACHA20-POLY1305:"
     # Priority 4: Widely compatible fallbacks (slower but universally supported)
-    "ECDHE-RSA-AES256-SHA384:"          # Common fallback
-    "ECDHE-RSA-AES128-SHA256:"          # Very widely supported
-    "AES256-GCM-SHA384:"                # Non-PFS fallback (compatibility)
-    "AES128-GCM-SHA256",                # Last resort (maximum compatibility)
+    "ECDHE-RSA-AES256-SHA384:"  # Common fallback
+    "ECDHE-RSA-AES128-SHA256:"  # Very widely supported
+    "AES256-GCM-SHA384:"  # Non-PFS fallback (compatibility)
+    "AES128-GCM-SHA256",  # Last resort (maximum compatibility)
 )
 
 ########### v2 Architecture constants for managing writing updates to the database ###########
@@ -167,11 +185,6 @@ OPENAI_FILE_SEARCH_COST_PER_1K_CALLS = float(
 AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY = float(
     os.getenv("AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day
 )
-AZURE_CODE_INTERPRETER_COST_PER_SESSION = float(
-    os.getenv(
-        "AZURE_CODE_INTERPRETER_COST_PER_SESSION", 0.03
-    )  # $0.03 USD per 1 Session
-)
 AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS = float(
     os.getenv(
         "AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 3.0
@@ -199,12 +212,24 @@ JITTER = float(os.getenv("JITTER", 0.75))
 DEFAULT_IN_MEMORY_TTL = int(
     os.getenv("DEFAULT_IN_MEMORY_TTL", 5)
 )  # default time to live for the in-memory cache
+DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE = int(
+    os.getenv("DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", 1000)
+)  # default max size for redis batch cache
 DEFAULT_POLLING_INTERVAL = float(
     os.getenv("DEFAULT_POLLING_INTERVAL", 0.03)
 )  # default polling interval for the scheduler
 AZURE_OPERATION_POLLING_TIMEOUT = int(os.getenv("AZURE_OPERATION_POLLING_TIMEOUT", 120))
+AZURE_DOCUMENT_INTELLIGENCE_API_VERSION = str(
+    os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30")
+)
+AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI = int(
+    os.getenv("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI", 96)
+)
 REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
 REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
+# Default Redis major version to assume when version cannot be determined
+# Using 7 as it's the modern version that supports LPOP with count parameter
+DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
 NON_LLM_CONNECTION_TIMEOUT = int(
     os.getenv("NON_LLM_CONNECTION_TIMEOUT", 15)
 )  # timeout for adjacent services (e.g. jwt auth)
@@ -262,6 +287,16 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "high": 10,
 }
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
+DEFAULT_VIDEO_ENDPOINT_MODEL = "sora-2"
+
+DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS = int(
+    os.getenv("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8)
+)
+
+### DATAFORSEO CONSTANTS ###
+DEFAULT_DATAFORSEO_LOCATION_CODE = int(
+    os.getenv("DEFAULT_DATAFORSEO_LOCATION_CODE", 2250)
+)  # Default to France (2250) - lower number, commonly used location
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
@@ -345,7 +380,7 @@ LITELLM_CHAT_PROVIDERS = [
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
-    "lemonade"
+    "lemonade",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -396,6 +431,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "extra_headers",
     "thinking",
     "web_search_options",
+    "service_tier",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
@@ -448,8 +484,10 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "additional_drop_params": None,
     "messages": None,
     "reasoning_effort": None,
+    "verbosity": None,
     "thinking": None,
     "web_search_options": None,
+    "service_tier": None,
     "safety_identifier": None,
 }
 
@@ -602,7 +640,7 @@ clarifai_models: set = set(
         "clarifai/qwen.qwenLM.Qwen3-14B",
         "clarifai/qwen.qwenLM.QwQ-32B-AWQ",
         "clarifai/anthropic.completion.claude-3_5-haiku",
-        "clarifai/anthropic.completion.claude-3_7-sonnet",    
+        "clarifai/anthropic.completion.claude-3_7-sonnet",
     ]
 )
 
@@ -768,28 +806,22 @@ WANDB_MODELS: set = set(
         # openai models
         "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
-
         # zai-org models
         "zai-org/GLM-4.5",
-
         # Qwen models
         "Qwen/Qwen3-235B-A22B-Instruct-2507",
         "Qwen/Qwen3-Coder-480B-A35B-Instruct",
         "Qwen/Qwen3-235B-A22B-Thinking-2507",
-
         # moonshotai
         "moonshotai/Kimi-K2-Instruct",
-
         # meta models
         "meta-llama/Llama-3.1-8B-Instruct",
         "meta-llama/Llama-3.3-70B-Instruct",
         "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-
         # deepseek-ai
         "deepseek-ai/DeepSeek-V3.1",
         "deepseek-ai/DeepSeek-R1-0528",
         "deepseek-ai/DeepSeek-V3-0324",
-
         # microsoft
         "microsoft/Phi-4-mini-instruct",
     ]
@@ -805,6 +837,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "ai21",
     "nova",
     "deepseek_r1",
+    "qwen3",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
@@ -970,6 +1003,10 @@ DEFAULT_SOFT_BUDGET = float(
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"
 
+# Python garbage collection threshold configuration
+# Format: "gen0,gen1,gen2" e.g., "1000,50,50"
+PYTHON_GC_THRESHOLD = os.getenv("PYTHON_GC_THRESHOLD")
+
 # pass through route constansts
 BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
     "agents/",
@@ -998,7 +1035,9 @@ LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
-LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400))  # 24 hours default
+LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
+    os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400)
+)  # 24 hours default
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
@@ -1026,7 +1065,29 @@ PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 360
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
-PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds
+PROXY_BATCH_WRITE_AT = int(
+    os.getenv("PROXY_BATCH_WRITE_AT", 10)
+)  # in seconds, increased from 10
+
+# APScheduler Configuration - MEMORY LEAK FIX
+# These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
+APSCHEDULER_COALESCE = os.getenv("APSCHEDULER_COALESCE", "True").lower() in [
+    "true",
+    "1",
+]  # collapse many missed runs into one
+APSCHEDULER_MISFIRE_GRACE_TIME = int(
+    os.getenv("APSCHEDULER_MISFIRE_GRACE_TIME", 3600)
+)  # ignore runs older than 1 hour (was 120)
+APSCHEDULER_MAX_INSTANCES = int(
+    os.getenv("APSCHEDULER_MAX_INSTANCES", 1)
+)  # prevent concurrent job instances
+APSCHEDULER_REPLACE_EXISTING = os.getenv(
+    "APSCHEDULER_REPLACE_EXISTING", "True"
+).lower() in [
+    "true",
+    "1",
+]  # always replace existing jobs
+
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes
@@ -1055,6 +1116,7 @@ SECRET_MANAGER_REFRESH_INTERVAL = int(
 )
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
+    "public_agent_groups",
     "public_model_groups",
     "public_model_groups_links",
 ]

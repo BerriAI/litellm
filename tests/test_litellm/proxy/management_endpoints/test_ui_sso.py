@@ -125,16 +125,14 @@ def test_get_microsoft_callback_response():
         "surname": "User",
     }
 
-    future = asyncio.Future()
-    future.set_result(mock_response)
-
     with patch.dict(
         os.environ,
         {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"},
     ):
+        mock_verify = AsyncMock(return_value=mock_response)
         with patch(
             "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
-            return_value=future,
+            new=mock_verify,
         ):
             # Act
             result = asyncio.run(
@@ -166,15 +164,14 @@ def test_get_microsoft_callback_response_raw_sso_response():
         "surname": "User",
     }
 
-    future = asyncio.Future()
-    future.set_result(mock_response)
     with patch.dict(
         os.environ,
         {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"},
     ):
+        mock_verify = AsyncMock(return_value=mock_response)
         with patch(
             "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
-            return_value=future,
+            new=mock_verify,
         ):
             # Act
             result = asyncio.run(
@@ -207,12 +204,10 @@ def test_get_google_callback_response():
         "family_name": "User",
     }
 
-    future = asyncio.Future()
-    future.set_result(mock_response)
-
     with patch.dict(os.environ, {"GOOGLE_CLIENT_SECRET": "mock_secret"}):
+        mock_verify = AsyncMock(return_value=mock_response)
         with patch(
-            "fastapi_sso.sso.google.GoogleSSO.verify_and_process", return_value=future
+            "fastapi_sso.sso.google.GoogleSSO.verify_and_process", new=mock_verify
         ):
             # Act
             result = asyncio.run(
@@ -500,6 +495,42 @@ def test_apply_user_info_values_to_sso_user_defined_values():
 
     assert sso_user_defined_values is not None
     assert sso_user_defined_values["user_id"] == "123"
+
+
+def test_apply_user_info_values_to_sso_user_defined_values_with_models():
+    """Test that user's models from DB are preserved when they log in via SSO"""
+    from litellm.proxy._types import LiteLLM_UserTable, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import (
+        apply_user_info_values_to_sso_user_defined_values,
+    )
+
+    # Simulate existing user with models=['no-default-models'] in DB
+    user_info = LiteLLM_UserTable(
+        user_id="123",
+        user_email="test@example.com",
+        user_role="admin",
+        models=["no-default-models"],  # User has this set in DB
+    )
+
+    # Simulate SSO login where models defaults to empty list
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],  # Empty on SSO login
+        "user_id": "456",
+        "user_email": "test@example.com",
+        "user_role": "admin",
+        "max_budget": None,
+        "budget_duration": None,
+    }
+
+    sso_user_defined_values = apply_user_info_values_to_sso_user_defined_values(
+        user_info=user_info,
+        user_defined_values=user_defined_values,
+    )
+
+    assert sso_user_defined_values is not None
+    assert sso_user_defined_values["user_id"] == "123"
+    # This is the fix: models from DB should be preserved
+    assert sso_user_defined_values["models"] == ["no-default-models"]
 
 
 @pytest.mark.asyncio
@@ -1970,6 +2001,83 @@ class TestProcessSSOJWTAccessToken:
             assert result.team_ids == []
 
 
+class TestGenericResponseConvertorNestedAttributes:
+    """Test generic_response_convertor with nested attribute paths"""
+
+    def test_generic_response_convertor_with_nested_attributes(self):
+        """
+        Test that generic_response_convertor handles nested attributes with dotted notation
+        like "attributes.userId"
+        """
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+        # Mock JWT handler
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        # Payload with nested attributes structure
+        nested_payload = {
+            "sub": "user-sub-123",
+            "service": "test-service",
+            "auth_time": 1234567890,
+            "attributes": {
+                "given_name": "John",
+                "oauthClientId": "client-123",
+                "family_name": "Doe",
+                "userId": "nested-user-456",
+                "email": "john.doe@example.com",
+            },
+            "id": "top-level-id-789",
+            "client_id": "client-abc",
+        }
+
+        # Test with nested user ID attribute
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_USER_ID_ATTRIBUTE": "attributes.userId",
+                "GENERIC_USER_EMAIL_ATTRIBUTE": "attributes.email",
+                "GENERIC_USER_FIRST_NAME_ATTRIBUTE": "attributes.given_name",
+                "GENERIC_USER_LAST_NAME_ATTRIBUTE": "attributes.family_name",
+                "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE": "sub",
+            },
+        ):
+            # Act
+            result = generic_response_convertor(
+                response=nested_payload,
+                jwt_handler=mock_jwt_handler,
+                sso_jwt_handler=None,
+            )
+
+            # Assert
+            assert isinstance(result, CustomOpenID)
+
+            # Note: The current implementation uses response.get() which doesn't support
+            # dotted notation for nested attributes. This test documents the current behavior.
+            # If nested attribute support is needed, the implementation would need to be updated
+            # to handle dotted paths like "attributes.userId"
+
+            # Current behavior: returns None for nested paths
+            print(f"User ID result: {result.id}")
+            print(f"Email result: {result.email}")
+            print(f"First name result: {result.first_name}")
+            print(f"Last name result: {result.last_name}")
+            print(f"Display name result: {result.display_name}")
+
+            # Expected behavior with current implementation (no nested path support):
+            assert result.id == "nested-user-456"
+            assert (
+                result.email == "john.doe@example.com"
+            )  # Can't access "attributes.email" with .get()
+            assert (
+                result.first_name == "John"
+            )  # Can't access "attributes.given_name" with .get()
+            assert (
+                result.last_name == "Doe"
+            )  # Can't access "attributes.family_name" with .get()
+            assert result.display_name == "user-sub-123"  # Top-level attribute works
+
+
 class TestPKCEFunctionality:
     """Test PKCE (Proof Key for Code Exchange) functionality"""
 
@@ -1988,15 +2096,21 @@ class TestPKCEFunctionality:
         # Assert
         assert len(code_verifier) == 43
         assert isinstance(code_verifier, str)
-        
+
         # Verify code_challenge is correctly generated from code_verifier
-        expected_challenge_bytes = hashlib.sha256(code_verifier.encode('utf-8')).digest()
-        expected_challenge = base64.urlsafe_b64encode(expected_challenge_bytes).decode('utf-8').rstrip('=')
+        expected_challenge_bytes = hashlib.sha256(
+            code_verifier.encode("utf-8")
+        ).digest()
+        expected_challenge = (
+            base64.urlsafe_b64encode(expected_challenge_bytes)
+            .decode("utf-8")
+            .rstrip("=")
+        )
         assert code_challenge == expected_challenge
-        
+
         # Verify both are base64url encoded (no padding)
-        assert '=' not in code_verifier
-        assert '=' not in code_challenge
+        assert "=" not in code_verifier
+        assert "=" not in code_challenge
 
     @pytest.mark.asyncio
     async def test_prepare_token_exchange_parameters_with_pkce(self):
@@ -2018,17 +2132,20 @@ class TestPKCEFunctionality:
         with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
             # Act
             token_params = SSOAuthenticationHandler.prepare_token_exchange_parameters(
-                request=mock_request,
-                generic_include_client_id=False
+                request=mock_request, generic_include_client_id=False
             )
 
             # Assert
             assert token_params["include_client_id"] is False
             assert token_params["code_verifier"] == test_code_verifier
-            
+
             # Verify cache was accessed and deleted
-            mock_cache.get_cache.assert_called_once_with(key=f"pkce_verifier:{test_state}")
-            mock_cache.delete_cache.assert_called_once_with(key=f"pkce_verifier:{test_state}")
+            mock_cache.get_cache.assert_called_once_with(
+                key=f"pkce_verifier:{test_state}"
+            )
+            mock_cache.delete_cache.assert_called_once_with(
+                key=f"pkce_verifier:{test_state}"
+            )
 
     @pytest.mark.asyncio
     async def test_get_generic_sso_redirect_response_with_pkce(self):
@@ -2040,7 +2157,9 @@ class TestPKCEFunctionality:
         # Mock SSO provider
         mock_sso = MagicMock()
         mock_redirect_response = MagicMock()
-        original_location = "https://auth.example.com/authorize?state=test456&client_id=abc"
+        original_location = (
+            "https://auth.example.com/authorize?state=test456&client_id=abc"
+        )
         mock_redirect_response.headers = {"location": original_location}
         mock_sso.get_login_redirect = AsyncMock(return_value=mock_redirect_response)
         mock_sso.__enter__ = MagicMock(return_value=mock_sso)
@@ -2055,7 +2174,7 @@ class TestPKCEFunctionality:
                 result = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
                     generic_sso=mock_sso,
                     state=test_state,
-                    generic_authorization_endpoint="https://auth.example.com/authorize"
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
                 )
 
                 # Assert
@@ -2072,4 +2191,3 @@ class TestPKCEFunctionality:
                 assert "code_challenge=" in updated_location
                 assert "code_challenge_method=S256" in updated_location
                 assert f"state={test_state}" in updated_location
-

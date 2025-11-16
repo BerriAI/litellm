@@ -11,6 +11,13 @@ import pytest
 
 import litellm
 
+@pytest.fixture(autouse=True)
+def _reset_litellm_http_client_cache():
+    """Ensure each test gets a fresh async HTTP client mock."""
+    from litellm import in_memory_llm_clients_cache
+
+    in_memory_llm_clients_cache.flush_cache()
+
 
 class TestVertexGemmaCompletion:
     """Test completion flow for Vertex AI Gemma models using litellm.acompletion()"""

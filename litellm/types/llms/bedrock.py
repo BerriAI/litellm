@@ -1,12 +1,7 @@
 import json
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from typing_extensions import (
-    TYPE_CHECKING,
-    Required,
-    TypedDict,
-    override,
-)
+from typing_extensions import TYPE_CHECKING, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -468,6 +463,15 @@ class AmazonStability3TextToImageResponse(TypedDict, total=False):
     finish_reasons: List[str]
 
 
+class AmazonTitanTextToImageParams(TypedDict, total=False):
+    """
+    Params for Amazon Titan Text to Image API
+    """
+
+    text: Required[str]
+    negativeText: str
+
+
 class AmazonNovaCanvasRequestBase(TypedDict, total=False):
     """
     Base class for Amazon Nova Canvas API requests
@@ -577,6 +581,16 @@ class AmazonNovaCanvasInpaintingRequest(
     imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
 
 
+class AmazonTitanImageGenerationRequestBody(TypedDict, total=False):
+    """
+    Config for Amazon Titan Image Generation API
+    """
+
+    taskType: Literal["TEXT_IMAGE", "COLOR_GUIDED_GENERATION", "INPAINTING"]
+    textToImageParams: AmazonTitanTextToImageParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
 else:
@@ -665,10 +679,11 @@ class BedrockInputDataConfig(TypedDict):
     s3InputDataConfig: BedrockS3InputDataConfig
 
 
-class BedrockS3OutputDataConfig(TypedDict):
+class BedrockS3OutputDataConfig(TypedDict, total=False):
     """S3 output data configuration for Bedrock batch jobs."""
 
     s3Uri: str
+    s3EncryptionKeyId: Optional[str]
 
 
 class BedrockOutputDataConfig(TypedDict):

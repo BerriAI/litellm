@@ -263,7 +263,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif (
                     _message_content is not None
                     and isinstance(_message_content, str)
-                    and len(_message_content) > 0
                 ):
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
@@ -335,9 +334,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif (
                     _message_content is not None
                     and isinstance(_message_content, str)
-                    and _message_content
                 ):
-                    assistant_text = _message_content  # either string or none
+                    assistant_text = _message_content
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL
@@ -475,7 +473,7 @@ def _transform_request_body(
                 labels = {k: v for k, v in rm.items() if isinstance(v, str)}
 
         filtered_params = {
-            k: v for k, v in optional_params.items() if k in config_fields
+            k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))
         }
 
         generation_config: Optional[GenerationConfig] = GenerationConfig(

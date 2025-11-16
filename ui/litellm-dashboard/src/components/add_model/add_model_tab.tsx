@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
 import type { FormInstance } from "antd";
 import type { UploadProps } from "antd/es/upload";
@@ -9,7 +9,14 @@ import ProviderSpecificFields from "./provider_specific_fields";
 import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
-import { CredentialItem, getGuardrailsList, modelAvailableCall } from "../networking";
+import {
+  type CredentialItem,
+  type ProviderCreateInfo,
+  getGuardrailsList,
+  getProviderCreateMetadata,
+  modelAvailableCall,
+  tagListCall,
+} from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
@@ -18,6 +25,7 @@ import TeamDropdown from "../common_components/team_dropdown";
 import { all_admin_roles } from "@/utils/roles";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import { Tag } from "../tag_management/types";
 
 interface AddModelTabProps {
   form: FormInstance; // For the Add Model tab
@@ -63,8 +71,14 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   // Using a unique ID to force the ConnectionErrorDisplay to remount and run a fresh test
   const [connectionTestId, setConnectionTestId] = useState<string>("");
+
+  // Provider metadata for driving the provider select from backend config
+  const [providerMetadata, setProviderMetadata] = useState<ProviderCreateInfo[] | null>(null);
+  const [isProviderMetadataLoading, setIsProviderMetadataLoading] = useState<boolean>(false);
+  const [providerMetadataError, setProviderMetadataError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -79,6 +93,50 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
     fetchGuardrails();
   }, [accessToken]);
+
+  useEffect(() => {
+    const fetchTags = async () => {
+      try {
+        const response = await tagListCall(accessToken);
+        setTagsList(response);
+      } catch (error) {
+        console.error("Failed to fetch tags:", error);
+      }
+    };
+
+    fetchTags();
+  }, [accessToken]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchProviderMetadata = async () => {
+      setIsProviderMetadataLoading(true);
+      setProviderMetadataError(null);
+      try {
+        const metadata = await getProviderCreateMetadata();
+        if (!isMounted) {
+          return;
+        }
+        setProviderMetadata(metadata);
+      } catch (error) {
+        console.error("Failed to fetch provider metadata:", error);
+        if (isMounted) {
+          setProviderMetadataError("Failed to load providers");
+        }
+      } finally {
+        if (isMounted) {
+          setIsProviderMetadataLoading(false);
+        }
+      }
+    };
+
+    fetchProviderMetadata();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Test connection when button is clicked
   const handleTestConnection = async () => {
@@ -102,6 +160,13 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
     };
     fetchModelAccessGroups();
   }, [accessToken]);
+
+  const sortedProviderMetadata: ProviderCreateInfo[] = useMemo(() => {
+    if (!providerMetadata) {
+      return [];
+    }
+    return [...providerMetadata].sort((a, b) => a.provider_display_name.localeCompare(b.provider_display_name));
+  }, [providerMetadata]);
 
   const isAdmin = all_admin_roles.includes(userRole);
 
@@ -151,41 +216,68 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     labelAlign="left"
                   >
                     <AntdSelect
-                      showSearch={true}
-                      value={selectedProvider}
+                      showSearch
+                      loading={isProviderMetadataLoading}
+                      placeholder={isProviderMetadataLoading ? "Loading providers..." : "Select a provider"}
+                      optionFilterProp="data-label"
                       onChange={(value) => {
-                        setSelectedProvider(value);
-                        setProviderModelsFn(value);
+                        setSelectedProvider(value as Providers);
+                        setProviderModelsFn(value as Providers);
+                        form.setFieldsValue({
+                          custom_llm_provider: value,
+                        });
                         form.setFieldsValue({
                           model: [],
                           model_name: undefined,
                         });
                       }}
                     >
-                      {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
-                        <AntdSelect.Option key={providerEnum} value={providerEnum}>
-                          <div className="flex items-center space-x-2">
-                            <img
-                              src={providerLogoMap[providerDisplayName]}
-                              alt={`${providerEnum} logo`}
-                              className="w-5 h-5"
-                              onError={(e) => {
-                                // Create a div with provider initial as fallback
-                                const target = e.target as HTMLImageElement;
-                                const parent = target.parentElement;
-                                if (parent) {
-                                  const fallbackDiv = document.createElement("div");
-                                  fallbackDiv.className =
-                                    "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                                  fallbackDiv.textContent = providerDisplayName.charAt(0);
-                                  parent.replaceChild(fallbackDiv, target);
-                                }
-                              }}
-                            />
-                            <span>{providerDisplayName}</span>
-                          </div>
+                      {providerMetadataError && sortedProviderMetadata.length === 0 && (
+                        <AntdSelect.Option key="__error" value="">
+                          {providerMetadataError}
                         </AntdSelect.Option>
-                      ))}
+                      )}
+                      {sortedProviderMetadata.map((providerInfo) => {
+                        const displayName = providerInfo.provider_display_name;
+                        const providerKey = providerInfo.provider;
+                        const logoSrc = providerLogoMap[displayName] ?? "";
+
+                        return (
+                          <AntdSelect.Option key={providerKey} value={providerKey} data-label={displayName}>
+                            <div className="flex items-center space-x-2">
+                              {logoSrc ? (
+                                <img
+                                  src={logoSrc}
+                                  alt={`${displayName} logo`}
+                                  className="w-5 h-5"
+                                  onError={(e) => {
+                                    const target = e.currentTarget as HTMLImageElement;
+                                    const parent = target.parentElement;
+                                    if (!parent || !parent.contains(target)) {
+                                      return;
+                                    }
+
+                                    try {
+                                      const fallbackDiv = document.createElement("div");
+                                      fallbackDiv.className =
+                                        "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                                      fallbackDiv.textContent = displayName.charAt(0);
+                                      parent.replaceChild(fallbackDiv, target);
+                                    } catch (error) {
+                                      console.error("Failed to replace provider logo fallback:", error);
+                                    }
+                                  }}
+                                />
+                              ) : (
+                                <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+                                  {displayName.charAt(0)}
+                                </div>
+                              )}
+                              <span>{displayName}</span>
+                            </div>
+                          </AntdSelect.Option>
+                        );
+                      })}
                     </AntdSelect>
                   </Form.Item>
                   <LiteLLMModelNameField
@@ -225,7 +317,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     </Typography.Text>
                   </div>
 
-                  <Form.Item label="Existing Credentials" name="litellm_credential_name">
+                  <Form.Item label="Existing Credentials" name="litellm_credential_name" initialValue={null}>
                     <AntdSelect
                       showSearch
                       placeholder="Select or search for existing credentials"
@@ -244,12 +336,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     />
                   </Form.Item>
 
-                  <div className="flex items-center my-4">
-                    <div className="flex-grow border-t border-gray-200"></div>
-                    <span className="px-4 text-gray-500 text-sm">OR</span>
-                    <div className="flex-grow border-t border-gray-200"></div>
-                  </div>
-
                   <Form.Item
                     noStyle
                     shouldUpdate={(prevValues, currentValues) =>
@@ -262,13 +348,18 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                       console.log("🔑 Credential Name Changed:", credentialName);
                       // Only show provider specific fields if no credentials selected
                       if (!credentialName) {
-                        return <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />;
+                        return (
+                          <>
+                            <div className="flex items-center my-4">
+                              <div className="flex-grow border-t border-gray-200"></div>
+                              <span className="px-4 text-gray-500 text-sm">OR</span>
+                              <div className="flex-grow border-t border-gray-200"></div>
+                            </div>
+                            <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+                          </>
+                        );
                       }
-                      return (
-                        <div className="text-gray-500 text-sm text-center">
-                          Using existing credentials - no additional provider fields needed
-                        </div>
-                      );
+                      return null;
                     }}
                   </Form.Item>
                   <div className="flex items-center my-4">
@@ -349,6 +440,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     setShowAdvancedSettings={setShowAdvancedSettings}
                     teams={teams}
                     guardrailsList={guardrailsList}
+                    tagsList={tagsList}
                   />
 
                   <div className="flex justify-between items-center mb-4">

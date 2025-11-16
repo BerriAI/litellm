@@ -59,7 +59,6 @@ class CustomGuardrail(CustomLogger):
         self.mask_response_content: bool = mask_response_content
 
         if supported_event_hooks:
-
             ## validate event_hook is in supported_event_hooks
             self._validate_event_hook(event_hook, supported_event_hooks)
         super().__init__(**kwargs)
@@ -80,7 +79,6 @@ class CustomGuardrail(CustomLogger):
         ],
         supported_event_hooks: List[GuardrailEventHooks],
     ) -> None:
-
         def _validate_event_hook_list_is_in_supported_event_hooks(
             event_hook: Union[List[GuardrailEventHooks], List[str]],
             supported_event_hooks: List[GuardrailEventHooks],
@@ -130,15 +128,12 @@ class CustomGuardrail(CustomLogger):
         self,
         requested_guardrails: Union[List[str], List[Dict[str, DynamicGuardrailParams]]],
     ) -> bool:
-
         for _guardrail in requested_guardrails:
             if isinstance(_guardrail, dict):
                 if self.guardrail_name in _guardrail:
-
                     return True
             elif isinstance(_guardrail, str):
                 if self.guardrail_name == _guardrail:
-
                     return True
 
         return False
@@ -146,7 +141,6 @@ class CustomGuardrail(CustomLogger):
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
-
         from litellm.proxy._types import UserAPIKeyAuth
 
         # should run guardrail
@@ -285,7 +279,7 @@ class CustomGuardrail(CustomLogger):
                 data, self.event_hook
             )
             if result is not None:
-                return result
+                return result        
         return True
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
@@ -385,14 +379,24 @@ class CustomGuardrail(CustomLogger):
             duration=duration,
             masked_entity_count=masked_entity_count,
         )
+
+        def _append_guardrail_info(container: dict) -> None:
+            key = "standard_logging_guardrail_information"
+            existing = container.get(key)
+            if existing is None:
+                container[key] = [slg]
+            elif isinstance(existing, list):
+                existing.append(slg)
+            else:
+                # should not happen
+                container[key] = [existing, slg]
+
         if "metadata" in request_data:
             if request_data["metadata"] is None:
                 request_data["metadata"] = {}
-            request_data["metadata"]["standard_logging_guardrail_information"] = slg
+            _append_guardrail_info(request_data["metadata"])
         elif "litellm_metadata" in request_data:
-            request_data["litellm_metadata"][
-                "standard_logging_guardrail_information"
-            ] = slg
+            _append_guardrail_info(request_data["litellm_metadata"])
         else:
             verbose_logger.warning(
                 "unable to log guardrail information. No metadata found in request_data"
@@ -403,6 +407,7 @@ class CustomGuardrail(CustomLogger):
         text: str,
         language: Optional[str] = None,
         entities: Optional[List[PiiEntityType]] = None,
+        request_data: Optional[dict] = None,
     ) -> str:
         """
         Apply your guardrail logic to the given text
@@ -411,6 +416,7 @@ class CustomGuardrail(CustomLogger):
             text: The text to apply the guardrail to
             language: The language of the text
             entities: The entities to mask, optional
+            request_data: The request data dictionary to store guardrail metadata
 
         Any of the custom guardrails can override this method to provide custom guardrail logic
 
@@ -495,37 +501,46 @@ class CustomGuardrail(CustomLogger):
         """
         for key, value in vars(litellm_params).items():
             setattr(self, key, value)
-    
-    def get_guardrails_messages_for_call_type(self, call_type: CallTypes, data: Optional[dict] = None) -> Optional[List[AllMessageValues]]:
+
+    def get_guardrails_messages_for_call_type(
+        self, call_type: CallTypes, data: Optional[dict] = None
+    ) -> Optional[List[AllMessageValues]]:
         """
         Returns the messages for the given call type and data
         """
         if call_type is None or data is None:
             return None
-        
+
         #########################################################
-        # /chat/completions 
-        # /messages 
+        # /chat/completions
+        # /messages
         # Both endpoints store the messages in the "messages" key
         #########################################################
-        if call_type == CallTypes.completion.value or call_type == CallTypes.acompletion.value or call_type == CallTypes.anthropic_messages.value:
+        if (
+            call_type == CallTypes.completion.value
+            or call_type == CallTypes.acompletion.value
+            or call_type == CallTypes.anthropic_messages.value
+        ):
             return data.get("messages")
-        
+
         #########################################################
-        # /responses 
+        # /responses
         # User/System messages are stored in the "input" key, use litellm transformation to get the messages
         #########################################################
-        if call_type == CallTypes.responses.value or call_type == CallTypes.aresponses.value:
+        if (
+            call_type == CallTypes.responses.value
+            or call_type == CallTypes.aresponses.value
+        ):
             from typing import cast
 
             from litellm.responses.litellm_completion_transformation.transformation import (
                 LiteLLMCompletionResponsesConfig,
             )
-            
+
             input_data = data.get("input")
             if input_data is None:
                 return None
-            
+
             messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input_data,
                 responses_api_request=data,

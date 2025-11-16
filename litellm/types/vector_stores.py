@@ -1,6 +1,7 @@
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from annotated_types import Ge
 from pydantic import BaseModel
@@ -76,6 +77,7 @@ class VectorStoreResultContent(TypedDict, total=False):
 
 class VectorStoreSearchResult(TypedDict, total=False):
     """Result of a vector store search"""
+
     score: Optional[float]
     content: Optional[List[VectorStoreResultContent]]
     file_id: Optional[str]
@@ -92,44 +94,55 @@ class VectorStoreSearchResponse(TypedDict, total=False):
     search_query: Optional[str]
     data: Optional[List[VectorStoreSearchResult]]
 
+
 class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the vector store search API."""
+
     filters: Optional[Dict]
-    max_num_results: Optional[int]  
+    max_num_results: Optional[int]
     ranking_options: Optional[Dict]
     rewrite_query: Optional[bool]
 
+
 class VectorStoreSearchRequest(VectorStoreSearchOptionalRequestParams, total=False):
     """Request body for searching a vector store"""
+
     query: Union[str, List[str]]
 
 
 # Vector Store Creation Types
 class VectorStoreExpirationPolicy(TypedDict, total=False):
     """The expiration policy for a vector store"""
-    anchor: Literal["last_active_at"]  # Anchor timestamp after which the expiration policy applies
+
+    anchor: Literal[
+        "last_active_at"
+    ]  # Anchor timestamp after which the expiration policy applies
     days: int  # Number of days after anchor time that the vector store will expire
 
 
 class VectorStoreAutoChunkingStrategy(TypedDict, total=False):
     """Auto chunking strategy configuration"""
+
     type: Literal["auto"]  # Always "auto"
 
 
 class VectorStoreStaticChunkingStrategyConfig(TypedDict, total=False):
     """Static chunking strategy configuration"""
+
     max_chunk_size_tokens: int  # Maximum number of tokens per chunk
     chunk_overlap_tokens: int  # Number of tokens to overlap between chunks
 
 
 class VectorStoreStaticChunkingStrategy(TypedDict, total=False):
     """Static chunking strategy"""
+
     type: Literal["static"]  # Always "static"
     static: VectorStoreStaticChunkingStrategyConfig
 
 
 class VectorStoreChunkingStrategy(TypedDict, total=False):
     """Union type for chunking strategies"""
+
     # This can be either auto or static
     type: Literal["auto", "static"]
     static: Optional[VectorStoreStaticChunkingStrategyConfig]
@@ -137,6 +150,7 @@ class VectorStoreChunkingStrategy(TypedDict, total=False):
 
 class VectorStoreFileCounts(TypedDict, total=False):
     """File counts for a vector store"""
+
     in_progress: int
     completed: int
     failed: int
@@ -146,20 +160,27 @@ class VectorStoreFileCounts(TypedDict, total=False):
 
 class VectorStoreCreateOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the vector store create API."""
+
     name: Optional[str]  # Name of the vector store
     file_ids: Optional[List[str]]  # List of File IDs that the vector store should use
-    expires_after: Optional[VectorStoreExpirationPolicy]  # Expiration policy for the vector store
-    chunking_strategy: Optional[VectorStoreChunkingStrategy]  # Chunking strategy for the files
+    expires_after: Optional[
+        VectorStoreExpirationPolicy
+    ]  # Expiration policy for the vector store
+    chunking_strategy: Optional[
+        VectorStoreChunkingStrategy
+    ]  # Chunking strategy for the files
     metadata: Optional[Dict[str, str]]  # Set of key-value pairs for metadata
 
 
 class VectorStoreCreateRequest(VectorStoreCreateOptionalRequestParams, total=False):
     """Request body for creating a vector store"""
+
     pass  # All fields are optional for vector store creation
 
 
 class VectorStoreCreateResponse(TypedDict, total=False):
     """Response after creating a vector store"""
+
     id: str  # ID of the vector store
     object: Literal["vector_store"]  # Always "vector_store"
     created_at: int  # Unix timestamp of when the vector store was created
@@ -169,5 +190,81 @@ class VectorStoreCreateResponse(TypedDict, total=False):
     status: Literal["expired", "in_progress", "completed"]  # Status of the vector store
     expires_after: Optional[VectorStoreExpirationPolicy]  # Expiration policy
     expires_at: Optional[int]  # Unix timestamp of when the vector store expires
-    last_active_at: Optional[int]  # Unix timestamp of when the vector store was last active
+    last_active_at: Optional[
+        int
+    ]  # Unix timestamp of when the vector store was last active
     metadata: Optional[Dict[str, str]]  # Metadata associated with the vector store
+
+
+class IndexCreateLiteLLMParams(BaseModel):
+    vector_store_index: str
+    vector_store_name: str
+
+
+class IndexCreateRequest(BaseModel):
+    index_name: str
+    litellm_params: IndexCreateLiteLLMParams
+    index_info: Optional[Dict[str, Any]] = None
+
+
+class BaseVectorStoreAuthCredentials(TypedDict, total=False):
+    headers: dict
+    query_params: dict
+
+
+class LiteLLM_ManagedVectorStoreIndex(BaseModel):
+    """LiteLLM managed vector store index object - this is is the object stored in the database"""
+
+    id: str
+    index_name: str
+    litellm_params: IndexCreateLiteLLMParams
+    index_info: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+
+
+class VectorStoreIndexType(str, Enum):
+    """Type of vector store index"""
+
+    READ = "read"
+    WRITE = "write"
+
+
+class VectorStoreIndexEndpoints(TypedDict):
+    """Endpoints for vector store index"""
+
+    read: List[
+        Tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
+    ]  # endpoints for reading a vector store index
+    write: List[
+        Tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
+    ]  # endpoints for writing a vector store index
+VECTOR_STORE_OPENAI_PARAMS = Literal[
+    "filters",
+    "max_num_results",
+    "ranking_options",
+    "rewrite_query",
+]
+
+
+
+@dataclass
+class VectorStoreToolParams:
+    """Parameters extracted from a file_search tool definition"""
+    filters: Optional[Dict] = None
+    max_num_results: Optional[int] = None
+    ranking_options: Optional[Dict] = None
+    
+    def to_dict(self) -> Dict:
+        """Convert to dict, excluding None values"""
+        return {
+            k: v
+            for k, v in {
+                "filters": self.filters,
+                "max_num_results": self.max_num_results,
+                "ranking_options": self.ranking_options,
+            }.items()
+            if v is not None
+        }

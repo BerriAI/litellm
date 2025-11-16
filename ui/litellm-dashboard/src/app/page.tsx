@@ -27,6 +27,7 @@ import CacheDashboard from "@/components/cache_dashboard";
 import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
+import AgentsPanel from "@/components/agents";
 import PromptsPanel from "@/components/prompts";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
@@ -41,6 +42,7 @@ import { cx } from "@/lib/cva.config";
 import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldTeams from "@/components/OldTeams";
+import { SearchTools } from "@/components/search_tools";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -414,6 +416,8 @@ export default function CreateKeyPage() {
                   <BudgetPanel accessToken={accessToken} />
                 ) : page == "guardrails" ? (
                   <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
+                ) : page == "agents" ? (
+                  <AgentsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "prompts" ? (
                   <PromptsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "transform-request" ? (
@@ -450,6 +454,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     modelData={modelData}
+                    premiumUser={premiumUser}
                   />
                 ) : page == "logs" ? (
                   <SpendLogsTable
@@ -462,6 +467,8 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "mcp-servers" ? (
                   <MCPServers accessToken={accessToken} userRole={userRole} userID={userID} />
+                ) : page == "search-tools" ? (
+                  <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "tag-management" ? (
                   <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "vector-stores" ? (
@@ -472,6 +479,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     teams={(teams as Team[]) ?? []}
+                    organizations={(organizations as Organization[]) ?? []}
                     premiumUser={premiumUser}
                   />
                 ) : (
