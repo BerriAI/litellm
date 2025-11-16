@@ -28,8 +28,13 @@ const { Title, Paragraph } = Typography;
 
 import FormItem from "antd/es/form/FormItem";
 import AlertingSettings from "./alerting/alerting_settings";
-import { CALLBACK_CONFIGS, getCallbackById } from "./callback_info_helpers";
-import { deleteCallback, getCallbacksCall, serviceHealthCheck, setCallbacksCall } from "./networking";
+import {
+  deleteCallback,
+  getCallbackConfigsCall,
+  getCallbacksCall,
+  serviceHealthCheck,
+  setCallbacksCall,
+} from "./networking";
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
@@ -46,6 +51,8 @@ interface genericCallbackParams {
   litellm_callback_params: string[] | null; // known required params for this callback
 }
 
+const assetsLogoFolder = "../ui/assets/logos/";
+
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -58,6 +65,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
 
   const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
+  const [callbackConfigs, setCallbackConfigs] = useState<any[]>([]);
   const [allCallbacks, setAllCallbacks] = useState<
     Record<
       string,
@@ -75,6 +83,19 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(null);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [callbackToDelete, setCallbackToDelete] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!accessToken) {
+      return;
+    }
+    getCallbackConfigsCall(accessToken)
+      .then((data) => {
+        setCallbackConfigs(data || []);
+      })
+      .catch((error) => {
+        NotificationsManager.fromBackend("Failed to load callback configs: " + parseErrorMessage(error));
+      });
+  }, [accessToken]);
 
   useEffect(() => {
     if (showEditCallback && selectedEditCallback) {
@@ -209,13 +230,10 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const handleSelectedCallbackChange = (callbackName: string) => {
     setSelectedCallback(callbackName);
 
-    // Get the callback configuration using the new clean structure
-    const callbackConfig = getCallbackById(callbackName);
+    const callbackConfig = callbackConfigs.find((config) => config.id === callbackName);
 
-    // Get the parameters from the callback configuration
     if (callbackConfig?.dynamic_params) {
-      const params = Object.keys(callbackConfig.dynamic_params);
-      setSelectedCallbackParams(params);
+      setSelectedCallbackParams(Object.keys(callbackConfig.dynamic_params));
     } else {
       setSelectedCallbackParams([]);
     }
@@ -559,53 +577,61 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 handleSelectedCallbackChange(value);
               }}
             >
-              {CALLBACK_CONFIGS.map((callbackConfig) => (
-                <SelectItem key={callbackConfig.id} value={callbackConfig.id}>
-                  <div className="flex items-center space-x-3 py-1">
-                    <div className="w-6 h-6 flex items-center justify-center">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={callbackConfig.logo}
-                        alt={`${callbackConfig.displayName} logo`}
-                        className="w-6 h-6 rounded object-contain"
-                        onError={(e) => {
-                          e.currentTarget.style.display = "none";
-                        }}
-                      />
+              {callbackConfigs.map((callbackConfig) => {
+                const logo = callbackConfig.logo;
+                const logoSrc =
+                  logo && (logo.includes("/") || logo.startsWith("data:") || logo.startsWith("http"))
+                    ? logo
+                    : `${assetsLogoFolder}${logo}`;
+
+                return (
+                  <SelectItem key={callbackConfig.id} value={callbackConfig.id}>
+                    <div className="flex items-center space-x-3 py-1">
+                      <div className="w-6 h-6 flex items-center justify-center">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={logoSrc}
+                          alt={`${callbackConfig.displayName} logo`}
+                          className="w-6 h-6 rounded object-contain"
+                          onError={(e) => {
+                            e.currentTarget.style.display = "none";
+                          }}
+                        />
+                      </div>
+                      <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>
                     </div>
-                    <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>
-                  </div>
-                </SelectItem>
-              ))}
+                  </SelectItem>
+                );
+              })}
             </Select>
           </FormItem>
 
           {selectedCallbackParams && selectedCallbackParams.length > 0 && (
             <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
               {selectedCallbackParams.map((param) => {
-                // Get the callback configuration to look up parameter types
-                const callbackConfig = getCallbackById(selectedCallback || "");
-                const paramType = callbackConfig?.dynamic_params[param] || "text";
-
-                const fieldLabel = param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+                const callbackConfig = callbackConfigs.find((config) => config.id === selectedCallback);
+                const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
+                const paramType = paramConfig.type || "text";
+                const fieldLabel =
+                  paramConfig.ui_name || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+                const isRequired = paramConfig.required || false;
 
                 return (
                   <FormItem
-                    label={
-                      <span className="text-sm font-medium text-gray-700">
-                        {fieldLabel}
-                        <span className="text-red-500 ml-1">*</span>
-                      </span>
-                    }
+                    label={<span className="text-sm font-medium text-gray-700">{fieldLabel} </span>}
                     name={param}
                     key={param}
                     className="mb-4"
-                    rules={[
-                      {
-                        required: true,
-                        message: `Please enter the ${fieldLabel.toLowerCase()}`,
-                      },
-                    ]}
+                    rules={
+                      isRequired
+                        ? [
+                            {
+                              required: true,
+                              message: `Please enter the ${fieldLabel.toLowerCase()}`,
+                            },
+                          ]
+                        : undefined
+                    }
                   >
                     {paramType === "password" ? (
                       <Input.Password
