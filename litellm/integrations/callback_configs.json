@@ -132,10 +132,114 @@
     "logo": "aws.svg",
     "supports_key_team_logging": false,
     "dynamic_params": {
-      "sqs_queue_url": "text",
-      "aws_access_key_id": "password",
-      "aws_secret_access_key": "password",
-      "aws_region": "text"
+      "sqs_queue_url": {
+        "type": "text",
+        "ui_name": "Queue URL",
+        "description": "AWS SQS Queue URL",
+        "required": true
+      },
+      "sqs_region_name": {
+        "type": "text",
+        "ui_name": "AWS Region",
+        "description": "AWS region name (e.g., us-east-1)",
+        "required": false
+      },
+      "sqs_aws_access_key_id": {
+        "type": "password",
+        "ui_name": "AWS Access Key ID",
+        "description": "AWS access key ID for authentication",
+        "required": false
+      },
+      "sqs_aws_secret_access_key": {
+        "type": "password",
+        "ui_name": "AWS Secret Access Key",
+        "description": "AWS secret access key for authentication",
+        "required": false
+      },
+      "sqs_aws_session_token": {
+        "type": "password",
+        "ui_name": "AWS Session Token",
+        "description": "AWS session token for temporary credentials",
+        "required": false
+      },
+      "sqs_aws_session_name": {
+        "type": "text",
+        "ui_name": "AWS Session Name",
+        "description": "Name for AWS session",
+        "required": false
+      },
+      "sqs_aws_profile_name": {
+        "type": "text",
+        "ui_name": "AWS Profile Name",
+        "description": "AWS profile name from credentials file",
+        "required": false
+      },
+      "sqs_aws_role_name": {
+        "type": "text",
+        "ui_name": "AWS Role Name",
+        "description": "AWS IAM role name to assume",
+        "required": false
+      },
+      "sqs_aws_web_identity_token": {
+        "type": "password",
+        "ui_name": "AWS Web Identity Token",
+        "description": "AWS web identity token for authentication",
+        "required": false
+      },
+      "sqs_aws_sts_endpoint": {
+        "type": "text",
+        "ui_name": "AWS STS Endpoint",
+        "description": "AWS STS endpoint URL",
+        "required": false
+      },
+      "sqs_endpoint_url": {
+        "type": "text",
+        "ui_name": "SQS Endpoint URL",
+        "description": "Custom SQS endpoint URL (for LocalStack or custom endpoints)",
+        "required": false
+      },
+      "sqs_api_version": {
+        "type": "text",
+        "ui_name": "API Version",
+        "description": "SQS API version",
+        "required": false
+      },
+      "sqs_use_ssl": {
+        "type": "boolean",
+        "ui_name": "Use SSL",
+        "description": "Whether to use SSL for SQS connections",
+        "required": false
+      },
+      "sqs_verify": {
+        "type": "boolean",
+        "ui_name": "Verify SSL",
+        "description": "Whether to verify SSL certificates",
+        "required": false
+      },
+      "sqs_strip_base64_files": {
+        "type": "boolean",
+        "ui_name": "Strip Base64 Files",
+        "description": "Remove base64-encoded files from logs to reduce payload size",
+        "required": false
+      },
+      "sqs_aws_use_application_level_encryption": {
+        "type": "boolean",
+        "ui_name": "Use Application-Level Encryption",
+        "description": "Enable application-level encryption for SQS messages",
+        "required": false
+      },
+      "sqs_app_encryption_key_b64": {
+        "type": "password",
+        "ui_name": "Encryption Key (Base64)",
+        "description": "Base64-encoded encryption key for application-level encryption",
+        "required": false
+      },
+      "sqs_app_encryption_aad": {
+        "type": "text",
+        "ui_name": "Encryption AAD",
+        "description": "Additional authenticated data for encryption",
+        "required": false
+      }
     },
     "description": "SQS Queue (AWS) Logging Integration"
   }
