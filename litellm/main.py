@@ -390,6 +390,7 @@ async def acompletion(
     reasoning_effort: Optional[
         Literal["none", "minimal", "low", "medium", "high", "default"]
     ] = None,
+    verbosity: Optional[Literal["low", "medium", "high"]] = None,
     safety_identifier: Optional[str] = None,
     service_tier: Optional[str] = None,
     # set api_base, api_version, api_key
@@ -961,6 +962,7 @@ def completion(  # type: ignore # noqa: PLR0915
     reasoning_effort: Optional[
         Literal["none", "minimal", "low", "medium", "high", "default"]
     ] = None,
+    verbosity: Optional[Literal["low", "medium", "high"]] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
@@ -2084,10 +2086,10 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            if (
-                litellm.enable_preview_features and metadata is not None
-            ):  # [PREVIEW] allow metadata to be passed to OPENAI
-                optional_params["metadata"] = add_openai_metadata(metadata)
+            if litellm.enable_preview_features:
+                metadata_payload = add_openai_metadata(metadata)
+                if metadata_payload is not None:
+                    optional_params["metadata"] = metadata_payload
 
             ## LOAD CONFIG - if set
             config = litellm.OpenAIConfig.get_config()

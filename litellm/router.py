@@ -849,6 +849,57 @@ class Router:
             create, call_type="vector_store_create"
         )
 
+        from litellm.vector_store_files.main import (
+            acreate as avector_store_file_create_fn,
+            alist as avector_store_file_list_fn,
+            aretrieve as avector_store_file_retrieve_fn,
+            aretrieve_content as avector_store_file_content_fn,
+            aupdate as avector_store_file_update_fn,
+            adelete as avector_store_file_delete_fn,
+            create as vector_store_file_create_fn,
+            list as vector_store_file_list_fn,
+            retrieve as vector_store_file_retrieve_fn,
+            retrieve_content as vector_store_file_content_fn,
+            update as vector_store_file_update_fn,
+            delete as vector_store_file_delete_fn,
+        )
+        self.avector_store_file_create = self.factory_function(
+            avector_store_file_create_fn, call_type="avector_store_file_create"
+        )
+        self.vector_store_file_create = self.factory_function(
+            vector_store_file_create_fn, call_type="vector_store_file_create"
+        )
+        self.avector_store_file_list = self.factory_function(
+            avector_store_file_list_fn, call_type="avector_store_file_list"
+        )
+        self.vector_store_file_list = self.factory_function(
+            vector_store_file_list_fn, call_type="vector_store_file_list"
+        )
+        self.avector_store_file_retrieve = self.factory_function(
+            avector_store_file_retrieve_fn, call_type="avector_store_file_retrieve"
+        )
+        self.vector_store_file_retrieve = self.factory_function(
+            vector_store_file_retrieve_fn, call_type="vector_store_file_retrieve"
+        )
+        self.avector_store_file_content = self.factory_function(
+            avector_store_file_content_fn, call_type="avector_store_file_content"
+        )
+        self.vector_store_file_content = self.factory_function(
+            vector_store_file_content_fn, call_type="vector_store_file_content"
+        )
+        self.avector_store_file_update = self.factory_function(
+            avector_store_file_update_fn, call_type="avector_store_file_update"
+        )
+        self.vector_store_file_update = self.factory_function(
+            vector_store_file_update_fn, call_type="vector_store_file_update"
+        )
+        self.avector_store_file_delete = self.factory_function(
+            avector_store_file_delete_fn, call_type="avector_store_file_delete"
+        )
+        self.vector_store_file_delete = self.factory_function(
+            vector_store_file_delete_fn, call_type="vector_store_file_delete"
+        )
+
         from litellm.google_genai import (
             agenerate_content,
             agenerate_content_stream,
@@ -3685,8 +3736,20 @@ class Router:
             "generate_content_stream",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_file_create",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_update",
+            "avector_store_file_delete",
             "vector_store_search",
             "vector_store_create",
+            "vector_store_file_create",
+            "vector_store_file_list",
+            "vector_store_file_retrieve",
+            "vector_store_file_content",
+            "vector_store_file_update",
+            "vector_store_file_delete",
             "aocr",
             "ocr",
             "asearch",
@@ -3738,7 +3801,6 @@ class Router:
             "retrieve_container",
             "delete_container",
         ):
-
             def sync_wrapper(
                 custom_llm_provider: Optional[str] = None,
                 client: Optional[Any] = None,
@@ -3749,6 +3811,28 @@ class Router:
                 )
 
             return sync_wrapper
+
+        if call_type in (
+            "vector_store_file_create",
+            "vector_store_file_list",
+            "vector_store_file_retrieve",
+            "vector_store_file_content",
+            "vector_store_file_update",
+            "vector_store_file_delete",
+        ):
+
+            def vector_store_file_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                return original_function(
+                    custom_llm_provider=custom_llm_provider,
+                    client=client,
+                    **kwargs,
+                )
+
+            return vector_store_file_sync_wrapper
 
         # Handle asynchronous call types
         async def async_wrapper(
@@ -3773,6 +3857,19 @@ class Router:
                     **kwargs,
                 )
             elif call_type in (
+                "avector_store_file_create",
+                "avector_store_file_list",
+                "avector_store_file_retrieve",
+                "avector_store_file_content",
+                "avector_store_file_update",
+                "avector_store_file_delete",
+            ):
+                return await self._init_vector_store_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
+            elif call_type in (
                 "anthropic_messages",
                 "aresponses",
                 "_arealtime",
@@ -3794,7 +3891,7 @@ class Router:
                 "acreate_container",
                 "alist_containers",
                 "aretrieve_container",
-                "adelete_container",
+                "adelete_container"
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

@@ -40,6 +40,7 @@ export function UserEditView({
     form.setFieldsValue({
       user_id: userData.user_id,
       user_email: userData.user_info?.user_email,
+      user_alias: userData.user_info?.user_alias,
       user_role: userData.user_info?.user_role,
       models: userData.user_info?.models || [],
       max_budget: userData.user_info?.max_budget,
@@ -75,6 +76,10 @@ export function UserEditView({
           <TextInput />
         </Form.Item>
       )}
+
+      <Form.Item label="User Alias" name="user_alias">
+        <TextInput />
+      </Form.Item>
 
       <Form.Item
         label={

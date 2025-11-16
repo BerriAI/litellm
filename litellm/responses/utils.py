@@ -147,9 +147,11 @@ class ResponsesAPIRequestUtils:
         if "metadata" in non_default_params:
             from litellm.utils import add_openai_metadata
 
-            non_default_params["metadata"] = add_openai_metadata(
-                non_default_params["metadata"]
-            )
+            converted_metadata = add_openai_metadata(non_default_params["metadata"])
+            if converted_metadata is not None:
+                non_default_params["metadata"] = converted_metadata
+            else:
+                non_default_params.pop("metadata", None)
 
         return cast(ResponsesAPIOptionalRequestParams, non_default_params)
 

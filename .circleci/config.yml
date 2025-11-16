@@ -24,6 +24,39 @@ commands:
             cd enterprise
             python -m pip install -e .
             cd ..
+  setup_litellm_test_deps:
+    steps:
+      - checkout
+      - setup_google_dns
+      - restore_cache:
+          keys:
+            - v2-litellm-deps-{{ checksum "requirements.txt" }}-{{ checksum ".circleci/config.yml" }}
+            - v2-litellm-deps-
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+            pip install "hypercorn==0.17.3"
+            pip install "pydantic==2.10.2"
+            pip install "mcp==1.10.1"
+            pip install "requests-mock>=1.12.1"
+            pip install "responses==0.25.7"
+            pip install "pytest-xdist==3.6.1"
+            pip install "pytest-timeout==2.2.0"
+            pip install "semantic_router==0.1.10"
+            pip install "fastapi-offline==1.7.3"
+      - setup_litellm_enterprise_pip
+      - save_cache:
+          paths:
+            - ~/.cache/pip
+          key: v2-litellm-deps-{{ checksum "requirements.txt" }}-{{ checksum ".circleci/config.yml" }}
 
 jobs:
   # Add Windows testing job
@@ -668,13 +701,16 @@ jobs:
           paths:
             - litellm_security_tests_coverage.xml
             - litellm_security_tests_coverage
-  litellm_proxy_unit_testing: # Runs all tests with the "proxy", "key", "jwt" filenames
+  # Split proxy unit tests into 3 jobs for faster execution and better debugging
+  # test_key_generate_prisma runs separately without parallel execution to avoid event loop issues with logging worker
+  litellm_proxy_unit_testing_key_generation:
     docker:
       - image: cimg/python:3.11
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    resource_class: large
     steps:
       - checkout
       - setup_google_dns
@@ -699,6 +735,114 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
+            pip install "pytest-timeout==2.2.0"
+            pip install "pytest-forked==1.6.0"
+            pip install "mypy==1.18.2"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-genai==1.22.0"
+            pip install pyarrow
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
+            pip install langchain
+            pip install lunary==0.2.5
+            pip install "azure-identity==1.16.1"
+            pip install "langfuse==2.59.7"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
+            pip install openai==1.100.1
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
+            pip install "httpx==0.24.1"
+            pip install "respx==0.22.0"
+            pip install fastapi
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==4.2.0"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
+            pip install "PyGithub==1.59.1"
+            pip install argon2-cffi
+            pip install "pytest-mock==3.12.0"
+            pip install python-multipart
+            pip install google-cloud-aiplatform
+            pip install prometheus-client==0.20.0
+            pip install "pydantic==2.10.2"
+            pip install "diskcache==5.6.1"
+            pip install "Pillow==10.3.0"
+            pip install "jsonschema==4.22.0"
+            pip install "pytest-postgresql==7.0.1"
+            pip install "fakeredis==2.28.1"
+      - setup_litellm_enterprise_pip
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+      - run:
+          name: Run key generation tests (no parallel execution to avoid event loop issues)
+          command: |
+            pwd
+            ls
+            # Run without -n flag to avoid pytest-xdist event loop conflicts with logging worker
+            python -m pytest tests/proxy_unit_tests/test_key_generate_prisma.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-key-generation.xml --durations=10 --timeout=300 -vv --log-cli-level=INFO
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_proxy_unit_tests_key_generation_coverage.xml
+            mv .coverage litellm_proxy_unit_tests_key_generation_coverage
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_proxy_unit_tests_key_generation_coverage.xml
+            - litellm_proxy_unit_tests_key_generation_coverage
+  litellm_proxy_unit_testing_part1:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: large
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Show git commit hash
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
+      - run:
+          name: Install PostgreSQL
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y postgresql-14 postgresql-contrib-14
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-timeout==2.2.0"
+            pip install "pytest-forked==1.6.0"
             pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
@@ -752,28 +896,132 @@ jobs:
             chmod +x docker/entrypoint.sh
             ./docker/entrypoint.sh
             set -e
-      # Run pytest and generate JUnit XML report
       - run:
-          name: Run tests
+          name: Run proxy unit tests (part 1 - auth checks only, key generation in separate job)
           command: |
             pwd
             ls
-            python -m pytest tests/proxy_unit_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            # Run auth tests with parallel execution (test_key_generate_prisma moved to separate job to avoid event loop issues)
+            python -m pytest tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part1.xml --durations=10 -n 8 --timeout=300 -vv --log-cli-level=INFO
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml litellm_proxy_unit_tests_coverage.xml
-            mv .coverage litellm_proxy_unit_tests_coverage
-      # Store test results
+            mv coverage.xml litellm_proxy_unit_tests_part1_coverage.xml
+            mv .coverage litellm_proxy_unit_tests_part1_coverage
       - store_test_results:
           path: test-results
-
       - persist_to_workspace:
           root: .
           paths:
-            - litellm_proxy_unit_tests_coverage.xml
-            - litellm_proxy_unit_tests_coverage
+            - litellm_proxy_unit_tests_part1_coverage.xml
+            - litellm_proxy_unit_tests_part1_coverage
+  litellm_proxy_unit_testing_part2:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: large
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Show git commit hash
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
+      - run:
+          name: Install PostgreSQL
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y postgresql-14 postgresql-contrib-14
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-timeout==2.2.0"
+            pip install "pytest-forked==1.6.0"
+            pip install "mypy==1.18.2"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-genai==1.22.0"
+            pip install pyarrow
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
+            pip install langchain
+            pip install lunary==0.2.5
+            pip install "azure-identity==1.16.1"
+            pip install "langfuse==2.59.7"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
+            pip install openai==1.100.1
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
+            pip install "httpx==0.24.1"
+            pip install "respx==0.22.0"
+            pip install fastapi
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==4.2.0"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
+            pip install "PyGithub==1.59.1"
+            pip install argon2-cffi
+            pip install "pytest-mock==3.12.0"
+            pip install python-multipart
+            pip install google-cloud-aiplatform
+            pip install prometheus-client==0.20.0
+            pip install "pydantic==2.10.2"
+            pip install "diskcache==5.6.1"
+            pip install "Pillow==10.3.0"
+            pip install "jsonschema==4.22.0"
+            pip install "pytest-postgresql==7.0.1"
+            pip install "fakeredis==2.28.1"
+            pip install "pytest-xdist==3.6.1"
+      - setup_litellm_enterprise_pip
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+      - run:
+          name: Run proxy unit tests (part 2 - remaining tests)
+          command: |
+            pwd
+            ls
+            python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part2.xml --durations=10 -n 8 --timeout=300 -vv --log-cli-level=INFO
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_proxy_unit_tests_part2_coverage.xml
+            mv .coverage litellm_proxy_unit_tests_part2_coverage
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_proxy_unit_tests_part2_coverage.xml
+            - litellm_proxy_unit_tests_part2_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
       - image: cimg/python:3.13.1
@@ -1128,59 +1376,88 @@ jobs:
           paths:
             - search_coverage.xml
             - search_coverage
-  litellm_mapped_tests:
+  # Split litellm_mapped_tests into 3 parallel jobs for 3x faster execution
+  litellm_mapped_tests_proxy:
     docker:
       - image: cimg/python:3.11
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-
+    resource_class: xlarge
     steps:
-      - checkout
-      - setup_google_dns
+      - setup_litellm_test_deps
       - run:
-          name: Install Dependencies
+          name: Run proxy tests
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-            pip install "pytest-mock==3.12.0"
-            pip install "pytest==7.3.1"
-            pip install "pytest-retry==1.6.3"
-            pip install "pytest-cov==5.0.0"
-            pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.22.0"
-            pip install "hypercorn==0.17.3"
-            pip install "pydantic==2.10.2"
-            pip install "mcp==1.10.1"
-            pip install "requests-mock>=1.12.1"
-            pip install "responses==0.25.7"
-            pip install "pytest-xdist==3.6.1"
-            pip install "semantic_router==0.1.10"
-            pip install "fastapi-offline==1.7.3"
-      - setup_litellm_enterprise_pip
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run litellm tests
-          command: |
-            pwd
-            ls
-            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
+            python -m pytest tests/test_litellm/proxy --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml litellm_mapped_tests_coverage.xml
-            mv .coverage litellm_mapped_tests_coverage
-
-      # Store test results
+            mv coverage.xml litellm_proxy_tests_coverage.xml
+            mv .coverage litellm_proxy_tests_coverage
       - store_test_results:
           path: test-results
       - persist_to_workspace:
           root: .
           paths:
-            - litellm_mapped_tests_coverage.xml
-            - litellm_mapped_tests_coverage
+            - litellm_proxy_tests_coverage.xml
+            - litellm_proxy_tests_coverage
+  litellm_mapped_tests_llms:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: xlarge
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Run LLM provider tests
+          command: |
+            python -m pytest tests/test_litellm/llms --cov=litellm --cov-report=xml --junitxml=test-results/junit-llms.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_llms_tests_coverage.xml
+            mv .coverage litellm_llms_tests_coverage
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_llms_tests_coverage.xml
+            - litellm_llms_tests_coverage
+  litellm_mapped_tests_core:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: xlarge
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Run core tests
+          command: |
+            python -m pytest tests/test_litellm --ignore=tests/test_litellm/proxy --ignore=tests/test_litellm/llms --cov=litellm --cov-report=xml --junitxml=test-results/junit-core.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_core_tests_coverage.xml
+            mv .coverage litellm_core_tests_coverage
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_core_tests_coverage.xml
+            - litellm_core_tests_coverage
   litellm_mapped_enterprise_tests:
     docker:
       - image: cimg/python:3.11
@@ -1447,7 +1724,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1914,14 +2191,14 @@ jobs:
             sudo usermod -aG docker $USER
             docker version
       - run:
-          name: Install Python 3.9
+          name: Install Python 3.10
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
       - run:
@@ -2695,19 +2972,22 @@ jobs:
             sudo usermod -aG docker $USER
             docker version
       - run:
-          name: Install Python 3.9
+          name: Install Python 3.10
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -2736,6 +3016,8 @@ jobs:
             pip install "langchain_mcp_adapters==0.0.5"
             pip install "langchain_openai==0.2.1"
             pip install "langgraph==0.3.18"
+            pip install "fastuuid==0.13.5"
+            pip install -r requirements.txt
       - run:
           name: Install dockerize
           command: |
@@ -2848,6 +3130,9 @@ jobs:
       - run:
           name: Run tests
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
             pwd
             ls
             python -m pytest -vv tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
@@ -2878,7 +3163,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3300,7 +3585,19 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - litellm_proxy_unit_testing:
+      - litellm_proxy_unit_testing_key_generation:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_proxy_unit_testing_part1:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_proxy_unit_testing_part2:
           filters:
             branches:
               only:
@@ -3444,7 +3741,19 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - litellm_mapped_tests:
+      - litellm_mapped_tests_proxy:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_mapped_tests_llms:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_mapped_tests_core:
           filters:
             branches:
               only:
@@ -3495,7 +3804,9 @@ workflows:
             - llm_responses_api_testing
             - ocr_testing
             - search_testing
-            - litellm_mapped_tests
+            - litellm_mapped_tests_proxy
+            - litellm_mapped_tests_llms
+            - litellm_mapped_tests_core
             - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing
@@ -3506,7 +3817,9 @@ workflows:
             - litellm_router_testing
             - litellm_router_unit_testing
             - caching_unit_tests
-            - litellm_proxy_unit_testing
+            - litellm_proxy_unit_testing_key_generation
+            - litellm_proxy_unit_testing_part1
+            - litellm_proxy_unit_testing_part2
             - litellm_security_tests
             - langfuse_logging_unit_tests
             - local_testing
@@ -3560,7 +3873,9 @@ workflows:
             - llm_responses_api_testing
             - ocr_testing
             - search_testing
-            - litellm_mapped_tests
+            - litellm_mapped_tests_proxy
+            - litellm_mapped_tests_llms
+            - litellm_mapped_tests_core
             - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing
@@ -3576,7 +3891,9 @@ workflows:
             - auth_ui_unit_tests
             - db_migration_disable_update_check
             - e2e_ui_testing
-            - litellm_proxy_unit_testing
+            - litellm_proxy_unit_testing_key_generation
+            - litellm_proxy_unit_testing_part1
+            - litellm_proxy_unit_testing_part2
             - litellm_security_tests
             - installing_litellm_on_python
             - installing_litellm_on_python_3_13

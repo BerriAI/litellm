@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import { updateSSOSettings } from "./networking";
+import * as Networking from "./networking";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
@@ -66,7 +66,7 @@ describe("networking - expired session handling", () => {
     global.fetch = mockFetch as any;
 
     try {
-      await updateSSOSettings("token", { some: "setting" });
+      await Networking.updateSSOSettings("token", { some: "setting" });
     } catch (error) {
       const thrownError = error as any;
       expect(thrownError).toBeInstanceOf(Error);
@@ -76,5 +76,59 @@ describe("networking - expired session handling", () => {
     }
 
     expect(mockFetch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("daily activity helpers", () => {
+  const startTime = new Date("2025-02-12T00:00:00.000Z");
+  const endTime = new Date("2025-02-19T00:00:00.000Z");
+  let currentFetch: typeof global.fetch;
+
+  const setupSuccessfulFetch = () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [] }),
+    } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it("appends tag list when tags argument is provided", async () => {
+    const mockFetch = setupSuccessfulFetch();
+
+    await Networking.tagDailyActivityCall("token", startTime, endTime, 2, ["alpha", "beta"]);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const calledUrl = mockFetch.mock.calls[0][0] as string;
+    const parsed = new URL(calledUrl, "http://example.com");
+
+    expect(parsed.pathname).toBe("/tag/daily/activity");
+    expect(parsed.searchParams.get("tags")).toBe("alpha,beta");
+  });
+
+  it("always includes exclude_team_ids but only adds team_ids when given", async () => {
+    const mockFetchWithoutTeams = setupSuccessfulFetch();
+
+    await Networking.teamDailyActivityCall("token", startTime, endTime, 1, null);
+    const urlWithoutTeams = new URL(mockFetchWithoutTeams.mock.calls[0][0] as string, "http://example.com");
+
+    expect(urlWithoutTeams.searchParams.get("exclude_team_ids")).toBe("litellm-dashboard");
+    expect(urlWithoutTeams.searchParams.has("team_ids")).toBe(false);
+
+    const mockFetchWithTeams = setupSuccessfulFetch();
+    await Networking.teamDailyActivityCall("token", startTime, endTime, 3, ["team-a", "team-b"]);
+    const urlWithTeams = new URL(mockFetchWithTeams.mock.calls[0][0] as string, "http://example.com");
+
+    expect(urlWithTeams.searchParams.get("team_ids")).toBe("team-a,team-b");
+    expect(urlWithTeams.searchParams.get("exclude_team_ids")).toBe("litellm-dashboard");
   });
 });

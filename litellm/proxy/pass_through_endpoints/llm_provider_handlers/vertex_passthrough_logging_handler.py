@@ -1,4 +1,3 @@
-import json
 import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
@@ -17,19 +16,20 @@ from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
 )
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import (
+    Choices,
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    SpecialEnums,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
-    Choices,
 )
-from litellm.types.utils import SpecialEnums
 
 vertex_search_api_config = VertexSearchAPIVectorStoreConfig()
 if TYPE_CHECKING:
-    from ..success_handler import PassThroughEndpointLogging
     from litellm.types.utils import LiteLLMBatch
+
+    from ..success_handler import PassThroughEndpointLogging
 else:
     PassThroughEndpointLogging = Any
     LiteLLMBatch = Any
@@ -489,7 +489,7 @@ class VertexPassthroughLoggingHandler:
         kwargs["model"] = model
 
         # pretty print standard logging object
-        verbose_proxy_logger.debug("kwargs= %s", json.dumps(kwargs, indent=4))
+        verbose_proxy_logger.debug("kwargs= %s", kwargs)
 
         # set litellm_call_id to logging response object
         litellm_model_response.id = logging_obj.litellm_call_id
@@ -513,9 +513,12 @@ class VertexPassthroughLoggingHandler:
         Handle batch prediction jobs passthrough logging.
         Creates a managed object for cost tracking when batch job is successfully created.
         """
-        from litellm.llms.vertex_ai.batches.transformation import VertexAIBatchTransformation
-        from litellm._uuid import uuid
         import base64
+
+        from litellm._uuid import uuid
+        from litellm.llms.vertex_ai.batches.transformation import (
+            VertexAIBatchTransformation,
+        )
 
         try:
             _json_response = httpx_response.json()
@@ -676,8 +679,7 @@ class VertexPassthroughLoggingHandler:
             managed_files_hook = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_hook is not None and hasattr(managed_files_hook, 'store_unified_object_id'):
                 # Create a mock user API key dict for the managed object storage
-                from litellm.proxy._types import UserAPIKeyAuth
-                from litellm.proxy._types import LitellmUserRoles
+                from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
                 user_api_key_dict = UserAPIKeyAuth(
                     user_id=kwargs.get("user_id", "default-user"),
                     api_key="",
@@ -704,7 +706,7 @@ class VertexPassthroughLoggingHandler:
                 # Store the unified object for batch cost tracking
                 import asyncio
                 asyncio.create_task(
-                    managed_files_hook.store_unified_object_id(
+                    managed_files_hook.store_unified_object_id(  # type: ignore
                         unified_object_id=unified_object_id,
                         file_object=batch_object,
                         litellm_parent_otel_span=None,

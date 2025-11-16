@@ -1,12 +1,14 @@
-import unittest
 import asyncio
-from unittest.mock import patch, MagicMock
-from typing import Optional
-import sys
-import os
 import datetime
 import json
+import os
+import sys
+import unittest
+from typing import Optional
+from unittest.mock import MagicMock, patch
+
 import pytest
+
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
@@ -255,6 +257,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
             side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
         ) as mock_add_prompt_params:
             # Create a mock response object with usage information containing None values
             response_obj = MagicMock()
