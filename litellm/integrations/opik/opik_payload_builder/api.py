@@ -78,6 +78,19 @@ def build_opik_payload(
     input_data = standard_logging_object.get("messages", {})
     output_data = standard_logging_object.get("response", {})
 
+    # Handle response_obj - it might be None or missing fields in failure cases
+    if response_obj is None:
+        response_obj = {}
+    elif not isinstance(response_obj, dict):
+        # Convert response_obj to dict if it's not already
+        if hasattr(response_obj, "__dict__"):
+            response_obj = response_obj.__dict__
+        elif hasattr(response_obj, "model_dump"):
+            # Pydantic model
+            response_obj = response_obj.model_dump()
+        else:
+            response_obj = {"object": "unknown"}
+
     # Decide whether to create a new trace or attach to existing
     trace_payload: Optional[types.TracePayload] = None
     if trace_id is None:
@@ -96,7 +109,10 @@ def build_opik_payload(
         )
 
     # Always create a span
-    usage = utils.create_usage_object(response_obj["usage"])
+    # Handle usage - it might not exist in failure cases
+    usage = {}
+    if response_obj.get("usage") is not None:
+        usage = utils.create_usage_object(response_obj["usage"])
     
     # Extract provider and cost
     provider = extractors.normalize_provider_name(kwargs.get("custom_llm_provider"))
