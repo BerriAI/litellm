@@ -1,41 +1,49 @@
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
-from litellm.types.agents import AgentConfig
+from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 
 
 class AgentRegistry:
     def __init__(self):
-        self.agent_list: List[AgentConfig] = []
+        self.agent_list: List[AgentResponse] = []
 
     def reset_agent_list(self):
         self.agent_list = []
 
-    def register_agent(self, agent_config: AgentConfig):
+    def register_agent(self, agent_config: AgentResponse):
         self.agent_list.append(agent_config)
 
     def deregister_agent(self, agent_name: str):
         self.agent_list = [
-            agent for agent in self.agent_list if agent.get("agent_name") != agent_name
+            agent for agent in self.agent_list if agent.agent_name != agent_name
         ]
 
     def get_agent_list(self, agent_names: Optional[List[str]] = None):
         if agent_names is not None:
             return [
-                agent
-                for agent in self.agent_list
-                if agent.get("agent_name") in agent_names
+                agent for agent in self.agent_list if agent.agent_name in agent_names
             ]
         return self.agent_list
 
-    def get_public_agent_list(self):
-        public_agent_list = []
+    def get_public_agent_list(self) -> List[AgentResponse]:
+        public_agent_list: List[AgentResponse] = []
+        if litellm.public_agent_groups is None:
+            return public_agent_list
         for agent in self.agent_list:
-            if agent.get("litellm_params", {}).get("make_public", False) is True:
+            if agent.agent_id in litellm.public_agent_groups:
                 public_agent_list.append(agent)
         return public_agent_list
+
+    def _create_agent_id(self, agent_config: AgentConfig) -> str:
+        return hashlib.sha256(
+            json.dumps(agent_config, sort_keys=True).encode()
+        ).hexdigest()
 
     def load_agents_from_config(self, agent_config: Optional[List[AgentConfig]] = None):
         if agent_config is None:
@@ -50,7 +58,10 @@ class AgentRegistry:
             if not all([agent_name, agent_card_params]):
                 continue
 
-            self.register_agent(agent_config=agent_config_item)
+            # create a stable hash id for config item
+            config_hash = self._create_agent_id(agent_config_item)
+
+            self.register_agent(agent_config=AgentResponse(agent_id=config_hash, **agent_config_item))  # type: ignore
 
     def load_agents_from_db_and_config(
         self,
@@ -64,14 +75,14 @@ class AgentRegistry:
                 if not isinstance(agent_config_item, dict):
                     raise ValueError("agent_config must be a list of dictionaries")
 
-                self.register_agent(agent_config=agent_config_item)
+                self.register_agent(agent_config=AgentResponse(agent_id=self._create_agent_id(agent_config_item), **agent_config_item))  # type: ignore
 
         if db_agents:
             for db_agent in db_agents:
                 if not isinstance(db_agent, dict):
                     raise ValueError("db_agents must be a list of dictionaries")
 
-                self.register_agent(agent_config=AgentConfig(**db_agent))  # type: ignore
+                self.register_agent(agent_config=AgentResponse(**db_agent))  # type: ignore
         return self.agent_list
 
     ###########################################################
@@ -79,7 +90,7 @@ class AgentRegistry:
     ############################################################
     async def add_agent_to_db(
         self, agent: AgentConfig, prisma_client: PrismaClient, created_by: str
-    ) -> Dict[str, Any]:
+    ) -> AgentResponse:
         """
         Add an agent to the database
         """
@@ -119,7 +130,7 @@ class AgentRegistry:
                 }
             )
 
-            return dict(created_agent)
+            return AgentResponse(**created_agent.model_dump())  # type: ignore
         except Exception as e:
             raise Exception(f"Error adding agent to DB: {str(e)}")
 
@@ -137,13 +148,70 @@ class AgentRegistry:
         except Exception as e:
             raise Exception(f"Error deleting agent from DB: {str(e)}")
 
+    async def patch_agent_in_db(
+        self,
+        agent_id: str,
+        agent: PatchAgentRequest,
+        prisma_client: PrismaClient,
+        updated_by: str,
+    ) -> AgentResponse:
+        """
+        Patch an agent in the database.
+
+        Get the existing agent from the database and patch it with the new values.
+
+        Args:
+            agent_id: The ID of the agent to patch
+            agent: The new agent values to patch
+            prisma_client: The Prisma client to use
+            updated_by: The user ID of the user who is patching the agent
+
+        Returns:
+            The patched agent
+        """
+        try:
+
+            existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
+                where={"agent_id": agent_id}
+            )
+            if existing_agent is not None:
+                existing_agent = dict(existing_agent)
+
+            if existing_agent is None:
+                raise Exception(f"Agent with ID {agent_id} not found")
+
+            augment_agent = {**existing_agent, **agent}
+            update_data = {}
+            if augment_agent.get("agent_name"):
+                update_data["agent_name"] = augment_agent.get("agent_name")
+            if augment_agent.get("litellm_params"):
+                update_data["litellm_params"] = safe_dumps(
+                    augment_agent.get("litellm_params")
+                )
+            if augment_agent.get("agent_card_params"):
+                update_data["agent_card_params"] = safe_dumps(
+                    augment_agent.get("agent_card_params")
+                )
+            # Patch agent in DB
+            patched_agent = await prisma_client.db.litellm_agentstable.update(
+                where={"agent_id": agent_id},
+                data={
+                    **update_data,
+                    "updated_by": updated_by,
+                    "updated_at": datetime.now(timezone.utc),
+                },
+            )
+            return AgentResponse(**patched_agent.model_dump())  # type: ignore
+        except Exception as e:
+            raise Exception(f"Error patching agent in DB: {str(e)}")
+
     async def update_agent_in_db(
         self,
         agent_id: str,
         agent: AgentConfig,
         prisma_client: PrismaClient,
         updated_by: str,
-    ) -> Dict[str, Any]:
+    ) -> AgentResponse:
         """
         Update an agent in the database
         """
@@ -182,7 +250,7 @@ class AgentRegistry:
                 },
             )
 
-            return dict(updated_agent)
+            return AgentResponse(**updated_agent.model_dump())  # type: ignore
         except Exception as e:
             raise Exception(f"Error updating agent in DB: {str(e)}")
 
@@ -209,27 +277,27 @@ class AgentRegistry:
     def get_agent_by_id(
         self,
         agent_id: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[AgentResponse]:
         """
         Get an agent by its ID from the database
         """
         try:
             for agent in self.agent_list:
-                if agent.get("agent_id") == agent_id:
-                    return dict(agent)
+                if agent.agent_id == agent_id:
+                    return agent
 
             return None
         except Exception as e:
             raise Exception(f"Error getting agent from DB: {str(e)}")
 
-    def get_agent_by_name(self, agent_name: str) -> Optional[Dict[str, Any]]:
+    def get_agent_by_name(self, agent_name: str) -> Optional[AgentResponse]:
         """
         Get an agent by its name from the database
         """
         try:
             for agent in self.agent_list:
-                if agent.get("agent_name") == agent_name:
-                    return dict(agent)
+                if agent.agent_name == agent_name:
+                    return agent
 
             return None
         except Exception as e:

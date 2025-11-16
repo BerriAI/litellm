@@ -12,6 +12,7 @@ import {
   KeyOutlined,
   LineChartOutlined,
   PlayCircleOutlined,
+  RobotOutlined,
   SafetyOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -100,7 +101,7 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
     {
       key: "16",
       page: "model-hub-table",
-      label: "Model Hub",
+      label: "AI Hub",
       icon: <AppstoreOutlined style={{ fontSize: "18px" }} />,
     },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: "18px" }} /> },
@@ -111,13 +112,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       icon: <SafetyOutlined style={{ fontSize: "18px" }} />,
       roles: all_admin_roles,
     },
+    { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: "18px" }} /> },
     {
       key: "26",
       page: "tools",
       label: "Tools",
       icon: <ToolOutlined style={{ fontSize: "18px" }} />,
       children: [
-        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: "18px" }} /> },
         {
           key: "28",
           page: "search-tools",
@@ -145,6 +146,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
           label: "Caching",
           icon: <DatabaseOutlined style={{ fontSize: "18px" }} />,
           roles: all_admin_roles,
+        },
+        {
+          "key": "29",
+          "page": "agents",
+          "label": "Agents",
+          "icon": <RobotOutlined style={{ fontSize: "18px" }} />,
+          "roles": rolesWithWriteAccess,
         },
         {
           key: "25",

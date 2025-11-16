@@ -158,14 +158,20 @@ class AgentCard(TypedDict, total=False):
     signatures: Optional[List[AgentCardSignature]]
 
 
-class AgentLitellmParams(TypedDict):
-    make_public: bool
+class AugmentedAgentCard(AgentCard):
+    is_public: bool
 
 
 class AgentConfig(TypedDict, total=False):
     agent_name: Required[str]
     agent_card_params: Required[AgentCard]
-    litellm_params: AgentLitellmParams
+    litellm_params: Dict[str, Any]  # allow for any future litellm params
+
+
+class PatchAgentRequest(TypedDict, total=False):
+    agent_name: str
+    agent_card_params: AgentCard
+    litellm_params: Dict[str, Any]
 
 
 # Request/Response models for CRUD endpoints
@@ -184,3 +190,13 @@ class AgentResponse(BaseModel):
 
 class ListAgentsResponse(BaseModel):
     agents: List[AgentResponse]
+
+
+class AgentMakePublicResponse(BaseModel):
+    message: str
+    public_agent_groups: List[str]
+    updated_by: str
+
+
+class MakeAgentsPublicRequest(BaseModel):
+    agent_ids: List[str]

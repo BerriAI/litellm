@@ -3,17 +3,17 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints.provider_create_metadata import (
     get_provider_create_metadata,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.agents import AgentCard
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
 from litellm.types.proxy.public_endpoints.public_endpoints import (
-    PublicModelHubInfo,
     ProviderCreateInfo,
+    PublicModelHubInfo,
 )
 from litellm.types.utils import LlmProviders
 
@@ -53,10 +53,19 @@ async def public_model_hub():
     response_model=List[AgentCard],
 )
 async def get_agents():
+    import litellm
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
     agents = global_agent_registry.get_public_agent_list()
-    return [agent.get("agent_card_params") for agent in agents]
+
+    if litellm.public_agent_groups is None:
+        return []
+    agent_card_list = [
+        agent.agent_card_params
+        for agent in agents
+        if agent.agent_id in litellm.public_agent_groups
+    ]
+    return agent_card_list
 
 
 @router.get(
