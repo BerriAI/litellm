@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     List,
     Literal,
     Optional,
@@ -5231,6 +5232,14 @@ async def moderations(
             )
 
 
+async def _audio_speech_chunk_generator(
+    _response: HttpxBinaryResponseContent,
+) -> AsyncGenerator[bytes, None]:
+    _generator = await _response.aiter_bytes(chunk_size=4096)
+    async for chunk in _generator:
+        yield chunk
+
+
 @router.post(
     "/v1/audio/speech",
     dependencies=[Depends(user_api_key_auth)],
@@ -5303,12 +5312,6 @@ async def audio_speech(
         response_cost = hidden_params.get("response_cost", None) or ""
         litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
 
-        # Printing each chunk size
-        async def generate(_response: HttpxBinaryResponseContent):
-            _generator = await _response.aiter_bytes(chunk_size=4096)
-            async for chunk in _generator:
-                yield chunk
-
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             model_id=model_id,
@@ -5337,7 +5340,9 @@ async def audio_speech(
             media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
 
         return StreamingResponse(
-            generate(response), media_type=media_type, headers=custom_headers  # type: ignore
+            _audio_speech_chunk_generator(response), # type: ignore[arg-type]
+            media_type=media_type,
+            headers=custom_headers,  # type: ignore
         )
 
     except Exception as e:
