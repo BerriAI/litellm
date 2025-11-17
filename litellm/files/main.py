@@ -566,7 +566,7 @@ def file_delete(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'file_delete'. Only 'openai' and 'azure' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
@@ -574,7 +574,7 @@ def file_delete(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="delete_file", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
             )
         return cast(FileDeleted, response)

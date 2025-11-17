@@ -453,3 +453,207 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
             await asyncio.gather(*tasks, return_exceptions=True)
             for task in tasks:
                 assert task.exception() is None, f"Error: {task.exception()}"
+
+
+@pytest.mark.asyncio
+async def test_afile_delete_with_unified_file_id_and_custom_llm_provider():
+    """
+    Test that afile_delete correctly extracts custom_llm_provider from deployment
+    when deleting a unified file ID. This tests the fix for the issue where
+    custom_llm_provider was None causing deletion to fail.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import OpenAIFileObject
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    # Create a mock unified file ID (base64 encoded)
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
+    
+    # Mock prisma client
+    prisma_client = AsyncMock()
+    mock_file_entry = MagicMock()
+    mock_file_entry.file_object = {
+        "id": unified_file_id,
+        "object": "file",
+        "purpose": "assistants",
+        "filename": "test.pdf",
+        "bytes": 1024,
+        "created_at": 1234567890,
+        "status": "uploaded"
+    }
+    mock_file_entry.model_mappings = {
+        "e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2": "file-ECBPW7ML9g7XHdwGgUPZaM"
+    }
+    prisma_client.db.litellm_managedfiletable.find_first.return_value = mock_file_entry
+    prisma_client.db.litellm_managedfiletable.delete.return_value = mock_file_entry
+    
+    # Mock internal usage cache
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache.return_value = None  # Not in cache, will check DB
+    mock_cache.async_set_cache.return_value = None
+    
+    # Create managed files instance
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        mock_cache, prisma_client=prisma_client
+    )
+    
+    # Create a mock router with a deployment
+    mock_router = MagicMock()
+    mock_deployment = Deployment(
+        model_name="gpt-4o",
+        litellm_params=LiteLLM_Params(
+            model="gpt-4o",
+            custom_llm_provider=None,  # This is the issue - custom_llm_provider is None
+            api_base="https://api.openai.com/v1",
+            api_key="test-key"
+        ),
+        model_info=ModelInfo(id="e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2")
+    )
+    mock_router.get_deployment.return_value = mock_deployment
+    
+    # Mock the router's afile_delete method
+    # The router's afile_delete returns a FileDeleted object, but managed_files
+    # returns the stored file_object from the database
+    mock_router.afile_delete = AsyncMock(return_value=None)  # Router deletion succeeds
+    
+    # Mock get_model_file_id_mapping to return the mapping
+    async def mock_get_model_file_id_mapping(file_ids, span):
+        return {
+            unified_file_id: {
+                "e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2": "file-ECBPW7ML9g7XHdwGgUPZaM"
+            }
+        }
+    
+    proxy_managed_files.get_model_file_id_mapping = mock_get_model_file_id_mapping
+    
+    # Test deletion
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user",
+        parent_otel_span=MagicMock()
+    )
+    
+    result = await proxy_managed_files.afile_delete(
+        file_id=unified_file_id,
+        litellm_parent_otel_span=MagicMock(),
+        llm_router=mock_router,
+        **{}
+    )
+    
+    # Verify get_deployment was called to look up the deployment
+    mock_router.get_deployment.assert_called_once_with(
+        model_id="e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2"
+    )
+    
+    # Verify the router was called with the correct custom_llm_provider
+    mock_router.afile_delete.assert_called_once()
+    call_kwargs = mock_router.afile_delete.call_args[1]
+    
+    # Verify custom_llm_provider was extracted and passed (should be "openai" extracted from model name)
+    assert "custom_llm_provider" in call_kwargs
+    assert call_kwargs["custom_llm_provider"] == "openai"
+    assert call_kwargs["model"] == "e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2"
+    assert call_kwargs["file_id"] == "file-ECBPW7ML9g7XHdwGgUPZaM"
+    
+    # Verify the file was deleted from the database
+    prisma_client.db.litellm_managedfiletable.delete.assert_called_once()
+    
+    # Verify result - delete_unified_file_id returns the file_object from the database
+    assert result is not None
+    assert result["id"] == unified_file_id
+    assert result["object"] == "file"
+    assert result["purpose"] == "assistants"
+
+
+@pytest.mark.asyncio
+async def test_afile_delete_with_explicit_custom_llm_provider():
+    """
+    Test that afile_delete correctly uses custom_llm_provider when it's explicitly
+    set in the deployment's litellm_params.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    # Create a mock unified file ID (base64 encoded)
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
+    
+    # Mock prisma client
+    prisma_client = AsyncMock()
+    mock_file_entry = MagicMock()
+    mock_file_entry.file_object = {
+        "id": unified_file_id,
+        "object": "file",
+        "purpose": "assistants",
+        "filename": "test.pdf",
+        "bytes": 1024,
+        "created_at": 1234567890,
+        "status": "uploaded"
+    }
+    mock_file_entry.model_mappings = {
+        "e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2": "file-ECBPW7ML9g7XHdwGgUPZaM"
+    }
+    prisma_client.db.litellm_managedfiletable.find_first.return_value = mock_file_entry
+    prisma_client.db.litellm_managedfiletable.delete.return_value = mock_file_entry
+    
+    # Mock internal usage cache
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache.return_value = None
+    mock_cache.async_set_cache.return_value = None
+    
+    # Create managed files instance
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        mock_cache, prisma_client=prisma_client
+    )
+    
+    # Create a mock router with a deployment that has explicit custom_llm_provider
+    mock_router = MagicMock()
+    mock_deployment = Deployment(
+        model_name="gpt-4o",
+        litellm_params=LiteLLM_Params(
+            model="gpt-4o",
+            custom_llm_provider="azure",  # Explicitly set
+            api_base="https://azure.openai.com/v1",
+            api_key="test-key"
+        ),
+        model_info=ModelInfo(id="e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2")
+    )
+    mock_router.get_deployment.return_value = mock_deployment
+    mock_router.afile_delete = AsyncMock(return_value=None)
+    
+    # Mock get_model_file_id_mapping
+    async def mock_get_model_file_id_mapping(file_ids, span):
+        return {
+            unified_file_id: {
+                "e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2": "file-ECBPW7ML9g7XHdwGgUPZaM"
+            }
+        }
+    
+    proxy_managed_files.get_model_file_id_mapping = mock_get_model_file_id_mapping
+    
+    # Test deletion
+    result = await proxy_managed_files.afile_delete(
+        file_id=unified_file_id,
+        litellm_parent_otel_span=MagicMock(),
+        llm_router=mock_router,
+        **{}
+    )
+    
+    # Verify get_deployment was called
+    mock_router.get_deployment.assert_called_once_with(
+        model_id="e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2"
+    )
+    
+    # Verify the router was called with the explicit custom_llm_provider
+    mock_router.afile_delete.assert_called_once()
+    call_kwargs = mock_router.afile_delete.call_args[1]
+    
+    # Verify custom_llm_provider was taken from deployment (should be "azure")
+    assert "custom_llm_provider" in call_kwargs
+    assert call_kwargs["custom_llm_provider"] == "azure"
+    assert call_kwargs["model"] == "e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2"
+    assert call_kwargs["file_id"] == "file-ECBPW7ML9g7XHdwGgUPZaM"
+    
+    # Verify the file was deleted from the database
+    prisma_client.db.litellm_managedfiletable.delete.assert_called_once()
+    
+    # Verify result
+    assert result is not None
+    assert result["id"] == unified_file_id

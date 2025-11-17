@@ -35,6 +35,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
+from litellm.types.router import Deployment
 from litellm.types.utils import (
     CallTypesLiteral,
     LiteLLMBatch,
@@ -640,6 +641,38 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     def get_output_file_id_from_unified_file_id(self, file_id: str) -> str:
         return file_id.split("llm_output_file_id,")[1].split(";")[0]
 
+    def _get_custom_llm_provider_from_deployment(
+        self, deployment: Deployment
+    ) -> str:
+        """
+        Get custom_llm_provider from deployment's litellm_params.
+        If not set, extract it from the model name.
+        
+        Args:
+            deployment: The deployment object
+            
+        Returns:
+            The custom_llm_provider string (defaults to "openai" if extraction fails)
+        """
+        # Get custom_llm_provider from deployment's litellm_params
+        custom_llm_provider = deployment.litellm_params.custom_llm_provider
+        
+        # If not set, extract from model name
+        if custom_llm_provider is None:
+            from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+            try:
+                _, extracted_provider, _, _ = get_llm_provider(
+                    model=deployment.litellm_params.model,
+                    custom_llm_provider=None,
+                    api_base=deployment.litellm_params.api_base,
+                    api_key=deployment.litellm_params.api_key,
+                )
+                custom_llm_provider = extracted_provider or "openai"
+            except Exception:
+                custom_llm_provider = "openai"
+        
+        return custom_llm_provider
+
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> Any:
@@ -764,22 +797,32 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Router,
         **data: Dict,
     ) -> OpenAIFileObject:
-        file_id = convert_b64_uid_to_unified_uid(file_id)
+        # Keep the original base64-encoded file_id for database/cache lookups
+        # The file is stored with the base64-encoded ID, not the decoded one
+        original_file_id = file_id
         model_file_id_mapping = await self.get_model_file_id_mapping(
-            [file_id], litellm_parent_otel_span
+            [original_file_id], litellm_parent_otel_span
         )
-        specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
+        specific_model_file_id_mapping = model_file_id_mapping.get(original_file_id)
         if specific_model_file_id_mapping:
-            for model_id, file_id in specific_model_file_id_mapping.items():
-                await llm_router.afile_delete(model=model_id, file_id=file_id, **data)  # type: ignore
+            for model_id, model_file_id in specific_model_file_id_mapping.items():
+                # Look up the deployment to get custom_llm_provider
+                deployment = llm_router.get_deployment(model_id=model_id)
+                if deployment is not None:
+                    custom_llm_provider = self._get_custom_llm_provider_from_deployment(deployment)
+                    # Explicitly pass custom_llm_provider to ensure it's set
+                    data_with_provider = {**data, "custom_llm_provider": custom_llm_provider}
+                else:
+                    data_with_provider = data
+                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data_with_provider)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
-            file_id, litellm_parent_otel_span
+            original_file_id, litellm_parent_otel_span
         )
         if stored_file_object:
             return stored_file_object
         else:
-            raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+            raise Exception(f"LiteLLM Managed File object with id={original_file_id} not found")
 
     async def afile_content(
         self,
