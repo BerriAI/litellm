@@ -2657,17 +2657,22 @@ async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
     endTime = endTime or datetime.now()
 
     sql_query = """
-SELECT end_user, COUNT(*) AS total_count, SUM(spend) AS total_spend
-FROM "LiteLLM_SpendLogs"
-WHERE "startTime" >= $1::timestamp
-  AND "startTime" < $2::timestamp
+SELECT
+  sl.end_user,
+  eu.alias,
+  COUNT(*) AS total_count,
+  SUM(sl.spend) AS total_spend
+FROM "LiteLLM_SpendLogs" sl
+LEFT JOIN "LiteLLM_EndUserTable" eu ON sl.end_user = eu.user_id
+WHERE sl."startTime" >= $1::timestamp
+  AND sl."startTime" < $2::timestamp
   AND (
     CASE
       WHEN $3::TEXT IS NULL THEN TRUE
-      ELSE api_key = $3
+      ELSE sl.api_key = $3
     END
   )
-GROUP BY end_user
+GROUP BY sl.end_user, eu.alias
 ORDER BY total_spend DESC
 LIMIT 100
     """

@@ -843,6 +843,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                 <TableHead>
                   <TableRow>
                     <TableHeaderCell>Customer</TableHeaderCell>
+                    <TableHeaderCell>Alias</TableHeaderCell>
                     <TableHeaderCell>Spend</TableHeaderCell>
                     <TableHeaderCell>Total Events</TableHeaderCell>
                   </TableRow>
@@ -852,6 +853,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                   {topUsers?.map((user: any, index: number) => (
                     <TableRow key={index}>
                       <TableCell>{user.end_user}</TableCell>
+                      <TableCell>{user.alias || "-"}</TableCell>
                       <TableCell>{formatNumberWithCommas(user.total_spend, 2)}</TableCell>
                       <TableCell>{user.total_count}</TableCell>
                     </TableRow>

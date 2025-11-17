@@ -1834,3 +1834,253 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
     assert "spend" in data[0]
     assert "users" in data[0]
     assert "models" in data[0]
+
+
+@pytest.mark.asyncio
+async def test_global_spend_end_users_with_alias(client, monkeypatch):
+    """Test /global/spend/end_users endpoint returns alias field"""
+    from datetime import datetime, timedelta, timezone
+
+    # Mock response from database query
+    mock_response = [
+        {
+            "end_user": "user1@example.com",
+            "alias": "User One",
+            "total_count": 25,
+            "total_spend": 15.50,
+        },
+        {
+            "end_user": "user2@example.com",
+            "alias": "User Two",
+            "total_count": 10,
+            "total_spend": 8.25,
+        },
+    ]
+
+    class MockDB:
+        async def query_raw(self, query, *args):
+            return mock_response
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    # Set up test dates
+    start_time = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    end_time = datetime.now(timezone.utc).isoformat()
+
+    # Make request
+    response = client.post(
+        "/global/spend/end_users",
+        json={
+            "startTime": start_time,
+            "endTime": end_time,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    # Assert response
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+
+    # Verify alias field is present
+    assert "alias" in data[0]
+    assert data[0]["alias"] == "User One"
+    assert data[0]["end_user"] == "user1@example.com"
+    assert data[0]["total_count"] == 25
+    assert data[0]["total_spend"] == 15.50
+
+    assert data[1]["alias"] == "User Two"
+    assert data[1]["end_user"] == "user2@example.com"
+
+
+@pytest.mark.asyncio
+async def test_global_spend_end_users_without_alias(client, monkeypatch):
+    """Test /global/spend/end_users endpoint when some users don't have aliases (LEFT JOIN scenario)"""
+    from datetime import datetime, timedelta, timezone
+
+    # Mock response - some users have aliases, some don't
+    mock_response = [
+        {
+            "end_user": "user1@example.com",
+            "alias": "User One",
+            "total_count": 25,
+            "total_spend": 15.50,
+        },
+        {
+            "end_user": "user2@example.com",
+            "alias": None,  # No alias set
+            "total_count": 10,
+            "total_spend": 8.25,
+        },
+    ]
+
+    class MockDB:
+        async def query_raw(self, query, *args):
+            return mock_response
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    # Set up test dates
+    start_time = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    end_time = datetime.now(timezone.utc).isoformat()
+
+    # Make request
+    response = client.post(
+        "/global/spend/end_users",
+        json={
+            "startTime": start_time,
+            "endTime": end_time,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    # Assert response
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+
+    # Verify first user has alias
+    assert data[0]["alias"] == "User One"
+    assert data[0]["end_user"] == "user1@example.com"
+
+    # Verify second user has null alias (LEFT JOIN returned null)
+    assert data[1]["alias"] is None
+    assert data[1]["end_user"] == "user2@example.com"
+
+
+@pytest.mark.asyncio
+async def test_global_spend_end_users_with_api_key_filter(client, monkeypatch):
+    """Test /global/spend/end_users endpoint with api_key filter"""
+    from datetime import datetime, timedelta, timezone
+
+    # Mock response for specific api_key
+    mock_response = [
+        {
+            "end_user": "user1@example.com",
+            "alias": "User One",
+            "total_count": 15,
+            "total_spend": 10.50,
+        },
+    ]
+
+    called_with_api_key = None
+
+    class MockDB:
+        async def query_raw(self, query, *args):
+            nonlocal called_with_api_key
+            # Capture the api_key argument (third parameter)
+            if len(args) >= 3:
+                called_with_api_key = args[2]
+            return mock_response
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    # Set up test dates
+    start_time = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    end_time = datetime.now(timezone.utc).isoformat()
+    test_api_key = "sk-test-key-123"
+
+    # Make request with api_key filter
+    response = client.post(
+        "/global/spend/end_users",
+        json={
+            "startTime": start_time,
+            "endTime": end_time,
+            "api_key": test_api_key,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    # Assert response
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) == 1
+    assert data[0]["alias"] == "User One"
+
+    # Verify api_key was passed to query
+    assert called_with_api_key == test_api_key
+
+
+@pytest.mark.asyncio
+async def test_global_spend_end_users_no_database(client, monkeypatch):
+    """Test /global/spend/end_users endpoint when database is not connected"""
+    from datetime import datetime, timedelta, timezone
+
+    # Mock prisma_client as None
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    # Set up test dates
+    start_time = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    end_time = datetime.now(timezone.utc).isoformat()
+
+    # Make request
+    response = client.post(
+        "/global/spend/end_users",
+        json={
+            "startTime": start_time,
+            "endTime": end_time,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    # Assert error response
+    assert response.status_code == 500
+    data = response.json()
+    # The error is nested in a 'detail' object
+    assert "detail" in data
+    assert "error" in data["detail"]
+
+
+@pytest.mark.asyncio
+async def test_global_spend_end_users_default_dates(client, monkeypatch):
+    """Test /global/spend/end_users endpoint with default date ranges (last 30 days)"""
+
+    # Mock response
+    mock_response = [
+        {
+            "end_user": "user1@example.com",
+            "alias": "User One",
+            "total_count": 25,
+            "total_spend": 15.50,
+        },
+    ]
+
+    class MockDB:
+        async def query_raw(self, query, *args):
+            return mock_response
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    # Make request without explicit dates (should use defaults)
+    response = client.post(
+        "/global/spend/end_users",
+        json={},
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    # Assert response
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) == 1
+    assert "alias" in data[0]
+    assert data[0]["alias"] == "User One"
