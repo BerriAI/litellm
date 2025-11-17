@@ -811,9 +811,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if deployment is not None:
                     custom_llm_provider = self._get_custom_llm_provider_from_deployment(deployment)
                     # Explicitly pass custom_llm_provider to ensure it's set
-                    data_with_provider = {**data, "custom_llm_provider": custom_llm_provider}
+                    data_with_provider: Dict[str, Any] = {**data, "custom_llm_provider": custom_llm_provider}
                 else:
-                    data_with_provider = data
+                    data_with_provider = dict(data)
                 await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data_with_provider)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
