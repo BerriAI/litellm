@@ -1025,15 +1025,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         _tools: List[ChatCompletionToolCallChunk] = []
         for part in parts:
             if "functionCall" in part:
-                _function_chunk = ChatCompletionToolCallFunctionChunk(
-                    name=part["functionCall"]["name"],
-                    arguments=json.dumps(part["functionCall"]["args"], ensure_ascii=False),
-                )
+                _function_chunk: ChatCompletionToolCallFunctionChunk = {
+                    "name": part["functionCall"]["name"],
+                    "arguments": json.dumps(part["functionCall"]["args"], ensure_ascii=False),
+                }
                 # Extract thought signature if present
                 thought_signature = part.get("thoughtSignature")
                 
                 if is_function_call is True:
-                    function_dict: Dict[str, Any] = dict(_function_chunk) if isinstance(_function_chunk, dict) else _function_chunk.model_dump() if hasattr(_function_chunk, "model_dump") else dict(_function_chunk)
+                    function_dict: Dict[str, Any] = dict(_function_chunk)
                     if thought_signature:
                         if "provider_specific_fields" not in function_dict:
                             function_dict["provider_specific_fields"] = {}
