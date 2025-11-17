@@ -45,11 +45,13 @@
     ]
   },
   "engines": {
-    "node": ">=16.14"
+    "node": ">=16.14",
+    "npm": ">=8.3.0"
   },
   "overrides": {
     "webpack-dev-server": ">=5.2.1",
     "form-data": ">=4.0.4",
-    "mermaid": ">=11.10.0"
+    "mermaid": ">=11.10.0",
+    "js-yaml": ">=4.1.1"
   }
 }
