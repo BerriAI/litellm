@@ -1229,7 +1229,7 @@ def convert_to_gemini_tool_call_invoke(
                         part_dict: VertexPartType = {
                             "function_call": gemini_function_call
                         }
-                        thought_signature = _get_thought_signature_from_tool(tool)
+                        thought_signature = _get_thought_signature_from_tool(dict(tool))
                         if thought_signature:
                             part_dict["thoughtSignature"] = thought_signature
                         
@@ -1245,7 +1245,7 @@ def convert_to_gemini_tool_call_invoke(
                 function_call_params=function_call
             )
             if gemini_function_call is not None:
-                part_dict: VertexPartType = {
+                part_dict_function: VertexPartType = {
                     "function_call": gemini_function_call
                 }
                 
@@ -1254,9 +1254,9 @@ def convert_to_gemini_tool_call_invoke(
                 if isinstance(provider_fields, dict):
                     thought_signature = provider_fields.get("thought_signature")
                     if thought_signature:
-                        part_dict["thoughtSignature"] = thought_signature
+                        part_dict_function["thoughtSignature"] = thought_signature
                 
-                _parts_list.append(part_dict)
+                _parts_list.append(part_dict_function)
             else:  # don't silently drop params. Make it clear to user what's happening.
                 raise Exception(
                     "function_call missing. Received tool call with 'type': 'function'. No function call in argument - {}".format(

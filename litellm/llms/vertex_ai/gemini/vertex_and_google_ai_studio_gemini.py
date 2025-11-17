@@ -1033,7 +1033,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 thought_signature = part.get("thoughtSignature")
                 
                 if is_function_call is True:
-                    function_dict = dict(_function_chunk) if isinstance(_function_chunk, dict) else _function_chunk.model_dump() if hasattr(_function_chunk, "model_dump") else dict(_function_chunk)
+                    function_dict: Dict[str, Any] = dict(_function_chunk) if isinstance(_function_chunk, dict) else _function_chunk.model_dump() if hasattr(_function_chunk, "model_dump") else dict(_function_chunk)
                     if thought_signature:
                         if "provider_specific_fields" not in function_dict:
                             function_dict["provider_specific_fields"] = {}
