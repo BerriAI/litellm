@@ -1760,7 +1760,7 @@ def test_anthropic_strict_not_present():
         drop_params=False,
     )
 
-    # Verify the strict parameter is in the mapped tool's input_schema
+    # Verify the strict parameter does not exist if it is not passed in
     assert "tools" in mapped_params
     assert len(mapped_params["tools"]) == 1
     tool = mapped_params["tools"][0]
