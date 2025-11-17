@@ -449,3 +449,52 @@ class TestVertexAIRerankTransform:
             "X-Goog-User-Project": "test-project-123"
         }
         assert headers == expected_headers
+
+    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
+    def test_validate_environment_preserves_optional_params_for_get_complete_url(
+        self,
+        mock_ensure_access_token,
+    ):
+        """
+        Validate that calling validate_environment does not remove vertex-specific
+        parameters needed later by get_complete_url.
+        """
+        mock_ensure_access_token.return_value = ("test-access-token", "project-from-token")
+
+        optional_params = {
+            "vertex_credentials": "path/to/credentials.json",
+            "vertex_project": "custom-project-id",
+        }
+
+        # Call validate_environment first – this previously popped the values in-place
+        self.config.validate_environment(
+            headers={},
+            model=self.model,
+            api_key=None,
+            optional_params=optional_params,
+        )
+
+        # Ensure the original optional_params dict still retains the vertex keys
+        assert optional_params["vertex_credentials"] == "path/to/credentials.json"
+        assert optional_params["vertex_project"] == "custom-project-id"
+
+        # get_complete_url should still be able to access the vertex params
+        with patch('litellm.llms.vertex_ai.rerank.transformation.get_secret_str', return_value=None):
+            url = self.config.get_complete_url(
+                api_base=None,
+                model=self.model,
+                optional_params=optional_params,
+            )
+
+        expected_url = (
+            "https://discoveryengine.googleapis.com/v1/projects/project-from-token/"
+            "locations/global/rankingConfigs/default_ranking_config:rank"
+        )
+        assert url == expected_url
+
+        # _ensure_access_token should have been called twice with the same credentials
+        assert mock_ensure_access_token.call_count == 2
+        first_call = mock_ensure_access_token.call_args_list[0]
+        second_call = mock_ensure_access_token.call_args_list[1]
+        assert first_call.kwargs["credentials"] == "path/to/credentials.json"
+        assert second_call.kwargs["credentials"] == "path/to/credentials.json"

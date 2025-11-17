@@ -237,11 +237,8 @@ mcp_servers:
   github_mcp:
     url: "https://api.githubcopilot.com/mcp"
     auth_type: oauth2
-    authorization_url: https://github.com/login/oauth/authorize
-    token_url: https://github.com/login/oauth/access_token
     client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
     client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
-    scopes: ["public_repo", "user:email"]
 ```
 
 </TabItem>
@@ -255,9 +252,6 @@ atlassian_mcp:
   url: "https://mcp.atlassian.com/v1/sse"
   transport: "sse"
   auth_type: oauth2
-  authorization_url: https://mcp.atlassian.com/v1/authorize
-  token_url: https://cf.mcp.atlassian.com/v1/token
-  registration_url: https://cf.mcp.atlassian.com/v1/register
 ```
 
 </TabItem>

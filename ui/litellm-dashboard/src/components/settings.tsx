@@ -1,38 +1,37 @@
-import React, { useState, useEffect } from "react";
 import {
-  Card,
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableCell,
-  TableBody,
-  Text,
-  Grid,
   Button,
-  TextInput,
+  Card,
+  Grid,
+  SelectItem,
   Switch,
+  Tab,
+  TabGroup,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+  TabList,
   TabPanel,
   TabPanels,
-  TabGroup,
-  TabList,
-  Tab,
-  SelectItem,
-  Icon,
+  Text,
+  TextInput,
 } from "@tremor/react";
+import React, { useEffect, useState } from "react";
 
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
-
-import { Modal, Typography, Form, Input, Select, Button as Button2 } from "antd";
-import NotificationsManager from "./molecules/notifications_manager";
+import { Button as Button2, Form, Input, Modal, Select, Typography } from "antd";
 import EmailSettings from "./email_settings";
+import NotificationsManager from "./molecules/notifications_manager";
 
 const { Title, Paragraph } = Typography;
 
-import { getCallbacksCall, setCallbacksCall, serviceHealthCheck, deleteCallback } from "./networking";
-import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
+import AlertingSettings from "./alerting/alerting_settings";
 import { CALLBACK_CONFIGS, getCallbackById } from "./callback_info_helpers";
+import { deleteCallback, getCallbacksCall, serviceHealthCheck, setCallbacksCall } from "./networking";
+import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
+import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
   accessToken: string | null;
@@ -47,19 +46,6 @@ interface genericCallbackParams {
   litellm_callback_params: string[] | null; // known required params for this callback
 }
 
-interface AlertingVariables {
-  SLACK_WEBHOOK_URL: string | null;
-  LANGFUSE_PUBLIC_KEY: string | null;
-  LANGFUSE_SECRET_KEY: string | null;
-  LANGFUSE_HOST: string | null;
-  OPENMETER_API_KEY: string | null;
-}
-
-interface AlertingObject {
-  name: string;
-  variables: AlertingVariables;
-}
-
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -72,7 +58,16 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
 
   const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
-  const [allCallbacks, setAllCallbacks] = useState<genericCallbackParams[]>([]);
+  const [allCallbacks, setAllCallbacks] = useState<
+    Record<
+      string,
+      {
+        litellm_callback_name: string;
+        litellm_callback_params: string[];
+        ui_callback_name: string;
+      }
+    >
+  >({});
 
   const [selectedCallbackParams, setSelectedCallbackParams] = useState<string[]>([]);
 
@@ -410,64 +405,24 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           </TabList>
           <TabPanels>
             <TabPanel>
-              <Title level={4}>Active Logging Callbacks</Title>
-
-              <Grid numItems={2}>
-                <Card className="max-h-[50vh]">
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableHeaderCell>Callback Name</TableHeaderCell>
-                        {/* <TableHeaderCell>Callback Env Vars</TableHeaderCell> */}
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {callbacks.map((callback, index) => (
-                        <TableRow key={index} className="flex justify-between">
-                          <TableCell>
-                            <Text>{callback.name}</Text>
-                          </TableCell>
-                          <TableCell>
-                            <Grid numItems={2} className="flex justify-between">
-                              <Icon
-                                icon={PencilAltIcon}
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedEditCallback(callback);
-                                  setShowEditCallback(true);
-                                }}
-                              />
-                              <Icon
-                                icon={TrashIcon}
-                                size="sm"
-                                onClick={() => handleDeleteCallback(callback.name)}
-                                className="text-red-500 hover:text-red-700 cursor-pointer"
-                              />
-                              <Button
-                                onClick={async () => {
-                                  try {
-                                    await serviceHealthCheck(accessToken, callback.name);
-                                    NotificationsManager.success("Health check triggered");
-                                  } catch (error) {
-                                    NotificationsManager.fromBackend(parseErrorMessage(error));
-                                  }
-                                }}
-                                className="ml-2"
-                                variant="secondary"
-                              >
-                                Test Callback
-                              </Button>
-                            </Grid>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Card>
-              </Grid>
-              <Button className="mt-2" onClick={() => setShowAddCallbacksModal(true)}>
-                Add Callback
-              </Button>
+              <LoggingCallbacksTable
+                callbacks={callbacks}
+                availableCallbacks={allCallbacks}
+                onAdd={() => setShowAddCallbacksModal(true)}
+                onEdit={(cb) => {
+                  setSelectedEditCallback(cb);
+                  setShowEditCallback(true);
+                }}
+                onDelete={(cb) => handleDeleteCallback(cb.name)}
+                onTest={async (cb) => {
+                  try {
+                    await serviceHealthCheck(accessToken, cb.name);
+                    NotificationsManager.success("Health check triggered");
+                  } catch (error) {
+                    NotificationsManager.fromBackend(parseErrorMessage(error));
+                  }
+                }}
+              />
             </TabPanel>
             <TabPanel>
               <Card>
@@ -565,7 +520,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
       <Modal
         title="Add Logging Callback"
-        visible={showAddCallbacksModal}
+        open={showAddCallbacksModal}
         width={800}
         onCancel={() => {
           setShowAddCallbacksModal(false);
@@ -682,7 +637,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           )}
 
           <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
-            <Button
+            <Button2
               onClick={() => {
                 setShowAddCallbacksModal(false);
                 setSelectedCallback(null);
@@ -691,7 +646,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               }}
             >
               Cancel
-            </Button>
+            </Button2>
             <Button2 htmlType="submit">Add Callback</Button2>
           </div>
         </Form>
