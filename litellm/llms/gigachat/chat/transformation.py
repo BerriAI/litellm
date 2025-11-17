@@ -197,6 +197,15 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
+        """
+        Build complete URL for chat/completions endpoint.
+
+        `api_base` is Optional in the public interface, but this implementation
+        requires a concrete string URL. Raise early if it's missing.
+        """
+        if api_base is None:
+            raise ValueError("api_base must be provided for GigaChat chat/completions")
+
         match = re.search(r"/v(\d+)/", api_base)
         if not match:
             api_base = urljoin(api_base, "v1/chat/completions")
@@ -205,12 +214,19 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
 
     def _transform_messages(
         self, messages: List[AllMessageValues], headers: dict
-    ) -> List[Dict]:
-        """Transforms messages to GigaChat format."""
-        transformed_messages = []
-        attachment_count = 0
+    ) -> List[Dict[str, Any]]:
+        """Transforms messages to GigaChat format.
 
-        for i, message in enumerate(messages):
+        We accept `AllMessageValues` for compatibility with the public types, but
+        internally operate on plain dictionaries to allow safe in-place
+        normalization without fighting TypedDict literal constraints.
+        """
+        transformed_messages: List[Dict[str, Any]] = []
+        attachment_count = 0
+        for i, raw_message in enumerate(messages):
+            # Work on a mutable copy with a broad dict type to avoid TypedDict
+            # role literal issues when normalizing between OpenAI and GigaChat.
+            message: Dict[str, Any] = dict(raw_message)
             # Normalize roles
             if message["role"] == "developer":
                 message["role"] = "system"
@@ -249,7 +265,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
 
     @staticmethod
     def _limit_attachments(
-        messages: List[Dict], max_total_attachments: int = 10
+        messages: List[Dict[str, Any]], max_total_attachments: int = 10
     ) -> None:
         """
         Limits the total number of attachments across all messages to max_total_attachments.
@@ -448,10 +464,17 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
                 if "function_call" in message:
                     choice["finish_reason"] = "tool_calls"
                     self._process_function_call(message)
-            response_json["usage"] |= {
+            usage = response_json.get("usage")
+            # Safely enrich usage information without relying on `|=` which can
+            # confuse static typing when `usage` has a broad type.
+            extra_usage = {
                 "input_tokens_details": {"cached_tokens": 0},
                 "output_tokens_details": {"reasoning_tokens": 0},
             }
+            if isinstance(usage, dict):
+                usage.update(extra_usage)
+            else:
+                response_json["usage"] = extra_usage
 
         except Exception as e:
             raise ValueError(f"Failed to parse GigaChat response as JSON: {e}")

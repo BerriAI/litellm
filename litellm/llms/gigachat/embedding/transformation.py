@@ -35,6 +35,16 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig, BaseGigaChat):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
+        """
+        Build complete URL for embeddings endpoint.
+
+        `api_base` is annotated as Optional[str] in the base interface, but this
+        implementation requires a concrete string value. Raise an explicit
+        error if it's missing so that both runtime and mypy are satisfied.
+        """
+        if api_base is None:
+            raise ValueError("api_base must be provided for GigaChat embeddings")
+
         match = re.search(r"/v(\d+)/", api_base)
         if not match:
             api_base = urljoin(api_base, "v1/embeddings")
