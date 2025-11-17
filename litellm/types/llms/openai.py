@@ -2,6 +2,8 @@ from enum import Enum
 from os import PathLike
 from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
+from typing_extensions import TypedDict
+
 import httpx
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
@@ -51,12 +53,38 @@ except (ImportError, AttributeError):
     )
 
 from openai.types.responses.response_create_params import (
-    Reasoning,
     ResponseIncludable,
     ResponseInputParam,
     ToolChoice,
     ToolParam,
 )
+# Override Reasoning type to support GPT-5.1's "none" effort value
+# OpenAI SDK >=2.8.0 includes this, but we maintain compatibility with <2.0.0 for semantic-router
+# See: https://github.com/BerriAI/litellm/issues/16741
+# When semantic-router updates to support OpenAI SDK 2.x, we can remove this override
+
+
+class Reasoning(TypedDict, total=False):
+    """Reasoning configuration for reasoning models.
+
+    Extended from OpenAI SDK to include 'none' effort value for GPT-5.1 compatibility.
+    """
+    effort: Optional[Literal["none", "minimal", "low", "medium", "high"]]
+    """Constrains effort on reasoning for reasoning models.
+
+    Currently supported values are `none`, `minimal`, `low`, `medium`, and `high`.
+    - gpt-5.1 defaults to `none` (no reasoning). Supports: none, low, medium, high.
+    - Models before gpt-5.1 default to `medium`. Do not support `none`.
+    - gpt-5-pro defaults to (and only supports) `high`.
+    """
+
+    generate_summary: Optional[Literal["auto", "concise", "detailed"]]
+    """**Deprecated:** use `summary` instead."""
+
+    summary: Optional[Literal["auto", "concise", "detailed"]]
+    """A summary of the reasoning performed by the model."""
+
+
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
