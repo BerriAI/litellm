@@ -5236,7 +5236,7 @@ async def moderations(
 async def _audio_speech_chunk_generator(
     _response: HttpxBinaryResponseContent,
 ) -> AsyncGenerator[bytes, None]:
-    _generator = await _response.aiter_bytes(chunk_size=4096)
+    _generator = await _response.aiter_bytes(chunk_size=8192)
     async for chunk in _generator:
         yield chunk
 
