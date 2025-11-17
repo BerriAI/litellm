@@ -2522,7 +2522,6 @@ def stringify_json_tool_call_content(messages: List) -> List:
 
 ###### AMAZON BEDROCK #######
 
-import base64
 from email.message import Message
 
 import httpx
