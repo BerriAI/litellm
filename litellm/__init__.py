@@ -228,6 +228,7 @@ groq_key: Optional[str] = None
 databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
+gigachat_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
 bytez_key: Optional[str] = None
@@ -535,6 +536,8 @@ galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 sambanova_models: Set = set()
 sambanova_embedding_models: Set = set()
+gigachat_models: Set = set()
+gigachat_embeddings_models: Set = set()
 novita_models: Set = set()
 assemblyai_models: Set = set()
 snowflake_models: Set = set()
@@ -743,6 +746,10 @@ def add_known_models():
             sambanova_models.add(key)
         elif value.get("litellm_provider") == "sambanova-embedding-models":
             sambanova_embedding_models.add(key)
+        elif value.get("litellm_provider") == "gigachat":
+            gigachat_models.add(key)
+        elif value.get("litellm_provider") == "gigachat-embedding-models":
+            gigachat_embeddings_models.add(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.add(key)
         elif value.get("litellm_provider") == "nebius-chat-models":
@@ -873,6 +880,7 @@ model_list = list(
     | galadriel_models
     | nvidia_nim_models
     | sambanova_models
+    | gigachat_models
     | azure_text_models
     | novita_models
     | assemblyai_models
@@ -962,6 +970,7 @@ models_by_provider: dict = {
     "galadriel": galadriel_models,
     "nvidia_nim": nvidia_nim_models,
     "sambanova": sambanova_models | sambanova_embedding_models,
+    "gigachat": gigachat_models | gigachat_embeddings_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
     "aiml": aiml_models,
@@ -1023,6 +1032,7 @@ all_embedding_models = (
     | fireworks_ai_embedding_models
     | nebius_embedding_models
     | sambanova_embedding_models
+    | gigachat_embeddings_models
     | ovhcloud_embedding_models
 )
 
@@ -1301,6 +1311,8 @@ from .llms.cerebras.chat import CerebrasConfig
 from .llms.baseten.chat import BasetenConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
+from .llms.gigachat.chat.transformation import GigaChatConfig
+from .llms.gigachat.embedding.transformation import GigaChatEmbeddingConfig
 from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
 from .llms.fireworks_ai.audio_transcription.transformation import (

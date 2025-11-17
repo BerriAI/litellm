@@ -164,6 +164,8 @@ from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
+from .llms.gigachat.chat.transformation import GigaChatConfig
+from .llms.gigachat.embedding.transformation import GigaChatEmbeddingConfig
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
@@ -285,13 +287,14 @@ heroku_transformation = HerokuChatConfig()
 oci_transformation = OCIChatConfig()
 ovhcloud_transformation = OVHCloudChatConfig()
 lemonade_transformation = LemonadeChatConfig()
+gigachat_chat_transformation = GigaChatConfig()
+gigachat_embedding_transformation = GigaChatEmbeddingConfig()
 
 MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
 ####### COMPLETION ENDPOINTS ################
 
 
 class LiteLLM:
-
     def __init__(
         self,
         *,
@@ -1132,7 +1135,6 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
-
         (
             model,
             messages,
@@ -2106,7 +2108,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             try:
                 if use_base_llm_http_handler:
-
                     response = base_llm_http_handler.completion(
                         model=model,
                         messages=messages,
@@ -3617,6 +3618,42 @@ def completion(  # type: ignore # noqa: PLR0915
 
             pass
 
+        elif custom_llm_provider == "gigachat" or model in litellm.gigachat_models:
+            api_key = (
+                api_key
+                or litellm.gigachat_key
+                or get_secret_str("GIGACHAT_API_KEY")
+                or litellm.api_key
+            )
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("GIGACHAT_API_BASE")
+                or "https://gigachat.devices.sberbank.ru/api/"
+            )
+            verify_certs = get_secret_str("GIGACHAT_VERIFY_SSL_CERTS", "")
+            if verify_certs is not None:
+                litellm_params["ssl_verify"] = False if verify_certs.lower() == "false" else True
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=gigachat_chat_transformation,
+            )
+
+            pass
         elif custom_llm_provider == "ovhcloud" or model in litellm.ovhcloud_models:
             api_key = (
                 api_key
@@ -3929,7 +3966,7 @@ def embedding(
     *,
     aembedding: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, EmbeddingResponse]: 
+) -> Coroutine[Any, Any, EmbeddingResponse]:
     ...
 
 
@@ -4765,6 +4802,35 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 litellm_params={},
+            )
+        elif custom_llm_provider == "gigachat":
+            api_key = (
+                api_key
+                or litellm.gigachat_key
+                or get_secret_str("GIGACHAT_API_KEY")
+                or litellm.api_key
+            )
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("GIGACHAT_API_BASE")
+                or "https://gigachat.devices.sberbank.ru/api/"
+            )
+            verify_certs = get_secret_str("GIGACHAT_VERIFY_SSL_CERTS", "")
+            if verify_certs is not None:
+                litellm_params_dict["ssl_verify"] = False if verify_certs.lower() == "false" else True
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                aembedding=aembedding,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params_dict
             )
         elif custom_llm_provider == "cometapi":
             api_key = (
