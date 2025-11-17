@@ -5286,7 +5286,7 @@ async def audio_speech(
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
+            user_api_key_dict=user_api_key_dict, data=data, call_type="aspeech"
         )
 
         ## ROUTE TO CORRECT ENDPOINT ##
@@ -5330,10 +5330,12 @@ async def audio_speech(
         # Determine media type based on model type
         media_type = "audio/mpeg"  # Default for OpenAI TTS
         request_model = data.get("model", "")
-        if "gemini" in request_model.lower() and (
-            "tts" in request_model.lower() or "preview-tts" in request_model.lower()
-        ):
-            media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
+        if request_model:
+            request_model_lower = request_model.lower()
+            if "gemini" in request_model_lower and (
+                "tts" in request_model_lower or "preview-tts" in request_model_lower
+            ):
+                media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
 
         return StreamingResponse(
             _audio_speech_chunk_generator(response), # type: ignore[arg-type]
