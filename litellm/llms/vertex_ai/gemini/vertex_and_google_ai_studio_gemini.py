@@ -1029,15 +1029,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     name=part["functionCall"]["name"],
                     arguments=json.dumps(part["functionCall"]["args"], ensure_ascii=False),
                 )
+                # Extract thought signature if present
+                thought_signature = part.get("thoughtSignature")
+                
                 if is_function_call is True:
-                    function = _function_chunk
+                    function_dict = dict(_function_chunk) if isinstance(_function_chunk, dict) else _function_chunk.model_dump() if hasattr(_function_chunk, "model_dump") else dict(_function_chunk)
+                    if thought_signature:
+                        if "provider_specific_fields" not in function_dict:
+                            function_dict["provider_specific_fields"] = {}
+                        function_dict["provider_specific_fields"]["thought_signature"] = thought_signature
+                    function = cast(ChatCompletionToolCallFunctionChunk, function_dict)
                 else:
-                    _tool_response_chunk = ChatCompletionToolCallChunk(
-                        id=f"call_{uuid.uuid4().hex[:28]}",
-                        type="function",
-                        function=_function_chunk,
-                        index=cumulative_tool_call_idx,
-                    )
+                    _tool_response_chunk: ChatCompletionToolCallChunk = {
+                        "id": f"call_{uuid.uuid4().hex[:28]}",
+                        "type": "function",
+                        "function": _function_chunk,
+                        "index": cumulative_tool_call_idx,
+                    }
+                    if thought_signature:
+                        _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
+                            "thought_signature": thought_signature
+                        }
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
         if len(_tools) == 0:
