@@ -5327,11 +5327,6 @@ async def audio_speech(
             hidden_params=hidden_params,
         )
 
-        select_data_generator(
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            request_data=data,
-        )
         # Determine media type based on model type
         media_type = "audio/mpeg"  # Default for OpenAI TTS
         request_model = data.get("model", "")
