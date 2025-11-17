@@ -158,9 +158,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
             api_key = self._get_oauth_token()
 
         if api_key is None:
-            raise ValueError(
-                "GIGACHAT_API_KEY not found and OAuth credentials not provided"
-            )
+            raise ValueError("GIGACHAT_API_KEY not found and OAuth credentials not provided")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -212,9 +210,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
 
         return api_base
 
-    def _transform_messages(
-        self, messages: List[AllMessageValues], headers: dict
-    ) -> List[Dict[str, Any]]:
+    def _transform_messages(self, messages: List[AllMessageValues], headers: dict) -> List[Dict[str, Any]]:
         """Transforms messages to GigaChat format.
 
         We accept `AllMessageValues` for compatibility with the public types, but
@@ -234,9 +230,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
                 message["role"] = "user"
             elif message["role"] == "tool":
                 message["role"] = "function"
-                message["content"] = json.dumps(
-                    message.get("content", ""), ensure_ascii=False
-                )
+                message["content"] = json.dumps(message.get("content", ""), ensure_ascii=False)
 
             # Handle content
             if message.get("content") is None:
@@ -245,15 +239,11 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
             if "tool_calls" in message and message["tool_calls"]:
                 message["function_call"] = message["tool_calls"][0]["function"]
                 try:
-                    message["function_call"]["arguments"] = json.loads(
-                        message["function_call"]["arguments"]
-                    )
+                    message["function_call"]["arguments"] = json.loads(message["function_call"]["arguments"])
                 except json.JSONDecodeError:
                     pass
             if isinstance(message["content"], list):
-                texts, attachments = self._process_content_parts(
-                    message["content"], headers
-                )
+                texts, attachments = self._process_content_parts(message["content"], headers)
                 message["content"] = "\n".join(texts)
                 message["attachments"] = attachments
                 attachment_count += len(attachments)
@@ -264,9 +254,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
         return transformed_messages
 
     @staticmethod
-    def _limit_attachments(
-        messages: List[Dict[str, Any]], max_total_attachments: int = 10
-    ) -> None:
+    def _limit_attachments(messages: List[Dict[str, Any]], max_total_attachments: int = 10) -> None:
         """
         Limits the total number of attachments across all messages to max_total_attachments.
         Trims extra attachments while iterating messages in order of appearance.
@@ -285,9 +273,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
             else:
                 remaining -= len(attachments)
 
-    async def upload_file_async(
-        self, image_url: str, headers: dict, filename: str | None = None
-    ) -> str | None:
+    async def upload_file_async(self, image_url: str, headers: dict, filename: str | None = None) -> str | None:
         """
         Uploads image to GigaChat and returns file_id.
         """
@@ -303,10 +289,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
                     content_type = resp.headers.get("content-type", "") or ""
                     image_bytes = resp.content
 
-            api_base = (
-                litellm.get_secret_str("GIGACHAT_API_BASE")
-                or "https://gigachat.devices.sberbank.ru/api/v1/"
-            )
+            api_base = litellm.get_secret_str("GIGACHAT_API_BASE") or "https://gigachat.devices.sberbank.ru/api/v1/"
             match = re.search(r"/v(\d+)/", api_base)
             if not match:
                 files_url = urljoin(api_base, "v1/files")
@@ -323,9 +306,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
 
             files = {"file": (filename, image_bytes)}
 
-            clean_headers = {
-                k: v for k, v in headers.items() if k.lower() != "content-type"
-            }
+            clean_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
 
             resp = await client.post(
                 files_url,
@@ -338,27 +319,21 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
             data = resp.json()
             return data.get("id")
 
-    def upload_file(
-        self, image_url: str, headers: dict, filename: str | None = None
-    ) -> Optional[str]:
+    def upload_file(self, image_url: str, headers: dict, filename: str | None = None) -> Optional[str]:
         """
         Sync-safe wrapper around async upload.
         This is used inside transform_request() which must stay sync.
         """
         return asyncio.run(self.upload_file_async(image_url, headers, filename))
 
-    def _process_content_parts(
-        self, content_parts: List[Dict], headers: dict
-    ) -> Tuple[List[str], List[str]]:
+    def _process_content_parts(self, content_parts: List[Dict], headers: dict) -> Tuple[List[str], List[str]]:
         """Processes content parts (text and images)."""
         texts = []
         attachments = []
         for content_part in content_parts:
             if content_part.get("type") == "text":
                 texts.append(content_part.get("text", ""))
-            elif content_part.get("type") == "image_url" and content_part.get(
-                "image_url"
-            ):
+            elif content_part.get("type") == "image_url" and content_part.get("image_url"):
                 file_id = self.upload_file(content_part["image_url"]["url"], headers)
                 if file_id:
                     attachments.append(file_id)
@@ -405,9 +380,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
             elif param == "stream":
                 request_body["stream"] = value
             elif param == "tools" or param == "functions":
-                gigachat_tools = self._construct_gigachat_tool(
-                    tools=optional_params[param]
-                )
+                gigachat_tools = self._construct_gigachat_tool(tools=optional_params[param])
                 request_body["functions"] = gigachat_tools
             elif param == "response_format":
                 if value.get("json_schema") and value["json_schema"].get("schema"):
@@ -555,11 +528,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
                 optional_params["top_p"] = value
             if param == "frequency_penalty":
                 optional_params["repetition_penalty"] = value
-            if (
-                param == "response_format"
-                and isinstance(value, dict)
-                and value.get("type") == "json_schema"
-            ):
+            if param == "response_format" and isinstance(value, dict) and value.get("type") == "json_schema":
                 optional_params["response_format"] = value
             if param == "tools" or param == "functions":
                 optional_params["functions"] = value
@@ -600,9 +569,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
                 logging_obj=logging_obj,
             )
         except httpx.HTTPStatusError as e:
-            raise GigaChatError(
-                status_code=e.response.status_code, message=e.response.text
-            )
+            raise GigaChatError(status_code=e.response.status_code, message=e.response.text)
 
         if response.status_code != 200:
             raise GigaChatError(status_code=response.status_code, message=response.text)
@@ -641,9 +608,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
                 logging_obj=logging_obj,
             )
         except httpx.HTTPStatusError as e:
-            raise GigaChatError(
-                status_code=e.response.status_code, message=e.response.text
-            )
+            raise GigaChatError(status_code=e.response.status_code, message=e.response.text)
 
         if response.status_code != 200:
             raise GigaChatError(status_code=response.status_code, message=response.text)
@@ -663,6 +628,4 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
     ) -> BaseLLMException:
         from ..common_utils import GigaChatError
 
-        return GigaChatError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return GigaChatError(status_code=status_code, message=error_message, headers=headers)

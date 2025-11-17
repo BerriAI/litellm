@@ -73,9 +73,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig, BaseGigaChat):
             api_key = self._get_oauth_token()
 
         if api_key is None:
-            raise ValueError(
-                "GIGACHAT_API_KEY not found and OAuth credentials not provided"
-            )
+            raise ValueError("GIGACHAT_API_KEY not found and OAuth credentials not provided")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -96,9 +94,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig, BaseGigaChat):
         """
         Transform OpenAI-style embedding request to GigaChat format
         """
-        if isinstance(input, list) and (
-            isinstance(input[0], list) or isinstance(input[0], int)
-        ):
+        if isinstance(input, list) and (isinstance(input[0], list) or isinstance(input[0], int)):
             raise ValueError("Input must be a list of strings")
         request_body = {
             "model": model,
@@ -152,6 +148,4 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig, BaseGigaChat):
     ) -> BaseLLMException:
         from ..common_utils import GigaChatError
 
-        return GigaChatError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return GigaChatError(status_code=status_code, message=error_message, headers=headers)

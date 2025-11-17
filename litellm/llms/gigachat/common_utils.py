@@ -21,11 +21,7 @@ class GigaChatError(BaseLLMException):
 class BaseGigaChat:
     def __init__(self):
         self._token_cache: dict[str, Any] = {"token": None, "expires_at": 0}
-        self._ssl_verify = (
-            False
-            if os.environ.get("GIGACHAT_VERIFY_SSL_CERTS", "").lower() == "false"
-            else True
-        )
+        self._ssl_verify = False if os.environ.get("GIGACHAT_VERIFY_SSL_CERTS", "").lower() == "false" else True
 
     @staticmethod
     def _check_timestamp_unit(timestamp):
@@ -58,10 +54,7 @@ class BaseGigaChat:
         import httpx
         import litellm
 
-        auth_url = (
-            litellm.get_secret_str("GIGACHAT_AUTH_URL")
-            or "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-        )
+        auth_url = litellm.get_secret_str("GIGACHAT_AUTH_URL") or "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 
         username = litellm.get_secret_str("GIGACHAT_USERNAME")
         password = litellm.get_secret_str("GIGACHAT_PASSWORD")
