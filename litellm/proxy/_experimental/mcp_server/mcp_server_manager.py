@@ -385,12 +385,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -714,12 +714,6 @@ class MCPServerManager:
                 f"Failed to get tools from server {server.name}: {str(e)}"
             )
             return []
-        finally:
-            if client:
-                try:
-                    await client.disconnect()
-                except Exception:
-                    pass
 
     async def _descovery_metadata(
         self,
@@ -983,8 +977,6 @@ class MCPServerManager:
 
         async def _list_tools_task():
             try:
-                await client.connect()
-
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
@@ -1439,14 +1431,12 @@ class MCPServerManager:
         )
 
         async def _call_tool_via_client(client, params):
-            async with client:
-                return await client.call_tool(params)
+            return await client.call_tool(params)
 
         tasks.append(
             asyncio.create_task(_call_tool_via_client(client, call_tool_params))
         )
 
-        # IMPORTANT: Must await tasks INSIDE the context manager to keep connection alive
         try:
             mcp_responses = await asyncio.gather(*tasks)
         except (
