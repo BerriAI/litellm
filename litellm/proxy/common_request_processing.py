@@ -292,6 +292,7 @@ class ProxyBaseLLMRequestProcessing:
         proxy_config: ProxyConfig,
         route_type: Literal[
             "acompletion",
+            "aembedding",
             "aresponses",
             "_arealtime",
             "aget_responses",
@@ -314,6 +315,12 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_file_create",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_update",
+            "avector_store_file_delete",
             "aocr",
             "asearch",
             "avideo_generation",
@@ -403,6 +410,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_key_dict: UserAPIKeyAuth,
         route_type: Literal[
             "acompletion",
+            "aembedding",
             "aresponses",
             "_arealtime",
             "aget_responses",
@@ -416,6 +424,12 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_file_create",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_update",
+            "avector_store_file_delete",
             "aocr",
             "asearch",
             "avideo_generation",
@@ -772,10 +786,12 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _get_pre_call_type(
-        route_type: Literal["acompletion", "aresponses"],
-    ) -> Literal["completion", "responses"]:
+        route_type: Literal["acompletion", "aembedding", "aresponses"],
+    ) -> Literal["completion", "embeddings", "responses"]:
         if route_type == "acompletion":
             return "completion"
+        elif route_type == "aembedding":
+            return "embeddings"
         elif route_type == "aresponses":
             return "responses"
 
