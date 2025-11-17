@@ -386,6 +386,8 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
     def is_ssml_input(self, input: str) -> bool:
         """
         Returns True if input is SSML, False otherwise
+
+        Based on https://www.w3.org/TR/speech-synthesis/ all SSML must start with <speak>
         """
         return "<speak>" in input or "<speak " in input
 
