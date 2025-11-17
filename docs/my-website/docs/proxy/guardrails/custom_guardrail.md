@@ -657,3 +657,22 @@ class myCustomGuardrail(CustomGuardrail):
 | `async_moderation_hook` | A hook that runs during the LLM API call| ✅ | INPUT | ❌ | ❌ | ✅ |
 | `async_post_call_success_hook` | A hook that runs after a successful LLM API call| ✅ | INPUT, OUTPUT | ❌ | ✅ | ✅ |
 | `async_post_call_streaming_iterator_hook` | A hook that processes streaming responses | ✅ | OUTPUT | ❌ | ✅ | ✅ |
+
+
+## Frequently Asked Questions
+
+**Q. Is `apply_guardrail` relevant both in the request and in the response (pre_call, during_call and post_call hooks)?**
+
+**A.** Yes, one function works in both - See implementation [here](https://github.com/BerriAI/litellm/blob/0292b84dc47473ddeff29bd5a86f529bc523034b/litellm/proxy/utils.py#L825)
+
+**Q. What do I get in the inputs of `apply_guardrail`? What does each field represent (what is text, language, entities, request_data)?**
+
+**A.** The main one you should care about is 'text' - this is what you'll want to send to your api for verification - See implementation [here](https://github.com/BerriAI/litellm/blob/0292b84dc47473ddeff29bd5a86f529bc523034b/litellm/llms/anthropic/chat/guardrail_translation/handler.py#L102)
+
+**Q. Is this function agnostic to the LLM provider? Meaning does it pass the same values for OpenAI and Anthropic for example?
+
+**A.** Yes
+
+**Q. How do I know if my guardrail is running?**
+
+**A.** If you implement `apply_guardrail`, you can query the guardrail directly via [the `/apply_guardrail` API](../../apply_guardrail).
