@@ -526,8 +526,10 @@ class LiteLLM_Proxy_MCP_Handler:
                     else:
                         assistant_message_content.append(content)
 
-        # Add assistant message with content and function calls
-        if assistant_message_content or function_calls:
+        # Add assistant message only if there's actual content (not empty)
+        # For example, gemini requires that function call turns come immediately after user turns,
+        # so we should not add empty assistant messages
+        if assistant_message_content:
             follow_up_input.append(
                 {
                     "type": "message",
@@ -536,9 +538,9 @@ class LiteLLM_Proxy_MCP_Handler:
                 }
             )
 
-            # Add function calls after assistant message
-            for function_call in function_calls:
-                follow_up_input.append(function_call)
+        # Add function calls (these can come directly after user message for LLM)
+        for function_call in function_calls:
+            follow_up_input.append(function_call)
 
         # Add tool results (function call outputs)
         for tool_result in tool_results:

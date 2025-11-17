@@ -14,7 +14,7 @@ export const vectorStoreProviderMap: Record<string, string> = {
   Azure: "azure",
 };
 
-const asset_logos_folder = "/ui/assets/logos/";
+const asset_logos_folder = "../ui/assets/logos/";
 
 export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.Bedrock]: `${asset_logos_folder}bedrock.svg`,

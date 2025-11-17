@@ -24,7 +24,7 @@ mcp_server_manager = MCPServerManager()
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Local only test")
 async def test_mcp_server_manager():
-    mcp_server_manager.load_servers_from_config(
+    await mcp_server_manager.load_servers_from_config(
         {
             "zapier_mcp_server": {
                 "url": os.environ.get("ZAPIER_MCP_SERVER_URL"),
@@ -68,8 +68,6 @@ async def test_mcp_server_manager_https_server():
     mock_client = AsyncMock()
     mock_client.list_tools = AsyncMock(return_value=mock_tools)
     mock_client.call_tool = AsyncMock(return_value=mock_result)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
 
     # Mock the MCPClient constructor
     def mock_client_constructor(*args, **kwargs):
@@ -79,7 +77,7 @@ async def test_mcp_server_manager_https_server():
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
         mock_client_constructor,
     ):
-        mcp_server_manager.load_servers_from_config(
+        await mcp_server_manager.load_servers_from_config(
             {
                 "zapier_mcp_server": {
                     "url": "https://test-mcp-server.com/mcp",
@@ -88,7 +86,15 @@ async def test_mcp_server_manager_https_server():
             }
         )
 
-        tools = await mcp_server_manager.list_tools()
+        allowed_server_ids = list(mcp_server_manager.get_registry().keys())
+        assert allowed_server_ids, "Expected registry to contain the configured server"
+
+        with patch.object(
+            mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new=AsyncMock(return_value=allowed_server_ids),
+        ):
+            tools = await mcp_server_manager.list_tools()
         print("TOOLS FROM MCP SERVER MANAGER== ", tools)
 
         # Verify tools were returned and properly prefixed
@@ -124,7 +130,6 @@ async def test_mcp_server_manager_https_server():
         assert result.content[0].text == "Email sent successfully"
 
         # Verify client methods were called
-        mock_client.__aenter__.assert_called()
         mock_client.list_tools.assert_called()
         mock_client.call_tool.assert_called_once()
 
@@ -181,7 +186,7 @@ async def test_mcp_http_transport_list_tools_mock():
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
-        test_manager.load_servers_from_config(
+        await test_manager.load_servers_from_config(
             {
                 "test_http_server": {
                     "url": "https://test-mcp-server.com/mcp",
@@ -192,7 +197,15 @@ async def test_mcp_http_transport_list_tools_mock():
         )
 
         # Call list_tools
-        tools = await test_manager.list_tools()
+        allowed_server_ids = list(test_manager.get_registry().keys())
+        assert allowed_server_ids, "Expected registry to contain configured server"
+
+        with patch.object(
+            test_manager,
+            "get_allowed_mcp_servers",
+            new=AsyncMock(return_value=allowed_server_ids),
+        ):
+            tools = await test_manager.list_tools()
 
         # Assertions
         assert len(tools) == 2
@@ -250,7 +263,7 @@ async def test_mcp_http_transport_call_tool_mock():
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
-        test_manager.load_servers_from_config(
+        await test_manager.load_servers_from_config(
             {
                 "test_http_server": {
                     "url": "https://test-mcp-server.com/mcp",
@@ -285,7 +298,6 @@ async def test_mcp_http_transport_call_tool_mock():
         assert result.content[0].text == "Email sent successfully to test@example.com"
 
         # Verify client methods were called
-        mock_client.__aenter__.assert_called()
         mock_client.call_tool.assert_called_once()
 
 
@@ -317,7 +329,7 @@ async def test_mcp_http_transport_call_tool_error_mock():
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
-        test_manager.load_servers_from_config(
+        await test_manager.load_servers_from_config(
             {
                 "test_http_server": {
                     "url": "https://test-mcp-server.com/mcp",
@@ -348,7 +360,6 @@ async def test_mcp_http_transport_call_tool_error_mock():
         assert "Error: Invalid email address" in result.content[0].text
 
         # Verify client methods were called
-        mock_client.__aenter__.assert_called()
         mock_client.call_tool.assert_called_once()
 
 
@@ -360,7 +371,7 @@ async def test_mcp_http_transport_tool_not_found():
     test_manager = MCPServerManager()
 
     # Load server config
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "test_http_server": {
                 "url": "https://test-mcp-server.com/mcp",
@@ -683,7 +694,7 @@ async def test_list_tools_rest_api_success():
             mock_client_constructor,
         ):
             # Load server config into global manager
-            global_mcp_server_manager.load_servers_from_config(
+            await global_mcp_server_manager.load_servers_from_config(
                 {
                     "test_server": {
                         "url": "https://test-server.com/mcp",
@@ -862,7 +873,7 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
     test_manager = MCPServerManager()
 
     # Setup two servers in the config
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "server_a": {
                 "url": "https://server-a.com/mcp",
@@ -928,12 +939,13 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         assert tools[0].name.startswith(f"{expected_prefix}-")
 
 
-def test_mcp_server_manager_access_groups_from_config():
+@pytest.mark.asyncio
+async def test_mcp_server_manager_access_groups_from_config():
     """
     Test that access_groups are loaded from config and can be resolved.
     """
     test_manager = MCPServerManager()
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "config_server": {
                 "url": "https://config-mcp-server.com/mcp",
@@ -970,15 +982,15 @@ def test_mcp_server_manager_access_groups_from_config():
     # Should find config_server for group-a, both for group-b, other_server for group-c
     import asyncio
 
-    server_ids_a = asyncio.run(
-        MCPRequestHandler._get_mcp_servers_from_access_groups(["group-a"])
-    )
-    server_ids_b = asyncio.run(
-        MCPRequestHandler._get_mcp_servers_from_access_groups(["group-b"])
-    )
-    server_ids_c = asyncio.run(
-        MCPRequestHandler._get_mcp_servers_from_access_groups(["group-c"])
-    )
+    server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+        "group-a"
+    ])
+    server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+        "group-b"
+    ])
+    server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+        "group-c"
+    ])
     assert any(config_server.server_id == sid for sid in server_ids_a)
     assert set(server_ids_b) == set(
         [
@@ -993,7 +1005,7 @@ def test_mcp_server_manager_access_groups_from_config():
     )
 
 
-def test_mcp_server_manager_config_integration_with_database():
+async def test_mcp_server_manager_config_integration_with_database():
     """
     Test that config-based servers properly integrate with database servers,
     specifically testing access_groups and description fields.
@@ -1004,7 +1016,7 @@ def test_mcp_server_manager_config_integration_with_database():
     test_manager = MCPServerManager()
 
     # Test 1: Load config with access_groups and description
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "config_server_with_groups": {
                 "url": "https://config-server.com/mcp",
@@ -1065,10 +1077,8 @@ def test_mcp_server_manager_config_integration_with_database():
     # Test the method (this tests our second fix)
     import asyncio
 
-    servers_list = asyncio.run(
-        test_manager.get_all_mcp_servers_with_health_and_teams(
-            user_api_key_auth=mock_user_auth
-        )
+    servers_list = await test_manager.get_all_mcp_servers_with_health_and_teams(
+        user_api_key_auth=mock_user_auth
     )
 
     # Verify we have the config server properly converted
@@ -1520,7 +1530,7 @@ async def test_mcp_protocol_version_passed_to_client():
         mock_client_constructor,
     ):
         # Load a test server
-        test_manager.load_servers_from_config(
+        await test_manager.load_servers_from_config(
             {
                 "test_server": {
                     "url": "https://test-server.com/mcp",
@@ -1530,8 +1540,16 @@ async def test_mcp_protocol_version_passed_to_client():
             }
         )
 
-        # Call list_tools with a specific protocol version from request
-        await test_manager.list_tools()
+        allowed_server_ids = list(test_manager.get_registry().keys())
+        assert allowed_server_ids, "Expected registry to contain configured server"
+
+        with patch.object(
+            test_manager,
+            "get_allowed_mcp_servers",
+            new=AsyncMock(return_value=allowed_server_ids),
+        ):
+            # Call list_tools with a specific protocol version from request
+            await test_manager.list_tools()
 
         # Verify the client was created with the correct protocol version
         mock_client.list_tools.assert_called()
@@ -2399,7 +2417,7 @@ async def test_mcp_server_manager_with_access_groups_integration():
     test_manager = MCPServerManager()
 
     # Load servers with access groups
-    test_manager.load_servers_from_config(
+    await test_manager.load_servers_from_config(
         {
             "staff_server": {
                 "url": "https://staff-server.com/mcp",
@@ -2436,3 +2454,203 @@ async def test_mcp_server_manager_with_access_groups_integration():
         # Should only get servers user has access to
         assert len(allowed_servers) >= 0  # At least verify no errors
         mock_get_allowed.assert_called_once_with(user_auth)
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_returns_registry_for_admin():
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+
+    test_manager = MCPServerManager()
+    await test_manager.load_servers_from_config(
+        {
+            "alpha_server": {
+                "url": "https://alpha.server/mcp",
+                "transport": MCPTransport.http,
+            },
+            "beta_server": {
+                "url": "https://beta.server/mcp",
+                "transport": MCPTransport.http,
+            },
+        }
+    )
+
+    admin_auth = UserAPIKeyAuth(
+        api_key="admin-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    with patch.object(
+        MCPRequestHandler, "get_allowed_mcp_servers", new_callable=AsyncMock
+    ) as mock_permission_lookup:
+        allowed_servers = await test_manager.get_allowed_mcp_servers(admin_auth)
+
+    assert set(allowed_servers) == set(test_manager.get_registry().keys())
+    mock_permission_lookup.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permissions():
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+
+    test_manager = MCPServerManager()
+    await test_manager.load_servers_from_config(
+        {
+            "alpha_server": {
+                "url": "https://alpha.server/mcp",
+                "transport": MCPTransport.http,
+            },
+            "beta_server": {
+                "url": "https://beta.server/mcp",
+                "transport": MCPTransport.http,
+            },
+        }
+    )
+
+    user_auth = UserAPIKeyAuth(
+        api_key="user-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with patch.object(
+        MCPRequestHandler, "get_allowed_mcp_servers", new_callable=AsyncMock
+    ) as mock_permission_lookup:
+        mock_permission_lookup.return_value = []
+        allowed_servers = await test_manager.get_allowed_mcp_servers(user_auth)
+
+    assert allowed_servers == []
+    mock_permission_lookup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_uses_manager_permission_lookup():
+    from litellm.proxy._experimental.mcp_server.server import (
+        call_mcp_tool,
+        global_mcp_server_manager,
+    )
+
+    mock_server = MCPServer(
+        server_id="server-123",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+
+    expected_response = [TextContent(type="text", text="ok")]
+
+    with patch.object(
+        global_mcp_server_manager,
+        "get_allowed_mcp_servers",
+        new_callable=AsyncMock,
+    ) as mock_get_allowed, patch.object(
+        global_mcp_server_manager,
+        "get_mcp_servers_from_ids",
+        return_value=[mock_server],
+    ), patch.object(
+        global_mcp_server_manager,
+        "_get_mcp_server_from_tool_name",
+        return_value=mock_server,
+    ) as mock_get_server, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_tool_registry"
+    ) as mock_tool_registry, patch(
+        "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+        new_callable=AsyncMock,
+    ) as mock_handle_managed, patch(
+        "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+        return_value=True,
+    ):
+        mock_get_allowed.return_value = [mock_server.server_id]
+        mock_tool_registry.get_tool.return_value = None
+        mock_handle_managed.return_value = expected_response
+
+        result = await call_mcp_tool(
+            name=f"{mock_server.name}/gmail_send_email",
+            arguments={"body": "hello"},
+            mcp_servers=["test_server"],
+        )
+
+    assert result == expected_response
+    mock_get_allowed.assert_awaited_once()
+    # We call `_get_mcp_server_from_tool_name` multiple times:
+    # - for logging/metadata
+    # - for resolving the server during dispatch
+    # - and inside `call_tool` for guardrails/hooks
+    # The exact count isn't important, only that it is used.
+    assert mock_get_server.call_count >= 2
+    # First call should use the prefixed tool name
+    assert (
+        mock_get_server.call_args_list[0][0][0]
+        == f"{mock_server.name}/gmail_send_email"
+    )
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permissions():
+    """
+    Ensure `call_mcp_tool` correctly resolves the MCP server for an unprefixed tool
+    name and enforces server-level permissions using that resolved server.
+    """
+    from litellm.proxy._experimental.mcp_server.server import (
+        call_mcp_tool,
+        global_mcp_server_manager,
+    )
+
+    mock_server = MCPServer(
+        server_id="server-123",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+
+    expected_response = [TextContent(type="text", text="ok")]
+
+    with patch.object(
+        global_mcp_server_manager,
+        "get_allowed_mcp_servers",
+        new_callable=AsyncMock,
+    ) as mock_get_allowed, patch.object(
+        global_mcp_server_manager,
+        "get_mcp_servers_from_ids",
+        return_value=[mock_server],
+    ), patch.object(
+        global_mcp_server_manager,
+        "_get_mcp_server_from_tool_name",
+        return_value=mock_server,
+    ) as mock_get_server, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_tool_registry"
+    ) as mock_tool_registry, patch(
+        "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+        new_callable=AsyncMock,
+    ) as mock_handle_managed, patch(
+        "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+        return_value=True,
+    ) as mock_is_allowed:
+        mock_get_allowed.return_value = [mock_server.server_id]
+        mock_tool_registry.get_tool.return_value = None
+        mock_handle_managed.return_value = expected_response
+
+        # Call with UNPREFIXED tool name; server should be resolved via mapping
+        result = await call_mcp_tool(
+            name="gmail_send_email",
+            arguments={"body": "hello"},
+            mcp_servers=["test_server"],
+        )
+
+    assert result == expected_response
+    mock_get_allowed.assert_awaited_once()
+    # We should resolve the server at least once using the unprefixed name
+    assert mock_get_server.call_count >= 1
+    assert mock_get_server.call_args_list[0][0][0] == "gmail_send_email"
+    # Permissions check should be invoked with the resolved server name
+    mock_is_allowed.assert_called_once()

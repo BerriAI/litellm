@@ -10,9 +10,12 @@ import asyncio
 import datetime
 import hashlib
 import json
-from typing import Any, Dict, List, Optional, Set, Union, cast
+import re
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
+from httpx import HTTPStatusError
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
@@ -20,6 +23,7 @@ from mcp.types import Tool as MCPTool
 from litellm._logging import verbose_logger
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
@@ -38,12 +42,15 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-)
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPStdioConfig
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPInfo,
+    MCPOAuthMetadata,
+    MCPServer,
+)
 
 
 def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
@@ -100,7 +107,7 @@ class MCPServerManager:
         """
         return self.config_mcp_servers | self.registry
 
-    def load_servers_from_config(
+    async def load_servers_from_config(
         self,
         mcp_servers_config: Dict[str, Any],
         mcp_aliases: Optional[Dict[str, str]] = None,
@@ -180,13 +187,35 @@ class MCPServerManager:
             )()
             name_for_prefix = get_server_prefix(temp_server)
 
+            server_url = server_config.get("url", None) or ""
             # Generate stable server ID based on parameters
             server_id = self._generate_stable_server_id(
                 server_name=server_name,
-                url=server_config.get("url", None) or "",
+                url=server_url,
                 transport=server_config.get("transport", MCPTransport.http),
                 auth_type=server_config.get("auth_type", None),
                 alias=alias,
+            )
+
+            auth_type = server_config.get("auth_type", None)
+            if server_url and auth_type is not None and auth_type == MCPAuth.oauth2:
+                mcp_oauth_metadata = await self._descovery_metadata(
+                    server_url=server_url,
+                )
+            else:
+                mcp_oauth_metadata = None
+
+            resolved_scopes = server_config.get("scopes") or (
+                mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
+            )
+            resolved_authorization_url = server_config.get("authorization_url") or (
+                mcp_oauth_metadata.authorization_url if mcp_oauth_metadata else None
+            )
+            resolved_token_url = server_config.get("token_url") or (
+                mcp_oauth_metadata.token_url if mcp_oauth_metadata else None
+            )
+            resolved_registration_url = server_config.get("registration_url") or (
+                mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
             )
 
             new_server = MCPServer(
@@ -195,20 +224,20 @@ class MCPServerManager:
                 alias=alias,
                 server_name=server_name,
                 spec_path=server_config.get("spec_path", None),
-                url=server_config.get("url", None) or "",
+                url=server_url,
                 command=server_config.get("command", None) or "",
                 args=server_config.get("args", None) or [],
                 env=server_config.get("env", None) or {},
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
-                scopes=server_config.get("scopes", None),
-                authorization_url=server_config.get("authorization_url", None),
-                token_url=server_config.get("token_url", None),
-                registration_url=server_config.get("registration_url", None),
+                scopes=resolved_scopes,
+                authorization_url=resolved_authorization_url,
+                token_url=resolved_token_url,
+                registration_url=resolved_registration_url,
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
-                auth_type=server_config.get("auth_type", None),
+                auth_type=auth_type,
                 authentication_token=server_config.get(
                     "authentication_token", server_config.get("auth_value", None)
                 ),
@@ -478,6 +507,12 @@ class MCPServerManager:
         """
         Get the allowed MCP Servers for the user
         """
+        from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+        # If admin, get all servers
+        if user_api_key_auth and _user_has_admin_view(user_api_key_auth):
+            return list(self.get_registry().keys())
+
         try:
             allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
                 user_api_key_auth
@@ -485,18 +520,14 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
             )
-            if len(allowed_mcp_servers) > 0:
-                return allowed_mcp_servers
-            else:
+            if len(allowed_mcp_servers) == 0:
                 verbose_logger.debug(
-                    "No allowed MCP Servers found for user api key auth, returning default registry servers"
+                    "No allowed MCP Servers found for user api key auth."
                 )
-                return list(self.get_registry().keys())
+            return allowed_mcp_servers
         except Exception as e:
-            verbose_logger.warning(
-                f"Failed to get allowed MCP servers: {str(e)}. Returning default registry servers."
-            )
-            return list(self.get_registry().keys())
+            verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}.")
+            return []
 
     async def get_tools_for_server(self, server_id: str) -> List[MCPTool]:
         """
@@ -683,12 +714,252 @@ class MCPServerManager:
                 f"Failed to get tools from server {server.name}: {str(e)}"
             )
             return []
-        finally:
-            if client:
+
+    async def _descovery_metadata(
+        self,
+        server_url: str,
+    ) -> Optional[MCPOAuthMetadata]:
+        """Discover OAuth metadata by following RFC 9728 (protected resource metadata discovery)."""
+
+        try:
+            client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+            response = await client.get(server_url)
+            response.raise_for_status()
+            verbose_logger.warning(
+                "MCP OAuth discovery unexpectedly succeeded for %s; server did not challenge",
+                server_url,
+            )
+            raise RuntimeError("OAuth discovery must not succeed without a challenge")
+        except HTTPStatusError as exc:
+            verbose_logger.debug(
+                "MCP OAuth discovery for %s received status error: %s",
+                server_url,
+                exc,
+            )
+
+            header_value: Optional[str] = None
+            if exc.response is not None:
+                header_value = exc.response.headers.get(
+                    "WWW-Authenticate"
+                ) or exc.response.headers.get("www-authenticate")
+
+            resource_metadata_url, scopes = self._parse_www_authenticate_header(
+                header_value
+            )
+
+            authorization_servers: List[str] = []
+            resource_scopes: Optional[List[str]] = None
+            if resource_metadata_url:
+                (
+                    authorization_servers,
+                    resource_scopes,
+                ) = await self._fetch_oauth_metadata_from_resource(
+                    resource_metadata_url
+                )
+            else:
+                (
+                    authorization_servers,
+                    resource_scopes,
+                ) = await self._attempt_well_known_discovery(server_url)
+
+            metadata = None
+            if not authorization_servers:
                 try:
-                    await client.disconnect()
+                    parsed_url = urlparse(server_url)
+                    if parsed_url.scheme and parsed_url.netloc:
+                        authorization_servers = [
+                            f"{parsed_url.scheme}://{parsed_url.netloc}"
+                        ]
                 except Exception:
-                    pass
+                    authorization_servers = []
+
+            if authorization_servers:
+                metadata = await self._fetch_authorization_server_metadata(
+                    authorization_servers
+                )
+
+            preferred_scopes = scopes or resource_scopes
+            if metadata is None and preferred_scopes:
+                metadata = MCPOAuthMetadata(scopes=preferred_scopes)
+            elif metadata is not None and preferred_scopes:
+                metadata.scopes = preferred_scopes
+
+            return metadata
+        except Exception as exc:  # pragma: no cover - network/transient issues
+            verbose_logger.debug(
+                "MCP OAuth discovery failed for %s: %s", server_url, exc
+            )
+            return None
+
+    def _parse_www_authenticate_header(
+        self, header_value: Optional[str]
+    ) -> Tuple[Optional[str], Optional[List[str]]]:
+        if not header_value:
+            return None, None
+
+        _, _, params_section = header_value.partition(" ")
+        params_section = params_section or header_value
+
+        param_pattern = re.compile(r"([a-zA-Z0-9_]+)\s*=\s*\"?([^\",]+)\"?")
+        params: Dict[str, str] = {
+            match.group(1).lower(): match.group(2).strip()
+            for match in param_pattern.finditer(params_section)
+        }
+
+        resource_metadata_url = params.get("resource_metadata")
+
+        scope_value = params.get("scope")
+        scopes_list = [s for s in (scope_value.split() if scope_value else []) if s]
+        scopes = scopes_list or None
+
+        return resource_metadata_url, scopes
+
+    async def _fetch_oauth_metadata_from_resource(
+        self, resource_metadata_url: str
+    ) -> Tuple[List[str], Optional[List[str]]]:
+        if not resource_metadata_url:
+            return [], None
+
+        try:
+            client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.MCP,
+                params={"timeout": 10.0, "follow_redirects": True},
+            )
+            response = await client.get(resource_metadata_url)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:  # pragma: no cover - network issues
+            verbose_logger.debug(
+                "Failed to fetch MCP OAuth metadata from %s: %s",
+                resource_metadata_url,
+                exc,
+            )
+            return [], None
+
+        raw_servers = data.get("authorization_servers")
+        if isinstance(raw_servers, list):
+            authorization_servers = [
+                entry
+                for entry in raw_servers
+                if isinstance(entry, str) and entry.strip() != ""
+            ]
+        else:
+            authorization_servers = []
+
+        scopes = self._extract_scopes(
+            data.get("scopes_supported") or data.get("scopes")
+        )
+
+        return authorization_servers, scopes
+
+    async def _attempt_well_known_discovery(
+        self, server_url: str
+    ) -> Tuple[List[str], Optional[List[str]]]:
+        try:
+            parsed = urlparse(server_url)
+        except Exception:
+            return [], None
+
+        if not parsed.scheme or not parsed.netloc:
+            return [], None
+
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        path = parsed.path or ""
+        path = path.strip("/")
+
+        candidate_urls: List[str] = []
+        if path:
+            candidate_urls.append(f"{base}/.well-known/oauth-protected-resource/{path}")
+        candidate_urls.append(f"{base}/.well-known/oauth-protected-resource")
+
+        for url in candidate_urls:
+            (
+                authorization_servers,
+                scopes,
+            ) = await self._fetch_oauth_metadata_from_resource(url)
+            if authorization_servers:
+                return authorization_servers, scopes
+
+        return [], None
+
+    async def _fetch_authorization_server_metadata(
+        self, authorization_servers: List[str]
+    ) -> Optional[MCPOAuthMetadata]:
+        for issuer in authorization_servers:
+            metadata = await self._fetch_single_authorization_server_metadata(issuer)
+            if metadata is not None:
+                return metadata
+        return None
+
+    async def _fetch_single_authorization_server_metadata(
+        self, issuer_url: str
+    ) -> Optional[MCPOAuthMetadata]:
+        try:
+            parsed = urlparse(issuer_url)
+        except Exception:
+            return None
+
+        if not parsed.scheme or not parsed.netloc:
+            return None
+
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        path = (parsed.path or "").strip("/")
+
+        candidate_urls: List[str] = []
+        if path:
+            candidate_urls.append(
+                f"{base}/.well-known/oauth-authorization-server/{path}"
+            )
+            candidate_urls.append(f"{base}/.well-known/openid-configuration/{path}")
+        candidate_urls.append(f"{base}/.well-known/oauth-authorization-server")
+        candidate_urls.append(f"{base}/.well-known/openid-configuration")
+        candidate_urls.append(issuer_url.rstrip("/"))
+
+        for url in candidate_urls:
+            try:
+                client = get_async_httpx_client(
+                    llm_provider=httpxSpecialProvider.MCP,
+                    params={"timeout": 10.0, "follow_redirects": True},
+                )
+                response = await client.get(url)
+                response.raise_for_status()
+                data = response.json()
+            except Exception as exc:  # pragma: no cover - network issues
+                verbose_logger.debug(
+                    "Failed to fetch authorization metadata from %s: %s",
+                    url,
+                    exc,
+                )
+                continue
+
+            scopes = self._extract_scopes(data.get("scopes_supported"))
+            metadata = MCPOAuthMetadata(
+                scopes=scopes,
+                authorization_url=data.get("authorization_endpoint"),
+                token_url=data.get("token_endpoint"),
+                registration_url=data.get("registration_endpoint"),
+            )
+
+            if any(
+                [
+                    metadata.scopes,
+                    metadata.authorization_url,
+                    metadata.token_url,
+                    metadata.registration_url,
+                ]
+            ):
+                return metadata
+
+        return None
+
+    def _extract_scopes(self, scopes_value: Any) -> Optional[List[str]]:
+        if isinstance(scopes_value, str):
+            scopes = [s.strip() for s in scopes_value.split() if s.strip()]
+            return scopes or None
+        if isinstance(scopes_value, list):
+            scopes = [s for s in scopes_value if isinstance(s, str) and s.strip()]
+            return scopes or None
+        return None
 
     async def _fetch_tools_with_timeout(
         self, client: MCPClient, server_name: str
@@ -706,8 +977,6 @@ class MCPServerManager:
 
         async def _list_tools_task():
             try:
-                await client.connect()
-
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
@@ -719,11 +988,6 @@ class MCPServerManager:
                     f"Client operation failed for {server_name}: {str(e)}"
                 )
                 return []
-            finally:
-                try:
-                    await client.disconnect()
-                except Exception:
-                    pass
 
         try:
             return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
@@ -1167,14 +1431,12 @@ class MCPServerManager:
         )
 
         async def _call_tool_via_client(client, params):
-            async with client:
-                return await client.call_tool(params)
+            return await client.call_tool(params)
 
         tasks.append(
             asyncio.create_task(_call_tool_via_client(client, call_tool_params))
         )
 
-        # IMPORTANT: Must await tasks INSIDE the context manager to keep connection alive
         try:
             mcp_responses = await asyncio.gather(*tasks)
         except (
