@@ -25,6 +25,7 @@ from litellm.types.videos.utils import (
 )
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+from litellm._logging import verbose_proxy_logger
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -206,7 +207,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL:predictLongRunning
         """
         vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params)
-        vertex_location = VertexBase.safe_get_vertex_ai_location(litellm_params)
+        original_location = VertexBase.safe_get_vertex_ai_location(litellm_params)
 
         if not vertex_project:
             raise ValueError(
@@ -214,8 +215,10 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                 "Set it via environment variable VERTEXAI_PROJECT or pass as parameter."
             )
 
-        # Default to us-central1 if no location specified
-        vertex_location = vertex_location or "us-central1"
+        # Force location to us-central1 (only supported location for video generation)
+        vertex_location = "us-central1"
+        if original_location and original_location != vertex_location:
+            verbose_proxy_logger.info(f"Vertex AI video generation: location {original_location} is currently not supported. Using {vertex_location} instead.")
 
         # Extract model name (remove vertex_ai/ prefix if present)
         model_name = model.replace("vertex_ai/", "")
