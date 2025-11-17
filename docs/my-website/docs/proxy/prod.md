@@ -62,13 +62,23 @@ These specifications provide:
 - Adequate memory for request processing and caching
 
 
-## 3. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
+## 3. On Kubernetes — Match Uvicorn Workers to CPU Count [Suggested CMD]
 
-Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
+Use this Docker `CMD`. It automatically matches Uvicorn workers to the pod’s CPU count, ensuring each worker uses one core efficiently for better throughput and stable latency.
 
-(Ensure that you're not setting `run_gunicorn` or `num_workers` in the CMD). 
 ```shell
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)"]
+```
+
+> **Optional:** If you observe gradual memory growth under sustained load, consider recycling workers after a fixed number of requests to mitigate leaks.
+> You can configure this either via CLI or environment variable:
+
+```shell
+# CLI
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)", "--max_requests_before_restart", "10000"]
+
+# or ENV (for deployment manifests / containers)
+export MAX_REQUESTS_BEFORE_RESTART=10000
 ```
 
 

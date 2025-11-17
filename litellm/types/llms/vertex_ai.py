@@ -178,6 +178,10 @@ class GeminiThinkingConfig(TypedDict, total=False):
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
+GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
+
+class GeminiImageConfig(TypedDict, total=False):
+    aspectRatio: GeminiImageAspectRatio
 
 class PrebuiltVoiceConfig(TypedDict):
     voiceName: str
@@ -206,7 +210,18 @@ class GenerationConfig(TypedDict, total=False):
     responseLogprobs: bool
     logprobs: int
     responseModalities: List[GeminiResponseModalities]
+    imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
+
+
+class VertexToolName(str, Enum):
+    """Enum for Vertex AI tool field names."""
+    GOOGLE_SEARCH = "googleSearch"
+    GOOGLE_SEARCH_RETRIEVAL = "googleSearchRetrieval"
+    ENTERPRISE_WEB_SEARCH = "enterpriseWebSearch"
+    URL_CONTEXT = "url_context"
+    CODE_EXECUTION = "code_execution"
+    GOOGLE_MAPS = "googleMaps"
 
 
 class Tools(TypedDict, total=False):
@@ -216,6 +231,7 @@ class Tools(TypedDict, total=False):
     enterpriseWebSearch: dict
     url_context: dict
     code_execution: dict
+    googleMaps: dict
     retrieval: Retrieval
 
 
@@ -620,6 +636,52 @@ class VertexBatchPredictionResponse(TypedDict, total=False):
     createTime: str
     updateTime: str
     modelVersionId: str
+
+
+class VertexVideoImage(TypedDict, total=False):
+    """Image input for video generation"""
+
+    bytesBase64Encoded: str
+    mimeType: str
+
+
+class VertexVideoGenerationInstance(TypedDict, total=False):
+    """Instance object for Vertex AI video generation request"""
+
+    prompt: Required[str]
+    image: VertexVideoImage
+
+
+class VertexVideoGenerationParameters(TypedDict, total=False):
+    """Parameters for Vertex AI video generation"""
+
+    aspectRatio: Literal["9:16", "16:9"]
+    durationSeconds: int
+
+
+class VertexVideoGenerationRequest(TypedDict):
+    """Complete request body for Vertex AI video generation"""
+
+    instances: Required[List[VertexVideoGenerationInstance]]
+    parameters: VertexVideoGenerationParameters
+
+
+class VertexVideoOutput(TypedDict, total=False):
+    """Video output in response"""
+
+    bytesBase64Encoded: str
+    mimeType: str
+    gcsUri: str
+
+
+class VertexVideoGenerationResponse(TypedDict, total=False):
+    """Response body for Vertex AI video generation"""
+
+    name: str
+    done: bool
+    response: Dict[str, Any]
+    metadata: Dict[str, Any]
+    error: Dict[str, Any]
 
 
 VERTEX_CREDENTIALS_TYPES = Union[str, Dict[str, str]]

@@ -953,7 +953,31 @@ except Exception as e:
 
 s/o @[Shekhar Patnaik](https://www.linkedin.com/in/patnaikshekhar) for requesting this!
 
-### Anthropic Hosted Tools (Computer, Text Editor, Web Search)
+### Context Management (Beta)
+
+Anthropic’s [context editing](https://docs.claude.com/en/docs/build-with-claude/context-editing) API lets you automatically clear older tool results or thinking blocks. LiteLLM now forwards the native `context_management` payload when you call Anthropic models, and automatically attaches the required `context-management-2025-06-27` beta header.
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Summarize the latest tool results"}],
+    context_management={
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 30000},
+                "keep": {"type": "tool_uses", "value": 3},
+                "clear_at_least": {"type": "input_tokens", "value": 5000},
+                "exclude_tools": ["web_search"],
+            }
+        ]
+    },
+)
+```
+
+### Anthropic Hosted Tools (Computer, Text Editor, Web Search, Memory)
 
 
 <Tabs>
@@ -1183,6 +1207,72 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </Tabs>
 
 </TabItem>
+
+<TabItem value="memory" label="Memory">
+
+:::info
+The Anthropic Memory tool is currently in beta.
+:::
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+tools = [{
+    "type": "memory_20250818",
+    "name": "memory"
+}]
+
+model = "claude-sonnet-4-5-20250929" 
+messages = [{"role": "user", "content": "Please remember that my favorite color is blue."}]
+
+response = completion(
+    model=model,
+    messages=messages,
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-memory-model
+    litellm_params:
+        model: anthropic/claude-sonnet-4-5-20250929
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $LITELLM_KEY" \
+    -d '{
+    "model": "claude-memory-model",
+    "messages": [{"role": "user", "content": "Please remember that my favorite color is blue."}],
+    "tools": [{"type": "memory_20250818", "name": "memory"}]
+    }'
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+
 </Tabs>
 
 

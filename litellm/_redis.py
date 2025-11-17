@@ -78,6 +78,7 @@ def _get_redis_cluster_kwargs(client=None):
     available_args.append("redis_connect_func")  # Needed for sync clusters and IAM detection
     available_args.append("gcp_service_account")
     available_args.append("gcp_ssl_ca_certs")
+    available_args.append("max_connections")
 
     return available_args
 
@@ -177,14 +178,21 @@ def get_redis_url_from_environment():
         raise ValueError(
             "Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT' must be specified for Redis."
         )
-
-    if "REDIS_PASSWORD" in os.environ:
-        redis_password = f":{os.environ['REDIS_PASSWORD']}@"
+    
+    if "REDIS_SSL" in os.environ and os.environ["REDIS_SSL"].lower() == "true":
+        redis_protocol = "rediss"
     else:
-        redis_password = ""
-
+        redis_protocol = "redis"
+    
+    # Build authentication part of URL
+    auth_part = ""
+    if "REDIS_USERNAME" in os.environ and "REDIS_PASSWORD" in os.environ:
+        auth_part = f"{os.environ['REDIS_USERNAME']}:{os.environ['REDIS_PASSWORD']}@"
+    elif "REDIS_PASSWORD" in os.environ:
+        auth_part = f"{os.environ['REDIS_PASSWORD']}@"
+    
     return (
-        f"redis://{redis_password}{os.environ['REDIS_HOST']}:{os.environ['REDIS_PORT']}"
+        f"{redis_protocol}://{auth_part}{os.environ['REDIS_HOST']}:{os.environ['REDIS_PORT']}"
     )
 
 
@@ -369,7 +377,7 @@ def get_redis_client(**env_overrides):
 
 
 def get_redis_async_client(
-    **env_overrides,
+    connection_pool: Optional[async_redis.BlockingConnectionPool] = None, **env_overrides,
 ) -> Union[async_redis.Redis, async_redis.RedisCluster]:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
@@ -440,6 +448,10 @@ def get_redis_async_client(
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_async_redis_sentinel(redis_kwargs)
     _pretty_print_redis_config(redis_kwargs=redis_kwargs)
+
+    if connection_pool is not None:
+        redis_kwargs["connection_pool"] = connection_pool
+
     return async_redis.Redis(
         **redis_kwargs,
     )

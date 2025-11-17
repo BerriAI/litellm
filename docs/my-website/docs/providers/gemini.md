@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `gemini/` |
 | Provider Doc | [Google AI Studio ↗](https://aistudio.google.com/) |
 | API Endpoint for Provider | https://generativelanguage.googleapis.com |
-| Supported OpenAI Endpoints | `/chat/completions`, [`/embeddings`](../embedding/supported_embedding#gemini-ai-embedding-models), `/completions` |
+| Supported OpenAI Endpoints | `/chat/completions`, [`/embeddings`](../embedding/supported_embedding#gemini-ai-embedding-models), `/completions`, [`/videos`](./gemini/videos.md), [`/images/edits`](../image_edits.md) |
 | Pass-through Endpoint | [Supported](../pass_through/google_ai_studio.md) |
 
 <br />
@@ -64,16 +64,21 @@ response = completion(
 
 LiteLLM translates OpenAI's `reasoning_effort` to Gemini's `thinking` parameter. [Code](https://github.com/BerriAI/litellm/blob/620664921902d7a9bfb29897a7b27c1a7ef4ddfb/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py#L362)
 
-Added an additional non-OpenAI standard "disable" value for non-reasoning Gemini requests.
+**Cost Optimization:** Use `reasoning_effort="none"` (OpenAI standard) for significant cost savings - up to 96% cheaper. [Google's docs](https://ai.google.dev/gemini-api/docs/openai)
+
+:::info
+Note: Reasoning cannot be turned off on Gemini 2.5 Pro models.
+:::
 
 **Mapping**
 
-| reasoning_effort | thinking |
-| ---------------- | -------- |
-| "disable"        | "budget_tokens": 0    |
-| "low"            | "budget_tokens": 1024 |
-| "medium"         | "budget_tokens": 2048 |
-| "high"           | "budget_tokens": 4096 |
+| reasoning_effort | thinking | Notes |
+| ---------------- | -------- | ----- |
+| "none"           | "budget_tokens": 0, "includeThoughts": false | 💰 **Recommended for cost optimization** - OpenAI-compatible, always 0 |
+| "disable"        | "budget_tokens": DEFAULT (0), "includeThoughts": false | LiteLLM-specific, configurable via env var |
+| "low"            | "budget_tokens": 1024 | |
+| "medium"         | "budget_tokens": 2048 | |
+| "high"           | "budget_tokens": 4096 | |
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -81,6 +86,14 @@ Added an additional non-OpenAI standard "disable" value for non-reasoning Gemini
 ```python
 from litellm import completion
 
+# Cost-optimized: Use reasoning_effort="none" for best pricing
+resp = completion(
+    model="gemini/gemini-2.0-flash-thinking-exp-01-21",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="none",  # Up to 96% cheaper!
+)
+
+# Or use other levels: "low", "medium", "high"
 resp = completion(
     model="gemini/gemini-2.5-flash-preview-04-17",
     messages=[{"role": "user", "content": "What is the capital of France?"}],

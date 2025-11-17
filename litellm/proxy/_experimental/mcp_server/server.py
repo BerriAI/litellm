@@ -238,7 +238,7 @@ if MCP_AVAILABLE:
         (
             user_api_key_auth,
             mcp_auth_header,
-            _,
+            mcp_servers,
             mcp_server_auth_headers,
             oauth2_headers,
             raw_headers,
@@ -272,6 +272,7 @@ if MCP_AVAILABLE:
             response = await call_mcp_tool(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
@@ -312,31 +313,32 @@ if MCP_AVAILABLE:
 
     async def _get_allowed_mcp_servers_from_mcp_server_names(
         mcp_servers: Optional[List[str]],
-        allowed_mcp_servers: List[str],
-    ) -> List[str]:
+        allowed_mcp_servers: List[MCPServer],
+    ) -> List[MCPServer]:
         """
         Get the filtered MCP servers from the MCP server names
         """
-        from typing import Set
 
-        filtered_server_ids: Set[str] = set()
+        filtered_server: dict[str, MCPServer] = {}
         # Filter servers based on mcp_servers parameter if provided
         if mcp_servers is not None:
             for server_or_group in mcp_servers:
                 server_name_matched = False
 
-                for server_id in allowed_mcp_servers:
-                    server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-
+                for server in allowed_mcp_servers:
                     if server:
                         match_list = [
                             s.lower()
-                            for s in [server.alias, server.server_name, server_id]
+                            for s in [
+                                server.alias,
+                                server.server_name,
+                                server.server_id,
+                            ]
                             if s is not None
                         ]
 
                         if server_or_group.lower() in match_list:
-                            filtered_server_ids.add(server_id)
+                            filtered_server[server.server_id] = server
                             server_name_matched = True
                             break
 
@@ -349,34 +351,81 @@ if MCP_AVAILABLE:
                         )
                         # Only include servers that the user has access to
                         for server_id in access_group_server_ids:
-                            if server_id in allowed_mcp_servers:
-                                filtered_server_ids.add(server_id)
+                            for server in allowed_mcp_servers:
+                                if server_id == server.server_id:
+                                    filtered_server[server.server_id] = server
                     except Exception as e:
                         verbose_logger.debug(
                             f"Could not resolve '{server_or_group}' as access group: {e}"
                         )
 
-        if filtered_server_ids:
-            allowed_mcp_servers = list(filtered_server_ids)
+        if filtered_server:
+            return list(filtered_server.values())
 
         return allowed_mcp_servers
+
+    def _tool_name_matches(tool_name: str, filter_list: List[str]) -> bool:
+        """
+        Check if a tool name matches any name in the filter list.
+
+        Checks both the full tool name and unprefixed version (without server prefix).
+        This allows users to configure simple tool names regardless of prefixing.
+
+        Args:
+            tool_name: The tool name to check (may be prefixed like "server-tool_name")
+            filter_list: List of tool names to match against
+
+        Returns:
+            True if the tool name (prefixed or unprefixed) is in the filter list
+        """
+        from litellm.proxy._experimental.mcp_server.utils import (
+            get_server_name_prefix_tool_mcp,
+        )
+
+        # Check if the full name is in the list
+        if tool_name in filter_list:
+            return True
+
+        # Check if the unprefixed name is in the list
+        unprefixed_name, _ = get_server_name_prefix_tool_mcp(tool_name)
+        return unprefixed_name in filter_list
 
     def filter_tools_by_allowed_tools(
         tools: List[MCPTool],
         mcp_server: MCPServer,
     ) -> List[MCPTool]:
         """
-        Filter tools by allowed tools
+        Filter tools by allowed/disallowed tools configuration.
+
+        If allowed_tools is set, only tools in that list are returned.
+        If disallowed_tools is set, tools in that list are excluded.
+        Tool names are matched with and without server prefixes for flexibility.
+
+        Args:
+            tools: List of tools to filter
+            mcp_server: Server configuration with allowed_tools/disallowed_tools
+
+        Returns:
+            Filtered list of tools
         """
         tools_to_return = tools
+
+        # Filter by allowed_tools (whitelist)
         if mcp_server.allowed_tools:
             tools_to_return = [
-                tool for tool in tools if tool.name in mcp_server.allowed_tools
+                tool
+                for tool in tools
+                if _tool_name_matches(tool.name, mcp_server.allowed_tools)
             ]
+
+        # Filter by disallowed_tools (blacklist)
         if mcp_server.disallowed_tools:
             tools_to_return = [
-                tool for tool in tools if tool.name not in mcp_server.disallowed_tools
+                tool
+                for tool in tools_to_return
+                if not _tool_name_matches(tool.name, mcp_server.disallowed_tools)
             ]
+
         return tools_to_return
 
     async def _get_tools_from_mcp_servers(
@@ -404,8 +453,11 @@ if MCP_AVAILABLE:
             return []
 
         # Get allowed MCP servers based on user permissions
-        allowed_mcp_servers = await global_mcp_server_manager.get_allowed_mcp_servers(
-            user_api_key_auth
+        allowed_mcp_server_ids = (
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+        )
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(
+            allowed_mcp_server_ids
         )
 
         if mcp_servers is not None:
@@ -419,8 +471,7 @@ if MCP_AVAILABLE:
 
         # Get tools from each allowed server
         all_tools = []
-        for server_id in allowed_mcp_servers:
-            server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        for server in allowed_mcp_servers:
             if server is None:
                 continue
 
@@ -453,9 +504,19 @@ if MCP_AVAILABLE:
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
                 )
-                all_tools.extend(filter_tools_by_allowed_tools(tools, server))
+
+                filtered_tools = filter_tools_by_allowed_tools(tools, server)
+
+                filtered_tools = await filter_tools_by_key_team_permissions(
+                    tools=filtered_tools,
+                    server_id=server.server_id,
+                    user_api_key_auth=user_api_key_auth,
+                )
+
+                all_tools.extend(filtered_tools)
+
                 verbose_logger.debug(
-                    f"Successfully fetched {len(tools)} tools from server {server.name}"
+                    f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
                 )
             except Exception as e:
                 verbose_logger.exception(
@@ -466,7 +527,40 @@ if MCP_AVAILABLE:
         verbose_logger.info(
             f"Successfully fetched {len(all_tools)} tools total from all MCP servers"
         )
+
         return all_tools
+
+    async def filter_tools_by_key_team_permissions(
+        tools: List[MCPTool],
+        server_id: str,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> List[MCPTool]:
+        """
+        Filter tools based on key/team mcp_tool_permissions.
+
+        Note: Tool names in the DB are stored without server prefixes,
+        but tool names from MCP servers are prefixed. We need to strip
+        the prefix before comparing.
+        """
+        # Filter by key/team tool-level permissions
+        allowed_tool_names = await MCPRequestHandler.get_allowed_tools_for_server(
+            server_id=server_id,
+            user_api_key_auth=user_api_key_auth,
+        )
+        if allowed_tool_names is not None:
+            # Strip prefix from tool names before comparing
+            # Tools are stored in DB without prefix, but come from MCP server with prefix
+            filtered_tools = []
+            for t in tools:
+                # Get tool name without server prefix
+                unprefixed_tool_name, _ = get_server_name_prefix_tool_mcp(t.name)
+                if unprefixed_tool_name in allowed_tool_names:
+                    filtered_tools.append(t)
+        else:
+            # No restrictions, return all tools
+            filtered_tools = tools
+
+        return filtered_tools
 
     async def _list_mcp_tools(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -510,30 +604,7 @@ if MCP_AVAILABLE:
             )
             # Continue with empty managed tools list instead of failing completely
 
-        # Get tools from local registry
-        local_tools = []
-        try:
-            local_tools_raw = global_mcp_tool_registry.list_tools()
-
-            # Convert local tools to MCPTool format
-            for tool in local_tools_raw:
-                # Convert from litellm.types.mcp_server.tool_registry.MCPTool to mcp.types.Tool
-                mcp_tool = MCPTool(
-                    name=tool.name,
-                    description=tool.description,
-                    inputSchema=tool.input_schema,
-                )
-                local_tools.append(mcp_tool)
-        except Exception as e:
-            verbose_logger.exception(
-                f"Error getting tools from local registry: {str(e)}"
-            )
-            # Continue with empty local tools list instead of failing completely
-
-        # Combine all tools
-        all_tools = managed_tools + local_tools
-
-        return all_tools
+        return managed_tools
 
     @client
     async def call_mcp_tool(
@@ -541,6 +612,7 @@ if MCP_AVAILABLE:
         arguments: Optional[Dict[str, Any]] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
+        mcp_servers: Optional[List[str]] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
@@ -555,72 +627,99 @@ if MCP_AVAILABLE:
                 status_code=400, detail="Request arguments are required"
             )
 
-        # Remove prefix from tool name for logging and processing
-        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(
-            name
-        )
-
         ## CHECK IF USER IS ALLOWED TO CALL THIS TOOL
-        allowed_mcp_server_ids = await MCPRequestHandler.get_allowed_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
+        allowed_mcp_server_ids = (
+            await global_mcp_server_manager.get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+            )
         )
 
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_server_names_from_ids(
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(
             allowed_mcp_server_ids
         )
 
-        if not MCPRequestHandler.is_tool_allowed(
+        allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
+            mcp_servers=mcp_servers,
             allowed_mcp_servers=allowed_mcp_servers,
-            server_name=server_name_from_prefix,
-        ):
+        )
 
-            raise HTTPException(
-                status_code=403,
-                detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
-            )
+        # Track resolved MCP server for both permission checks and dispatch
+        mcp_server: Optional[MCPServer] = None
+
+        # Remove prefix from tool name for logging and processing
+        original_tool_name, server_name = get_server_name_prefix_tool_mcp(name)
+
+        # If tool name is unprefixed, resolve its server so we can enforce permissions
+        if not server_name:
+            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            if mcp_server:
+                server_name = mcp_server.name
+
+        # Only enforce server-level permissions when we can resolve a server
+        if server_name:
+            if not MCPRequestHandler.is_tool_allowed(
+                allowed_mcp_servers=[server.name for server in allowed_mcp_servers],
+                server_name=server_name,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
+                )
 
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
             _get_standard_logging_mcp_tool_call(
                 name=original_tool_name,  # Use original name for logging
                 arguments=arguments,
-                server_name=server_name_from_prefix,
+                server_name=server_name,
             )
         )
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
-                standard_logging_mcp_tool_call
-            )
+            litellm_logging_obj.model_call_details[
+                "mcp_tool_call_metadata"
+            ] = standard_logging_mcp_tool_call
             litellm_logging_obj.model = f"MCP: {name}"
-        # Try managed server tool first (pass the full prefixed name)
-        # Primary and recommended way to use MCP servers
+        # Check if tool exists in local registry first (for OpenAPI-based tools)
+        # These tools are registered with their prefixed names
         #########################################################
-        mcp_server: Optional[MCPServer] = (
-            global_mcp_server_manager._get_mcp_server_from_tool_name(name)
-        )
-        if mcp_server:
-            standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
-                mcp_server.mcp_info or {}
-            ).get("mcp_server_cost_info")
-            response = await _handle_managed_mcp_tool(
-                name=name,  # Pass the full name (potentially prefixed)
-                arguments=arguments,
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                litellm_logging_obj=litellm_logging_obj,
-            )
+        local_tool = global_mcp_tool_registry.get_tool(name)
+        if local_tool:
+            verbose_logger.debug(f"Executing local registry tool: {name}")
+            response = await _handle_local_mcp_tool(name, arguments)
 
-        # Fall back to local tool registry (use original name)
-        #########################################################
-        # Deprecated: Local MCP Server Tool
+        # Try managed MCP server tool (pass the full prefixed name)
+        # Primary and recommended way to use external MCP servers
         #########################################################
         else:
-            response = await _handle_local_mcp_tool(original_tool_name, arguments)
+            # If we haven't already resolved the server, do it now for dispatch
+            if mcp_server is None:
+                mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(
+                    name
+                )
+            if mcp_server:
+                standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                    mcp_server.mcp_info or {}
+                ).get("mcp_server_cost_info")
+                response = await _handle_managed_mcp_tool(
+                    server_name=server_name,
+                    name=original_tool_name,  # Pass the full name (potentially prefixed)
+                    arguments=arguments,
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    litellm_logging_obj=litellm_logging_obj,
+                )
+
+            # Fall back to local tool registry with original name (legacy support)
+            #########################################################
+            # Deprecated: Local MCP Server Tool
+            #########################################################
+            else:
+                response = await _handle_local_mcp_tool(original_tool_name, arguments)
 
         #########################################################
         # Post MCP Tool Call Hook
@@ -659,6 +758,7 @@ if MCP_AVAILABLE:
             )
 
     async def _handle_managed_mcp_tool(
+        server_name: str,
         name: str,
         arguments: Dict[str, Any],
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -673,6 +773,7 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         call_tool_result = await global_mcp_server_manager.call_tool(
+            server_name=server_name,
             name=name,
             arguments=arguments,
             user_api_key_auth=user_api_key_auth,
@@ -692,14 +793,21 @@ if MCP_AVAILABLE:
         Handle tool execution for local registry tools
         Note: Local tools don't use prefixes, so we use the original name
         """
+        import inspect
+
         tool = global_mcp_tool_registry.get_tool(name)
         if not tool:
             raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
 
         try:
-            result = tool.handler(**arguments)
+            # Check if handler is async or sync
+            if inspect.iscoroutinefunction(tool.handler):
+                result = await tool.handler(**arguments)
+            else:
+                result = tool.handler(**arguments)
             return [TextContent(text=str(result), type="text")]
         except Exception as e:
+            verbose_logger.exception(f"Error executing local tool {name}: {str(e)}")
             return [TextContent(text=f"Error: {str(e)}", type="text")]
 
     def _get_mcp_servers_in_path(path: str) -> Optional[List[str]]:
@@ -802,6 +910,26 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
+            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
+            for server_name in mcp_servers or []:
+                server = global_mcp_server_manager.get_mcp_server_by_name(server_name)
+                if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
+                    from starlette.requests import Request
+
+                    request = Request(scope)
+                    base_url = str(request.base_url).rstrip("/")
+
+                    authorization_uri = (
+                        f"Bearer authorization_uri="
+                        f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                    )
+
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": authorization_uri},
+                    )
+
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
@@ -820,6 +948,7 @@ if MCP_AVAILABLE:
 
             await session_manager.handle_request(scope, receive, send)
         except Exception as e:
+            raise e
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response
             try:
@@ -947,14 +1076,16 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> Tuple[
-        Optional[UserAPIKeyAuth],
-        Optional[str],
-        Optional[List[str]],
-        Optional[Dict[str, Dict[str, str]]],
-        Optional[Dict[str, str]],
-        Optional[Dict[str, str]],
-    ]:
+    def get_auth_context() -> (
+        Tuple[
+            Optional[UserAPIKeyAuth],
+            Optional[str],
+            Optional[List[str]],
+            Optional[Dict[str, Dict[str, str]]],
+            Optional[Dict[str, str]],
+            Optional[Dict[str, str]],
+        ]
+    ):
         """
         Get the UserAPIKeyAuth from the auth context variable.
 

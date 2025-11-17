@@ -9,7 +9,7 @@ export const mcpServerColumns = (
   userRole: string,
   onView: (serverId: string) => void,
   onEdit: (serverId: string) => void,
-  onDelete: (serverId: string) => void
+  onDelete: (serverId: string) => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -36,30 +36,75 @@ export const mcpServerColumns = (
     header: "URL",
     cell: ({ row }) => {
       const { maskedUrl } = getMaskedAndFullUrl(row.original.url);
-      return (
-        <span className="font-mono text-sm">
-          {maskedUrl}
-        </span>
-      );
+      return <span className="font-mono text-sm">{maskedUrl}</span>;
     },
   },
   {
     accessorKey: "transport",
     header: "Transport",
-    cell: ({ getValue }) => (
-      <span>
-        {(getValue() as string || "http").toUpperCase()}
-      </span>
-    ),
+    cell: ({ getValue }) => <span>{((getValue() as string) || "http").toUpperCase()}</span>,
   },
   {
     accessorKey: "auth_type",
     header: "Auth Type",
-    cell: ({ getValue }) => (
-      <span>
-        {getValue() as string || "none"}
-      </span>
-    ),
+    cell: ({ getValue }) => <span>{(getValue() as string) || "none"}</span>,
+  },
+  {
+    id: "health_status",
+    header: "Health Status",
+    cell: ({ row }) => {
+      const server = row.original;
+      const status = server.status || "unknown";
+      const lastCheck = server.last_health_check;
+      const error = server.health_check_error;
+
+      const getStatusColor = (status: string) => {
+        switch (status) {
+          case "healthy":
+            return "text-green-500 bg-green-50 hover:bg-green-100";
+          case "unhealthy":
+            return "text-red-500 bg-red-50 hover:bg-red-100";
+          default:
+            return "text-gray-500 bg-gray-50 hover:bg-gray-100";
+        }
+      };
+
+      const getStatusIcon = (status: string) => {
+        switch (status) {
+          case "healthy":
+            return "●";
+          case "unhealthy":
+            return "●";
+          default:
+            return "●";
+        }
+      };
+
+      const tooltipContent = (
+        <div className="max-w-xs">
+          <div className="font-semibold mb-1">Health Status: {status}</div>
+          {lastCheck && <div className="text-xs mb-1">Last Check: {new Date(lastCheck).toLocaleString()}</div>}
+          {error && (
+            <div className="text-xs">
+              <div className="font-medium text-red-400 mb-1">Error:</div>
+              <div className="break-words">{error}</div>
+            </div>
+          )}
+          {!lastCheck && !error && <div className="text-xs text-gray-400">No health check data available</div>}
+        </div>
+      );
+
+      return (
+        <Tooltip title={tooltipContent} placement="top">
+          <button
+            className={`font-mono text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[10ch] ${getStatusColor(status)}`}
+          >
+            <span className="mr-1">{getStatusIcon(status)}</span>
+            {status.charAt(0).toUpperCase() + status.slice(1)}
+          </button>
+        </Tooltip>
+      );
+    },
   },
   {
     id: "mcp_access_groups",
@@ -72,7 +117,9 @@ export const mcpServerColumns = (
           const joined = groups.join(", ");
           return (
             <Tooltip title={joined}>
-              <span className="max-w-[200px] truncate block">{joined.length > 30 ? `${joined.slice(0, 30)}...` : joined}</span>
+              <span className="max-w-[200px] truncate block">
+                {joined.length > 30 ? `${joined.slice(0, 30)}...` : joined}
+              </span>
             </Tooltip>
           );
         }
@@ -87,9 +134,7 @@ export const mcpServerColumns = (
     cell: ({ row }) => {
       const server = row.original;
       return (
-        <span className="text-xs">
-          {server.created_at ? new Date(server.created_at).toLocaleDateString() : "-"}
-        </span>
+        <span className="text-xs">{server.created_at ? new Date(server.created_at).toLocaleDateString() : "-"}</span>
       );
     },
   },
@@ -100,9 +145,7 @@ export const mcpServerColumns = (
     cell: ({ row }) => {
       const server = row.original;
       return (
-        <span className="text-xs">
-          {server.updated_at ? new Date(server.updated_at).toLocaleDateString() : "-"}
-        </span>
+        <span className="text-xs">{server.updated_at ? new Date(server.updated_at).toLocaleDateString() : "-"}</span>
       );
     },
   },
@@ -117,12 +160,7 @@ export const mcpServerColumns = (
           onClick={() => onEdit(row.original.server_id)}
           className="cursor-pointer"
         />
-        <Icon
-          icon={TrashIcon}
-          size="sm"
-          onClick={() => onDelete(row.original.server_id)}
-          className="cursor-pointer"
-        />
+        <Icon icon={TrashIcon} size="sm" onClick={() => onDelete(row.original.server_id)} className="cursor-pointer" />
       </div>
     ),
   },

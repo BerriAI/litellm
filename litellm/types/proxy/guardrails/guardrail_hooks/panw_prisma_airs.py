@@ -15,9 +15,29 @@ class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
         description="The API base for the PANW Prisma AIRS guardrail. Defaults to https://service.api.aisecurity.paloaltonetworks.com. If not provided, the `PANW_PRISMA_AIRS_API_BASE` environment variable is checked.",
     )
 
-    profile_name: str = Field(
-        default="default",
-        description="PANW Prisma AIRS security profile name. Required.",
+    profile_name: Optional[str] = Field(
+        default=None,
+        description="PANW Prisma AIRS security profile name configured in Strata Cloud Manager. Optional if API key has a linked profile.",
+    )
+
+    app_name: Optional[str] = Field(
+        default=None,
+        description="Application name for tracking this LiteLLM instance in Prisma AIRS analytics and dashboards. Defaults to 'LiteLLM' if not specified.",
+    )
+
+    mask_on_block: bool = Field(
+        default=False,
+        description="Backwards compatible flag that enables both request and response masking. When True, enables both mask_request_content and mask_response_content.",
+    )
+
+    mask_request_content: bool = Field(
+        default=False,
+        description="Apply masking to prompts that would be blocked. When True, masked content is sent to the LLM instead of blocking the request.",
+    )
+
+    mask_response_content: bool = Field(
+        default=False,
+        description="Apply masking to responses that would be blocked. When True, masked content is returned to the user instead of blocking the response.",
     )
 
     @staticmethod

@@ -22,12 +22,13 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
 }) => {
   // Predefined intervals
   const predefinedIntervals = ["7d", "30d", "90d", "180d", "365d"];
-  
+
   // Check if current interval is custom
   const isCustomInterval = rotationInterval && !predefinedIntervals.includes(rotationInterval);
-  
+
   const [showCustomInput, setShowCustomInput] = useState(isCustomInterval);
   const [customInterval, setCustomInterval] = useState(isCustomInterval ? rotationInterval : "");
+  const [durationValue, setDurationValue] = useState<string>(form?.getFieldValue?.("duration") || "");
 
   const handleIntervalChange = (value: string) => {
     if (value === "custom") {
@@ -44,6 +45,15 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
     const value = e.target.value;
     setCustomInterval(value);
     onRotationIntervalChange(value);
+  };
+
+  const handleDurationChange = (value: string) => {
+    setDurationValue(value);
+    if (form && typeof form.setFieldValue === "function") {
+      form.setFieldValue("duration", value);
+    } else if (form && typeof form.setFieldsValue === "function") {
+      form.setFieldsValue({ duration: value });
+    }
   };
   return (
     <div className="space-y-6">
@@ -62,6 +72,8 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
             name="duration"
             placeholder="e.g., 30d"
             className="w-full"
+            value={durationValue}
+            onValueChange={handleDurationChange}
           />
         </div>
       </div>
@@ -110,7 +122,7 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
                   <Option value="365d">365 days</Option>
                   <Option value="custom">Custom interval</Option>
                 </Select>
-                
+
                 {showCustomInput && (
                   <div className="space-y-1">
                     <TextInput
@@ -130,7 +142,8 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
 
         {autoRotationEnabled && (
           <div className="bg-blue-50 p-3 rounded-md text-sm text-blue-700">
-            When rotation occurs, you&apos;ll receive a notification with the new key. The old key will be deactivated after a brief grace period.
+            When rotation occurs, you&apos;ll receive a notification with the new key. The old key will be deactivated
+            after a brief grace period.
           </div>
         )}
       </div>

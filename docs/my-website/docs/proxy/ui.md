@@ -54,6 +54,22 @@ Allow others to create/delete their own keys.
 
 [**Go Here**](./self_serve.md)
 
+## Model Management
+
+The Admin UI provides comprehensive model management capabilities:
+
+- **Add Models**: Add new models through the UI without restarting the proxy
+- **AI Hub**: Make models and agents public for developers to discover what's available
+- **Price Data Sync**: Keep model pricing data up to date by syncing from GitHub
+
+For detailed information on model management, see [Model Management](./model_management.md).
+
+For information on sharing models and agents, see [AI Hub](./ai_hub.md).
+
+:::tip Sync Model Pricing Data
+[Sync model pricing data from GitHub](./sync_models_github.md) to keep your model cost information current.
+:::
+
 ## Disable Admin UI
 
 Set `DISABLE_ADMIN_UI="True"` in your environment to disable the Admin UI. 

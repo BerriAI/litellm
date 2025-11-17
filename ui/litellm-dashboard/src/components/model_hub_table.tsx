@@ -1,24 +1,20 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, getProxyBaseUrl } from "./networking";
-import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
+import { useRouter } from "next/navigation";
+import { modelHubCall, modelHubPublicModelsCall, getAgentsList, getProxyBaseUrl } from "./networking";
+import { getConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
+import { agentHubColumns, AgentHubData } from "./agent_hub_table_columns";
 import PublicModelHub from "./public_model_hub";
 import MakeModelPublicForm from "./make_model_public_form";
+import MakeAgentPublicForm from "./make_agent_public_form";
 import ModelFilters from "./model_filters";
 import UsefulLinksManagement from "./useful_links_management";
-import {
-  Card,
-  Text,
-  Title,
-  Button,
-  Badge,
-  Flex,
-} from "@tremor/react";
-import { Modal, message, Tooltip } from "antd";
+import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { Modal } from "antd";
+import { CopyOutlined } from "@ant-design/icons";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { Table as TableInstance } from '@tanstack/react-table';
+import { Table as TableInstance } from "@tanstack/react-table";
 import { Copy } from "lucide-react";
 import { isAdminRole } from "../utils/roles";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -49,12 +45,7 @@ interface ModelGroupInfo {
   [key: string]: any;
 }
 
-const ModelHubTable: React.FC<ModelHubTableProps> = ({
-  accessToken,
-  publicPage,
-  premiumUser,
-  userRole,
-}) => {
+const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, premiumUser, userRole }) => {
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -63,8 +54,15 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [selectedModel, setSelectedModel] = useState<null | ModelGroupInfo>(null);
   const [filteredData, setFilteredData] = useState<ModelGroupInfo[]>([]);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
+  // Agent Hub state
+  const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
+  const [isMakeAgentPublicModalVisible, setIsMakeAgentPublicModalVisible] = useState(false);
+  const [agentLoading, setAgentLoading] = useState<boolean>(true);
+  const [selectedAgent, setSelectedAgent] = useState<null | AgentHubData>(null);
+  const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
   const router = useRouter();
   const tableRef = useRef<TableInstance<any>>(null);
+  const agentTableRef = useRef<TableInstance<any>>(null);
 
   useEffect(() => {
     const fetchData = async (accessToken: string) => {
@@ -106,7 +104,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       } finally {
         setLoading(false);
       }
-    }
+    };
 
     if (accessToken) {
       fetchData(accessToken);
@@ -115,9 +113,44 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     }
   }, [accessToken, publicPage]);
 
+  // Fetch Agent Hub data
+  useEffect(() => {
+    const fetchAgentData = async () => {
+      if (!accessToken) {
+        return;
+      }
+
+      try {
+        setAgentLoading(true);
+        const response = await getAgentsList(accessToken);
+        console.log("AgentHubData:", response);
+        let agents = response.agents;
+        let agent_card_list = agents.map((agent: any) => ({
+          agent_id: agent.agent_id,
+          ...agent.agent_card_params,
+          is_public: agent.litellm_params.is_public,
+        }));
+        setAgentHubData(agent_card_list);
+      } catch (error) {
+        console.error("There was an error fetching the agent data", error);
+      } finally {
+        setAgentLoading(false);
+      }
+    };
+
+    if (!publicPage) {
+      fetchAgentData();
+    }
+  }, [publicPage, accessToken]);
+
   const showModal = (model: ModelGroupInfo) => {
     setSelectedModel(model);
     setIsModalVisible(true);
+  };
+
+  const showAgentModal = (agent: AgentHubData) => {
+    setSelectedAgent(agent);
+    setIsAgentModalVisible(true);
   };
 
   const goToPublicModelPage = () => {
@@ -128,21 +161,34 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     if (!accessToken) {
       return;
     }
-    
+
     // Show the modal for selecting models to make public
     setIsMakePublicModalVisible(true);
+  };
+
+  const handleMakeAgentPublicPage = () => {
+    if (!accessToken) {
+      return;
+    }
+
+    // Show the modal for selecting agents to make public
+    setIsMakeAgentPublicModalVisible(true);
   };
 
   const handleOk = () => {
     setIsModalVisible(false);
     setIsPublicPageModalVisible(false);
     setSelectedModel(null);
+    setIsAgentModalVisible(false);
+    setSelectedAgent(null);
   };
 
   const handleCancel = () => {
     setIsModalVisible(false);
     setIsPublicPageModalVisible(false);
     setSelectedModel(null);
+    setIsAgentModalVisible(false);
+    setSelectedAgent(null);
   };
 
   const copyToClipboard = (text: string) => {
@@ -153,16 +199,16 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const formatCapabilityName = (key: string) => {
     // Remove 'supports_' prefix and convert snake_case to Title Case
     return key
-      .replace(/^supports_/, '')
-      .split('_')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+      .replace(/^supports_/, "")
+      .split("_")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
   };
 
   const getModelCapabilities = (model: ModelGroupInfo) => {
     // Find all properties that start with 'supports_' and are true
     return Object.entries(model)
-      .filter(([key, value]) => key.startsWith('supports_') && value === true)
+      .filter(([key, value]) => key.startsWith("supports_") && value === true)
       .map(([key]) => key);
   };
 
@@ -185,108 +231,153 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     }
   };
 
+  const handleMakeAgentPublicSuccess = () => {
+    // Refresh the agent hub data after successful public operation
+    if (accessToken) {
+      const fetchAgentData = async () => {
+        try {
+          const response = await getAgentsList(accessToken);
+          let agents = response.agents;
+          let agent_card_list = agents.map((agent: any) => ({
+            agent_id: agent.agent_id,
+            ...agent.agent_card_params,
+            is_public: agent.is_public,
+          }));
+          setAgentHubData(agent_card_list);
+        } catch (error) {
+          console.error("Error refreshing agent data:", error);
+        }
+      };
+      fetchAgentData();
+    }
+  };
+
   const handleFilteredDataChange = useCallback((newFilteredData: ModelGroupInfo[]) => {
     setFilteredData(newFilteredData);
   }, []);
 
   console.log("publicPage: ", publicPage);
   console.log("publicPageAllowed: ", publicPageAllowed);
-  
+
   // If this is a public page, use the dedicated PublicModelHub component
   if (publicPage && publicPageAllowed) {
     return <PublicModelHub accessToken={accessToken} />;
   }
-  
+
   return (
     <div className="w-full mx-4 h-[75vh]">
       {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
+          {/* Header with Title, Description and URL */}
           <div className="flex justify-between items-center mb-6">
             <div className="flex flex-col items-start">
-            <Title className="text-center">Model Hub</Title>
-            {isAdminRole(userRole || "") ? (
-              <p className="text-sm text-gray-600">
-                Make models public for developers to know what models are available on the proxy.
-              </p>
-            ): (
-            <p className="text-sm text-gray-600">
-              A list of all public model names personally available to you.
-            </p>
-            )}
+              <Title className="text-center">AI Hub</Title>
+              {isAdminRole(userRole || "") ? (
+                <p className="text-sm text-gray-600">
+                  Make models and agents public for developers to know what&apos;s available.
+                </p>
+              ) : (
+                <p className="text-sm text-gray-600">A list of all public model names personally available to you.</p>
+              )}
             </div>
-                          <div className="flex items-center space-x-4">
-                <Text>Model Hub URL:</Text>
-                <div className="flex items-center bg-gray-200 px-2 py-1 rounded">
-                  <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
-                  <button
-                    onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
-                    className="p-1 hover:bg-gray-300 rounded transition-colors"
-                    title="Copy URL"
-                  >
-                    <Copy size={16} className="text-gray-600" />
-                  </button>
-                </div>
-            
-            {publicPage == false && isAdminRole(userRole || "") && (
-              <Button 
-                className="ml-4" 
-                onClick={() => handleMakePublicPage()}
-              >
-                Make Public
-              </Button>
-            )}
+            <div className="flex items-center space-x-4">
+              <Text>Model Hub URL:</Text>
+              <div className="flex items-center bg-gray-200 px-2 py-1 rounded">
+                <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
+                <button
+                  onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
+                  className="p-1 hover:bg-gray-300 rounded transition-colors"
+                  title="Copy URL"
+                >
+                  <Copy size={16} className="text-gray-600" />
+                </button>
+              </div>
+            </div>
           </div>
-          </div>
-
 
           {/* Useful Links Management Section for Admins */}
           {isAdminRole(userRole || "") && (
             <div className="mt-8 mb-2">
-              <UsefulLinksManagement 
-                accessToken={accessToken}
-                userRole={userRole}
-              />
+              <UsefulLinksManagement accessToken={accessToken} userRole={userRole} />
             </div>
           )}
 
-          {/* Model Filters and Table */}
-          <Card>
-            {/* Filters */}
-            <ModelFilters
-              modelHubData={modelHubData || []}
-              onFilteredDataChange={handleFilteredDataChange}
-            />
+          {/* Tab System for Model Hub and Agent Hub */}
+          <TabGroup>
+            <TabList className="mb-4">
+              <Tab>Model Hub</Tab>
+              <Tab>Agent Hub</Tab>
+            </TabList>
 
-            {/* Model Table */}
-            <ModelDataTable
-              columns={modelHubColumns(
-                showModal,
-                copyToClipboard,
-                publicPage,
-              )}
-              data={filteredData}
-              isLoading={loading}
-              table={tableRef}
-              defaultSorting={[{ id: "model_group", desc: false }]}
-            />
-          </Card>
+            <TabPanels>
+              {/* Model Hub Tab */}
+              <TabPanel>
+                {/* Model Filters and Table */}
+                <Card>
+                  {/* Header with Make Public Button */}
+                  {publicPage == false && isAdminRole(userRole || "") && (
+                    <div className="flex justify-end mb-4">
+                      <Button onClick={() => handleMakePublicPage()}>
+                        Select Models to Make Public
+                      </Button>
+                    </div>
+                  )}
+                  
+                  {/* Filters */}
+                  <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
 
-          <div className="mt-4 text-center space-y-2">
-            <Text className="text-sm text-gray-600">
-              Showing {filteredData.length} of {modelHubData?.length || 0} models
-            </Text>
-          </div>
+                  {/* Model Table */}
+                  <ModelDataTable
+                    columns={modelHubColumns(showModal, copyToClipboard, publicPage)}
+                    data={filteredData}
+                    isLoading={loading}
+                    table={tableRef}
+                    defaultSorting={[{ id: "model_group", desc: false }]}
+                  />
+                </Card>
 
-          
+                <div className="mt-4 text-center space-y-2">
+                  <Text className="text-sm text-gray-600">
+                    Showing {filteredData.length} of {modelHubData?.length || 0} models
+                  </Text>
+                </div>
+              </TabPanel>
+
+              {/* Agent Hub Tab */}
+              <TabPanel>
+                <Card>
+                  {/* Header with Make Public Button */}
+                  {publicPage == false && isAdminRole(userRole || "") && (
+                    <div className="flex justify-end mb-4">
+                      <Button onClick={() => handleMakeAgentPublicPage()}>
+                        Select Agents to Make Public
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Agent Table */}
+                  <ModelDataTable
+                    columns={agentHubColumns(showAgentModal, copyToClipboard, publicPage)}
+                    data={agentHubData || []}
+                    isLoading={agentLoading}
+                    table={agentTableRef}
+                    defaultSorting={[{ id: "name", desc: false }]}
+                  />
+                </Card>
+
+                <div className="mt-4 text-center space-y-2">
+                  <Text className="text-sm text-gray-600">
+                    Showing {agentHubData?.length || 0} agent{agentHubData?.length !== 1 ? "s" : ""}
+                  </Text>
+                </div>
+              </TabPanel>
+            </TabPanels>
+          </TabGroup>
         </div>
       ) : (
         <Card className="mx-auto max-w-xl mt-10">
-          <Text className="text-xl text-center mb-2 text-black">
-            Public Model Hub not enabled.
-          </Text>
-          <p className="text-base text-center text-slate-800">
-            Ask your proxy admin to enable this on their Admin UI.
-          </p>
+          <Text className="text-xl text-center mb-2 text-black">Public Model Hub not enabled.</Text>
+          <p className="text-base text-center text-slate-800">Ask your proxy admin to enable this on their Admin UI.</p>
         </Card>
       )}
 
@@ -338,8 +429,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <div>
                   <Text className="font-medium">Providers:</Text>
                   <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedModel.providers.map(provider => (
-                      <Badge key={provider} color="blue">{provider}</Badge>
+                    {selectedModel.providers.map((provider) => (
+                      <Badge key={provider} color="blue">
+                        {provider}
+                      </Badge>
                     ))}
                   </div>
                 </div>
@@ -360,11 +453,19 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 </div>
                 <div>
                   <Text className="font-medium">Input Cost per 1M Tokens:</Text>
-                  <Text>{selectedModel.input_cost_per_token ? formatCost(selectedModel.input_cost_per_token) : "Not specified"}</Text>
+                  <Text>
+                    {selectedModel.input_cost_per_token
+                      ? formatCost(selectedModel.input_cost_per_token)
+                      : "Not specified"}
+                  </Text>
                 </div>
                 <div>
                   <Text className="font-medium">Output Cost per 1M Tokens:</Text>
-                  <Text>{selectedModel.output_cost_per_token ? formatCost(selectedModel.output_cost_per_token) : "Not specified"}</Text>
+                  <Text>
+                    {selectedModel.output_cost_per_token
+                      ? formatCost(selectedModel.output_cost_per_token)
+                      : "Not specified"}
+                  </Text>
                 </div>
               </div>
             </div>
@@ -375,17 +476,14 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               <div className="flex flex-wrap gap-2">
                 {(() => {
                   const capabilities = getModelCapabilities(selectedModel);
-                  const colors = ['green', 'blue', 'purple', 'orange', 'red', 'yellow'];
-                  
+                  const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
+
                   if (capabilities.length === 0) {
                     return <Text className="text-gray-500">No special capabilities listed</Text>;
                   }
-                  
+
                   return capabilities.map((capability, index) => (
-                    <Badge 
-                      key={capability} 
-                      color={colors[index % colors.length]}
-                    >
+                    <Badge key={capability} color={colors[index % colors.length]}>
                       {formatCapabilityName(capability)}
                     </Badge>
                   ));
@@ -419,8 +517,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               <div>
                 <Text className="text-lg font-semibold mb-4">Supported OpenAI Parameters</Text>
                 <div className="flex flex-wrap gap-2">
-                  {selectedModel.supported_openai_params.map(param => (
-                    <Badge key={param} color="green">{param}</Badge>
+                  {selectedModel.supported_openai_params.map((param) => (
+                    <Badge key={param} color="green">
+                      {param}
+                    </Badge>
                   ))}
                 </div>
               </div>
@@ -454,6 +554,145 @@ print(response.choices[0].message.content)`}
         )}
       </Modal>
 
+      {/* Agent Details Modal */}
+      <Modal
+        title={selectedAgent?.name || "Agent Details"}
+        width={1000}
+        visible={isAgentModalVisible}
+        footer={null}
+        onOk={handleOk}
+        onCancel={handleCancel}
+      >
+        {selectedAgent && (
+          <div className="space-y-6">
+            {/* Agent Overview */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Agent Overview</Text>
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <Text className="font-medium">Name:</Text>
+                  <Text>{selectedAgent.name}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Version:</Text>
+                  <Badge color="blue">v{selectedAgent.version}</Badge>
+                </div>
+                <div>
+                  <Text className="font-medium">Protocol Version:</Text>
+                  <Text>{selectedAgent.protocolVersion}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">URL:</Text>
+                  <div className="flex items-center space-x-2">
+                    <Text className="truncate">{selectedAgent.url}</Text>
+                    <CopyOutlined
+                      onClick={() => copyToClipboard(selectedAgent.url)}
+                      className="cursor-pointer text-gray-500 hover:text-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div>
+                <Text className="font-medium">Description:</Text>
+                <Text className="mt-1">{selectedAgent.description}</Text>
+              </div>
+            </div>
+
+            {/* Capabilities */}
+            {selectedAgent.capabilities && Object.keys(selectedAgent.capabilities).length > 0 && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Capabilities</Text>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(selectedAgent.capabilities)
+                    .filter(([_, value]) => value === true)
+                    .map(([key]) => (
+                      <Badge key={key} color="green">
+                        {key}
+                      </Badge>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* Input/Output Modes */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Input/Output Modes</Text>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Text className="font-medium">Input Modes:</Text>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {selectedAgent.defaultInputModes?.map((mode) => (
+                      <Badge key={mode} color="blue">
+                        {mode}
+                      </Badge>
+                    )) || <Text>Not specified</Text>}
+                  </div>
+                </div>
+                <div>
+                  <Text className="font-medium">Output Modes:</Text>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {selectedAgent.defaultOutputModes?.map((mode) => (
+                      <Badge key={mode} color="purple">
+                        {mode}
+                      </Badge>
+                    )) || <Text>Not specified</Text>}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Skills */}
+            {selectedAgent.skills && selectedAgent.skills.length > 0 && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Skills</Text>
+                <div className="space-y-4">
+                  {selectedAgent.skills.map((skill) => (
+                    <div key={skill.id} className="border border-gray-200 rounded p-4">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <Text className="font-medium text-base">{skill.name}</Text>
+                          <Text className="text-xs text-gray-500">ID: {skill.id}</Text>
+                        </div>
+                        {skill.tags && skill.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {skill.tags.map((tag) => (
+                              <Badge key={tag} color="purple" size="xs">
+                                {tag}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <Text className="text-sm mb-2">{skill.description}</Text>
+                      {skill.examples && skill.examples.length > 0 && (
+                        <div>
+                          <Text className="text-xs font-medium text-gray-700">Examples:</Text>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {skill.examples.map((example, idx) => (
+                              <Badge key={idx} color="gray" size="xs">
+                                {example}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Additional Properties */}
+            {selectedAgent.supportsAuthenticatedExtendedCard && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Additional Features</Text>
+                <Badge color="green">Supports Authenticated Extended Card</Badge>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
       {/* Make Model Public Form */}
       <MakeModelPublicForm
         visible={isMakePublicModalVisible}
@@ -462,8 +701,17 @@ print(response.choices[0].message.content)`}
         modelHubData={modelHubData || []}
         onSuccess={handleMakePublicSuccess}
       />
+
+      {/* Make Agent Public Form */}
+      <MakeAgentPublicForm
+        visible={isMakeAgentPublicModalVisible}
+        onClose={() => setIsMakeAgentPublicModalVisible(false)}
+        accessToken={accessToken || ""}
+        agentHubData={agentHubData || []}
+        onSuccess={handleMakeAgentPublicSuccess}
+      />
     </div>
   );
 };
 
-export default ModelHubTable; 
+export default ModelHubTable;

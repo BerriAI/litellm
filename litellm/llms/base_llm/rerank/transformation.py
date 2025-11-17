@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
-from litellm.types.rerank import OptionalRerankParams, RerankBilledUnits, RerankResponse
+from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import ModelInfo
 
 from ..chat.transformation import BaseLLMException
@@ -23,6 +23,7 @@ class BaseRerankConfig(ABC):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> dict:
         pass
 
@@ -30,7 +31,7 @@ class BaseRerankConfig(ABC):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: OptionalRerankParams,
+        optional_rerank_params: Dict,
         headers: dict,
     ) -> dict:
         return {}
@@ -50,7 +51,12 @@ class BaseRerankConfig(ABC):
         return model_response
 
     @abstractmethod
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         """
         OPTIONAL
 
@@ -78,7 +84,7 @@ class BaseRerankConfig(ABC):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
-    ) -> OptionalRerankParams:
+    ) -> Dict:
         pass
 
     def get_error_class(

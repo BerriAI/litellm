@@ -1,6 +1,6 @@
 import sys
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -8,32 +8,35 @@ from fastapi import HTTPException
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../../../")
 
+import httpx
+
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
-    _deserialize_env_dict,
+    _deserialize_json_dict,
 )
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp import MCPAuth
+from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 
 
 class TestMCPServerManager:
     """Test MCP Server Manager stdio functionality"""
 
-    def test_deserialize_env_dict(self):
+    def test_deserialize_json_dict(self):
         """Test environment dictionary deserialization"""
         # Test JSON string
         env_json = '{"PATH": "/usr/bin", "DEBUG": "1"}'
-        result = _deserialize_env_dict(env_json)
+        result = _deserialize_json_dict(env_json)
         assert result == {"PATH": "/usr/bin", "DEBUG": "1"}
 
         # Test already dict
         env_dict = {"PATH": "/usr/bin", "DEBUG": "1"}
-        result = _deserialize_env_dict(env_dict)
+        result = _deserialize_json_dict(env_dict)
         assert result == {"PATH": "/usr/bin", "DEBUG": "1"}
 
         # Test invalid JSON
         invalid_json = '{"PATH": "/usr/bin", "DEBUG": 1'
-        result = _deserialize_env_dict(invalid_json)
+        result = _deserialize_json_dict(invalid_json)
         assert result is None
 
     def test_add_update_server_stdio(self):
@@ -217,6 +220,125 @@ class TestMCPServerManager:
 
         assert len(result) == 1
         assert result[0].name == "github_tool_1"
+
+    @pytest.mark.asyncio
+    async def test_fetch_oauth_metadata_from_resource_returns_servers_and_scopes(self):
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_servers": [
+                "https://auth1.example.com",
+                "https://auth2.example.com",
+            ],
+            "scopes_supported": ["read", "write"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://protected.example.com/.well-known/oauth"
+            )
+
+        assert servers == [
+            "https://auth1.example.com",
+            "https://auth2.example.com",
+        ]
+        assert scopes == ["read", "write"]
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_falls_back_to_origin_when_no_auth_servers(self):
+        manager = MCPServerManager()
+        server_url = "https://example.com/public/mcp"
+
+        request = httpx.Request("GET", server_url)
+        response_obj = httpx.Response(
+            status_code=401,
+            request=request,
+            headers={"WWW-Authenticate": 'Bearer scope="read"'},
+        )
+
+        def raise_http_error():
+            raise httpx.HTTPStatusError(
+                "unauthorized", request=request, response=response_obj
+            )
+
+        response_obj.raise_for_status = MagicMock(side_effect=raise_http_error)
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=response_obj)
+
+        mock_metadata = MCPOAuthMetadata(
+            scopes=None,
+            authorization_url="https://example.com/auth",
+            token_url="https://example.com/token",
+            registration_url=None,
+        )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ), patch.object(
+            manager,
+            "_fetch_oauth_metadata_from_resource",
+            AsyncMock(return_value=([], None)),
+        ), patch.object(
+            manager,
+            "_attempt_well_known_discovery",
+            AsyncMock(return_value=([], None)),
+        ), patch.object(
+            manager,
+            "_fetch_authorization_server_metadata",
+            AsyncMock(return_value=mock_metadata),
+        ) as mock_fetch_auth:
+            result = await manager._descovery_metadata(server_url)
+
+        mock_fetch_auth.assert_awaited_once_with(["https://example.com"])
+        assert result is mock_metadata
+        assert result.scopes == ["read"]
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_overrides_discovery_metadata(self):
+        manager = MCPServerManager()
+
+        discovered_metadata = MCPOAuthMetadata(
+            scopes=["discovered"],
+            authorization_url="https://discovered.example.com/auth",
+            token_url="https://discovered.example.com/token",
+            registration_url="https://discovered.example.com/register",
+        )
+
+        async def fake_discovery(server_url: str):
+            assert server_url == "https://example.com/mcp"
+            return discovered_metadata
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        config = {
+            "example": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "scopes": ["config"],
+                "authorization_url": "https://config.example.com/auth",
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.scopes == ["config"]  # config overrides discovery
+        assert server.authorization_url == "https://config.example.com/auth"
+        assert server.token_url == "https://discovered.example.com/token"
+        assert (
+            server.registration_url == "https://discovered.example.com/register"
+        )
 
     @pytest.mark.asyncio
     async def test_list_tools_handles_missing_server_alias(self):
@@ -435,8 +557,11 @@ class TestMCPServerManager:
             disallowed_tools=None,
         )
 
-        # Mock dependencies
+        # Mock dependencies - set object_permission and object_permission_id to None
+        # so permission checks return None (no restrictions)
         user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -450,7 +575,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="allowed_tool",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -479,7 +604,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="blocked_tool",
                 arguments={"param": "value"},
-                server_name_from_prefix="test-server",
+                server_name="test-server",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
@@ -508,8 +633,11 @@ class TestMCPServerManager:
             disallowed_tools=["banned_tool", "another_banned_tool"],
         )
 
-        # Mock dependencies
+        # Mock dependencies - set object_permission and object_permission_id to None
+        # so permission checks return None (no restrictions)
         user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -523,7 +651,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="allowed_tool",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -552,7 +680,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="banned_tool",
                 arguments={"param": "value"},
-                server_name_from_prefix="test-server",
+                server_name="test-server",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
@@ -581,8 +709,11 @@ class TestMCPServerManager:
             disallowed_tools=None,
         )
 
-        # Mock dependencies
+        # Mock dependencies - set object_permission and object_permission_id to None
+        # so permission checks return None (no restrictions)
         user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -596,7 +727,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="any_tool",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -617,8 +748,11 @@ class TestMCPServerManager:
             disallowed_tools=["tool2", "tool3"],  # tool2 is in both lists
         )
 
-        # Mock dependencies
+        # Mock dependencies - set object_permission and object_permission_id to None
+        # so permission checks return None (no restrictions)
         user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -632,7 +766,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="tool2",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -643,7 +777,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="tool3",
                 arguments={"param": "value"},
-                server_name_from_prefix="test-server",
+                server_name="test-server",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
@@ -654,6 +788,7 @@ class TestMCPServerManager:
             "Tool tool3 is not allowed for server test-server"
             in exc_info.value.detail["error"]
         )
+
     async def test_get_tools_from_server_add_prefix(self):
         """Verify _get_tools_from_server respects add_prefix True/False."""
         manager = MCPServerManager()
@@ -758,6 +893,527 @@ class TestMCPServerManager:
         )
         assert resolved_server_pref is not None
         assert resolved_server_pref.server_id == server.server_id
+
+    @pytest.mark.asyncio
+    async def test_rest_endpoint_filters_by_allowed_tools(self):
+        """Test that REST endpoint _get_tools_for_single_server respects allowed_tools configuration"""
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+            _get_tools_for_single_server,
+        )
+
+        # Create server with allowed_tools configured
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            allowed_tools=["allowed_tool_1", "allowed_tool_2"],
+        )
+        server.mcp_info = {"server_name": "test-server"}
+
+        # Mock tools returned from manager (3 tools, but only 2 are allowed)
+        tool1 = MagicMock()
+        tool1.name = "allowed_tool_1"
+        tool1.description = "This tool is allowed"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = "blocked_tool"
+        tool2.description = "This tool is not allowed"
+        tool2.inputSchema = {}
+
+        tool3 = MagicMock()
+        tool3.name = "allowed_tool_2"
+        tool3.description = "This tool is also allowed"
+        tool3.inputSchema = {}
+
+        # Mock the global_mcp_server_manager._get_tools_from_server
+        from litellm.proxy._experimental.mcp_server import rest_endpoints
+
+        with patch.object(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            new=AsyncMock(return_value=[tool1, tool2, tool3]),
+        ):
+            # Call the REST endpoint helper
+            filtered_response = await _get_tools_for_single_server(
+                server, server_auth_header=None
+            )
+
+            # Verify only allowed tools are in the response
+            assert len(filtered_response) == 2
+            tool_names = [t.name for t in filtered_response]
+            assert "allowed_tool_1" in tool_names
+            assert "allowed_tool_2" in tool_names
+            assert "blocked_tool" not in tool_names
+
+    @pytest.mark.asyncio
+    async def test_rest_endpoint_shows_all_when_allowed_tools_is_none(self):
+        """Test that REST endpoint shows all tools when allowed_tools is None (backwards compatibility)"""
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+            _get_tools_for_single_server,
+        )
+
+        # Create server with allowed_tools as None
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            allowed_tools=None,  # No filtering
+        )
+        server.mcp_info = {"server_name": "test-server"}
+
+        # Mock tools returned from manager
+        tool1 = MagicMock()
+        tool1.name = "tool_1"
+        tool1.description = "Tool 1"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = "tool_2"
+        tool2.description = "Tool 2"
+        tool2.inputSchema = {}
+
+        tool3 = MagicMock()
+        tool3.name = "tool_3"
+        tool3.description = "Tool 3"
+        tool3.inputSchema = {}
+
+        # Mock the global_mcp_server_manager._get_tools_from_server
+        from litellm.proxy._experimental.mcp_server import rest_endpoints
+
+        with patch.object(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            new=AsyncMock(return_value=[tool1, tool2, tool3]),
+        ):
+            # Call the REST endpoint helper
+            all_tools_response = await _get_tools_for_single_server(
+                server, server_auth_header=None
+            )
+
+            # Verify all tools are returned (no filtering)
+            assert len(all_tools_response) == 3
+            tool_names = [t.name for t in all_tools_response]
+            assert "tool_1" in tool_names
+            assert "tool_2" in tool_names
+            assert "tool_3" in tool_names
+
+    @pytest.mark.asyncio
+    async def test_rest_endpoint_shows_all_when_allowed_tools_is_empty_list(self):
+        """Test that REST endpoint shows all tools when allowed_tools is empty list (backwards compatibility)"""
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+            _get_tools_for_single_server,
+        )
+
+        # Create server with allowed_tools as empty list
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            allowed_tools=[],  # Empty list means no filtering
+        )
+        server.mcp_info = {"server_name": "test-server"}
+
+        # Mock tools returned from manager
+        tool1 = MagicMock()
+        tool1.name = "tool_1"
+        tool1.description = "Tool 1"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = "tool_2"
+        tool2.description = "Tool 2"
+        tool2.inputSchema = {}
+
+        # Mock the global_mcp_server_manager._get_tools_from_server
+        from litellm.proxy._experimental.mcp_server import rest_endpoints
+
+        with patch.object(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            new=AsyncMock(return_value=[tool1, tool2]),
+        ):
+            # Call the REST endpoint helper
+            all_tools_response = await _get_tools_for_single_server(
+                server, server_auth_header=None
+            )
+
+            # Verify all tools are returned (no filtering)
+            assert len(all_tools_response) == 2
+            tool_names = [t.name for t in all_tools_response]
+            assert "tool_1" in tool_names
+            assert "tool_2" in tool_names
+
+    def test_add_db_mcp_server_to_registry(self):
+        """Test that add_db_mcp_server_to_registry adds a MCP server to the registry"""
+        manager = MCPServerManager()
+        server = LiteLLM_MCPServerTable(
+            **{
+                "server_id": "4c679a81-acd9-4954-9f84-30b739362498",
+                "server_name": "edc_mcp_server",
+                "alias": "edc_mcp_server",
+                "description": None,
+                "url": "fake_mcp_url",
+                "transport": "http",
+                "auth_type": "none",
+                "created_at": "2025-09-30T08:28:31.353000Z",
+                "created_by": "a1248959",
+                "updated_at": "2025-09-30T08:28:31.353000Z",
+                "updated_by": "a1248959",
+                "teams": [],
+                "mcp_access_groups": [],
+                "mcp_info": {
+                    "server_name": "edc_mcp_server",
+                    "mcp_server_cost_info": None,
+                },
+                "status": "unknown",
+                "last_health_check": None,
+                "health_check_error": None,
+                "command": None,
+                "args": [],
+                "env": {},
+            },
+        )
+        manager.add_update_server(server)
+        assert server.server_id in manager.get_registry()
+
+    @pytest.mark.asyncio
+    async def test_key_tool_permission_allows_permitted_tool(self):
+        """
+        Test that key can call tool when it's in mcp_tool_permissions allowed list.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="test_server_123",
+            name="Test Server",
+            transport=MCPTransport.http,
+            allowed_tools=None,
+            disallowed_tools=None,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_123",
+            mcp_tool_permissions={"test_server_123": ["read_wiki_structure"]},
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+        )
+
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        # Should succeed
+        await manager.pre_call_tool_check(
+            server_name="Test Server",
+            name="read_wiki_structure",
+            arguments={"repoName": "facebook/react"},
+            user_api_key_auth=user_auth,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+        )
+
+    @pytest.mark.asyncio
+    async def test_key_tool_permission_blocks_unpermitted_tool(self):
+        """
+        Test that key cannot call tool when it's NOT in mcp_tool_permissions allowed list.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="test_server_123",
+            name="Test Server",
+            transport=MCPTransport.http,
+            allowed_tools=None,
+            disallowed_tools=None,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_123",
+            mcp_tool_permissions={"test_server_123": ["read_wiki_structure"]},
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+        )
+
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        # Should fail with 403
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(
+                server_name="Test Server",
+                name="ask_question",
+                arguments={"question": "test"},
+                user_api_key_auth=user_auth,
+                proxy_logging_obj=proxy_logging,
+                server=server,
+            )
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_check_tool_permission_for_key_team_allows_permitted_tool(self):
+        """
+        Test check_tool_permission_for_key_team directly - should allow permitted tool.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="github_server",
+            name="GitHub Server",
+            transport=MCPTransport.http,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_456",
+            mcp_tool_permissions={"github_server": ["read_repo", "list_issues"]},
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-456",
+            object_permission=object_permission,
+        )
+
+        # Should not raise exception for allowed tool
+        await manager.check_tool_permission_for_key_team(
+            tool_name="read_repo",
+            server=server,
+            user_api_key_auth=user_auth,
+        )
+
+    @pytest.mark.asyncio
+    async def test_check_tool_permission_for_key_team_blocks_unpermitted_tool(self):
+        """
+        Test check_tool_permission_for_key_team directly - should block unpermitted tool.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="github_server",
+            name="GitHub Server",
+            transport=MCPTransport.http,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_456",
+            mcp_tool_permissions={"github_server": ["read_repo"]},
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-456",
+            object_permission=object_permission,
+        )
+
+        # Should raise HTTPException for unpermitted tool
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.check_tool_permission_for_key_team(
+                tool_name="delete_repo",
+                server=server,
+                user_api_key_auth=user_auth,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "delete_repo" in exc_info.value.detail["error"]
+        assert "not allowed" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_check_tool_permission_for_key_team_allows_all_when_no_restrictions(
+        self,
+    ):
+        """
+        Test check_tool_permission_for_key_team - should allow all tools when no restrictions set.
+        """
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="github_server",
+            name="GitHub Server",
+            transport=MCPTransport.http,
+        )
+
+        # No object_permission set on user_auth
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-456",
+            object_permission=None,
+        )
+
+        # Should allow any tool when no restrictions
+        await manager.check_tool_permission_for_key_team(
+            tool_name="any_tool",
+            server=server,
+            user_api_key_auth=user_auth,
+        )
+
+    @pytest.mark.asyncio
+    async def test_allowed_tools_with_mixed_prefixed_and_unprefixed_names(self):
+        """
+        Test that allowed_tools works with both unprefixed and prefixed tool names.
+        This tests the scenario where allowed_tools = ["getpetbyid", "my_api_mcp-findpetsbystatus"]
+        Both getpetbyid (unprefixed) and findpetsbystatus (called unprefixed but allowed via prefix) should work.
+        """
+        manager = MCPServerManager()
+
+        # Create server with mixed prefixed/unprefixed allowed_tools
+        server = MCPServer(
+            server_id="my_api_mcp",
+            name="my_api_mcp",
+            transport=MCPTransport.stdio,
+            allowed_tools=["getpetbyid", "my_api_mcp-findpetsbystatus"],
+            disallowed_tools=None,
+        )
+
+        # Mock dependencies - set object_permission and object_permission_id to None
+        # so permission checks return None (no restrictions)
+        user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
+        proxy_logging_obj = MagicMock()
+
+        # Mock the async methods that pre_call_tool_check calls
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+
+        # Test 1: Call getpetbyid (unprefixed in allowed_tools) - should succeed
+        await manager.pre_call_tool_check(
+            name="getpetbyid",
+            arguments={"petId": "1"},
+            server_name="my_api_mcp",
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+        )
+
+        # Test 2: Call findpetsbystatus (prefixed in allowed_tools as "my_api_mcp-findpetsbystatus") - should succeed
+        await manager.pre_call_tool_check(
+            name="findpetsbystatus",
+            arguments={"status": "available"},
+            server_name="my_api_mcp",
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+        )
+
+        # Test 3: Call a tool that's not in allowed_tools - should fail
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(
+                name="deletepet",
+                arguments={"petId": "1"},
+                server_name="my_api_mcp",
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                server=server,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert (
+            "Tool deletepet is not allowed for server my_api_mcp"
+            in exc_info.value.detail["error"]
+        )
+        assert (
+            "Contact proxy admin to allow this tool" in exc_info.value.detail["error"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_call_tool_without_broken_pipe_error(self):
+        """
+        Test that call_tool awaits the client call even without a persistent context manager.
+        Ensures the gathered tasks still include the MCP client call result.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from mcp.types import CallToolResult
+
+        manager = MCPServerManager()
+
+        # Create a test server
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            url="http://test-server.com",
+        )
+
+        # Register the server and map a tool to it
+        manager.registry = {"test-server": server}
+        manager.tool_name_to_mcp_server_name_mapping["test_tool"] = "test-server"
+        manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = "test-server"
+
+        # Create mock client that tracks call_tool usage
+        mock_client = AsyncMock()
+
+        async def mock_call_tool(params):
+            # Return a mock CallToolResult
+            result = MagicMock(spec=CallToolResult)
+            result.content = [{"type": "text", "text": "Tool executed successfully"}]
+            result.isError = False
+            return result
+
+        mock_client.call_tool.side_effect = mock_call_tool
+
+        # Mock _create_mcp_client to return our mock client
+        manager._create_mcp_client = MagicMock(return_value=mock_client)
+
+        # Mock user auth with no restrictions
+        user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
+
+        # Mock proxy logging
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+
+        # Call the tool
+        result = await manager.call_tool(
+            server_name="test-server",
+            name="test_tool",
+            arguments={"param": "value"},
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        # Verify the result
+        assert result is not None
+        assert result.isError is False
+        assert len(result.content) > 0
+
+        # Verify the MCP client call was awaited exactly once
+        assert mock_client.call_tool.await_count == 1
 
 
 if __name__ == "__main__":

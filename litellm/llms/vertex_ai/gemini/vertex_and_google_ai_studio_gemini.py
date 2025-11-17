@@ -46,6 +46,8 @@ from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
     ChatCompletionResponseMessage,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -68,6 +70,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
     UsageMetadata,
+    VertexToolName,
 )
 from litellm.types.utils import (
     ChatCompletionAudioResponse,
@@ -214,6 +217,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+    
+    def _supports_penalty_parameters(self, model: str) -> bool:
+        unsupported_models = ["gemini-2.5-pro-preview-06-05"]
+        if model in unsupported_models:
+            return False
+        return True
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
@@ -228,8 +237,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "response_format",
             "n",
             "stop",
-            "frequency_penalty",
-            "presence_penalty",
             "extra_headers",
             "seed",
             "logprobs",
@@ -238,6 +245,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "parallel_tool_calls",
             "web_search_options",
         ]
+        
+        # Add penalty parameters only for non-preview models
+        if self._supports_penalty_parameters(model):
+            supported_params.extend(["frequency_penalty", "presence_penalty"])
+        
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
@@ -276,41 +288,105 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         return Tools(googleSearch={})
 
-    def _map_function(self, value: List[dict]) -> List[Tools]:  # noqa: PLR0915
+    def _extract_google_maps_retrieval_config(
+        self, google_maps_config: dict
+    ) -> Tuple[dict, Optional[dict]]:
+        """
+        Extract location configuration from googleMaps tool for Vertex AI toolConfig.
+        
+        Supports two interface styles:
+        1. Nested (recommended): {"enableWidget": "...", "retrievalConfig": {"latitude": ..., "longitude": ...}}
+        2. Flat (backward compat): {"enableWidget": "...", "latitude": ..., "longitude": ...}
+        
+        Args:
+            google_maps_config: The googleMaps tool configuration from LiteLLM
+        
+        Returns:
+            Tuple of (cleaned_google_maps_config, retrieval_config):
+                - cleaned_google_maps_config: googleMaps config without location fields
+                - retrieval_config: Location config for toolConfig.retrievalConfig or None
+        """
+        retrieval_config = None
+        latitude = google_maps_config.get("latitude")
+        longitude = google_maps_config.get("longitude")
+        language_code = google_maps_config.get("languageCode")
+        
+        if latitude is not None and longitude is not None:
+            retrieval_config = {
+                "latLng": {
+                    "latitude": latitude,
+                    "longitude": longitude,
+                }
+            }
+            if language_code is not None:
+                retrieval_config["languageCode"] = language_code
+        
+        # Remove location fields from tool definition
+        cleaned_config = {
+            k: v
+            for k, v in google_maps_config.items()
+            if k not in ["latitude", "longitude", "languageCode"]
+        }
+    
+        return cleaned_config, retrieval_config
+    
+    def get_tool_value(
+        self,
+        tool: dict, 
+        tool_name: str
+    ) -> Optional[dict]:
+        """
+        Helper function to get tool value handling both camelCase and underscore_case variants
+
+        Args:
+            tool (dict): The tool dictionary
+            tool_name (str): The base tool name (e.g. "codeExecution")
+
+        Returns:
+            Optional[dict]: The tool value if found, None otherwise
+        """
+        # Convert camelCase to underscore_case
+        underscore_name = "".join(
+            ["_" + c.lower() if c.isupper() else c for c in tool_name]
+        ).lstrip("_")
+        # Try both camelCase and underscore_case variants
+
+        if tool.get(tool_name) is not None:
+            return tool.get(tool_name)
+        elif tool.get(underscore_name) is not None:
+            return tool.get(underscore_name)
+        else:
+            return None
+
+    def _map_function( # noqa: PLR0915
+        self, value: List[dict], optional_params: dict
+    ) -> List[Tools]:
+        """
+        Map OpenAI-style tools/functions to Vertex AI format.
+        
+        Args:
+            value: List of tool definitions
+            optional_params: Request-scoped parameters to store retrieval config
+        
+        Returns:
+            List of mapped tools in Vertex AI format
+            
+        Side effects:
+            May add 'toolConfig' with 'retrievalConfig' to optional_params if
+            googleMaps tools contain location data
+        """
         gtool_func_declarations = []
         googleSearch: Optional[dict] = None
         googleSearchRetrieval: Optional[dict] = None
         enterpriseWebSearch: Optional[dict] = None
         urlContext: Optional[dict] = None
         code_execution: Optional[dict] = None
+        googleMaps: Optional[dict] = None
+        google_maps_retrieval_config: Optional[dict] = None
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
         # remove 'strict' from tools
         value = _remove_strict_from_schema(value)
-
-        def get_tool_value(tool: dict, tool_name: str) -> Optional[dict]:
-            """
-            Helper function to get tool value handling both camelCase and underscore_case variants
-
-            Args:
-                tool (dict): The tool dictionary
-                tool_name (str): The base tool name (e.g. "codeExecution")
-
-            Returns:
-                Optional[dict]: The tool value if found, None otherwise
-            """
-            # Convert camelCase to underscore_case
-            underscore_name = "".join(
-                ["_" + c.lower() if c.isupper() else c for c in tool_name]
-            ).lstrip("_")
-            # Try both camelCase and underscore_case variants
-
-            if tool.get(tool_name) is not None:
-                return tool.get(tool_name)
-            elif tool.get(underscore_name) is not None:
-                return tool.get(underscore_name)
-            else:
-                return None
 
         for tool in value:
             openai_function_object: Optional[
@@ -337,21 +413,31 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
             if "type" in tool:
-                del tool["type"]  # type: ignore
+                tool = {k: tool[k] for k in tool if k != "type"}
 
             tool_name = list(tool.keys())[0] if len(tool.keys()) == 1 else None
             if tool_name and (
-                tool_name == "codeExecution" or tool_name == "code_execution"
+                tool_name == "codeExecution" or tool_name == VertexToolName.CODE_EXECUTION.value
             ):  # code_execution maintained for backwards compatibility
-                code_execution = get_tool_value(tool, "codeExecution")
-            elif tool_name and tool_name == "googleSearch":
-                googleSearch = get_tool_value(tool, "googleSearch")
-            elif tool_name and tool_name == "googleSearchRetrieval":
-                googleSearchRetrieval = get_tool_value(tool, "googleSearchRetrieval")
-            elif tool_name and tool_name == "enterpriseWebSearch":
-                enterpriseWebSearch = get_tool_value(tool, "enterpriseWebSearch")
-            elif tool_name and tool_name == "urlContext":
-                urlContext = get_tool_value(tool, "urlContext")
+                code_execution = self.get_tool_value(tool, "codeExecution")
+            elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH.value:
+                googleSearch = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH.value)
+            elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value:
+                googleSearchRetrieval = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value)
+            elif tool_name and tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value:
+                enterpriseWebSearch = self.get_tool_value(tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value)
+            elif tool_name and (tool_name == VertexToolName.URL_CONTEXT.value or tool_name == "urlContext"):
+                urlContext = self.get_tool_value(tool, tool_name)
+            elif tool_name and (
+                tool_name == VertexToolName.GOOGLE_MAPS.value or tool_name == "google_maps"
+            ):
+                google_maps_value = self.get_tool_value(tool, VertexToolName.GOOGLE_MAPS.value)
+                
+                # Extract and transform location configuration for toolConfig
+                if google_maps_value is not None:
+                    googleMaps, google_maps_retrieval_config = self._extract_google_maps_retrieval_config(
+                        google_maps_config=google_maps_value
+                    )
             elif openai_function_object is not None:
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
@@ -373,19 +459,29 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "Invalid tool={}. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
                 )
 
-        _tools = Tools(
-            function_declarations=gtool_func_declarations,
-        )
+        # Only include function_declarations if there are actual functions
+        _tools = Tools()
+        if gtool_func_declarations:
+            _tools["function_declarations"] = gtool_func_declarations
         if googleSearch is not None:
-            _tools["googleSearch"] = googleSearch
+            _tools[VertexToolName.GOOGLE_SEARCH.value] = googleSearch
         if googleSearchRetrieval is not None:
-            _tools["googleSearchRetrieval"] = googleSearchRetrieval
+            _tools[VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value] = googleSearchRetrieval
         if enterpriseWebSearch is not None:
-            _tools["enterpriseWebSearch"] = enterpriseWebSearch
+            _tools[VertexToolName.ENTERPRISE_WEB_SEARCH.value] = enterpriseWebSearch
         if code_execution is not None:
-            _tools["code_execution"] = code_execution
+            _tools[VertexToolName.CODE_EXECUTION.value] = code_execution
         if urlContext is not None:
-            _tools["url_context"] = urlContext
+            _tools[VertexToolName.URL_CONTEXT.value] = urlContext
+        if googleMaps is not None:
+            _tools[VertexToolName.GOOGLE_MAPS.value] = googleMaps
+        
+        # Add retrieval config to toolConfig if googleMaps has location data
+        if google_maps_retrieval_config is not None:
+            if "toolConfig" not in optional_params:
+                optional_params["toolConfig"] = {}
+            optional_params["toolConfig"]["retrievalConfig"] = google_maps_retrieval_config
+        
         return [_tools]
 
     def _map_response_schema(self, value: dict) -> dict:
@@ -469,6 +565,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "disable":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
+                "includeThoughts": False,
+            }
+        elif reasoning_effort == "none":
+            return {
+                "thinkingBudget": 0,
                 "includeThoughts": False,
             }
         else:
@@ -594,9 +695,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     value=value, optional_params=optional_params
                 )
             elif param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
+                if self._supports_penalty_parameters(model):
+                    optional_params["frequency_penalty"] = value
             elif param == "presence_penalty":
-                optional_params["presence_penalty"] = value
+                if self._supports_penalty_parameters(model):
+                    optional_params["presence_penalty"] = value
             elif param == "logprobs":
                 optional_params["responseLogprobs"] = value
             elif param == "top_logprobs":
@@ -606,8 +709,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 and isinstance(value, list)
                 and value
             ):
+                # Pass optional_params so _map_function can add toolConfig if needed
+                mapped_tools = self._map_function(
+                    value=value, optional_params=optional_params
+                )
                 optional_params = self._add_tools_to_optional_params(
-                    optional_params, self._map_function(value=value)
+                    optional_params, mapped_tools
                 )
             elif param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
@@ -920,7 +1027,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=part["functionCall"]["name"],
-                    arguments=json.dumps(part["functionCall"]["args"]),
+                    arguments=json.dumps(part["functionCall"]["args"], ensure_ascii=False),
                 )
                 if is_function_call is True:
                     function = _function_chunk
@@ -1195,6 +1302,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         from litellm.types.utils import Delta, StreamingChoices
 
+        annotations = chat_completion_message.get("annotations")  # type: ignore
         # create a streaming choice object
         choice = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -1207,6 +1315,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool_calls=tools,
                 images=image_response,
                 function_call=functions,
+                annotations=annotations,  # type: ignore
             ),
             logprobs=chat_completion_logprobs,
             enhancements=None,
@@ -1255,11 +1364,68 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
 
     @staticmethod
-    def _process_candidates(
+    def _convert_grounding_metadata_to_annotations(
+        grounding_metadata: List[dict],
+        content_text: Optional[str],
+    ) -> List[ChatCompletionAnnotation]:
+        """
+        Convert Vertex AI grounding metadata to OpenAI-style annotations.
+        """
+
+        annotations: List[ChatCompletionAnnotation] = []
+
+        
+        for metadata in grounding_metadata:
+            # Extract groundingSupports - these map text segments to sources
+            grounding_supports = metadata.get("groundingSupports", [])
+            grounding_chunks = metadata.get("groundingChunks", [])
+
+            # Build a map of chunk indices to web URIs
+            chunk_to_uri_map: Dict[int, Dict[str, str]] = {}
+            for idx, chunk in enumerate(grounding_chunks):
+                if "web" in chunk:
+                    web_data = chunk["web"]
+                    chunk_to_uri_map[idx] = {
+                        "url": web_data.get("uri", ""),
+                        "title": web_data.get("title", ""),
+                    }
+
+            # Process each grounding support to create annotations
+            for support in grounding_supports:
+                segment = support.get("segment", {})
+                start_index = segment.get("startIndex")
+                end_index = segment.get("endIndex")
+                
+                # Get the chunk indices for this support
+                chunk_indices = support.get("groundingChunkIndices", [])
+                
+                if start_index is not None and end_index is not None and chunk_indices:
+                    # Use the first chunk's URL for the annotation
+                    first_chunk_idx = chunk_indices[0]
+                    if first_chunk_idx in chunk_to_uri_map:
+                        uri_info = chunk_to_uri_map[first_chunk_idx]
+                        
+                        url_citation: ChatCompletionAnnotationURLCitation = {
+                            "start_index": start_index,
+                            "end_index": end_index,
+                            "url": uri_info["url"],
+                            "title": uri_info["title"],
+                        }
+                        
+                        annotation: ChatCompletionAnnotation = {
+                            "type": "url_citation",
+                            "url_citation": url_citation,
+                        }
+                        annotations.append(annotation)
+        return annotations
+
+    @staticmethod
+    def _process_candidates(  # noqa: PLR0915
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
-    ) -> Tuple[List[dict], List[dict], List, List]:
+        cumulative_tool_call_index: int = 0,
+    ) -> Tuple[List[dict], List[dict], List, List, int]:
         """
         Helper method to process candidates and extract metadata
 
@@ -1268,6 +1434,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata: List[dict]
             safety_ratings: List
             citation_metadata: List
+            cumulative_tool_call_index: int
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             is_function_call,
@@ -1283,7 +1450,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_logprobs: Optional[ChoiceLogprobs] = None
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
-        cumulative_tool_call_index: int = 0
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
 
         for idx, candidate in enumerate(_candidates):
@@ -1343,6 +1509,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
+
+                if candidate_grounding_metadata:
+                    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+                        grounding_metadata=candidate_grounding_metadata,
+                        content_text=content,
+                    )
+                    if annotations:
+                        chat_completion_message["annotations"] = annotations  # type: ignore
                 (
                     functions,
                     tools,
@@ -1395,6 +1569,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata,
             safety_ratings,
             citation_metadata,
+            cumulative_tool_call_index,
         )
 
     def transform_response(
@@ -1495,6 +1670,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    _,  # cumulative_tool_call_index not needed in non-streaming
                 ) = VertexGeminiConfig._process_candidates(
                     _candidates, model_response, logging_obj.optional_params
                 )
@@ -1572,13 +1748,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         messages: List[AllMessageValues],
         optional_params: Dict,
         litellm_params: Dict,
-        api_key: Optional[str] = None,
+        api_key: Optional[Union[str, Dict]] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
         default_headers = {
             "Content-Type": "application/json",
         }
-        if api_key is not None:
+        if isinstance(api_key, dict):
+            default_headers.update(api_key)
+        elif api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
         if headers is not None:
             default_headers.update(headers)
@@ -1703,7 +1881,6 @@ class VertexLLM(VertexBase):
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> CustomStreamWrapper:
-        request_body = await async_transform_request_body(**data)  # type: ignore
 
         should_use_v1beta1_features = self.is_using_v1beta1_features(
             optional_params=optional_params
@@ -1736,6 +1913,13 @@ class VertexLLM(VertexBase):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
+
+        request_body = await async_transform_request_body(
+            **data,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=auth_header)  # type: ignore
+
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1824,7 +2008,12 @@ class VertexLLM(VertexBase):
             litellm_params=litellm_params,
         )
 
-        request_body = await async_transform_request_body(**data)  # type: ignore
+        request_body = await async_transform_request_body(
+            **data,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=auth_header)  # type: ignore
+
         _async_client_params = {}
         if timeout:
             _async_client_params["timeout"] = timeout
@@ -1999,7 +2188,11 @@ class VertexLLM(VertexBase):
         )
 
         ## TRANSFORMATION ##
-        data = sync_transform_request_body(**transform_request_params)
+        data = sync_transform_request_body(
+            **transform_request_params,
+            vertex_project=vertex_project, 
+            vertex_location=vertex_location,
+            vertex_auth_header=auth_header)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2094,6 +2287,7 @@ class ModelResponseIterator:
         self.sent_first_chunk = False
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
+        self.cumulative_tool_call_index: int = 0
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -2115,8 +2309,12 @@ class ModelResponseIterator:
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    self.cumulative_tool_call_index,
                 ) = VertexGeminiConfig._process_candidates(
-                    _candidates, model_response, self.logging_obj.optional_params
+                    _candidates,
+                    model_response,
+                    self.logging_obj.optional_params,
+                    cumulative_tool_call_index=self.cumulative_tool_call_index,
                 )
 
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore

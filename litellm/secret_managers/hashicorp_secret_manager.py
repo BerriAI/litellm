@@ -24,19 +24,25 @@ class HashicorpSecretManager(BaseSecretManager):
         # Vault-specific config
         self.vault_addr = os.getenv("HCP_VAULT_ADDR", "http://127.0.0.1:8200")
         self.vault_token = os.getenv("HCP_VAULT_TOKEN", "")
-        # If your KV engine is mounted somewhere other than "secret", adjust here:
+        # Vault namespace (for X-Vault-Namespace header)
         self.vault_namespace = os.getenv("HCP_VAULT_NAMESPACE", None)
+        # KV engine mount name (default: "secret")
+        # If your KV engine is mounted somewhere other than "secret", set HCP_VAULT_MOUNT_NAME
+        self.vault_mount_name = os.getenv("HCP_VAULT_MOUNT_NAME", "secret")
+        # Optional path prefix for secrets (e.g., "myapp" -> secret/data/myapp/{secret_name})
+        self.vault_path_prefix = os.getenv("HCP_VAULT_PATH_PREFIX", None)
 
         # Optional config for TLS cert auth
         self.tls_cert_path = os.getenv("HCP_VAULT_CLIENT_CERT", "")
         self.tls_key_path = os.getenv("HCP_VAULT_CLIENT_KEY", "")
         self.vault_cert_role = os.getenv("HCP_VAULT_CERT_ROLE", None)
 
-        # Validate environment
-        if not self.vault_token:
-            raise ValueError(
-                "Missing Vault token. Please set HCP_VAULT_TOKEN in your environment."
-            )
+        # Optional config for AppRole auth
+        self.approle_role_id = os.getenv("HCP_VAULT_APPROLE_ROLE_ID", "")
+        self.approle_secret_id = os.getenv("HCP_VAULT_APPROLE_SECRET_ID", "")
+        self.approle_mount_path = os.getenv("HCP_VAULT_APPROLE_MOUNT_PATH", "approle")
+
+        self._verify_required_credentials_exist()
 
         litellm.secret_manager_client = self
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
@@ -56,6 +62,92 @@ class HashicorpSecretManager(BaseSecretManager):
             raise ValueError(
                 f"Hashicorp secret manager is only available for premium users. {CommonProxyErrors.not_premium_user.value}"
             )
+
+    def _verify_required_credentials_exist(self) -> None:
+        """
+        Validate that at least one authentication method is configured.
+        
+        Raises:
+            ValueError: If no valid authentication credentials are provided
+        """
+        if not self.vault_token and not (self.approle_role_id and self.approle_secret_id):
+            raise ValueError(
+                "Missing Vault authentication credentials. Please set either:\n"
+                "  - HCP_VAULT_TOKEN for token-based auth, or\n"
+                "  - HCP_VAULT_APPROLE_ROLE_ID and HCP_VAULT_APPROLE_SECRET_ID for AppRole auth"
+            )
+
+    def _auth_via_approle(self) -> str:
+        """
+        Authenticate to Vault using AppRole auth method.
+        
+        Ref: https://developer.hashicorp.com/vault/api-docs/auth/approle
+
+        Request:
+        ```
+        curl \
+            --request POST \
+            --header "X-Vault-Namespace: mynamespace/" \
+            --data '{"role_id": "...", "secret_id": "..."}' \
+            http://127.0.0.1:8200/v1/auth/approle/login
+        ```
+
+        Response:
+        ```
+        {
+            "auth": {
+                "client_token": "hvs.CAESI...",
+                "accessor": "hmac-sha256...",
+                "policies": ["default", "dev-policy"],
+                "token_policies": ["default", "dev-policy"],
+                "lease_duration": 2764800,
+                "renewable": true
+            }
+        }
+        ```
+        """
+        verbose_logger.debug("Using AppRole auth for Hashicorp Vault")
+        
+        # Check cache first
+        cached_token = self.cache.get_cache(key="hcp_vault_approle_token")
+        if cached_token:
+            verbose_logger.debug("Using cached Vault token from AppRole auth")
+            return cached_token
+        
+        # Vault endpoint for AppRole login
+        login_url = f"{self.vault_addr}/v1/auth/{self.approle_mount_path}/login"
+
+        headers = {}
+        if hasattr(self, "vault_namespace") and self.vault_namespace:
+            headers["X-Vault-Namespace"] = self.vault_namespace
+        
+        try:
+            client = _get_httpx_client()
+            resp = client.post(
+                url=login_url,
+                headers=headers,
+                json={
+                    "role_id": self.approle_role_id,
+                    "secret_id": self.approle_secret_id,
+                },
+            )
+            resp.raise_for_status()
+            
+            auth_data = resp.json()["auth"]
+            token = auth_data["client_token"]
+            _lease_duration = auth_data["lease_duration"]
+            
+            verbose_logger.debug(
+                f"Successfully obtained Vault token via AppRole auth. Lease duration: {_lease_duration}s"
+            )
+            
+            # Cache the token with its lease duration
+            self.cache.set_cache(
+                key="hcp_vault_approle_token", value=token, ttl=_lease_duration
+            )
+            return token
+        except Exception as e:
+            raise RuntimeError(f"Could not authenticate to Vault via AppRole: {e}")
 
     def _auth_via_tls_cert(self) -> str:
         """
@@ -118,15 +210,44 @@ class HashicorpSecretManager(BaseSecretManager):
         return {"name": self.vault_cert_role}
 
     def get_url(self, secret_name: str) -> str:
+        """
+        Constructs the Vault URL for KV v2 secrets.
+        
+        Format: {VAULT_ADDR}/v1/{NAMESPACE}/{MOUNT_NAME}/data/{PATH_PREFIX}/{SECRET_NAME}
+        
+        Examples:
+        - Default: http://127.0.0.1:8200/v1/secret/data/mykey
+        - With namespace: http://127.0.0.1:8200/v1/mynamespace/secret/data/mykey
+        - With custom mount: http://127.0.0.1:8200/v1/kv/data/mykey
+        - With path prefix: http://127.0.0.1:8200/v1/secret/data/myapp/mykey
+        """
         _url = f"{self.vault_addr}/v1/"
         if self.vault_namespace:
             _url += f"{self.vault_namespace}/"
-        _url += f"secret/data/{secret_name}"
+        _url += f"{self.vault_mount_name}/data/"
+        if self.vault_path_prefix:
+            _url += f"{self.vault_path_prefix}/"
+        _url += secret_name
         return _url
 
     def _get_request_headers(self) -> dict:
+        """
+        Get the headers for Vault API requests.
+        
+        Authentication priority:
+        1. AppRole (if role_id and secret_id are configured)
+        2. TLS Certificate (if cert paths are configured)
+        3. Direct token (if HCP_VAULT_TOKEN is set)
+        """
+        # Priority 1: AppRole auth
+        if self.approle_role_id and self.approle_secret_id:
+            return {"X-Vault-Token": self._auth_via_approle()}
+        
+        # Priority 2: TLS cert auth
         if self.tls_cert_path and self.tls_key_path:
             return {"X-Vault-Token": self._auth_via_tls_cert()}
+        
+        # Priority 3: Direct token
         return {"X-Vault-Token": self.vault_token}
 
     async def async_read_secret(
@@ -202,6 +323,7 @@ class HashicorpSecretManager(BaseSecretManager):
         description: Optional[str] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        tags: Optional[Union[dict, list]] = None
     ) -> Dict[str, Any]:
         """
         Writes a secret to Vault KV v2 using an async HTTPX client.

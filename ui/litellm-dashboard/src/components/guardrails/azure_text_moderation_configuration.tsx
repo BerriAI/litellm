@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
-import { Typography, Badge, Card, Checkbox, Select, Slider, Tooltip, Divider, Row, Col } from 'antd';
-import { 
-  AzureTextModerationConfigurationProps, 
-  AZURE_TEXT_MODERATION_CATEGORIES, 
-  SEVERITY_LEVELS 
-} from './azure_text_moderation_types';
-import { InfoCircleOutlined, SafetyOutlined } from '@ant-design/icons';
+import React, { useState } from "react";
+import { Typography, Badge, Card, Checkbox, Select, Slider, Tooltip, Divider, Row, Col } from "antd";
+import {
+  AzureTextModerationConfigurationProps,
+  AZURE_TEXT_MODERATION_CATEGORIES,
+  SEVERITY_LEVELS,
+} from "./azure_text_moderation_types";
+import { InfoCircleOutlined, SafetyOutlined } from "@ant-design/icons";
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -25,19 +25,19 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const getSeverityLabel = (value: number) => {
-    const level = SEVERITY_LEVELS.find(l => l.value === value);
+    const level = SEVERITY_LEVELS.find((l) => l.value === value);
     return level ? level.label : `Level ${value}`;
   };
 
   const getSeverityColor = (value: number) => {
-    if (value === 0) return '#52c41a'; // green
-    if (value === 2) return '#faad14'; // orange
-    if (value === 4) return '#fa8c16'; // dark orange
-    return '#f5222d'; // red
+    if (value === 0) return "#52c41a"; // green
+    if (value === 2) return "#faad14"; // orange
+    if (value === 4) return "#fa8c16"; // dark orange
+    return "#f5222d"; // red
   };
 
   const handleSelectAll = () => {
-    AZURE_TEXT_MODERATION_CATEGORIES.forEach(category => {
+    AZURE_TEXT_MODERATION_CATEGORIES.forEach((category) => {
       if (!selectedCategories.includes(category.name)) {
         onCategorySelect(category.name);
       }
@@ -45,7 +45,7 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
   };
 
   const handleUnselectAll = () => {
-    selectedCategories.forEach(category => {
+    selectedCategories.forEach((category) => {
       onCategorySelect(category);
     });
   };
@@ -55,12 +55,14 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
       <div className="flex justify-between items-center mb-5">
         <div className="flex items-center">
           <SafetyOutlined className="text-blue-600 mr-2 text-lg" />
-          <Title level={4} className="mb-0 font-semibold text-gray-800">Azure Text Moderation</Title>
+          <Title level={4} className="mb-0 font-semibold text-gray-800">
+            Azure Text Moderation
+          </Title>
         </div>
-        <Badge 
-          count={selectedCategories.length} 
-          showZero 
-          style={{ backgroundColor: selectedCategories.length > 0 ? '#1890ff' : '#d9d9d9' }}
+        <Badge
+          count={selectedCategories.length}
+          showZero
+          style={{ backgroundColor: selectedCategories.length > 0 ? "#1890ff" : "#d9d9d9" }}
           overflowCount={999}
         >
           <Text className="text-gray-500">{selectedCategories.length} categories selected</Text>
@@ -69,46 +71,48 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
 
       <Card className="mb-6">
         <div className="flex justify-between items-center mb-4">
-          <Title level={5} className="mb-0">Content Categories</Title>
+          <Title level={5} className="mb-0">
+            Content Categories
+          </Title>
           <div className="space-x-2">
             <a onClick={handleSelectAll} className="text-blue-600 hover:text-blue-800 cursor-pointer">
               Select All
             </a>
             <span className="text-gray-300">|</span>
-            <a 
-              onClick={handleUnselectAll} 
+            <a
+              onClick={handleUnselectAll}
               className="text-red-600 hover:text-red-800 cursor-pointer"
-              style={{ display: selectedCategories.length > 0 ? 'inline' : 'none' }}
+              style={{ display: selectedCategories.length > 0 ? "inline" : "none" }}
             >
               Unselect All
             </a>
           </div>
         </div>
-        
-        <Paragraph className="text-gray-600 mb-4">
-          Select which content categories to monitor and filter
-        </Paragraph>
+
+        <Paragraph className="text-gray-600 mb-4">Select which content categories to monitor and filter</Paragraph>
 
         <Row gutter={[16, 16]}>
-          {AZURE_TEXT_MODERATION_CATEGORIES.map(category => (
+          {AZURE_TEXT_MODERATION_CATEGORIES.map((category) => (
             <Col xs={24} sm={12} key={category.name}>
-              <Card 
-                size="small" 
+              <Card
+                size="small"
                 className={`cursor-pointer transition-all duration-200 ${
-                  selectedCategories.includes(category.name) 
-                    ? 'border-blue-500 bg-blue-50 shadow-sm' 
-                    : 'border-gray-200 hover:border-gray-300'
+                  selectedCategories.includes(category.name)
+                    ? "border-blue-500 bg-blue-50 shadow-sm"
+                    : "border-gray-200 hover:border-gray-300"
                 }`}
                 onClick={() => onCategorySelect(category.name)}
               >
                 <div className="flex items-start">
-                  <Checkbox 
+                  <Checkbox
                     checked={selectedCategories.includes(category.name)}
                     onChange={() => onCategorySelect(category.name)}
                     className="mr-3 mt-1"
                   />
                   <div className="flex-1">
-                    <Text strong className="text-sm">{category.name}</Text>
+                    <Text strong className="text-sm">
+                      {category.name}
+                    </Text>
                     <br />
                     <Text className="text-xs text-gray-600">{category.description}</Text>
                   </div>
@@ -121,7 +125,9 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
 
       <Card className="mb-6">
         <div className="flex items-center mb-4">
-          <Title level={5} className="mb-0 mr-2">Global Severity Threshold</Title>
+          <Title level={5} className="mb-0 mr-2">
+            Global Severity Threshold
+          </Title>
           <Tooltip title="Content with severity levels at or above this threshold will be flagged">
             <InfoCircleOutlined className="text-gray-400" />
           </Tooltip>
@@ -141,10 +147,10 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
                 value={globalSeverityThreshold}
                 onChange={onGlobalSeverityChange}
                 marks={{
-                  0: { label: 'Safe', style: { color: '#52c41a' } },
-                  2: { label: 'Low', style: { color: '#faad14' } },
-                  4: { label: 'Medium', style: { color: '#fa8c16' } },
-                  6: { label: 'High', style: { color: '#f5222d' } },
+                  0: { label: "Safe", style: { color: "#52c41a" } },
+                  2: { label: "Low", style: { color: "#faad14" } },
+                  4: { label: "Medium", style: { color: "#fa8c16" } },
+                  6: { label: "High", style: { color: "#f5222d" } },
                 }}
                 tooltip={{
                   formatter: (value) => getSeverityLabel(value || 0),
@@ -153,7 +159,7 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
             </Col>
             <Col span={8} className="pl-4">
               <div className="text-center">
-                <div 
+                <div
                   className="inline-block px-3 py-1 rounded-full text-white font-medium"
                   style={{ backgroundColor: getSeverityColor(globalSeverityThreshold) }}
                 >
@@ -168,16 +174,18 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
       <Card>
         <div className="flex justify-between items-center mb-4">
           <div className="flex items-center">
-            <Title level={5} className="mb-0 mr-2">Per-Category Thresholds</Title>
+            <Title level={5} className="mb-0 mr-2">
+              Per-Category Thresholds
+            </Title>
             <Tooltip title="Override the global threshold for specific categories">
               <InfoCircleOutlined className="text-gray-400" />
             </Tooltip>
           </div>
-          <a 
+          <a
             onClick={() => setShowAdvanced(!showAdvanced)}
             className="text-blue-600 hover:text-blue-800 cursor-pointer"
           >
-            {showAdvanced ? 'Hide Advanced' : 'Show Advanced'}
+            {showAdvanced ? "Hide Advanced" : "Show Advanced"}
           </a>
         </div>
 
@@ -193,7 +201,7 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
               </div>
             ) : (
               <div className="space-y-4">
-                {selectedCategories.map(category => (
+                {selectedCategories.map((category) => (
                   <div key={category}>
                     <div className="flex justify-between items-center mb-2">
                       <Text strong>{category}</Text>
@@ -204,11 +212,11 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
                         onChange={(value) => onCategorySeverityChange(category, value)}
                         allowClear
                       >
-                        {SEVERITY_LEVELS.map(level => (
+                        {SEVERITY_LEVELS.map((level) => (
                           <Option key={level.value} value={level.value}>
                             <div className="flex items-center justify-between">
                               <span>{level.label}</span>
-                              <div 
+                              <div
                                 className="w-3 h-3 rounded-full ml-2"
                                 style={{ backgroundColor: getSeverityColor(level.value) }}
                               />
@@ -218,11 +226,9 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
                       </Select>
                     </div>
                     <Text className="text-xs text-gray-500">
-                      {AZURE_TEXT_MODERATION_CATEGORIES.find(c => c.name === category)?.description}
+                      {AZURE_TEXT_MODERATION_CATEGORIES.find((c) => c.name === category)?.description}
                     </Text>
-                    {category !== selectedCategories[selectedCategories.length - 1] && (
-                      <Divider className="my-4" />
-                    )}
+                    {category !== selectedCategories[selectedCategories.length - 1] && <Divider className="my-4" />}
                   </div>
                 ))}
               </div>
@@ -234,4 +240,4 @@ const AzureTextModerationConfiguration: React.FC<AzureTextModerationConfiguratio
   );
 };
 
-export default AzureTextModerationConfiguration; 
+export default AzureTextModerationConfiguration;

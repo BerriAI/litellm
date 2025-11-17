@@ -57,7 +57,7 @@ const CredentialDeleteModal: React.FC<CredentialDeleteModalProps> = ({
             </p>
           </div>
         </div>
-        
+
         <div className="mb-5">
           <label className="block text-base font-medium text-gray-700 mb-2">
             {`Type `}
@@ -73,21 +73,12 @@ const CredentialDeleteModal: React.FC<CredentialDeleteModalProps> = ({
             autoFocus
           />
         </div>
-        
+
         <div className="flex justify-end space-x-2">
-          <TremorButton 
-            onClick={handleCancel} 
-            variant="secondary"
-            className="mr-2"
-          >
+          <TremorButton onClick={handleCancel} variant="secondary" className="mr-2">
             Cancel
           </TremorButton>
-          <TremorButton
-            onClick={handleConfirm}
-            color="red"
-            className="focus:ring-red-500"
-            disabled={!isValid}
-          >
+          <TremorButton onClick={handleConfirm} color="red" className="focus:ring-red-500" disabled={!isValid}>
             Delete Credential
           </TremorButton>
         </div>

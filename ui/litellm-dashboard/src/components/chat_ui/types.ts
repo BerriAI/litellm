@@ -56,11 +56,26 @@ export interface StreamingResponse {
   usage?: Usage;
 }
 
+export interface VectorStoreSearchResult {
+  score: number;
+  content: Array<{ text: string; type: string }>;
+  file_id?: string;
+  filename?: string;
+  attributes?: Record<string, any>;
+}
+
+export interface VectorStoreSearchResponse {
+  object: string;
+  search_query: string;
+  data: VectorStoreSearchResult[];
+}
+
 export interface MessageType {
   role: string;
   content: string | MultimodalContent[];
   model?: string;
   isImage?: boolean;
+  isAudio?: boolean;
   reasoningContent?: string;
   timeToFirstToken?: number;
   usage?: {
@@ -75,10 +90,11 @@ export interface MessageType {
     url: string;
     detail: string;
   };
+  searchResults?: VectorStoreSearchResponse[];
 }
 
 export interface MultimodalContent {
   type: "input_text" | "input_image";
   text?: string;
   image_url?: string;
-} 
+}

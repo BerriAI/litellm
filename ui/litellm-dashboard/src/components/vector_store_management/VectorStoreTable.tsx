@@ -1,22 +1,6 @@
 import React from "react";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Icon,
-  Text,
-  Badge,
-} from "@tremor/react";
-import {
-  TrashIcon,
-  PencilAltIcon,
-  SwitchVerticalIcon,
-  ChevronUpIcon,
-  ChevronDownIcon,
-} from "@heroicons/react/outline";
+import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Icon } from "@tremor/react";
+import { TrashIcon, PencilAltIcon, SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
 import {
   ColumnDef,
@@ -36,15 +20,8 @@ interface VectorStoreTableProps {
   onDelete: (vectorStoreId: string) => void;
 }
 
-const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
-  data,
-  onView,
-  onEdit,
-  onDelete,
-}) => {
-  const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "created_at", desc: true }
-  ]);
+const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdit, onDelete }) => {
+  const [sorting, setSorting] = React.useState<SortingState>([{ id: "created_at", desc: true }]);
 
   const columns: ColumnDef<VectorStore>[] = [
     {
@@ -59,8 +36,7 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
           >
             {vectorStore.vector_store_id.length > 15
               ? `${vectorStore.vector_store_id.slice(0, 15)}...`
-              : vectorStore.vector_store_id
-            }
+              : vectorStore.vector_store_id}
           </button>
         );
       },
@@ -72,9 +48,7 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
         const vectorStore = row.original;
         return (
           <Tooltip title={vectorStore.vector_store_name}>
-            <span className="text-xs">
-              {vectorStore.vector_store_name || "-"}
-            </span>
+            <span className="text-xs">{vectorStore.vector_store_name || "-"}</span>
           </Tooltip>
         );
       },
@@ -86,9 +60,7 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
         const vectorStore = row.original;
         return (
           <Tooltip title={vectorStore.vector_store_description}>
-            <span className="text-xs">
-              {vectorStore.vector_store_description || "-"}
-            </span>
+            <span className="text-xs">{vectorStore.vector_store_description || "-"}</span>
           </Tooltip>
         );
       },
@@ -113,11 +85,7 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
       sortingFn: "datetime",
       cell: ({ row }) => {
         const vectorStore = row.original;
-        return (
-          <span className="text-xs">
-            {new Date(vectorStore.created_at).toLocaleDateString()}
-          </span>
-        );
+        return <span className="text-xs">{new Date(vectorStore.created_at).toLocaleDateString()}</span>;
       },
     },
     {
@@ -126,11 +94,7 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
       sortingFn: "datetime",
       cell: ({ row }) => {
         const vectorStore = row.original;
-        return (
-          <span className="text-xs">
-            {new Date(vectorStore.updated_at).toLocaleDateString()}
-          </span>
-        );
+        return <span className="text-xs">{new Date(vectorStore.updated_at).toLocaleDateString()}</span>;
       },
     },
     {
@@ -181,27 +145,20 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
                   <TableHeaderCell
                     key={header.id}
                     className={`py-1 h-8 ${
-                      header.id === 'actions'
-                        ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
-                        : ''
+                      header.id === "actions" ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]" : ""
                     }`}
                     onClick={header.column.getToggleSortingHandler()}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center">
-                        {header.isPlaceholder ? null : (
-                          flexRender(
-                            header.column.columnDef.header,
-                            header.getContext()
-                          )
-                        )}
+                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                       </div>
-                      {header.id !== 'actions' && (
+                      {header.id !== "actions" && (
                         <div className="w-4">
                           {header.column.getIsSorted() ? (
                             {
                               asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />
+                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
                             }[header.column.getIsSorted() as string]
                           ) : (
                             <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
@@ -222,9 +179,9 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
                     <TableCell
                       key={cell.id}
                       className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
-                        cell.column.id === 'actions'
-                          ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
-                          : ''
+                        cell.column.id === "actions"
+                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                          : ""
                       }`}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -248,4 +205,4 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
   );
 };
 
-export default VectorStoreTable; 
+export default VectorStoreTable;

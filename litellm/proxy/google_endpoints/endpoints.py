@@ -25,11 +25,23 @@ async def google_generate_content(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, general_settings, proxy_config, version
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     data = await _read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
+    
+    # Add user authentication metadata for cost tracking
+    data = await add_litellm_data_to_request(
+        data=data,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config,
+        general_settings=general_settings,
+        version=version,
+    )
+    
     # call router
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
@@ -51,7 +63,8 @@ async def google_stream_generate_content(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, general_settings, proxy_config, version
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     data = await _read_request_body(request=request)
 
@@ -60,10 +73,20 @@ async def google_stream_generate_content(
 
     data["stream"] = True  # enforce streaming for this endpoint
 
+    # Add user authentication metadata for cost tracking
+    data = await add_litellm_data_to_request(
+        data=data,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config,
+        general_settings=general_settings,
+        version=version,
+    )
+
     # call router
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
-    response = await llm_router.agenerate_content(**data)
+    response = await llm_router.agenerate_content_stream(**data)
 
     # Check if response is an async iterator (streaming response)
     if hasattr(response, "__aiter__"):
