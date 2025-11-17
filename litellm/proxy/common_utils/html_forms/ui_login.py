@@ -191,11 +191,11 @@ html_form = f"""
     <form action="{url_to_redirect_to}" method="post">
         <div class="logo-container">
             <div class="logo">
-                🚅 LiteLLM
+                :check AriLLM
             </div>
         </div>
         <h2>Login</h2>
-        <p class="subtitle">Access your LiteLLM Admin UI.</p>
+        <p class="subtitle">Access your LLM Admin UI.</p>
         <div class="info-box">
             <div class="info-header">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

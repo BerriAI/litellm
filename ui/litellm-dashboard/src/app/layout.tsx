@@ -6,8 +6,8 @@ import { FeatureFlagsProvider } from "@/hooks/useFeatureFlags";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "LiteLLM Dashboard",
-  description: "LiteLLM Proxy Admin UI",
+  title: "AriLLM Dashboard",
+  description: "AriLLM Proxy Admin UI",
   icons: { icon: "./favicon.ico" },
 };
 

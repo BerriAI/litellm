@@ -41,7 +41,7 @@ services:
       start_period: 60s  # Wait longer for development setup
 
   db:
-    image: postgres:18
+    image: postgres:17
     restart: always
     container_name: litellm_db
     environment:
@@ -49,7 +49,7 @@ services:
       POSTGRES_USER: llmproxy
       POSTGRES_PASSWORD: dbpassword9090
     ports:
-      - "5432:5432"
+      - "5432:5434"
     volumes:
       - postgres_data:/var/lib/postgresql/data # Persists Postgres data across container restarts
     healthcheck:
