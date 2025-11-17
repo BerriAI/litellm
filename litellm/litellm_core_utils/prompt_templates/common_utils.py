@@ -438,7 +438,7 @@ def update_messages_with_model_file_ids(
 
 
 def update_responses_input_with_model_file_ids(
-    input: Union[str, List[Dict[str, Any]]],
+    input: Any,
 ) -> Union[str, List[Dict[str, Any]]]:
     """
     Updates responses API input with provider-specific file IDs.

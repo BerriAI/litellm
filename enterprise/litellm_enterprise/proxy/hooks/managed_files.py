@@ -475,7 +475,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
           - type: "input_file" with file_id
           - content: a list that can contain items with type: "input_file" and file_id
         """
-        file_ids = []
+        file_ids: List[str] = []
         
         if isinstance(input, str):
             return file_ids

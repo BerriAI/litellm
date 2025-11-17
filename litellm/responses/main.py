@@ -12,6 +12,7 @@ from typing import (
     Optional,
     Type,
     Union,
+    cast,
 )
 
 import httpx
@@ -562,7 +563,7 @@ def responses(
         #########################################################
         # Update input with provider-specific file IDs if managed files are used
         #########################################################
-        input = update_responses_input_with_model_file_ids(input=input)
+        input = cast(Union[str, ResponseInputParam], update_responses_input_with_model_file_ids(input=input))
         local_vars["input"] = input
         
         #########################################################
