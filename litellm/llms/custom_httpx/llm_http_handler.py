@@ -1827,7 +1827,7 @@ class BaseLLMHTTPHandler:
         )
 
         # Apply additional_drop_params for nested field removal
-        additional_drop_params = litellm_params.additional_drop_params
+        additional_drop_params = litellm_params.get("additional_drop_params")
         if additional_drop_params:
             from litellm.litellm_core_utils.dot_notation_indexing import (
                 delete_nested_value,
