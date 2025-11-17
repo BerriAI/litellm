@@ -34,6 +34,8 @@ class LowestTPMLoggingHandler(CustomLogger):
             """
             Update TPM/RPM usage on success
             """
+            if "litellm_params" not in kwargs or kwargs["litellm_params"] is None:
+                return
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
@@ -93,11 +95,11 @@ class LowestTPMLoggingHandler(CustomLogger):
             """
             Update TPM/RPM usage on success
             """
+            if "litellm_params" not in kwargs or kwargs["litellm_params"] is None:
+                return
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                if "litellm_params" not in kwargs:
-                    return
                 model_group = kwargs["litellm_params"]["metadata"].get(
                     "model_group", None
                 )
