@@ -35,7 +35,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig, BaseGigaChat):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        match = re.search(r'/v(\d+)/', api_base)
+        match = re.search(r"/v(\d+)/", api_base)
         if not match:
             api_base = urljoin(api_base, "v1/embeddings")
         return api_base

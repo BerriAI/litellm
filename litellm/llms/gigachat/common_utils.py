@@ -21,7 +21,11 @@ class GigaChatError(BaseLLMException):
 class BaseGigaChat:
     def __init__(self):
         self._token_cache: dict[str, Any] = {"token": None, "expires_at": 0}
-        self._ssl_verify = False if os.environ.get("GIGACHAT_VERIFY_SSL_CERTS", "").lower() == "false" else True
+        self._ssl_verify = (
+            False
+            if os.environ.get("GIGACHAT_VERIFY_SSL_CERTS", "").lower() == "false"
+            else True
+        )
 
     @staticmethod
     def _check_timestamp_unit(timestamp):
@@ -88,7 +92,11 @@ class BaseGigaChat:
             }
             data = {"scope": scope}
             response = httpx.post(
-                auth_url, headers=headers, data=data, timeout=30, verify=self._ssl_verify
+                auth_url,
+                headers=headers,
+                data=data,
+                timeout=30,
+                verify=self._ssl_verify,
             )
             response.raise_for_status()
             data = response.json()

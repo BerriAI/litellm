@@ -197,7 +197,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        match = re.search(r'/v(\d+)/', api_base)
+        match = re.search(r"/v(\d+)/", api_base)
         if not match:
             api_base = urljoin(api_base, "v1/chat/completions")
 
@@ -211,7 +211,6 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
         attachment_count = 0
 
         for i, message in enumerate(messages):
-            print(message)
             # Normalize roles
             if message["role"] == "developer":
                 message["role"] = "system"
@@ -271,10 +270,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
                 remaining -= len(attachments)
 
     async def upload_file_async(
-            self,
-            image_url: str,
-            headers: dict,
-            filename: str | None = None
+        self, image_url: str, headers: dict, filename: str | None = None
     ) -> str | None:
         """
         Uploads image to GigaChat and returns file_id.
@@ -292,10 +288,10 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
                     image_bytes = resp.content
 
             api_base = (
-                    litellm.get_secret_str("GIGACHAT_API_BASE")
-                    or "https://gigachat.devices.sberbank.ru/api/v1/"
+                litellm.get_secret_str("GIGACHAT_API_BASE")
+                or "https://gigachat.devices.sberbank.ru/api/v1/"
             )
-            match = re.search(r'/v(\d+)/', api_base)
+            match = re.search(r"/v(\d+)/", api_base)
             if not match:
                 files_url = urljoin(api_base, "v1/files")
             else:
@@ -312,8 +308,7 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
             files = {"file": (filename, image_bytes)}
 
             clean_headers = {
-                k: v for k, v in headers.items()
-                if k.lower() != "content-type"
+                k: v for k, v in headers.items() if k.lower() != "content-type"
             }
 
             resp = await client.post(
@@ -327,7 +322,9 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
             data = resp.json()
             return data.get("id")
 
-    def upload_file(self, image_url: str, headers: dict, filename: str | None = None) -> Optional[str]:
+    def upload_file(
+        self, image_url: str, headers: dict, filename: str | None = None
+    ) -> Optional[str]:
         """
         Sync-safe wrapper around async upload.
         This is used inside transform_request() which must stay sync.
@@ -451,17 +448,15 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
                 if "function_call" in message:
                     choice["finish_reason"] = "tool_calls"
                     self._process_function_call(message)
-            response_json["usage"] |= {"input_tokens_details":
-                                           {"cached_tokens": 0},
-                                      "output_tokens_details":
-                                          {"reasoning_tokens": 0}
-                                       }
+            response_json["usage"] |= {
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            }
 
         except Exception as e:
             raise ValueError(f"Failed to parse GigaChat response as JSON: {e}")
 
         return ModelResponse(**response_json)
-
 
     def _construct_gigachat_tool(self, tools: Optional[list] = None) -> list:
         if tools is None:
@@ -569,7 +564,8 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
     ) -> "CustomStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(
-                llm_provider=LlmProviders.GIGACHAT, params={"ssl_verify": self._ssl_verify}
+                llm_provider=LlmProviders.GIGACHAT,
+                params={"ssl_verify": self._ssl_verify},
             )
 
         try:
