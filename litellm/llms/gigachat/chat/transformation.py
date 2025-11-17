@@ -383,14 +383,14 @@ class GigaChatConfig(BaseConfig, BaseGigaChat):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> Dict[str, Any]:
         """
         Transform OpenAI-style request to GigaChat format.
         """
         # Transform messages to GigaChat format
         gigachat_messages = self._transform_messages(messages, headers)
         # Build request body
-        request_body = {
+        request_body: Dict[str, Any] = {
             "model": model,
             "messages": gigachat_messages,
         }
