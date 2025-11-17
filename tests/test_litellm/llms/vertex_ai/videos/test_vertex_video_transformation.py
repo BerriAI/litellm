@@ -86,7 +86,8 @@ class TestVertexAIVideoConfig:
 
         assert url.startswith("https://custom-endpoint.example.com")
         assert "test-project" in url
-        assert "us-west1" in url
+        # Location is always forced to us-central1 for video generation
+        assert "us-central1" in url
         assert "veo-002" in url
         # Should NOT include endpoint
         assert not url.endswith(":predictLongRunning")
