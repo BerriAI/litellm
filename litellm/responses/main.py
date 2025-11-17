@@ -37,6 +37,9 @@ from litellm.types.llms.openai import (
     ToolChoice,
     ToolParam,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    update_responses_input_with_model_file_ids,
+)
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
@@ -555,6 +558,13 @@ def responses(
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
+        
+        #########################################################
+        # Update input with provider-specific file IDs if managed files are used
+        #########################################################
+        input = update_responses_input_with_model_file_ids(input=input)
+        local_vars["input"] = input
+        
         #########################################################
         # Native MCP Responses API
         #########################################################
