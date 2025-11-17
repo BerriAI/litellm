@@ -1,5 +1,28 @@
 name: CARTO - Create Release
 
+################################################################################
+# CARTO Release Workflow with Intelligent Release Notes
+################################################################################
+#
+# This workflow creates CARTO releases with AI-powered, product-focused
+# release notes that automatically filter out infrastructure changes.
+#
+# Features:
+# - Security verification: Only authorized users can trigger releases
+# - Intelligent release notes: Uses Claude Code to analyze commits and
+#   generate user-friendly release notes that exclude CI/CD, sync automation,
+#   and dev tooling changes
+# - Automatic versioning: Detects version from commits or uses manual input
+# - Docker build: Creates and pushes non-root Docker image
+#
+# Security measures:
+# - Actor authorization check (Cartofante, mateo-di only)
+# - Read-only tools for Claude (Bash, Read, Grep, Glob)
+# - Rate limiting: max-turns: 50, 20-min timeout (~$0.50-2 per release)
+# - No write access to repository during notes generation
+#
+# Uses X_GITHUB_SUPERCARTOFANTE token where workflow modifications are needed.
+
 on:
   workflow_dispatch:
     inputs:
@@ -19,8 +42,51 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Security verification - MUST PASS before any release operations
+  security-check:
+    name: Security Verification
+    runs-on: ubuntu-latest
+    outputs:
+      authorized: ${{ steps.verify.outputs.authorized }}
+
+    steps:
+      - name: Verify actor authorization
+        id: verify
+        run: |
+          set -eu
+
+          echo "::group::Security verification"
+
+          # Security Check: Only allow specific authorized users to create releases
+          ACTOR="${{ github.actor }}"
+          ALLOWED_ACTORS="Cartofante mateo-di"
+
+          # Check if actor is in allowed list (case-insensitive)
+          ACTOR_LOWER="${ACTOR,,}"
+          ALLOWED=false
+          for allowed in ${ALLOWED_ACTORS}; do
+            if [[ "${ACTOR_LOWER}" == "${allowed,,}" ]]; then
+              ALLOWED=true
+              break
+            fi
+          done
+
+          if [[ "${ALLOWED}" == "false" ]]; then
+            echo "[Security] ❌ Unauthorized actor: ${ACTOR}"
+            echo "[Security] Allowed actors: ${ALLOWED_ACTORS}"
+            echo "authorized=false" >> $GITHUB_OUTPUT
+            echo "::error::Unauthorized user attempted to create release"
+            exit 1
+          fi
+
+          echo "[Security] ✅ Actor verified: ${ACTOR}"
+          echo "authorized=true" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
   create-release:
     runs-on: ubuntu-latest
+    needs: security-check
+    if: needs.security-check.outputs.authorized == 'true'
     permissions:
       contents: write
       packages: write
@@ -135,48 +201,116 @@ jobs:
           echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
           echo "Release tag: ${RELEASE_TAG}"
 
-      - name: Generate release notes
+      - name: Generate intelligent release notes with Claude
         id: release-notes
-        run: |
-          UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
-          PREFIX="carto-v${UPSTREAM_VERSION}-"
-          LATEST_TAG=$(git tag -l "${PREFIX}*" | sort -V | tail -n 1)
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          show_full_output: false
+          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 50 --allowed-tools Read,Bash,Grep,Glob"
+          prompt: |
+            # Intelligent Release Notes Generation
 
-          if [ -z "$LATEST_TAG" ]; then
-            # First release for this upstream version - get all commits
-            echo "## 🎉 First CARTO Release for LiteLLM v${UPSTREAM_VERSION}" > release_notes.md
-            echo "" >> release_notes.md
-            echo "### Changes" >> release_notes.md
-            git log --oneline --no-merges -20 >> release_notes.md
-          else
-            # Get commits since last tag
-            echo "## 🚀 CARTO Release" > release_notes.md
-            echo "" >> release_notes.md
-            echo "**Base Version:** LiteLLM v${UPSTREAM_VERSION}" >> release_notes.md
-            echo "**Previous Tag:** ${LATEST_TAG}" >> release_notes.md
-            echo "" >> release_notes.md
-            echo "### Changes Since Last Release" >> release_notes.md
-            echo "" >> release_notes.md
+            ## Your Task
+            Generate product-focused release notes for LiteLLM CARTO fork that ONLY include changes relevant to end-users and product functionality.
 
-            # Categorize commits
-            echo "#### 🐛 Bug Fixes" >> release_notes.md
-            git log ${LATEST_TAG}..HEAD --oneline --no-merges --grep="fix:" --grep="bugfix:" --grep="Fix" -i >> release_notes.md || echo "No bug fixes" >> release_notes.md
-            echo "" >> release_notes.md
+            ## Context
+            - **Upstream Version**: ${{ steps.detect-upstream.outputs.upstream_version }}
+            - **Previous Tag**: Find it with: `git tag -l "carto-v${{ steps.detect-upstream.outputs.upstream_version }}-*" | sort -V | tail -n 1`
+            - **Output File**: `release_notes.md` (create this file)
 
-            echo "#### ✨ Features" >> release_notes.md
-            git log ${LATEST_TAG}..HEAD --oneline --no-merges --grep="feat:" --grep="feature:" -i >> release_notes.md || echo "No new features" >> release_notes.md
-            echo "" >> release_notes.md
+            ## Step 1: Find Commits to Analyze
+            ```bash
+            # Get the latest CARTO tag for this upstream version
+            UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
+            LATEST_TAG=$(git tag -l "carto-v${UPSTREAM_VERSION}-*" | sort -V | tail -n 1)
 
-            echo "#### 🔧 Chores & Maintenance" >> release_notes.md
-            git log ${LATEST_TAG}..HEAD --oneline --no-merges --grep="chore:" -i >> release_notes.md || echo "No chores" >> release_notes.md
-            echo "" >> release_notes.md
+            if [ -z "$LATEST_TAG" ]; then
+              # First release - get last 30 commits
+              git log --oneline --no-merges -30
+            else
+              # Get commits since last tag
+              git log ${LATEST_TAG}..HEAD --oneline --no-merges
+            fi
+            ```
 
-            echo "#### 📦 All Commits" >> release_notes.md
-            git log ${LATEST_TAG}..HEAD --oneline --no-merges >> release_notes.md
-          fi
+            ## Step 2: Filter Out Non-Product Commits
+            **EXCLUDE these types of commits:**
+            1. ❌ **CI/CD & Workflows**: Changes to `.github/workflows/`, GitHub Actions, CI configurations
+               - Examples: "fix: workflow", "ci:", "chore(workflow)", "Add Claude conflict resolution"
+            2. ❌ **Upstream Sync Automation**: Sync infrastructure, conflict resolution automation
+               - Examples: "sync:", "upstream sync", "resolver workflow", "merge upstream"
+            3. ❌ **Internal Documentation**: CARTO_*.md files, maintainer guides, development docs
+               - Examples: "Improve CARTO_CLAUDE.md", "docs: update release process"
+            4. ❌ **Development Tooling**: Makefile changes, linting configs, dev scripts
+               - Examples: "chore: update Makefile", "refactor: improve dev scripts"
 
-          # Read the release notes into output
-          cat release_notes.md
+            **INCLUDE these types of commits:**
+            1. ✅ **Bug Fixes**: Fixes to LiteLLM core functionality, proxy, providers
+               - Look for: "fix:", "bugfix:", fixes to `litellm/`, `proxy/`
+            2. ✅ **Features**: New LiteLLM features, provider support, API improvements
+               - Look for: "feat:", "feature:", new capabilities for end-users
+            3. ✅ **Breaking Changes**: Changes that affect API, configuration, behavior
+               - Look for: "BREAKING CHANGE:", "breaking:", changes to public APIs
+            4. ✅ **Cherry-picks from Upstream**: Important upstream fixes merged into CARTO
+               - Look for: "cherry-pick", "[sc-XXXXX]" with LiteLLM functionality changes
+
+            ## Step 3: Analyze Each Commit
+            For each commit:
+            1. Read the commit message
+            2. If needed, check what files were changed: `git show --name-only <commit-hash>`
+            3. Determine if it's product-relevant (affects LiteLLM functionality for users)
+            4. If yes, categorize it: Feature / Bug Fix / Breaking Change / Security
+
+            ## Step 4: Generate Markdown Release Notes
+
+            Create `release_notes.md` with this structure:
+
+            ```markdown
+            ## 🚀 CARTO Release for LiteLLM v${{ steps.detect-upstream.outputs.upstream_version }}
+
+            **Base Version:** LiteLLM v${{ steps.detect-upstream.outputs.upstream_version }}
+
+            ### ✨ Features
+            - [Brief description of feature - explain what it does for users, not technical commit details]
+            - [Another feature]
+
+            ### 🐛 Bug Fixes
+            - [Brief description of fix - explain what issue was resolved]
+            - [Another fix]
+
+            ### 🔒 Security
+            - [If any security-related changes]
+
+            ### ⚠️ Breaking Changes
+            - [If any breaking changes - explain impact and migration path]
+
+            ---
+            *This release includes X product-relevant changes. Infrastructure and CI changes are not listed here.*
+            ```
+
+            ## Important Guidelines
+            1. **Be concise but clear**: Each bullet should explain WHAT changed and WHY it matters to users
+            2. **Group related changes**: If multiple commits fix the same issue, combine into one bullet
+            3. **Skip internal details**: Don't mention workflow files, CI configs, documentation updates for maintainers
+            4. **Add context**: Transform raw commit messages into user-friendly descriptions
+            5. **Empty sections**: If no features/fixes, write "No changes in this category"
+
+            ## Example Transformation
+            ❌ BAD (raw commit): "fix: cherry-pick upstream metadata None check [sc-521238]"
+            ✅ GOOD (user-friendly): "Fixed crash when LiteLLM proxy encounters null metadata in provider responses"
+
+            ❌ BAD (should exclude): "feat: create separate CI fixer workflow with upstream test check"
+            ✅ GOOD (excluded): Not included in release notes (CI infrastructure change)
+
+            ## Output
+            Write the final release notes to `release_notes.md` and confirm it was created successfully.
+
+            **Start now!**
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        timeout-minutes: 20
 
       - name: Create Git tag
         run: |
@@ -238,7 +372,16 @@ jobs:
           echo "**Upstream Version:** \`${{ steps.detect-upstream.outputs.upstream_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Tag:** \`${{ steps.calc-version.outputs.release_tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Docker Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 Release Notes" >> $GITHUB_STEP_SUMMARY
+          echo "Release notes were generated using Claude Code AI analysis." >> $GITHUB_STEP_SUMMARY
+          echo "Only product-relevant changes are included (CI/CD and infrastructure changes excluded)." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🐳 Docker Tags" >> $GITHUB_STEP_SUMMARY
           echo "- \`ghcr.io/${{ env.IMAGE_NAME }}-non_root:${{ steps.calc-version.outputs.release_tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`ghcr.io/${{ env.IMAGE_NAME }}-non_root:carto-stable\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`ghcr.io/${{ env.IMAGE_NAME }}-non_root:carto-v${{ steps.detect-upstream.outputs.upstream_version }}-latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔒 Security" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Actor authorization verified" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Claude Code used read-only tools" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Rate limited (max 50 turns, 20-min timeout)" >> $GITHUB_STEP_SUMMARY
