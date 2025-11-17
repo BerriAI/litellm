@@ -1025,19 +1025,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         _tools: List[ChatCompletionToolCallChunk] = []
         for part in parts:
             if "functionCall" in part:
-                _function_chunk: ChatCompletionToolCallFunctionChunk = {
-                    "name": part["functionCall"]["name"],
-                    "arguments": json.dumps(part["functionCall"]["args"], ensure_ascii=False),
-                }
+                _function_chunk = ChatCompletionToolCallFunctionChunk(
+                    name=part["functionCall"]["name"],
+                    arguments=json.dumps(part["functionCall"]["args"], ensure_ascii=False),
+                )
                 if is_function_call is True:
                     function = _function_chunk
                 else:
-                    _tool_response_chunk: ChatCompletionToolCallChunk = {
-                        "id": f"call_{uuid.uuid4().hex[:28]}",
-                        "type": "function",
-                        "function": _function_chunk,
-                        "index": cumulative_tool_call_idx,
-                    }
+                    _tool_response_chunk = ChatCompletionToolCallChunk(
+                        id=f"call_{uuid.uuid4().hex[:28]}",
+                        type="function",
+                        function=_function_chunk,
+                        index=cumulative_tool_call_idx,
+                    )
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
         if len(_tools) == 0:
