@@ -707,71 +707,22 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     )
 
 
-async def _regenerate_cli_key(
-    existing_key: str, new_key: str, user_id: Optional[str] = None
-) -> None:
-    """Regenerate an existing CLI key with a new token"""
-    from litellm.proxy._types import RegenerateKeyRequest, UserAPIKeyAuth
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        regenerate_key_fn,
-    )
-
-    verbose_proxy_logger.info(f"Regenerating existing CLI key: {existing_key}")
-
-    admin_user_dict = UserAPIKeyAuth.get_litellm_cli_user_api_key_auth()
-
-    regenerate_request = RegenerateKeyRequest(
-        key=existing_key,
-        new_key=new_key,
-        duration="24hr",
-        user_id=user_id,
-    )
-
-    await regenerate_key_fn(
-        key=existing_key, data=regenerate_request, user_api_key_dict=admin_user_dict
-    )
-
-    verbose_proxy_logger.info(f"Regenerated CLI key: {new_key}")
-
-
-async def _create_new_cli_key(
-    key: str,
-    user_id: Optional[str] = None,
-) -> None:
-    """Create a new CLI key"""
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        generate_key_helper_fn,
-    )
-
-    verbose_proxy_logger.info("Creating new CLI key")
-
-    await generate_key_helper_fn(
-        request_type="key",
-        duration="24hr",
-        key_max_budget=litellm.max_ui_session_budget,
-        aliases={},
-        config={},
-        spend=0,
-        user_id=user_id,
-        table_name="key",
-        token=key,
-    )
-
-    verbose_proxy_logger.info(f"Created new CLI key: {key}")
-
-
 async def cli_sso_callback(
     request: Request,
     key: Optional[str] = None,
     existing_key: Optional[str] = None,
     result: Optional[Union[OpenID, dict]] = None,
 ):
-    """CLI SSO callback - regenerates existing CLI key or creates new one"""
+    """CLI SSO callback - stores session info for JWT generation on polling"""
     verbose_proxy_logger.info(
         f"CLI SSO callback for key: {key}, existing_key: {existing_key}"
     )
 
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if not key or not key.startswith("sk-"):
         raise HTTPException(
@@ -784,23 +735,59 @@ async def cli_sso_callback(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
 
+    if result is None:
+        raise HTTPException(
+            status_code=500,
+            detail="SSO authentication failed - no result returned from provider",
+        )
+
+    # After None check, cast to non-None type for type checker
+    result_non_none: Union[OpenID, dict] = cast(Union[OpenID, dict], result)
+
     parsed_openid_result = SSOAuthenticationHandler._get_user_email_and_id_from_result(
-        result=result
+        result=result_non_none
     )
     verbose_proxy_logger.debug(f"parsed_openid_result: {parsed_openid_result}")
 
     try:
-        if existing_key:
-            await _regenerate_cli_key(
-                existing_key=existing_key,
-                new_key=key,
-                user_id=parsed_openid_result.get("user_id"),
+        # Get full user info from DB
+        user_info = await get_user_info_from_db(
+            result=result_non_none,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            user_email=parsed_openid_result.get("user_email"),
+            user_defined_values=None,
+            alternate_user_id=parsed_openid_result.get("user_id"),
+        )
+
+        if user_info is None:
+            raise HTTPException(
+                status_code=500, detail="Failed to retrieve user information from SSO"
             )
-        else:
-            await _create_new_cli_key(
-                key=key,
-                user_id=parsed_openid_result.get("user_id"),
-            )
+
+        # Store session info in cache (10 min TTL)
+        from litellm.constants import CLI_SSO_SESSION_CACHE_KEY_PREFIX
+
+        # Get all teams from user_info - CLI will let user select which one
+        teams: List[str] = []
+        if hasattr(user_info, "teams") and user_info.teams:
+            teams = user_info.teams if isinstance(user_info.teams, list) else []
+
+        session_data = {
+            "user_id": user_info.user_id,
+            "user_role": user_info.user_role,
+            "models": user_info.models if hasattr(user_info, "models") else [],
+            "user_email": parsed_openid_result.get("user_email"),
+            "teams": teams,
+        }
+
+        cache_key = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:{key}"
+        user_api_key_cache.set_cache(key=cache_key, value=session_data, ttl=600)
+
+        verbose_proxy_logger.info(
+            f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
+        )
 
         # Return success page
         from fastapi.responses import HTMLResponse
@@ -813,47 +800,103 @@ async def cli_sso_callback(
         return HTMLResponse(content=html_content, status_code=200)
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error with CLI key: {e}")
+        verbose_proxy_logger.error(f"Error with CLI SSO callback: {e}")
         raise HTTPException(
-            status_code=500, detail=f"Failed to process CLI key: {str(e)}"
+            status_code=500, detail=f"Failed to process CLI SSO: {str(e)}"
         )
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
-async def cli_poll_key(key_id: str):
-    """CLI polling endpoint - checks if key exists in DB"""
-    from litellm.proxy._types import LiteLLM_VerificationToken
-    from litellm.proxy.proxy_server import prisma_client
+async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
+    """
+    CLI polling endpoint - retrieves session from cache and generates JWT.
+    
+    Flow:
+    1. First poll (no team_id): Returns teams list without generating JWT
+    2. Second poll (with team_id): Generates JWT with selected team and deletes session
+    
+    Args:
+        key_id: The session key ID
+        team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
+    """
+    from litellm.constants import CLI_SSO_SESSION_CACHE_KEY_PREFIX
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.proxy.proxy_server import user_api_key_cache
 
     if not key_id.startswith("sk-"):
         raise HTTPException(status_code=400, detail="Invalid key ID format")
 
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
-
     try:
-        # Check if key exists in database
-        from litellm.proxy.utils import hash_token
+        # Look up session in cache
+        cache_key = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:{key_id}"
+        session_data = user_api_key_cache.get_cache(key=cache_key)
 
-        hashed_token = hash_token(key_id)
+        if session_data:
+            user_teams = session_data.get("teams", [])
+            user_id = session_data["user_id"]
+            
+            verbose_proxy_logger.info(
+                f"CLI poll: user={user_id}, team_id={team_id}, user_teams={user_teams}, num_teams={len(user_teams)}"
+            )
+            
+            # If no team_id provided and user has teams, return teams list for selection
+            # Don't generate JWT yet - let CLI select a team first
+            if team_id is None and len(user_teams) > 1:
+                verbose_proxy_logger.info(
+                    f"Returning teams list for user {user_id} to select from: {user_teams}"
+                )
+                return {
+                    "status": "ready",
+                    "user_id": user_id,
+                    "teams": user_teams,
+                    "requires_team_selection": True,
+                }
+            
+            # Validate team_id if provided
+            if team_id is not None:
+                if team_id not in user_teams:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"User does not belong to team: {team_id}. Available teams: {user_teams}",
+                    )
+            else:
+                # If no team_id provided and user has 0 or 1 team, use first team (or None)
+                team_id = user_teams[0] if len(user_teams) > 0 else None
 
-        key_obj = await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={"token": hashed_token}
-        )
-        key_obj = cast(LiteLLM_VerificationToken, key_obj)
+            # Create user object for JWT generation
+            user_info = LiteLLM_UserTable(
+                user_id=user_id,
+                user_role=session_data["user_role"],
+                models=session_data.get("models", []),
+                max_budget=litellm.max_ui_session_budget,
+            )
 
-        if key_obj:
-            verbose_proxy_logger.info(f"CLI key found: {key_id}")
-            return {"status": "ready", "key": key_id, "user_id": key_obj.user_id}
+            # Generate CLI JWT on-demand (24hr expiration)
+            # Pass selected team_id to ensure JWT has correct team
+            jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+                user_info=user_info, team_id=team_id
+            )
+
+            # Delete cache entry (single-use)
+            user_api_key_cache.delete_cache(key=cache_key)
+
+            verbose_proxy_logger.info(
+                f"CLI JWT generated for user: {user_id}, team: {team_id}"
+            )
+            return {
+                "status": "ready",
+                "key": jwt_token,
+                "user_id": user_id,
+                "team_id": team_id,
+                "teams": user_teams,
+            }
         else:
             return {"status": "pending"}
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error polling for CLI key: {e}")
+        verbose_proxy_logger.error(f"Error polling for CLI JWT: {e}")
         raise HTTPException(
-            status_code=500, detail=f"Error checking key status: {str(e)}"
+            status_code=500, detail=f"Error checking session status: {str(e)}"
         )
 
 

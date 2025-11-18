@@ -1044,6 +1044,8 @@ LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
+CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
+CLI_JWT_TOKEN_NAME = "cli-jwt-token"
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
