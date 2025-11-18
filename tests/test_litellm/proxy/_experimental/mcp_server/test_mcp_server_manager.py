@@ -17,6 +17,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
+from mcp.types import GetPromptResult, Prompt
 
 
 class TestMCPServerManager:
@@ -39,7 +40,7 @@ class TestMCPServerManager:
         result = _deserialize_json_dict(invalid_json)
         assert result is None
 
-    def test_add_update_server_stdio(self):
+    async def test_add_update_server_stdio(self):
         """Test adding stdio MCP server"""
         manager = MCPServerManager()
 
@@ -220,6 +221,66 @@ class TestMCPServerManager:
 
         assert len(result) == 1
         assert result[0].name == "github_tool_1"
+
+    @pytest.mark.asyncio
+    async def test_get_prompts_from_server_success(self):
+        """Ensure prompts are fetched and prefixed when requested."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+
+        mock_prompt = Prompt(name="hello", description="Say hi")
+        mock_client = AsyncMock()
+        mock_client.list_prompts = AsyncMock(return_value=[mock_prompt])
+
+        with patch.object(manager, "_create_mcp_client", return_value=mock_client):
+            prompts = await manager.get_prompts_from_server(server, add_prefix=True)
+
+        mock_client.list_prompts.assert_awaited_once()
+        assert len(prompts) == 1
+        assert prompts[0].name == "alias-server-hello"
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_from_server_success(self):
+        """Ensure a single prompt definition is requested via the MCP client."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+
+        mock_result = GetPromptResult(
+            description="Hello world prompt",
+            messages=[],
+        )
+        mock_client = AsyncMock()
+        mock_client.get_prompt = AsyncMock(return_value=mock_result)
+
+        with patch.object(manager, "_create_mcp_client", return_value=mock_client):
+            result = await manager.get_prompt_from_server(
+                server=server,
+                prompt_name="hello",
+                arguments={"tone": "casual"},
+            )
+
+        mock_client.get_prompt.assert_awaited_once()
+        awaited_call = mock_client.get_prompt.await_args
+        called_params = awaited_call.args[0]
+        assert called_params.name == "hello"
+        assert called_params.arguments == {"tone": "casual"}
+        assert result is mock_result
 
     @pytest.mark.asyncio
     async def test_fetch_oauth_metadata_from_resource_returns_servers_and_scopes(self):
@@ -1044,7 +1105,7 @@ class TestMCPServerManager:
             assert "tool_1" in tool_names
             assert "tool_2" in tool_names
 
-    def test_add_db_mcp_server_to_registry(self):
+    async def test_add_db_mcp_server_to_registry(self):
         """Test that add_db_mcp_server_to_registry adds a MCP server to the registry"""
         manager = MCPServerManager()
         server = LiteLLM_MCPServerTable(
