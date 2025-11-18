@@ -423,6 +423,7 @@ fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
 allowed_fails: int = 3
+allow_dynamic_callback_disabling: bool = True
 num_retries_per_request: Optional[int] = (
     None  # for the request overall (incl. fallbacks + model retries)
 )
@@ -1360,6 +1361,7 @@ from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
 from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
 from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
+from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
 from .llms.burncloud.chat.transformation import BurnCloudChatConfig
 from .main import *  # type: ignore
 from .integrations import *

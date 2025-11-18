@@ -760,5 +760,10 @@ def test_video_content_handler_uses_get_for_openai():
     assert called_url == "https://api.openai.com/v1/videos/video_abc/content"
 
 
+def test_openai_video_config_has_async_transform():
+    """Ensure OpenAIVideoConfig exposes async_transform_video_content_response at runtime."""
+    cfg = OpenAIVideoConfig()
+    assert callable(getattr(cfg, "async_transform_video_content_response", None))
+
 if __name__ == "__main__":
     pytest.main([__file__])
