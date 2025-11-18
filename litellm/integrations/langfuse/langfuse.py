@@ -509,6 +509,9 @@ class LangFuseLogger:
         verbose_logger.warning(
             "Please upgrade langfuse to v2.0.0 or higher: https://github.com/langfuse/langfuse-python/releases/tag/v2.0.1"
         )
+        optional_params = self._sanitize_optional_params(
+            optional_params or {}, allow_dict=True
+        )
 
         trace = self.Langfuse.trace(  # type: ignore
             CreateTrace(  # type: ignore
@@ -557,6 +560,9 @@ class LangFuseLogger:
         verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
         try:
+            optional_params = self._sanitize_optional_params(
+                optional_params or {}, allow_dict=True
+            )
             metadata = metadata or {}
             standard_logging_object: Optional[StandardLoggingPayload] = cast(
                 Optional[StandardLoggingPayload],
