@@ -1107,6 +1107,9 @@ class DBSpendUpdateWriter:
                                     )
                                 }
 
+                            if entity_type == "tag" and "request_id" in transaction:
+                                update_data["request_id"] = transaction.get("request_id")
+
                             table.upsert(
                                 where=where_clause,
                                 data={

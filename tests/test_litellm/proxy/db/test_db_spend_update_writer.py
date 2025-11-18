@@ -221,6 +221,61 @@ async def test_update_daily_spend_sorting():
 
     # Verify that table.upsert was called
     mock_table.upsert.assert_has_calls(upsert_calls)
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_tag_with_request_id():
+    """
+    Test that request_id is included in update_data when updating tag transactions.
+    """
+    # Setup
+    mock_prisma_client = MagicMock()
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_prisma_client.db.batch_.return_value.__aenter__.return_value = mock_batcher
+    mock_batcher.litellm_dailytagspend = mock_table
+
+    # Create a transaction with request_id
+    daily_spend_transactions = {
+        "test_key": {
+            "tag": "prod-tag",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": "",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+            "request_id": "test-request-id-123",
+        }
+    }
+
+    # Call the method
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=1,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=MagicMock(),
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="tag",
+        entity_id_field="tag",
+        table_name="litellm_dailytagspend",
+        unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
+    )
+
+    # Verify that table.upsert was called
+    mock_table.upsert.assert_called_once()
+    
+    # Verify request_id is in update_data
+    call_args = mock_table.upsert.call_args[1]
+    update_data = call_args["data"]["update"]
+    assert "request_id" in update_data
+    assert update_data["request_id"] == "test-request-id-123"
+
+
 # Tag Spend Tracking Tests
 
 
