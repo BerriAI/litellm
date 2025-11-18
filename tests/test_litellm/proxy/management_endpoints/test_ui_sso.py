@@ -1394,7 +1394,7 @@ class TestCLIKeyRegenerationFlow:
     @pytest.mark.asyncio
     async def test_cli_sso_callback_stores_session(self):
         """Test CLI SSO callback stores session data in cache for JWT generation"""
-        from litellm._types import LiteLLM_UserTable
+        from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
 
         # Mock request
@@ -1410,6 +1410,12 @@ class TestCLIKeyRegenerationFlow:
             teams=["team1", "team2"],
             models=["gpt-4"]
         )
+
+        # Mock SSO result
+        mock_sso_result = {
+            "user_email": "test@example.com",
+            "user_id": "test-user-123"
+        }
 
         # Mock cache
         mock_cache = MagicMock()
@@ -1428,7 +1434,7 @@ class TestCLIKeyRegenerationFlow:
 
             # Act
             result = await cli_sso_callback(
-                request=mock_request, key=session_key, existing_key=None
+                request=mock_request, key=session_key, existing_key=None, result=mock_sso_result
             )
 
             # Assert - verify session was stored in cache
@@ -1577,7 +1583,7 @@ class TestCLIKeyRegenerationFlow:
     @pytest.mark.asyncio
     async def test_cli_poll_key_generates_jwt_with_team(self):
         """Test CLI poll endpoint generates JWT when team_id is provided"""
-        from litellm._types import LiteLLM_UserTable
+        from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
 
         # Test data
