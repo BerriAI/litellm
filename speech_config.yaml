@@ -1,9 +1,0 @@
-model_list:
-  - model_name: fake-openai-speech
-    litellm_params:
-      model: openai/gpt-4o-mini-tts
-      api_base: http://0.0.0.0:8090/
-      api_key: sk-1234
-    model_info:
-      mode: audio_speech
-  
