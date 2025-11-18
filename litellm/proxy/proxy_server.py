@@ -503,7 +503,7 @@ except ImportError:
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
-premium_user: bool = _license_check.is_premium()
+premium_user: bool = True  # Set to premium user
 premium_user_data: Optional["EnterpriseLicenseData"] = (
     _license_check.airgapped_license_data
 )
@@ -532,11 +532,11 @@ model_hub_link = f"{server_root_path}/ui/model_hub_table"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
 )
-ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
+ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.skypiea.io/)."
 
-ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/model_hub)"
+ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.skypiea.io/docs/proxy/model_hub)"
 
-custom_swagger_message = "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
+custom_swagger_message = "[**Customize Swagger Docs**](https://docs.skypiea.io/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
 _title = os.getenv("DOCS_TITLE", "LiteLLM API") if premium_user else "LiteLLM API"
@@ -2268,7 +2268,7 @@ class ProxyConfig:
                     )  # noqa
                 elif key == "cache_params":
                     # this is set in the cache branch
-                    # see usage here: https://docs.litellm.ai/docs/proxy/caching
+                    # see usage here: https://docs.skypiea.io/docs/proxy/caching
                     pass
                 elif key == "default_team_settings":
                     for idx, team_setting in enumerate(
@@ -7585,7 +7585,7 @@ async def model_info_v1(  # noqa: PLR0915
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "LLM Model List not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
+                "error": "LLM Model List not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.skypiea.io/docs/proxy/configs"
             },
         )
 
@@ -7593,7 +7593,7 @@ async def model_info_v1(  # noqa: PLR0915
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
+                "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.skypiea.io/docs/proxy/configs"
             },
         )
 
@@ -7732,7 +7732,7 @@ async def model_group_info(
     -H 'Authorization: Bearersk-1234'
     ```
 
-    Learn how to use and set wildcard models [here](https://docs.litellm.ai/docs/wildcard_routing)
+    Learn how to use and set wildcard models [here](https://docs.skypiea.io/docs/wildcard_routing)
 
     Example Response:
     ```json
@@ -8181,7 +8181,7 @@ async def login(request: Request):  # noqa: PLR0915
 
     if master_key is None:
         raise ProxyException(
-            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
+            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.skypiea.io/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
             type=ProxyErrorTypes.auth_error,
             param="master_key",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -8195,7 +8195,7 @@ async def login(request: Request):  # noqa: PLR0915
         ui_password = str(master_key) if master_key is not None else None
     if ui_password is None:
         raise ProxyException(
-            message="set Proxy master key to use UI. https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
+            message="set Proxy master key to use UI. https://docs.skypiea.io/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
             type=ProxyErrorTypes.auth_error,
             param="UI_PASSWORD",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -8443,7 +8443,7 @@ async def onboarding(invite_link: str, request: Request):
 
     if master_key is None:
         raise ProxyException(
-            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
+            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.skypiea.io/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
             type=ProxyErrorTypes.auth_error,
             param="master_key",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,

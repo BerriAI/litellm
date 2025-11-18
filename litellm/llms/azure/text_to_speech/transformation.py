@@ -305,7 +305,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         validated_headers["Content-Type"] = "application/ssml+xml"
         
         # User-Agent
-        validated_headers["User-Agent"] = "litellm"
+        validated_headers["User-Agent"] = "Skypiea Gateway"
         
         return validated_headers
 

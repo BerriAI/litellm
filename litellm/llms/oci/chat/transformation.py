@@ -594,7 +594,7 @@ class OCIChatConfig(BaseConfig):
         headers.update(
             {
                 "content-type": "application/json",
-                "user-agent": f"litellm/{version}",
+                "user-agent": "Skypiea Gateway",
             }
         )
 

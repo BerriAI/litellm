@@ -8,7 +8,7 @@ except Exception:
     version = "0.0.0"
 
 headers = {
-    "User-Agent": f"litellm/{version}",
+    "User-Agent": "Skypiea Gateway",
 }
 
 

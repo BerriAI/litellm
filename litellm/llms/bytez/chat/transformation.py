@@ -129,7 +129,7 @@ class BytezChatConfig(BaseConfig):
             {
                 "content-type": "application/json",
                 "Authorization": f"Key {api_key}",
-                "user-agent": f"litellm/{version}",
+                "user-agent": "Skypiea Gateway",
             }
         )
 

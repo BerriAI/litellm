@@ -261,6 +261,8 @@ class ProxyBaseLLMRequestProcessing:
                 else None
             ),
             "x-litellm-timeout": str(timeout) if timeout is not None else None,
+            "Referer": "https://skypiea.io",
+            "X-Title": "Skypiea Gateway",
             **{k: str(v) for k, v in kwargs.items()},
         }
         if request_data:
