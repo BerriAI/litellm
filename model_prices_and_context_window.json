@@ -10958,8 +10958,8 @@
     "gemini-3-pro-preview": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_200k_tokens": 2.5e-07,
-        "input_cost_per_token": 1.25e-06,
-        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_audio_length_hours": 8.4,
         "max_audio_per_prompt": 1,
@@ -10971,8 +10971,8 @@
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
         "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -12660,8 +12660,8 @@
     },
     "gemini/gemini-3-pro-preview": {
         "cache_read_input_token_cost": 3.125e-07,
-        "input_cost_per_token": 1.25e-06,
-        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
         "litellm_provider": "gemini",
         "max_audio_length_hours": 8.4,
         "max_audio_per_prompt": 1,
@@ -12673,8 +12673,8 @@
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
         "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "rpm": 2000,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_endpoints": [
