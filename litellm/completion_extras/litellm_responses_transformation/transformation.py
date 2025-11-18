@@ -545,7 +545,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # If string is passed, map without summary (default)
         if reasoning_effort == "none":
-            return Reasoning(effort="none")
+            return Reasoning(effort="none") # type: ignore
         elif reasoning_effort == "high":
             return Reasoning(effort="high")
         elif reasoning_effort == "medium":

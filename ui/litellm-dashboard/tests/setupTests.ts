@@ -1,6 +1,20 @@
 import "@testing-library/jest-dom";
-import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
+import { afterEach, vi } from "vitest";
+
+// Global mock for NotificationManager to prevent React rendering issues in tests
+// This avoids "window is not defined" errors when notifications try to render
+// after test environment is torn down
+vi.mock("@/components/molecules/notifications_manager", () => ({
+  default: {
+    success: vi.fn(),
+    fromBackend: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+    clear: vi.fn(),
+  },
+}));
 
 afterEach(() => {
   cleanup();
@@ -41,3 +55,7 @@ Object.defineProperty(HTMLAnchorElement.prototype, "click", {
   writable: true,
   value: vi.fn(),
 });
+
+if (!document.getAnimations) {
+  document.getAnimations = () => [];
+}
