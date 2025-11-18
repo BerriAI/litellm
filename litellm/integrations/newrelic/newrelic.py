@@ -139,7 +139,7 @@ class NewRelicLogger(CustomLogger):
         litellm_params = kwargs.get("litellm_params", {}) or {}
         return litellm_params.get("custom_llm_provider", "unknown")
 
-    def _get_model_names(self, kwargs: Dict, response_obj: Dict) -> tuple[str, str]:
+    def _get_model_names(self, kwargs: Dict, response_obj: Dict) -> Tuple[str, str]:
         """
         Extract request and response model names.
 
@@ -299,6 +299,7 @@ class NewRelicLogger(CustomLogger):
 
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic summary event: {e}")
+            self.handle_callback_failure("newrelic")
 
     def _record_message_events(
         self,
@@ -334,6 +335,7 @@ class NewRelicLogger(CustomLogger):
 
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic message events: {e}")
+            self.handle_callback_failure("newrelic")
 
     def _record_error_metric(self):
         """Record error metric to New Relic."""
@@ -345,6 +347,7 @@ class NewRelicLogger(CustomLogger):
 
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic error metric: {e}")
+            self.handle_callback_failure("newrelic")
 
     def _process_success(self, kwargs: Dict, response_obj: Dict):
         """
@@ -414,6 +417,7 @@ class NewRelicLogger(CustomLogger):
             self._process_success(kwargs, response_obj)
         except Exception as e:
             verbose_logger.warning(f"Error in New Relic log_success_event: {e}")
+            self.handle_callback_failure("newrelic")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -426,6 +430,7 @@ class NewRelicLogger(CustomLogger):
             self._process_success(kwargs, response_obj)
         except Exception as e:
             verbose_logger.warning(f"Error in New Relic async_log_success_event: {e}")
+            self.handle_callback_failure("newrelic")
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -441,6 +446,7 @@ class NewRelicLogger(CustomLogger):
 
         except Exception as e:
             verbose_logger.warning(f"Error in New Relic log_failure_event: {e}")
+            self.handle_callback_failure("newrelic")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -456,3 +462,4 @@ class NewRelicLogger(CustomLogger):
 
         except Exception as e:
             verbose_logger.warning(f"Error in New Relic async_log_failure_event: {e}")
+            self.handle_callback_failure("newrelic")
