@@ -24,7 +24,6 @@ from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -778,6 +777,9 @@ class PrometheusLogger(CustomLogger):
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
+        # Lazy import to avoid loading utils.py at import time (60MB saved)
+        from litellm.utils import get_end_user_id_for_cost_tracking
+        
         end_user_id = get_end_user_id_for_cost_tracking(
             litellm_params, service_type="prometheus"
         )
@@ -1164,6 +1166,9 @@ class PrometheusLogger(CustomLogger):
             "standard_logging_object", {}
         )
         litellm_params = kwargs.get("litellm_params", {}) or {}
+        # Lazy import to avoid loading utils.py at import time (60MB saved)
+        from litellm.utils import get_end_user_id_for_cost_tracking
+        
         end_user_id = get_end_user_id_for_cost_tracking(
             litellm_params, service_type="prometheus"
         )
@@ -2249,6 +2254,9 @@ def prometheus_label_factory(
     }
 
     if UserAPIKeyLabelNames.END_USER.value in filtered_labels:
+        # Lazy import to avoid loading utils.py at import time (60MB saved)
+        from litellm.utils import get_end_user_id_for_cost_tracking
+        
         filtered_labels["end_user"] = get_end_user_id_for_cost_tracking(
             litellm_params={"user_api_key_end_user_id": enum_values.end_user},
             service_type="prometheus",
