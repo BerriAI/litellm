@@ -116,3 +116,54 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
     """
 
     return get_provider_create_metadata()
+
+
+@router.get(
+    "/public/model_provider_map",
+    tags=["public", "model management"],
+)
+async def get_model_provider_map():
+    """
+    Return a mapping of model names to their litellm_provider and mode.
+    This is a public endpoint that provides the same structure as /get/litellm_model_cost_map
+    but without cost information, making it accessible to non-admin users.
+    
+    Returns:
+        dict: A dictionary mapping model names to their provider information:
+            {
+                "model_name": {
+                    "litellm_provider": "provider_name",
+                    "mode": "chat" | "completion" | "embedding" | "image_generation" | "audio_transcription" | ...
+                },
+                ...
+            }
+    """
+    import litellm
+
+    try:
+        _model_cost_map = litellm.model_cost
+        if not _model_cost_map:
+            return {}
+
+        # Extract the litellm_provider and mode fields from each model entry
+        model_provider_map = {}
+        for model_name, model_info in _model_cost_map.items():
+            if isinstance(model_info, dict) and "litellm_provider" in model_info:
+                litellm_provider = model_info["litellm_provider"]
+                # Only include if litellm_provider is not None/empty
+                if litellm_provider:
+                    model_entry = {
+                        "litellm_provider": litellm_provider
+                    }
+                    # Include mode if it exists
+                    if "mode" in model_info and model_info["mode"]:
+                        model_entry["mode"] = model_info["mode"]
+                    
+                    model_provider_map[model_name] = model_entry
+
+        return model_provider_map
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal Server Error ({str(e)})",
+        )
