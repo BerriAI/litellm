@@ -25,6 +25,7 @@ AnthropicInputSchema = TypedDict(
         "additionalProperties": Optional[bool],
         "required": Optional[List[str]],
         "$defs": Optional[Dict],
+        "strict": Optional[bool],
     },
     total=False,
 )

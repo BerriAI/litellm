@@ -517,7 +517,7 @@ export function KeyEditView({
         <KeyLifecycleSettings
           form={form}
           autoRotationEnabled={autoRotationEnabled}
-          onAutoRotationChange={setAutoRotationEnabled}q
+          onAutoRotationChange={setAutoRotationEnabled}
           rotationInterval={rotationInterval}
           onRotationIntervalChange={setRotationInterval}
         />
