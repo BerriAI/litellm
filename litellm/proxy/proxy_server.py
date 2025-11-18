@@ -5486,26 +5486,25 @@ async def audio_transcriptions(
         file_object = io.BytesIO(file_content)
         file_object.name = file.filename
         data["file"] = file_object
-        try:
-            ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-            data = await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                data=data,
-                call_type="transcription",
-            )
 
-            ## ROUTE TO CORRECT ENDPOINT ##
-            llm_call = await route_request(
-                data=data,
-                route_type="atranscription",
-                llm_router=llm_router,
-                user_model=user_model,
-            )
-            response = await llm_call
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-        finally:
-            file_object.close()  # close the file read in by io library
+        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+        data = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="transcription",
+        )
+
+        ## ROUTE TO CORRECT ENDPOINT ##
+        llm_call = await route_request(
+            data=data,
+            route_type="atranscription",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+        response = await llm_call
+
+
+        file_object.close()  # close the file read in by io library
 
         ### ALERTING ###
         asyncio.create_task(
