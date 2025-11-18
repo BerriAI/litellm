@@ -231,6 +231,11 @@ const config = {
         ],
         copyright: `Copyright © ${new Date().getFullYear()} liteLLM`,
       },
+      colorMode: {
+        defaultMode: 'light',
+        disableSwitch: false,
+        respectPrefersColorScheme: true,
+      },
       prism: {
         theme: lightCodeTheme,
         darkTheme: darkCodeTheme,
