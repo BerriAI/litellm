@@ -195,7 +195,9 @@ class LangFuseLogger:
             metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
-            optional_params = self._sanitize_optional_params(optional_params)
+            optional_params = self._sanitize_optional_params(
+                optional_params, allow_dict=True
+            )
 
             prompt = {"messages": kwargs.get("messages")}
 
@@ -427,7 +429,7 @@ class LangFuseLogger:
 
     @staticmethod
     def _sanitize_optional_params(
-        value: Any, _seen: Optional[Set[int]] = None
+        value: Any, _seen: Optional[Set[int]] = None, *, allow_dict: bool = False
     ) -> Any:
         if isinstance(value, (str, int, float, bool)) or value is None:
             return value
@@ -443,7 +445,7 @@ class LangFuseLogger:
         if hasattr(value, "model_dump") and callable(getattr(value, "model_dump")):
             try:
                 return LangFuseLogger._sanitize_optional_params(
-                    value.model_dump(), _seen
+                    value.model_dump(), _seen, allow_dict=False
                 )
             except Exception:
                 return str(value)
@@ -455,8 +457,11 @@ class LangFuseLogger:
                     key if isinstance(key, (str, int, float, bool)) else str(key)
                 )
                 sanitized[sanitized_key] = LangFuseLogger._sanitize_optional_params(
-                    item, _seen
+                    item, _seen, allow_dict=False
                 )
+
+            if allow_dict:
+                return sanitized
 
             try:
                 return json.dumps(sanitized)
@@ -465,18 +470,24 @@ class LangFuseLogger:
 
         if isinstance(value, list):
             return [
-                LangFuseLogger._sanitize_optional_params(item, _seen)
+                LangFuseLogger._sanitize_optional_params(item, _seen, allow_dict=False)
                 for item in value
             ]
 
         if isinstance(value, tuple):
             return tuple(
-                LangFuseLogger._sanitize_optional_params(item, _seen) for item in value
+                LangFuseLogger._sanitize_optional_params(
+                    item, _seen, allow_dict=False
+                )
+                for item in value
             )
 
         if isinstance(value, set):
             return [
-                LangFuseLogger._sanitize_optional_params(item, _seen) for item in value
+                LangFuseLogger._sanitize_optional_params(
+                    item, _seen, allow_dict=False
+                )
+                for item in value
             ]
 
         return str(value)
