@@ -2371,6 +2371,7 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
             split_string = key.split("/", 1)
             if key not in litellm.openrouter_models:
                 litellm.openrouter_models.add(split_string[1])
+                print(f"DEBUG: Added to openrouter_models: {split_string[1]}")
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             if key not in litellm.vercel_ai_gateway_models:
                 litellm.vercel_ai_gateway_models.add(key)

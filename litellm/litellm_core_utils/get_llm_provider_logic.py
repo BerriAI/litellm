@@ -309,7 +309,8 @@ def get_llm_provider(  # noqa: PLR0915
             elif model in litellm.replicate_models:
                 custom_llm_provider = "replicate"
         ## openrouter
-        elif model in litellm.openrouter_models:
+        elif model in litellm.openrouter_models or model.startswith("openrouter/"):
+            print(f"DEBUG: Detected OpenRouter model: {model}")
             custom_llm_provider = "openrouter"
         ## maritalk
         elif model in litellm.maritalk_models:

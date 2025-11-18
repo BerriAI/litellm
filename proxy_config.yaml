@@ -1,0 +1,16 @@
+model_list:
+  - model_name: sherlock-think-alpha
+    litellm_params:
+      model: openrouter/sherlock-think-alpha
+      api_key: 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
+      api_base: https://openrouter.ai/api/v1
+      custom_llm_provider: openai-compatible
+    recommended: true
+
+litellm_settings:
+  successful_requests_logging: true
+  failed_requests_logging: true
+
+dashboard:
+  enabled: true
+  app_title: "🚀 Skypiea Gateway Dashboard"

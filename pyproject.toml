@@ -96,6 +96,10 @@ proxy = [
     "soundfile",
 ]
 
+ui = [
+    "streamlit",
+]
+
 extra_proxy = [
     "prisma",
     "azure-identity",

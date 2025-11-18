@@ -18661,6 +18661,17 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 395
     },
+    "openrouter/sherlock-think-alpha": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openrouter",
+        "max_tokens": 1840000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_reasoning": true
+    },
     "openrouter/anthropic/claude-3-sonnet": {
         "input_cost_per_image": 0.0048,
         "input_cost_per_token": 3e-06,

@@ -35,9 +35,23 @@ class OpenrouterConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        # Preserve full OpenRouter model names that include the provider prefix
+        print(f"DEBUG: OpenRouter transformation called with model: {model}")
+
+        # Always ensure OpenRouter models have the full provider prefix
+        if not model.startswith("openrouter/"):
+            # If model doesn't start with openrouter/, prepend it
+            model = f"openrouter/{model}"
+            print(f"DEBUG: Prepended openrouter/ prefix, new model: {model}")
+
+        print(f"DEBUG: Using full OpenRouter model name: {model}")
+
+        # Keep the full model name including "openrouter/" prefix
         mapped_openai_params = super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )
+
+        print(f"DEBUG: Final mapped model: {mapped_openai_params.get('model', 'NOT_SET')}")
 
         # OpenRouter-only parameters
         extra_body = {}

@@ -603,6 +603,7 @@ def is_openai_finetune_model(key: str) -> bool:
 
 
 def add_known_models():
+    print(f"DEBUG: add_known_models called with {len(model_cost)} models")
     for key, value in model_cost.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
             key
@@ -623,6 +624,7 @@ def add_known_models():
         elif value.get("litellm_provider") == "empower":
             empower_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
+            print(f"DEBUG: Adding openrouter model: {key}")
             openrouter_models.add(key)
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             vercel_ai_gateway_models.add(key)
@@ -802,7 +804,7 @@ def add_known_models():
         elif value.get("litellm_provider") == "lemonade":
             lemonade_models.add(key)
 
-
+print(f"DEBUG: About to call add_known_models, model_cost has {len(model_cost)} items")
 add_known_models()
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 
