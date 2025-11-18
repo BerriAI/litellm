@@ -2,7 +2,7 @@
 name = "litellm-enterprise"
 version = "0.1.21"
 description = "Package for LiteLLM Enterprise features"
-authors = ["BerriAI"]
+authors = ["SkypieaLabs"]
 readme = "README.md"
 
 

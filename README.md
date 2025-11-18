@@ -1,9 +1,9 @@
 <h1 align="center">
-        🚅 LiteLLM
+        🚀 Skypiea Gateway
     </h1>
     <p align="center">
         <p align="center">
-        <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank" rel="nofollow"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render"></a>
+        <a href="https://render.com/deploy?repo=https://github.com/itsreiji/litellm" target="_blank" rel="nofollow"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render"></a>
         <a href="https://railway.app/template/HLP0Ub?referralCode=jch2ME">
           <img src="https://railway.app/button.svg" alt="Deploy on Railway">
         </a>
@@ -30,21 +30,21 @@
     </a>
 </h4>
 
-LiteLLM manages:
+Skypiea Gateway manages:
 
 - Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
-- Set Budgets & Rate limits per project, api key, model [LiteLLM Proxy Server (LLM Gateway)](https://docs.litellm.ai/docs/simple_proxy)
+- Set Budgets & Rate limits per project, api key, model [Skypiea Gateway Proxy Server (LLM Gateway)](https://docs.litellm.ai/docs/simple_proxy)
 
-LiteLLM Performance: **8ms P95 latency** at 1k RPS (See benchmarks [here](https://docs.litellm.ai/docs/benchmarks))
+Skypiea Gateway Performance: **8ms P95 latency** at 1k RPS (See benchmarks [here](https://docs.litellm.ai/docs/benchmarks))
 
-[**Jump to LiteLLM Proxy (LLM Gateway) Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#litellm-proxy-server-llm-gateway---docs) <br>
-[**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-providers-docs)
+[**Jump to Skypiea Gateway Proxy (LLM Gateway) Docs**](https://github.com/itsreiji/litellm?tab=readme-ov-file#skypiea-gateway-proxy-server-llm-gateway---docs) <br>
+[**Jump to Supported LLM Providers**](https://github.com/itsreiji/litellm?tab=readme-ov-file#supported-providers-docs)
 
 🚨 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. [More information about the release cycle here](https://docs.litellm.ai/docs/proxy/release_cycle)
 
-Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
+Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/itsreiji/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 

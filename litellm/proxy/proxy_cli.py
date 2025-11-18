@@ -54,11 +54,11 @@ class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
         pkg_version = importlib.metadata.version("litellm")  # type: ignore
-        click.echo(f"\n🚀 Skypiea Gateway: Current Version = 1.0.0-skypiea (powered by LiteLLM {pkg_version})\n")
+        click.echo(f"\n🚀 Skypiea Gateway: Current Version = 1.0.0-skypiea (powered by Skypiea {pkg_version})\n")
 
     @staticmethod
     def _run_health_check(host, port):
-        print("\nLiteLLM: Health Testing models in config")  # noqa
+        print("\n🚀 Skypiea Gateway: Health Testing models in config")  # noqa
         response = httpx.get(url=f"http://{host}:{port}/health")
         print(json.dumps(response.json(), indent=4))  # noqa
 
@@ -71,7 +71,7 @@ class ProxyInitializationHelpers:
     ):
         request_model = model or "gpt-3.5-turbo"
         click.echo(
-            f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}"
+            f"\n🚀 Skypiea Gateway: Making a test ChatCompletions request to your proxy. Model={request_model}"
         )
         import openai
 
@@ -92,10 +92,10 @@ class ProxyInitializationHelpers:
             ],
             max_tokens=256,
         )
-        click.echo(f"\nLiteLLM: response from proxy {response}")
+        click.echo(f"\n🚀 Skypiea Gateway: response from proxy {response}")
 
         print(  # noqa
-            f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}"
+            f"\n 🚀 Skypiea Gateway: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}"
         )
 
         stream_response = client.chat.completions.create(
@@ -109,7 +109,7 @@ class ProxyInitializationHelpers:
             stream=True,
         )
         for chunk in stream_response:
-            click.echo(f"LiteLLM: streaming response from proxy {chunk}")
+            click.echo(f"🚀 Skypiea Gateway: streaming response from proxy {chunk}")
         print("\n making completion request to proxy")  # noqa
         completion_response = client.completions.create(
             model=request_model, prompt="this is a test request, write a short poem"

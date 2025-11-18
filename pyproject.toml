@@ -2,7 +2,7 @@
 name = "litellm"
 version = "1.80.0"
 description = "Library to easily interface with LLM API providers"
-authors = ["BerriAI"]
+authors = ["SkypieaLabs"]
 license = "MIT"
 readme = "README.md"
 packages = [
@@ -13,8 +13,8 @@ packages = [
 [tool.poetry.urls]
 homepage = "https://litellm.ai"
 Homepage = "https://litellm.ai"
-repository = "https://github.com/BerriAI/litellm"
-Repository = "https://github.com/BerriAI/litellm"
+repository = "https://github.com/itsreiji/litellm"
+Repository = "https://github.com/itsreiji/litellm"
 documentation = "https://docs.litellm.ai"
 Documentation = "https://docs.litellm.ai"
 

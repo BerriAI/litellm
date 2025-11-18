@@ -2,7 +2,7 @@
 name = "litellm-proxy-extras"
 version = "0.4.5"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
-authors = ["BerriAI"]
+authors = ["SkypieaLabs"]
 readme = "README.md"
 
 

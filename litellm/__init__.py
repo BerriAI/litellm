@@ -216,10 +216,10 @@ store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 ### end of callbacks #############
 
 email: Optional[str] = (
-    None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+    None  # Not used anymore, will be removed in next MAJOR release - https://github.com/itsreiji/litellm/discussions/648
 )
 token: Optional[str] = (
-    None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+    None  # Not used anymore, will be removed in next MAJOR release - https://github.com/itsreiji/litellm/discussions/648
 )
 telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
@@ -358,7 +358,7 @@ aclient_session: Optional[httpx.AsyncClient] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+    "https://raw.githubusercontent.com/itsreiji/litellm/main/model_prices_and_context_window.json",
 )
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
