@@ -13084,7 +13084,7 @@
         "supports_audio_output": false,
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_system_messages": true,
+        "supports_system_messages": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
