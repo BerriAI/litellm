@@ -1,3 +1,4 @@
+import base64
 import copy
 import hashlib
 import json
@@ -1161,6 +1162,14 @@ def _gemini_tool_call_invoke_helper(
     return function_call
 
 
+def _get_thought_signature_from_tool(tool: dict) -> Optional[str]:
+    """Extract thought signature from tool call's provider_specific_fields"""
+    provider_fields = tool.get("provider_specific_fields") or {}
+    if isinstance(provider_fields, dict):
+        return provider_fields.get("thought_signature")
+    return None
+
+
 def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
 ) -> List[VertexPartType]:
@@ -1207,8 +1216,9 @@ def convert_to_gemini_tool_call_invoke(
         _parts_list: List[VertexPartType] = []
         tool_calls = message.get("tool_calls", None)
         function_call = message.get("function_call", None)
+        
         if tool_calls is not None:
-            for tool in tool_calls:
+            for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
                     gemini_function_call: Optional[VertexFunctionCall] = (
                         _gemini_tool_call_invoke_helper(
@@ -1216,9 +1226,14 @@ def convert_to_gemini_tool_call_invoke(
                         )
                     )
                     if gemini_function_call is not None:
-                        _parts_list.append(
-                            VertexPartType(function_call=gemini_function_call)
-                        )
+                        part_dict: VertexPartType = {
+                            "function_call": gemini_function_call
+                        }
+                        thought_signature = _get_thought_signature_from_tool(dict(tool))
+                        if thought_signature:
+                            part_dict["thoughtSignature"] = thought_signature
+                        
+                        _parts_list.append(part_dict)
                     else:  # don't silently drop params. Make it clear to user what's happening.
                         raise Exception(
                             "function_call missing. Received tool call with 'type': 'function'. No function call in argument - {}".format(
@@ -1230,7 +1245,18 @@ def convert_to_gemini_tool_call_invoke(
                 function_call_params=function_call
             )
             if gemini_function_call is not None:
-                _parts_list.append(VertexPartType(function_call=gemini_function_call))
+                part_dict_function: VertexPartType = {
+                    "function_call": gemini_function_call
+                }
+                
+                # Extract thought signature from function_call's provider_specific_fields
+                provider_fields = function_call.get("provider_specific_fields") if isinstance(function_call, dict) else {}
+                if isinstance(provider_fields, dict):
+                    thought_signature = provider_fields.get("thought_signature")
+                    if thought_signature:
+                        part_dict_function["thoughtSignature"] = thought_signature
+                
+                _parts_list.append(part_dict_function)
             else:  # don't silently drop params. Make it clear to user what's happening.
                 raise Exception(
                     "function_call missing. Received tool call with 'type': 'function'. No function call in argument - {}".format(
@@ -2496,7 +2522,6 @@ def stringify_json_tool_call_content(messages: List) -> List:
 
 ###### AMAZON BEDROCK #######
 
-import base64
 from email.message import Message
 
 import httpx
