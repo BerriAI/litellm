@@ -270,6 +270,78 @@ describe("OldTeams - handleCreate organization handling", () => {
   });
 });
 
+describe("OldTeams - empty state", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should display empty state message when teams array is empty", () => {
+    const { getByText } = render(
+      <OldTeams
+        teams={[]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(getByText("No teams found")).toBeInTheDocument();
+    expect(getByText("Adjust your filters or create a new team")).toBeInTheDocument();
+  });
+
+  it("should display empty state message when teams is null", () => {
+    const { getByText } = render(
+      <OldTeams
+        teams={null}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(getByText("No teams found")).toBeInTheDocument();
+    expect(getByText("Adjust your filters or create a new team")).toBeInTheDocument();
+  });
+
+  it("should not display empty state when teams array has items", () => {
+    const { queryByText, getByText } = render(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(queryByText("No teams found")).not.toBeInTheDocument();
+    expect(queryByText("Adjust your filters or create a new team")).not.toBeInTheDocument();
+    expect(getByText("Test Team")).toBeInTheDocument();
+  });
+});
+
 describe("OldTeams - helper functions", () => {
   describe("getAdminOrganizations", () => {
     it("should return all organizations for Admin role", () => {
