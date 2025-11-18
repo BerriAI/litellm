@@ -297,6 +297,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
 
                     data["model_file_id_mapping"] = model_file_id_mapping
+        elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
+            # Handle managed files in responses API input
+            input_data = data.get("input")
+            if input_data:
+                file_ids = self.get_file_ids_from_responses_input(input_data)
+                if file_ids:
+                    model_file_id_mapping = await self.get_model_file_id_mapping(
+                        file_ids, user_api_key_dict.parent_otel_span
+                    )
+                    data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.afile_content.value:
             retrieve_file_id = cast(Optional[str], data.get("file_id"))
             potential_file_id = (
@@ -451,6 +461,47 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                             file_id = file_object_file_field.get("file_id")
                             if file_id:
                                 file_ids.append(file_id)
+        return file_ids
+
+    def get_file_ids_from_responses_input(
+        self, input: Union[str, List[Dict[str, Any]]]
+    ) -> List[str]:
+        """
+        Gets file ids from responses API input.
+        
+        The input can be:
+        - A string (no files)
+        - A list of input items, where each item can have:
+          - type: "input_file" with file_id
+          - content: a list that can contain items with type: "input_file" and file_id
+        """
+        file_ids: List[str] = []
+        
+        if isinstance(input, str):
+            return file_ids
+        
+        if not isinstance(input, list):
+            return file_ids
+        
+        for item in input:
+            if not isinstance(item, dict):
+                continue
+            
+            # Check for direct input_file type
+            if item.get("type") == "input_file":
+                file_id = item.get("file_id")
+                if file_id:
+                    file_ids.append(file_id)
+            
+            # Check for input_file in content array
+            content = item.get("content")
+            if isinstance(content, list):
+                for content_item in content:
+                    if isinstance(content_item, dict) and content_item.get("type") == "input_file":
+                        file_id = content_item.get("file_id")
+                        if file_id:
+                            file_ids.append(file_id)
+        
         return file_ids
 
     async def get_model_file_id_mapping(
