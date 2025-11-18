@@ -63,6 +63,50 @@ class TestDeleteNestedValue:
         # Verify original unchanged (deep copy)
         assert "input_examples" in data["tools"][0]
 
+    def test_specific_array_index_removes_field_from_single_element(self):
+        """Test removing a field from specific array elements using [n] syntax."""
+        # Test data with multiple array elements
+        data = {
+            "tools": [
+                {"name": "t0", "input_examples": ["ex0"], "keep": "val0"},
+                {"name": "t1", "input_examples": ["ex1"], "keep": "val1"},
+                {"name": "t2", "input_examples": ["ex2"], "keep": "val2"},
+                {"name": "t3", "input_examples": ["ex3"], "keep": "val3"},
+                {"name": "t4", "input_examples": ["ex4"], "keep": "val4"},
+                {"name": "t5", "input_examples": ["ex5"], "keep": "val5"},
+            ]
+        }
+
+        # Test [0] - first element
+        result = delete_nested_value(data, "tools[0].input_examples")
+        assert "input_examples" not in result["tools"][0]
+        assert "input_examples" in result["tools"][1]
+        assert "input_examples" in result["tools"][2]
+
+        # Test [1] - second element
+        result = delete_nested_value(data, "tools[1].input_examples")
+        assert "input_examples" in result["tools"][0]
+        assert "input_examples" not in result["tools"][1]
+        assert "input_examples" in result["tools"][2]
+
+        # Test [2] - middle element
+        result = delete_nested_value(data, "tools[2].input_examples")
+        assert "input_examples" in result["tools"][0]
+        assert "input_examples" not in result["tools"][2]
+        assert "input_examples" in result["tools"][3]
+
+        # Test [5] - last element
+        result = delete_nested_value(data, "tools[5].input_examples")
+        assert "input_examples" in result["tools"][0]
+        assert "input_examples" not in result["tools"][5]
+
+        # Verify other fields preserved in all cases
+        assert result["tools"][0]["keep"] == "val0"
+        assert result["tools"][5]["keep"] == "val5"
+
+        # Verify original unchanged (deep copy)
+        assert "input_examples" in data["tools"][0]
+
 
 class TestComplexNestedPatterns:
     """Test complex nested patterns with multiple wildcards and deep nesting."""
@@ -229,6 +273,82 @@ class TestComplexNestedPatterns:
         # Verify top-level fields unchanged
         assert result["top_level_remove"] == "should_go"
         assert result["top_level_keep"] == "should_stay"
+
+    def test_mixed_wildcards_and_indices_with_deep_nesting(self):
+        """Test combining [*] wildcards, [n] indices, and deep nesting in complex patterns."""
+        data = {
+            "tools": [
+                {
+                    "name": "t0",
+                    "configs": [
+                        {"id": "c0", "remove_me": "val1", "keep": "yes1"},
+                        {"id": "c1", "remove_me": "val2", "keep": "yes2"},
+                    ],
+                    "metadata": {"drop_this": "meta1", "preserve": "preserve1"},
+                },
+                {
+                    "name": "t1",
+                    "configs": [
+                        {"id": "c0", "remove_me": "val3", "keep": "yes3"},
+                        {"id": "c1", "remove_me": "val4", "keep": "yes4"},
+                    ],
+                    "metadata": {"drop_this": "meta2", "preserve": "preserve2"},
+                },
+                {
+                    "name": "t2",
+                    "configs": [
+                        {"id": "c0", "remove_me": "val5", "keep": "yes5"},
+                    ],
+                    "metadata": {"drop_this": "meta3", "preserve": "preserve3"},
+                },
+            ]
+        }
+
+        # Simulate processing multiple complex paths
+        paths = [
+            "tools[*].configs[1].remove_me",  # Wildcard + specific index [1] + nested
+            "tools[1].metadata.drop_this",  # Specific index + nested
+            "tools[*].configs[*].id",  # Double wildcard + nested
+        ]
+
+        result = data
+        for path in paths:
+            result = delete_nested_value(result, path)
+
+        # Verify: tools[*].configs[1].remove_me removed from second config of all tools (that have one)
+        assert "remove_me" in result["tools"][0]["configs"][0]  # First config untouched
+        assert (
+            "remove_me" not in result["tools"][0]["configs"][1]
+        )  # Second config removed
+        assert "remove_me" in result["tools"][1]["configs"][0]  # First config untouched
+        assert (
+            "remove_me" not in result["tools"][1]["configs"][1]
+        )  # Second config removed
+        assert (
+            "remove_me" in result["tools"][2]["configs"][0]
+        )  # Only has [0], unaffected
+
+        # Verify: tools[1].metadata.drop_this removed only from second tool
+        assert "drop_this" in result["tools"][0]["metadata"]
+        assert "drop_this" not in result["tools"][1]["metadata"]
+        assert "drop_this" in result["tools"][2]["metadata"]
+
+        # Verify: tools[*].configs[*].id removed from all configs in all tools
+        assert "id" not in result["tools"][0]["configs"][0]
+        assert "id" not in result["tools"][0]["configs"][1]
+        assert "id" not in result["tools"][1]["configs"][0]
+        assert "id" not in result["tools"][1]["configs"][1]
+        assert "id" not in result["tools"][2]["configs"][0]
+
+        # Verify: other fields preserved
+        assert result["tools"][0]["configs"][0]["keep"] == "yes1"
+        assert result["tools"][1]["configs"][1]["keep"] == "yes4"
+        assert result["tools"][0]["metadata"]["preserve"] == "preserve1"
+        assert result["tools"][1]["metadata"]["preserve"] == "preserve2"
+        assert result["tools"][2]["name"] == "t2"
+
+        # Verify original unchanged
+        assert "remove_me" in data["tools"][0]["configs"][1]
 
 
 # Phase 1 tests - validates core functionality and complex patterns
