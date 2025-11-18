@@ -70,7 +70,11 @@ LiteLLM translates OpenAI's `reasoning_effort` to Gemini's `thinking` parameter.
 Note: Reasoning cannot be turned off on Gemini 2.5 Pro models.
 :::
 
-**Mapping**
+:::tip Gemini 3 Models
+For **Gemini 3+ models** (e.g., `gemini-3-pro-preview`), LiteLLM automatically maps `reasoning_effort` to the new `thinking_level` parameter instead of `thinking_budget`. The `thinking_level` parameter uses `"low"` or `"high"` values for better control over reasoning depth.
+:::
+
+**Mapping for Gemini 2.5 and earlier models**
 
 | reasoning_effort | thinking | Notes |
 | ---------------- | -------- | ----- |
@@ -79,6 +83,17 @@ Note: Reasoning cannot be turned off on Gemini 2.5 Pro models.
 | "low"            | "budget_tokens": 1024 | |
 | "medium"         | "budget_tokens": 2048 | |
 | "high"           | "budget_tokens": 4096 | |
+
+**Mapping for Gemini 3+ models**
+
+| reasoning_effort | thinking_level | Notes |
+| ---------------- | -------------- | ----- |
+| "minimal"        | "low" | Minimizes latency and cost |
+| "low"            | "low" | Best for simple instruction following or chat |
+| "medium"         | "high" | Maps to high (medium not yet available) |
+| "high"           | "high" | Maximizes reasoning depth |
+| "disable"        | "low" | Cannot fully disable thinking in Gemini 3 |
+| "none"           | "low" | Cannot fully disable thinking in Gemini 3 |
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -137,6 +152,59 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+### Gemini 3+ Models - `thinking_level` Parameter
+
+For Gemini 3+ models (e.g., `gemini-3-pro-preview`), you can use the new `thinking_level` parameter directly:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+# Use thinking_level for Gemini 3 models
+resp = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[{"role": "user", "content": "Solve this complex math problem step by step."}],
+    reasoning_effort="high",  # Options: "low" or "high"
+)
+
+# Low thinking level for faster, simpler tasks
+resp = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[{"role": "user", "content": "What is the weather today?"}],
+    reasoning_effort="low",  # Minimizes latency and cost
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-3-pro-preview",
+    "messages": [{"role": "user", "content": "Solve this complex problem."}],
+    "reasoning_effort": "high"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+:::warning
+**Temperature Recommendation for Gemini 3 Models**
+
+For Gemini 3 models, LiteLLM defaults `temperature` to `1.0` and strongly recommends keeping it at this default. Setting `temperature < 1.0` can cause:
+- Infinite loops
+- Degraded reasoning performance
+- Failure on complex tasks
+
+LiteLLM will automatically set `temperature=1.0` if not specified for Gemini 3+ models.
+:::
 
 **Expected Response**
 
@@ -1310,6 +1378,56 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 LiteLLM Supports the following image types passed in `url`
 - Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
 - Image in local storage - ./localimage.jpeg
+
+## Image Resolution Control (Gemini 3+)
+
+For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images in your request.
+
+**Supported `detail` values:**
+- `"low"` - Maps to `media_resolution: "low"` (280 tokens for images, 70 tokens per frame for videos)
+- `"high"` - Maps to `media_resolution: "high"` (1120 tokens for images)
+- `"auto"` or `None` - Model decides optimal resolution (no `media_resolution` set)
+
+**Usage Example:**
+
+```python
+from litellm import completion
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/chart.png",
+                    "detail": "high"  # High resolution for detailed chart analysis
+                }
+            },
+            {
+                "type": "text",
+                "text": "Analyze this chart"
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/icon.png",
+                    "detail": "low"  # Low resolution for simple icon
+                }
+            }
+        ]
+    }
+]
+
+response = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=messages,
+)
+```
+
+:::info
+**Per-Part Resolution:** Each image in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature is only available for Gemini 3+ models.
+:::
 
 ## Sample Usage
 ```python
