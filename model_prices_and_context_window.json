@@ -2304,6 +2304,18 @@
             "/v1/audio/transcriptions"
         ]
     },
+    "azure/gpt-4o-transcribe-diarize": {
+        "input_cost_per_audio_token": 6e-06,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 16000,
+        "max_output_tokens": 2000,
+        "mode": "audio_transcription",
+        "output_cost_per_token": 1e-05,
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
    "azure/gpt-5.1-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
