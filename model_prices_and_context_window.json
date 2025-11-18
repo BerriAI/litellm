@@ -9091,6 +9091,18 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "fireworks_ai/accounts/fireworks/models/deepseek-v3p1-terminus": {
+        "input_cost_per_token": 5.6e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.68e-06,
+        "source": "https://fireworks.ai/pricing",
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "fireworks_ai/accounts/fireworks/models/firefunction-v2": {
         "input_cost_per_token": 9e-07,
         "litellm_provider": "fireworks_ai",
@@ -9168,6 +9180,20 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "fireworks_ai/accounts/fireworks/models/kimi-k2-thinking": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://fireworks.ai/pricing",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct": {
         "input_cost_per_token": 3e-06,
@@ -21125,16 +21151,6 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0,
         "output_vector_size": 1536
-    },
-    "text-embedding-ada-002-v2": {
-        "input_cost_per_token": 1e-07,
-        "input_cost_per_token_batches": 5e-08,
-        "litellm_provider": "openai",
-        "max_input_tokens": 8191,
-        "max_tokens": 8191,
-        "mode": "embedding",
-        "output_cost_per_token": 0.0,
-        "output_cost_per_token_batches": 0.0
     },
     "text-embedding-large-exp-03-07": {
         "input_cost_per_character": 2.5e-08,
