@@ -1,0 +1,33 @@
+<svg width="200" height="60" viewBox="0 0 200 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Pirate flag background -->
+  <rect width="200" height="60" rx="8" fill="url(#gradient)"/>
+
+  <!-- Skull and crossbones -->
+  <g transform="translate(10, 15)">
+    <!-- Skull -->
+    <circle cx="15" cy="12" r="8" fill="white"/>
+    <circle cx="11" cy="10" r="1.5" fill="black"/>
+    <circle cx="19" cy="10" r="1.5" fill="black"/>
+    <path d="M11 16 Q15 18 19 16" stroke="black" stroke-width="1.5" fill="none"/>
+    <!-- Crossbones -->
+    <line x1="8" y1="20" x2="22" y2="26" stroke="white" stroke-width="2"/>
+    <line x1="22" y1="20" x2="8" y2="26" stroke="white" stroke-width="2"/>
+  </g>
+
+  <!-- Text -->
+  <text x="45" y="25" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="white">Skypiea</text>
+  <text x="45" y="42" font-family="Arial, sans-serif" font-size="14" font-weight="600" fill="#87CEEB">Gateway</text>
+
+  <!-- Decorative elements -->
+  <circle cx="170" cy="20" r="3" fill="#FFD700" opacity="0.8"/>
+  <circle cx="185" cy="35" r="2" fill="#FFD700" opacity="0.6"/>
+  <circle cx="175" cy="45" r="2.5" fill="#FFD700" opacity="0.7"/>
+
+  <defs>
+    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e40af;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0ea5e9;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+</svg>

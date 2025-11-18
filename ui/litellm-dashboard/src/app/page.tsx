@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Team } from "@/components/key_team_helpers/key_list";
+import SkypieaDashboard from "@/components/skypiea-dashboard";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
@@ -112,12 +113,18 @@ const queryClient = new QueryClient();
 
 function LoadingScreen() {
   return (
-    <div className={cx("h-screen", "flex items-center justify-center gap-4")}>
-      <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">🚅 LiteLLM</div>
+    <div className={cx("h-screen", "flex items-center justify-center gap-4", "bg-gradient-to-br from-sky-50 to-indigo-100")}>
+      <div className="text-xl font-bold py-3 pr-6 border-r border-r-sky-300 text-sky-700 flex items-center gap-2">
+        <span className="text-2xl">🏴‍☠️</span>
+        🚀 Skypiea Gateway
+      </div>
 
-      <div className="flex items-center justify-center gap-2">
-        <UiLoadingSpinner className="size-4" />
-        <span className="text-gray-600 text-sm">Loading...</span>
+      <div className="flex items-center justify-center gap-3">
+        <div className="relative">
+          <UiLoadingSpinner className="size-5 text-sky-600" />
+          <div className="absolute inset-0 animate-pulse bg-sky-400/20 rounded-full"></div>
+        </div>
+        <span className="text-sky-700 text-sm font-medium">Setting sail...</span>
       </div>
     </div>
   );
@@ -148,9 +155,9 @@ export default function CreateKeyPage() {
 
   const invitation_id = searchParams.get("invitation_id");
 
-  // Get page from URL, default to 'api-keys' if not present
+  // Get page from URL, default to 'dashboard' if not present
   const [page, setPage] = useState(() => {
-    return searchParams.get("page") || "api-keys";
+    return searchParams.get("page") || "dashboard";
   });
 
   // Custom setPage function that updates URL
@@ -332,7 +339,14 @@ export default function CreateKeyPage() {
                   <SidebarProvider setPage={updatePage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
                 </div>
 
-                {page == "api-keys" ? (
+                {page == "dashboard" ? (
+                  <SkypieaDashboard
+                    userRole={userRole}
+                    userID={userID}
+                    accessToken={accessToken}
+                    onNavigate={updatePage}
+                  />
+                ) : page == "api-keys" ? (
                   <UserDashboard
                     userID={userID}
                     userRole={userRole}

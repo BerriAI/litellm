@@ -161,7 +161,11 @@ const Navbar: React.FC<NavbarProps> = ({
             )}
 
             <Link href="/" className="flex items-center">
-              <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
+              <img
+                src="/skypiea-logo.svg"
+                alt="Skypiea Gateway"
+                className="h-12 w-auto"
+              />
             </Link>
           </div>
           {/* Right side nav items */}
