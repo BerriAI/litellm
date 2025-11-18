@@ -390,6 +390,8 @@ CallTypesLiteral = Literal[
     "vector_store_file_delete",
     "avector_store_file_delete",
     "call_mcp_tool",
+    "aresponses",
+    "responses",
 ]
 
 

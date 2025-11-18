@@ -21,7 +21,7 @@ Available via the `litellm[proxy]` package or any `litellm` docker image.
 | Proxy | ✅ |  |
 | SDK | ❌ | Requires postgres DB for storing file ids. |
 | Available across all providers | ✅ |  |
-| Supported endpoints | `/chat/completions`, `/batch`, `/fine_tuning` |  |
+| Supported endpoints | `/chat/completions`, `/batch`, `/fine_tuning`, `/responses` |  |
 
 ## Usage
 
