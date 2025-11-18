@@ -67,7 +67,6 @@ polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
 semantic-router = {version = "*", optional = true, python = ">=3.9"}
 mlflow = {version = ">3.1.4", optional = true, python = ">=3.10"}
 soundfile = {version = "^0.12.1", optional = true}
-jsonpath-ng = "^1.7.0"
 
 [tool.poetry.extras]
 proxy = [

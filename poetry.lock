@@ -2195,7 +2195,7 @@ files = [
     {file = "grpcio-1.70.0-cp39-cp39-win_amd64.whl", hash = "sha256:a31d7e3b529c94e930a117b2175b2efd179d96eb3c7a21ccb0289a8ab05b645c"},
     {file = "grpcio-1.70.0.tar.gz", hash = "sha256:8d1584a68d5922330025881e63a6c1b54cc8117291d382e4fa69339b6d914c56"},
 ]
-markers = {main = "python_version < \"3.14\" and extra == \"extra-proxy\"", dev = "python_version < \"3.14\"", proxy-dev = "python_version < \"3.14\""}
+markers = {main = "(python_version < \"3.9\" or platform_python_implementation == \"PyPy\") and extra == \"extra-proxy\" and python_version < \"3.10\"", dev = "python_version < \"3.9\" or python_version < \"3.10\" and platform_python_implementation == \"PyPy\"", proxy-dev = "python_version < \"3.9\" or python_version < \"3.10\" and platform_python_implementation == \"PyPy\""}
 
 [package.extras]
 protobuf = ["grpcio-tools (>=1.70.0)"]
@@ -2270,7 +2270,7 @@ files = [
     {file = "grpcio-1.76.0-cp39-cp39-win_amd64.whl", hash = "sha256:acab0277c40eff7143c2323190ea57b9ee5fd353d8190ee9652369fae735668a"},
     {file = "grpcio-1.76.0.tar.gz", hash = "sha256:7be78388d6da1a25c0d5ec506523db58b18be22d9c37d8d3a32c08be4987bd73"},
 ]
-markers = {main = "python_version >= \"3.14\" and extra == \"extra-proxy\"", dev = "python_version >= \"3.14\"", proxy-dev = "python_version >= \"3.14\""}
+markers = {main = "(python_version >= \"3.10\" or platform_python_implementation != \"PyPy\") and extra == \"extra-proxy\" and python_version >= \"3.9\"", dev = "platform_python_implementation != \"PyPy\" and python_version >= \"3.9\" or python_version >= \"3.10\"", proxy-dev = "platform_python_implementation != \"PyPy\" and python_version >= \"3.9\" or python_version >= \"3.10\""}
 
 [package.dependencies]
 typing-extensions = ">=4.12,<5.0"
@@ -2804,22 +2804,6 @@ files = [
     {file = "joblib-1.5.2-py3-none-any.whl", hash = "sha256:4e1f0bdbb987e6d843c70cf43714cb276623def372df3c22fe5266b2670bc241"},
     {file = "joblib-1.5.2.tar.gz", hash = "sha256:3faa5c39054b2f03ca547da9b2f52fde67c06240c31853f306aea97f13647b55"},
 ]
-
-[[package]]
-name = "jsonpath-ng"
-version = "1.7.0"
-description = "A final implementation of JSONPath for Python that aims to be standard compliant, including arithmetic and binary comparison operators and providing clear AST for metaprogramming."
-optional = false
-python-versions = "*"
-groups = ["main"]
-files = [
-    {file = "jsonpath-ng-1.7.0.tar.gz", hash = "sha256:f6f5f7fd4e5ff79c785f1573b394043b39849fb2bb47bcead935d12b00beab3c"},
-    {file = "jsonpath_ng-1.7.0-py2-none-any.whl", hash = "sha256:898c93fc173f0c336784a3fa63d7434297544b7198124a68f9a3ef9597b0ae6e"},
-    {file = "jsonpath_ng-1.7.0-py3-none-any.whl", hash = "sha256:f3d7f9e848cba1b6da28c55b1c26ff915dc9e0b1ba7e752a53d6da8d5cbd00b6"},
-]
-
-[package.dependencies]
-ply = "*"
 
 [[package]]
 name = "jsonschema"
@@ -4289,18 +4273,6 @@ files = [
 [package.extras]
 dev = ["pre-commit", "tox"]
 testing = ["pytest", "pytest-benchmark"]
-
-[[package]]
-name = "ply"
-version = "3.11"
-description = "Python Lex & Yacc"
-optional = false
-python-versions = "*"
-groups = ["main"]
-files = [
-    {file = "ply-3.11-py2.py3-none-any.whl", hash = "sha256:096f9b8350b65ebd2fd1346b12452efe5b9607f7482813ffca50c22722a807ce"},
-    {file = "ply-3.11.tar.gz", hash = "sha256:00c7c1aaa88358b9c765b6d3000c6eec0ba42abca5351b095321aef446081da3"},
-]
 
 [[package]]
 name = "polars"
@@ -7123,4 +7095,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "a76852a460dcd45b1bf39a87ffe9dad6bda3ff4e5655f5ab4b436344c0c5663b"
+content-hash = "ced4152a4f49f03f1909103e4ee1738d4f7c0f04bc9c7ea5f59a84917a4b19d7"
