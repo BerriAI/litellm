@@ -1034,7 +1034,6 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 openai_video_generation_models = ["sora-2"]
 
 from .timeout import timeout
-from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
@@ -1416,7 +1415,8 @@ from .vector_store_files.main import (
     update as vector_store_file_update,
 )
 from .scheduler import *
-from .cost_calculator import response_cost_calculator, cost_per_token
+# Note: response_cost_calculator and cost_per_token are imported lazily via __getattr__ 
+# to avoid loading cost_calculator.py at import time
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
@@ -1471,3 +1471,35 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_gitlab_config
     global_gitlab_config = config
+
+
+# Lazy import for cost_calculator functions to avoid loading the module at import time
+# This significantly reduces memory usage when importing litellm
+def _lazy_import_cost_calculator(name: str) -> Any:
+    """Lazy import for cost_calculator functions."""
+    from .cost_calculator import (
+        completion_cost as _completion_cost,
+        cost_per_token as _cost_per_token,
+        response_cost_calculator as _response_cost_calculator,
+    )
+    
+    # Map names to imported functions
+    _cost_functions = {
+        "completion_cost": _completion_cost,
+        "cost_per_token": _cost_per_token,
+        "response_cost_calculator": _response_cost_calculator,
+    }
+    
+    # Cache the imported function in the module namespace
+    func = _cost_functions[name]
+    globals()[name] = func
+    
+    return func
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import for cost_calculator functions."""
+    if name in ("completion_cost", "response_cost_calculator", "cost_per_token"):
+        return _lazy_import_cost_calculator(name)
+    
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
