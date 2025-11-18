@@ -114,6 +114,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.guardrailVersion = guardrailVersion
         self.guardrail_provider = "bedrock"
 
+        # Ensure kwargs is always a dict to prevent AttributeError
+        # This defensive check handles edge cases where kwargs might be None or not a dict
+        kwargs = kwargs if kwargs is not None and isinstance(kwargs, dict) else {}
+
         # store kwargs as optional_params
         self.optional_params = kwargs
 
