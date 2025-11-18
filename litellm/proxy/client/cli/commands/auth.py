@@ -263,6 +263,90 @@ def prompt_team_selection_fallback(teams: List[Dict[str, Any]]) -> Optional[Dict
 
 # Polling-based authentication - no local server needed
 
+def _poll_for_authentication(
+    base_url: str, key_id: str
+) -> Optional[dict]:
+    """
+    Poll the server for authentication completion and handle team selection.
+    
+    Returns:
+        Dictionary with authentication data if successful, None otherwise
+    """
+    poll_url = f"{base_url}/sso/cli/poll/{key_id}"
+    timeout = 300  # 5 minute timeout
+    poll_interval = 2  # Poll every 2 seconds
+    
+    for attempt in range(timeout // poll_interval):
+        try:
+            response = requests.get(poll_url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "ready":
+                    # Check if we need team selection first
+                    if data.get("requires_team_selection"):
+                        # Server returned teams list without JWT - need to select team
+                        teams = data.get("teams", [])
+                        user_id = data.get("user_id")
+                        
+                        if teams and len(teams) > 1:
+                            # User has multiple teams - let them select
+                            jwt_with_team = _handle_team_selection_during_polling(
+                                base_url=base_url,
+                                key_id=key_id,
+                                teams=teams
+                            )
+                            
+                            # Use the team-specific JWT if selection succeeded
+                            if jwt_with_team:
+                                return {
+                                    "api_key": jwt_with_team,
+                                    "user_id": user_id,
+                                    "teams": teams,
+                                    "team_id": None  # Set by server in JWT
+                                }
+                            else:
+                                # Selection failed or was skipped - poll again without team_id
+                                click.echo("⚠️ Team selection skipped, retrying...")
+                                continue
+                        else:
+                            # Shouldn't happen, but fallback
+                            click.echo("⚠️ No teams available, retrying...")
+                            continue
+                    else:
+                        # JWT is ready (single team or team already selected)
+                        api_key = data.get("key")
+                        user_id = data.get("user_id")
+                        teams = data.get("teams", [])
+                        team_id = data.get("team_id")
+                        
+                        # Show which team was assigned
+                        if team_id and len(teams) == 1:
+                            click.echo(f"\n✅ Automatically assigned to team: {team_id}")
+                        
+                        if api_key:
+                            return {
+                                "api_key": api_key,
+                                "user_id": user_id,
+                                "teams": teams,
+                                "team_id": team_id
+                            }
+                elif data.get("status") == "pending":
+                    # Still pending
+                    if attempt % 10 == 0:  # Show progress every 20 seconds
+                        click.echo("Still waiting for authentication...")
+            else:
+                click.echo(f"Polling error: HTTP {response.status_code}")
+                
+        except requests.RequestException as e:
+            if attempt % 10 == 0:
+                click.echo(f"Connection error (will retry): {e}")
+        
+        time.sleep(poll_interval)
+    
+    # Timeout reached
+    return None
+
+
 def _handle_team_selection_during_polling(
     base_url: str, key_id: str, teams: List[str]
 ) -> Optional[str]:
@@ -288,8 +372,8 @@ def _handle_team_selection_during_polling(
     table.add_column("Index", style="cyan", no_wrap=True)
     table.add_column("Team ID", style="green")
     
-    for i, team_id in enumerate(teams):
-        table.add_row(str(i + 1), team_id)
+    for i, team in enumerate(teams):
+        table.add_row(str(i + 1), team)
     
     console.print(table)
     
@@ -377,90 +461,37 @@ def login(ctx: click.Context):
         # Open browser
         webbrowser.open(sso_url)
         
-        # Poll for key creation
+        # Poll for authentication completion
         click.echo("Waiting for authentication...")
         
-        poll_url = f"{base_url}/sso/cli/poll/{key_id}"
-        timeout = 300  # 5 minute timeout
-        poll_interval = 2  # Poll every 2 seconds
+        auth_result = _poll_for_authentication(base_url=base_url, key_id=key_id)
         
-        for attempt in range(timeout // poll_interval):
-            try:
-                response = requests.get(poll_url, timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("status") == "ready":
-                        # Check if we need team selection first
-                        if data.get("requires_team_selection"):
-                            # Server returned teams list without JWT - need to select team
-                            teams = data.get("teams", [])
-                            user_id = data.get("user_id")
-                            
-                            if teams and len(teams) > 1:
-                                # User has multiple teams - let them select
-                                jwt_with_team = _handle_team_selection_during_polling(
-                                    base_url=base_url,
-                                    key_id=key_id,
-                                    teams=teams
-                                )
-                                
-                                # Use the team-specific JWT if selection succeeded
-                                if jwt_with_team:
-                                    api_key = jwt_with_team
-                                else:
-                                    # Selection failed or was skipped - poll again without team_id
-                                    click.echo("⚠️ Team selection skipped, retrying...")
-                                    continue
-                            else:
-                                # Shouldn't happen, but fallback
-                                click.echo("⚠️ No teams available, retrying...")
-                                continue
-                        else:
-                            # JWT is ready (single team or team already selected)
-                            api_key = data.get("key")
-                            user_id = data.get("user_id")
-                            teams = data.get("teams", [])
-                            team_id = data.get("team_id")
-                            
-                            # Show which team was assigned
-                            if team_id and len(teams) == 1:
-                                click.echo(f"\n✅ Automatically assigned to team: {team_id}")
-                        
-                        if api_key:
-                            # Save token data (simplified for CLI - we just need the key)
-                            save_token({
-                                'key': api_key,
-                                'user_id': user_id or 'cli-user',
-                                'user_email': 'unknown',
-                                'user_role': 'cli',
-                                'auth_header_name': 'Authorization',
-                                'jwt_token': '',
-                                'timestamp': time.time()
-                            })
-                            
-                            click.echo("\n✅ Login successful!")
-                            click.echo(f"JWT Token: {api_key[:20]}...")
-                            click.echo("You can now use the CLI without specifying --api-key")
-                            
-                            # Show available commands after successful login
-                            click.echo("\n" + "="*60)
-                            show_commands()
-                            return
-                    elif data.get("status") == "pending":
-                        # Still pending
-                        if attempt % 10 == 0:  # Show progress every 20 seconds
-                            click.echo("Still waiting for authentication...")
-                else:
-                    click.echo(f"Polling error: HTTP {response.status_code}")
-                    
-            except requests.RequestException as e:
-                if attempt % 10 == 0:
-                    click.echo(f"Connection error (will retry): {e}")
+        if auth_result:
+            api_key = auth_result["api_key"]
+            user_id = auth_result["user_id"]
             
-            time.sleep(poll_interval)
-        
-        click.echo("❌ Authentication timed out. Please try again.")
-        return
+            # Save token data (simplified for CLI - we just need the key)
+            save_token({
+                'key': api_key,
+                'user_id': user_id or 'cli-user',
+                'user_email': 'unknown',
+                'user_role': 'cli',
+                'auth_header_name': 'Authorization',
+                'jwt_token': '',
+                'timestamp': time.time()
+            })
+            
+            click.echo("\n✅ Login successful!")
+            click.echo(f"JWT Token: {api_key[:20]}...")
+            click.echo("You can now use the CLI without specifying --api-key")
+            
+            # Show available commands after successful login
+            click.echo("\n" + "="*60)
+            show_commands()
+            return
+        else:
+            click.echo("❌ Authentication timed out. Please try again.")
+            return
             
     except KeyboardInterrupt:
         click.echo("\n❌ Authentication cancelled by user.")
