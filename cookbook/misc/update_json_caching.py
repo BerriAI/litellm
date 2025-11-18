@@ -10,7 +10,6 @@ models_to_update = [
     "gpt-4o-2024-05-13",
     "text-embedding-3-small",
     "text-embedding-3-large",
-    "text-embedding-ada-002-v2",
     "ft:gpt-4o-2024-08-06",
     "ft:gpt-4o-mini-2024-07-18",
     "ft:gpt-3.5-turbo",
