@@ -823,7 +823,7 @@ class MCPServerManager:
         try:
             client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": 10.0, "follow_redirects": True},
+                params={"timeout": 10.0},
             )
             response = await client.get(resource_metadata_url)
             response.raise_for_status()
@@ -919,7 +919,7 @@ class MCPServerManager:
             try:
                 client = get_async_httpx_client(
                     llm_provider=httpxSpecialProvider.MCP,
-                    params={"timeout": 10.0, "follow_redirects": True},
+                    params={"timeout": 10.0},
                 )
                 response = await client.get(url)
                 response.raise_for_status()

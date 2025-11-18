@@ -1,6 +1,6 @@
 import { LogEntry } from "./columns";
 import NotificationsManager from "../molecules/notifications_manager";
-import { JsonView, allExpanded, defaultStyles } from "react-json-view-lite";
+import { JsonView, allExpanded, defaultStyles } from 'react-json-view-lite';
 
 interface RequestResponsePanelProps {
   row: {
