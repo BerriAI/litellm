@@ -138,6 +138,7 @@ class GraySwanGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Gray Swan Guardrail: No messages in data")
             return data
 
+        custom_headers = self.get_guardrail_custom_headers(data)
         dynamic_body = self.get_guardrail_dynamic_request_body_params(data) or {}
 
         payload = self._prepare_payload(messages, dynamic_body)
@@ -147,7 +148,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return data
 
-        await self.run_grayswan_guardrail(payload)
+        await self.run_grayswan_guardrail(payload, custom_headers)
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
@@ -184,6 +185,7 @@ class GraySwanGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Gray Swan Guardrail: No messages in data")
             return data
 
+        custom_headers = self.get_guardrail_custom_headers(data)
         dynamic_body = self.get_guardrail_dynamic_request_body_params(data) or {}
 
         payload = self._prepare_payload(messages, dynamic_body)
@@ -193,7 +195,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return data
 
-        await self.run_grayswan_guardrail(payload)
+        await self.run_grayswan_guardrail(payload, custom_headers)
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
@@ -231,6 +233,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return response
 
+        custom_headers = self.get_guardrail_custom_headers(data)
         dynamic_body = self.get_guardrail_dynamic_request_body_params(data) or {}
 
         payload = self._prepare_payload(response_messages, dynamic_body)
@@ -240,7 +243,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return response
 
-        await self.run_grayswan_guardrail(payload)
+        await self.run_grayswan_guardrail(payload, custom_headers)
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
@@ -250,8 +253,10 @@ class GraySwanGuardrail(CustomGuardrail):
     # Core GraySwan interaction
     # ------------------------------------------------------------------
 
-    async def run_grayswan_guardrail(self, payload: dict):
-        headers = self._prepare_headers()
+    async def run_grayswan_guardrail(
+        self, payload: dict, custom_headers: Optional[Dict[str, Any]] = None
+    ):
+        headers = self._prepare_headers(custom_headers)
 
         try:
             response = await self.async_handler.post(
@@ -279,28 +284,47 @@ class GraySwanGuardrail(CustomGuardrail):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _prepare_headers(self) -> Dict[str, str]:
-        return {
+    def _prepare_headers(
+        self, custom_headers: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, str]:
+        headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "grayswan-api-key": self.api_key,
         }
 
+        # Merge all custom headers if provided (all custom headers go to guardrail endpoint)
+        if custom_headers:
+            for key, value in custom_headers.items():
+                if value is not None:
+                    headers[key] = str(value)
+
+        return headers
+
     def _prepare_payload(
-        self, messages: list[dict], dynamic_body: dict
+        self,
+        messages: list[dict],
+        dynamic_body: dict,
     ) -> Optional[Dict[str, Any]]:
         payload: Dict[str, Any] = {}
         payload["messages"] = messages
 
-        categories = dynamic_body.get("categories") or self.categories
+        # Priority: dynamic_body > config
+        categories = dynamic_body.get("categories") if dynamic_body else None
+        if not categories:
+            categories = self.categories
         if categories:
             payload["categories"] = categories
 
-        policy_id = dynamic_body.get("policy_id") or self.policy_id
+        policy_id = dynamic_body.get("policy_id") if dynamic_body else None
+        if not policy_id:
+            policy_id = self.policy_id
         if policy_id:
             payload["policy_id"] = policy_id
 
-        reasoning_mode = dynamic_body.get("reasoning_mode") or self.reasoning_mode
+        reasoning_mode = dynamic_body.get("reasoning_mode") if dynamic_body else None
+        if not reasoning_mode:
+            reasoning_mode = self.reasoning_mode
         if reasoning_mode:
             payload["reasoning_mode"] = reasoning_mode
 

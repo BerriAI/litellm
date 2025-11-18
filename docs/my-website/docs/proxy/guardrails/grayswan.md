@@ -27,22 +27,22 @@ Add a guardrail entry that references the Gray Swan integration. Below is a bala
 
 ```yaml
 model_list:
-  - model_name: openai/gpt-4.1-mini
+  - model_name: openai/gpt-5
     litellm_params:
-      model: openai/gpt-4.1-mini
+      model: openai/gpt-5
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
   - guardrail_name: "cygnal-monitor"
     litellm_params:
       guardrail: grayswan
-      mode: [pre_call, post_call]            # monitor both input and output
+      mode: [pre_call, post_call] # monitor both input and output
       api_key: os.environ/GRAYSWAN_API_KEY
-      api_base: os.environ/GRAYSWAN_API_BASE  # optional
+      api_base: os.environ/GRAYSWAN_API_BASE # optional
       optional_params:
-        on_flagged_action: monitor             # or "block"
-        violation_threshold: 0.5               # score >= threshold is flagged
-        reasoning_mode: hybrid                 # off | hybrid | thinking
+        on_flagged_action: monitor # or "block"
+        violation_threshold: 0.5 # score >= threshold is flagged
+        reasoning_mode: "off" # off | hybrid | thinking (ensure quotes are used for "off", otherwise it will get parsed as `false`)
         categories:
           safety: "Detect jailbreaks and policy violations"
         policy_id: "your-cygnal-policy-id"
@@ -67,11 +67,11 @@ litellm --config config.yaml --port 4000
 
 Gray Swan can run during `pre_call`, `during_call`, and `post_call` stages. Combine modes based on your latency and coverage requirements.
 
-| Mode         | When it Runs      | Protects              | Typical Use Case |
-|--------------|-------------------|-----------------------|------------------|
-| `pre_call`   | Before LLM call   | User input only       | Block prompt injection before it reaches the model |
-| `during_call`| Parallel to call  | User input only       | Low-latency monitoring without blocking |
-| `post_call`  | After response    | Full conversation     | Scan output for policy violations, leaked secrets, or IPI |
+| Mode          | When it Runs     | Protects          | Typical Use Case                                          |
+| ------------- | ---------------- | ----------------- | --------------------------------------------------------- |
+| `pre_call`    | Before LLM call  | User input only   | Block prompt injection before it reaches the model        |
+| `during_call` | Parallel to call | User input only   | Low-latency monitoring without blocking                   |
+| `post_call`   | After response   | Full conversation | Scan output for policy violations, leaked secrets, or IPI |
 
 <Tabs>
 <TabItem value="monitor" label="Monitor Only">
@@ -138,12 +138,24 @@ Provides the strongest enforcement by inspecting both prompts and responses.
 
 ## Configuration Reference
 
-| Parameter                             | Type            | Description |
-|---------------------------------------|-----------------|-------------|
-| `api_key`                             | string          | Gray Swan Cygnal API key. Reads from `GRAYSWAN_API_KEY` if omitted. |
-| `mode`                                | string or list  | Guardrail stages (`pre_call`, `during_call`, `post_call`). |
-| `optional_params.on_flagged_action`   | string          | `monitor` (log only) or `block` (raise `HTTPException`). |
-| `.optional_params.violation_threshold`| number (0-1)    | Scores at or above this value are considered violations. |
-| `optional_params.reasoning_mode`      | string          | `off`, `hybrid`, or `thinking`. Enables Cygnal’s reasoning capabilities. |
-| `optional_params.categories`          | object          | Map of custom category names to descriptions. |
-| `optional_params.policy_id`           | string          | Gray Swan policy identifier. |
+| Parameter                              | Type           | Description                                                              |
+| -------------------------------------- | -------------- | ------------------------------------------------------------------------ |
+| `api_key`                              | string         | Gray Swan Cygnal API key. Reads from `GRAYSWAN_API_KEY` if omitted.      |
+| `mode`                                 | string or list | Guardrail stages (`pre_call`, `during_call`, `post_call`).               |
+| `optional_params.on_flagged_action`    | string         | `monitor` (log only) or `block` (raise `HTTPException`).                 |
+| `.optional_params.violation_threshold` | number (0-1)   | Scores at or above this value are considered violations.                 |
+| `optional_params.reasoning_mode`       | string         | `off`, `hybrid`, or `thinking`. Enables Cygnal's reasoning capabilities. |
+| `optional_params.categories`           | object         | Map of custom category names to descriptions.                            |
+| `optional_params.policy_id`            | string         | Gray Swan policy identifier.                                             |
+
+---
+
+## Dynamic Configuration
+
+### Custom HTTP Headers
+
+You can pass custom HTTP headers to the Gray Swan API endpoint at runtime. All headers passed via `X-LiteLLM-Guardrail-{guardrail_name}` will be forwarded directly to the Gray Swan API.
+
+For detailed documentation and examples, see [Pass custom HTTP headers to guardrail API](../custom_guardrail.md#-pass-custom-http-headers-to-guardrail-api).
+
+**Note:** For payload parameters like `policy_id`, `reasoning_mode`, and `categories`, use the `extra_body` parameter in the request metadata instead (see [Pass additional parameters to guardrail](../custom_guardrail.md#-pass-additional-parameters-to-guardrail)).

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type, Union, get_args
 
@@ -279,7 +280,7 @@ class CustomGuardrail(CustomLogger):
                 data, self.event_hook
             )
             if result is not None:
-                return result        
+                return result
         return True
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
@@ -332,6 +333,83 @@ class CustomGuardrail(CustomLogger):
                 return guardrail_config.get("extra_body", {})
 
         return {}
+
+    def get_guardrail_custom_headers(self, request_data: dict) -> dict:
+        """
+        Returns custom headers from HTTP request header for the Guardrail API call.
+
+        Extracts headers matching pattern `X-LiteLLM-Guardrail-{guardrail_name}` from the
+        incoming HTTP request. The header value should be a JSON object string containing
+        multiple header values.
+
+        Example:
+            Header: `X-LiteLLM-Guardrail-grayswan: {"policy_id": "xyz", "reasoning_mode": "hybrid"}`
+            Will return: `{"policy_id": "xyz", "reasoning_mode": "hybrid"}`
+
+        Priority order:
+        1. Custom headers from HTTP request header (this method)
+        2. Dynamic body params from `extra_body` in request metadata
+        3. Config values from `config.yaml` or initialization
+
+        Args:
+            request_data: The original `request_data` passed to LiteLLM Proxy
+
+        Returns:
+            dict: Dictionary of custom headers, empty dict if not found or invalid
+        """
+        if not self.guardrail_name:
+            return {}
+
+        # Get headers from proxy_server_request
+        proxy_server_request = request_data.get("proxy_server_request", {})
+        headers = proxy_server_request.get("headers", {})
+
+        if not headers:
+            return {}
+
+        # Build expected header name (case-insensitive matching)
+        expected_header_name = f"x-litellm-guardrail-{self.guardrail_name.lower()}"
+
+        # Find matching header (HTTP headers are case-insensitive)
+        header_value = None
+        for header_name, value in headers.items():
+            if header_name.lower() == expected_header_name:
+                header_value = value
+                break
+
+        if header_value is None:
+            return {}
+
+        # Parse header value
+        try:
+            # Handle both string and dict formats
+            if isinstance(header_value, str):
+                parsed = json.loads(header_value)
+            elif isinstance(header_value, dict):
+                parsed = header_value
+            else:
+                verbose_logger.warning(
+                    f"Guardrail {self.guardrail_name}: Invalid header value type for {expected_header_name}, expected string or dict"
+                )
+                return {}
+
+            if not isinstance(parsed, dict):
+                verbose_logger.warning(
+                    f"Guardrail {self.guardrail_name}: Header {expected_header_name} must contain a JSON object"
+                )
+                return {}
+
+            return parsed
+        except json.JSONDecodeError as e:
+            verbose_logger.warning(
+                f"Guardrail {self.guardrail_name}: Failed to parse JSON from header {expected_header_name}: {e}"
+            )
+            return {}
+        except Exception as e:
+            verbose_logger.warning(
+                f"Guardrail {self.guardrail_name}: Error extracting custom headers: {e}"
+            )
+            return {}
 
     def _validate_premium_user(self) -> bool:
         """
