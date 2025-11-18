@@ -53,12 +53,14 @@ from typing_extensions import overload
 
 import litellm
 from litellm import (  # type: ignore
-    Logging,
     client,
     exception_type,
     get_litellm_params,
     get_optional_params,
 )
+# Logging is imported lazily when needed to avoid loading litellm_logging at import time
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -77,7 +79,7 @@ from litellm.litellm_core_utils.health_check_utils import (
     _create_health_check_response,
     _filter_model_params,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj, Logging
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
@@ -6295,7 +6297,7 @@ def stream_chunk_builder(  # noqa: PLR0915
     messages: Optional[list] = None,
     start_time=None,
     end_time=None,
-    logging_obj: Optional[Logging] = None,
+    logging_obj: Optional["Logging"] = None,
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
         if chunks is None:

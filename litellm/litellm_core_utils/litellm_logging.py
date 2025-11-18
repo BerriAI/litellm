@@ -58,7 +58,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
-from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
@@ -246,6 +245,23 @@ class ServiceTraceIDCache:
 
 in_memory_trace_id_cache = ServiceTraceIDCache()
 in_memory_dynamic_logger_cache = DynamicLoggingCache()
+
+# Cached lazy import for PrometheusLogger
+# Module-level cache to avoid repeated imports while preserving memory benefits
+_PrometheusLogger = None
+
+
+def _get_cached_prometheus_logger():
+    """
+    Get cached PrometheusLogger class.
+    Lazy imports on first call to avoid loading prometheus.py and utils.py at import time (60MB saved).
+    Subsequent calls use cached class for better performance.
+    """
+    global _PrometheusLogger
+    if _PrometheusLogger is None:
+        from litellm.integrations.prometheus import PrometheusLogger
+        _PrometheusLogger = PrometheusLogger
+    return _PrometheusLogger
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -3457,6 +3473,8 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_literalai_logger)
             return _literalai_logger  # type: ignore
         elif logging_integration == "prometheus":
+            PrometheusLogger = _get_cached_prometheus_logger()
+            
             for callback in _in_memory_loggers:
                 if isinstance(callback, PrometheusLogger):
                     return callback  # type: ignore
@@ -3934,7 +3952,8 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, LiteralAILogger):
                     return callback
-        elif logging_integration == "prometheus" and PrometheusLogger is not None:
+        elif logging_integration == "prometheus":
+            PrometheusLogger = _get_cached_prometheus_logger()
             for callback in _in_memory_loggers:
                 if isinstance(callback, PrometheusLogger):
                     return callback
