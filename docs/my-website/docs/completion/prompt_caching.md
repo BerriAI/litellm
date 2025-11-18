@@ -506,3 +506,11 @@ curl -L -X GET 'http://0.0.0.0:4000/v1/model/info' \
 </Tabs>
 
 This checks our maintained [model info/cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
+
+## Read More
+
+:::tip Auto-Inject Prompt Caching
+Want LiteLLM to automatically add `cache_control` directives without modifying your code? 
+
+See [**Auto-Inject Prompt Caching Tutorial**](../tutorials/prompt_caching.md) to learn how to use `cache_control_injection_points` to automatically cache system messages, specific messages by index, or custom injection patterns.
+:::

@@ -117,3 +117,39 @@ async def test__transform_request_body_labels_and_metadata():
     # Check URL
     assert rb["contents"] == [{'parts': [{'text': 'hi'}], 'role': 'user'}, {'parts': [{'text': 'Hello! How can I assist you today?'}], 'role': 'model'}, {'parts': [{'text': 'hi'}], 'role': 'user'}]
     assert "labels" in rb and rb["labels"] == {"lparam1": "lvalue1", "lparam2": "lvalue2"}
+
+@pytest.mark.asyncio
+async def test__transform_request_body_image_config():
+    """
+    Test that Vertex AI Gemini supports the imageConfig parameter for gemini-2.5-flash-image model.
+    """
+    model = "gemini-2.5-flash-image"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme"
+                }
+            ]
+        }
+    ]
+    optional_params = {
+        "imageConfig": {"aspectRatio": "16:9"},
+        "responseModalities": ["Image"]
+    }
+    litellm_params = {}
+    transform_request_params = {
+        "messages": messages,
+        "model": model,
+        "optional_params": optional_params,
+        "custom_llm_provider": "gemini",
+        "litellm_params": litellm_params,
+        "cached_content": None,
+    }
+
+    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+
+    assert "imageConfig" in rb
+    assert rb["imageConfig"] == {"aspectRatio": "16:9"}

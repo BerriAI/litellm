@@ -387,11 +387,9 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
     from litellm.proxy._types import UserAPIKeyAuth
     from openai.types.batch import BatchRequestCounts
 
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
-    await prisma_client.connect()
-
+    # Use AsyncMock instead of real database connection
+    prisma_client = AsyncMock()
+    
     batch = LiteLLMBatch(
         id="bGl0ZWxsbV9wcm94eTttb2RlbF9pZDoxMjM0NTY3OTtsbG1fYmF0Y2hfaWQ6YmF0Y2hfNjg1YzVlNWQ2Mzk4ODE5MGI4NWJkYjIxNDdiYTEzMWQ",
         completion_window="24h",

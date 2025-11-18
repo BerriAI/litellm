@@ -11,7 +11,7 @@ WORKDIR /app
 # Install build dependencies
 USER root
 RUN apk add --no-cache build-base bash \
-    && pip install --no-cache-dir --upgrade pip build
+  && pip install --no-cache-dir --upgrade pip build
 
 # Copy project files
 COPY . .
@@ -62,10 +62,12 @@ WORKDIR /app
 # Install runtime dependencies
 USER root
 RUN apk upgrade --no-cache && \
-    apk add --no-cache bash libstdc++ ca-certificates openssl
+  apk add --no-cache bash libstdc++ ca-certificates openssl supervisor
 
 # Copy only necessary artifacts from builder stage for runtime
+COPY . .
 COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
+COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/db_scripts/create_views_improved.py /app/create_views.py
 COPY --from=builder /app/dist/*.whl .
@@ -85,16 +87,16 @@ COPY --from=builder /usr/bin/prisma /usr/bin/prisma
 
 # Install package from wheel and dependencies
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
-    && rm -f *.whl \
-    && rm -rf /wheels
+  && rm -f *.whl \
+  && rm -rf /wheels
 
-# Install semantic_router without dependencies
-RUN pip install semantic_router --no-deps
+# Install semantic_router and aurelio-sdk using script
+RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
 
 # Ensure correct JWT library is used (pyjwt not jwt)
 RUN pip uninstall jwt -y && \
-    pip uninstall PyJWT -y && \
-    pip install PyJWT==2.9.0 --no-cache-dir
+  pip uninstall PyJWT -y && \
+  pip install PyJWT==2.9.0 --no-cache-dir
 
 # --- Prisma Configuration ---
 # Use pre-cached binaries from builder stage

@@ -451,6 +451,7 @@ def test_img_url_token_counter(img_url):
 
 def test_token_encode_disallowed_special():
     encode(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
+    token_counter(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
 
 
 def test_token_counter():

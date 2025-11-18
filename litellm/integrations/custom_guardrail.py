@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Type, Union, get_args
+from typing import Any, Dict, List, Optional, Type, Union, get_args
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -11,9 +11,13 @@ from litellm.types.guardrails import (
     Mode,
     PiiEntityType,
 )
+from litellm.types.llms.openai import (
+    AllMessageValues,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     CallTypes,
+    GuardrailStatus,
     LLMResponseTypes,
     StandardLoggingGuardrailInformation,
 )
@@ -119,11 +123,8 @@ class CustomGuardrail(CustomLogger):
         """
         if "guardrails" in data:
             return data["guardrails"]
-        metadata = data.get("metadata") or {}
-        requested_guardrails = metadata.get("guardrails") or []
-        if requested_guardrails:
-            return requested_guardrails
-        return requested_guardrails
+        metadata = data.get("litellm_metadata") or data.get("metadata", {})
+        return metadata.get("guardrails") or []
 
     def _guardrail_is_in_requested_guardrails(
         self,
@@ -355,11 +356,12 @@ class CustomGuardrail(CustomLogger):
         self,
         guardrail_json_response: Union[Exception, str, dict, List[dict]],
         request_data: dict,
-        guardrail_status: Literal["success", "failure"],
+        guardrail_status: GuardrailStatus,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
         masked_entity_count: Optional[Dict[str, int]] = None,
+        guardrail_provider: Optional[str] = None,
     ) -> None:
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
@@ -370,6 +372,7 @@ class CustomGuardrail(CustomLogger):
 
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
+            guardrail_provider=guardrail_provider,
             guardrail_mode=(
                 GuardrailMode(**self.event_hook.model_dump())  # type: ignore
                 if isinstance(self.event_hook, Mode)
@@ -461,7 +464,7 @@ class CustomGuardrail(CustomLogger):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=e,
             request_data=request_data,
-            guardrail_status="failure",
+            guardrail_status="guardrail_failed_to_respond",
             duration=duration,
             start_time=start_time,
             end_time=end_time,
@@ -490,7 +493,45 @@ class CustomGuardrail(CustomLogger):
         """
         Update the guardrails litellm params in memory
         """
-        pass
+        for key, value in vars(litellm_params).items():
+            setattr(self, key, value)
+    
+    def get_guardrails_messages_for_call_type(self, call_type: CallTypes, data: Optional[dict] = None) -> Optional[List[AllMessageValues]]:
+        """
+        Returns the messages for the given call type and data
+        """
+        if call_type is None or data is None:
+            return None
+        
+        #########################################################
+        # /chat/completions 
+        # /messages 
+        # Both endpoints store the messages in the "messages" key
+        #########################################################
+        if call_type == CallTypes.completion.value or call_type == CallTypes.acompletion.value or call_type == CallTypes.anthropic_messages.value:
+            return data.get("messages")
+        
+        #########################################################
+        # /responses 
+        # User/System messages are stored in the "input" key, use litellm transformation to get the messages
+        #########################################################
+        if call_type == CallTypes.responses.value or call_type == CallTypes.aresponses.value:
+            from typing import cast
+
+            from litellm.responses.litellm_completion_transformation.transformation import (
+                LiteLLMCompletionResponsesConfig,
+            )
+            
+            input_data = data.get("input")
+            if input_data is None:
+                return None
+            
+            messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=input_data,
+                responses_api_request=data,
+            )
+            return cast(List[AllMessageValues], messages)
+        return None
 
 
 def log_guardrail_information(func):

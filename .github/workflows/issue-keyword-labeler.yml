@@ -1,0 +1,64 @@
+name: Issue Keyword Labeler
+
+on:
+  issues:
+    types: 
+        - opened
+
+jobs:
+  scan-and-label:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Scan for provider keywords
+        id: scan
+        env:
+          PROVIDER_ISSUE_WEBHOOK_URL: ${{ secrets.PROVIDER_ISSUE_WEBHOOK_URL }}
+          KEYWORDS: azure,openai,bedrock,vertexai,vertex ai,anthropic
+        run: python3 .github/scripts/scan_keywords.py
+
+      - name: Ensure label exists
+        if: steps.scan.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const labelName = 'llm translation';
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: labelName
+              });
+            } catch (error) {
+              if (error.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: labelName,
+                  color: 'c1ff72',
+                  description: 'Issues related to LLM provider translation/mapping'
+                });
+              } else {
+                throw error;
+              }
+            }
+
+      - name: Add label to the issue
+        if: steps.scan.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['llm translation']
+            });
+

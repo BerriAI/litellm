@@ -17,6 +17,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -149,13 +150,6 @@ async def view_spend_tags(
     ```
     """
 
-    try:
-        from enterprise.utils import get_spend_by_tags
-    except ImportError:
-        raise Exception(
-            "Trying to use Spend by Tags"
-            + CommonProxyErrors.missing_enterprise_package_docker.value
-        )
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -1666,6 +1660,12 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     model: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by model"
     ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by key alias"
+    ),
+    end_user: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by end user"
+    ),
 ):
     """
     View spend logs for UI with pagination support
@@ -1733,6 +1733,15 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if model is not None:
             where_conditions["model"] = model
+
+        if key_alias is not None:
+            where_conditions["metadata"] = {
+                "path": ["user_api_key_alias"],
+                "string_contains": key_alias,
+            }
+
+        if end_user is not None:
+            where_conditions["end_user"] = end_user
 
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}
@@ -2772,16 +2781,23 @@ async def provider_budgets() -> ProviderBudgetResponse:
 
         provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
         for _provider, _budget_info in provider_budget_config.items():
-            if llm_router.router_budget_logger is None:
+            router_budget_logger = next(
+                (
+                    cb
+                    for cb in (llm_router.optional_callbacks or [])
+                    if isinstance(cb, RouterBudgetLimiting)
+                ),
+                None,
+            )
+            if router_budget_logger is None:
                 raise ValueError("No router budget logger found")
             _provider_spend = (
-                await llm_router.router_budget_logger._get_current_provider_spend(
+                await router_budget_logger._get_current_provider_spend(_provider) or 0.0
+            )
+            _provider_budget_ttl = (
+                await router_budget_logger._get_current_provider_budget_reset_at(
                     _provider
                 )
-                or 0.0
-            )
-            _provider_budget_ttl = await llm_router.router_budget_logger._get_current_provider_budget_reset_at(
-                _provider
             )
             provider_budget_response_object = ProviderBudgetResponseObject(
                 budget_limit=_budget_info.max_budget,

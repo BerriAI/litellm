@@ -36,6 +36,7 @@ from litellm.types.llms.openai import (
     ChatCompletionFileObject,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
+    ChatCompletionUserMessage,
 )
 from litellm.types.llms.vertex_ai import *
 from litellm.types.llms.vertex_ai import (
@@ -103,6 +104,64 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
         raise e
+
+
+def _snake_to_camel(snake_str: str) -> str:
+    """Convert snake_case to camelCase"""
+    components = snake_str.split("_")
+    return components[0] + "".join(x.capitalize() for x in components[1:])
+
+
+def _camel_to_snake(camel_str: str) -> str:
+    """Convert camelCase to snake_case"""
+    import re
+
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_str).lower()
+
+
+def _get_equivalent_key(key: str, available_keys: set) -> Optional[str]:
+    """
+    Get the equivalent key from available keys, checking both camelCase and snake_case variants
+    """
+    if key in available_keys:
+        return key
+
+    # Try camelCase version
+    camel_key = _snake_to_camel(key)
+    if camel_key in available_keys:
+        return camel_key
+
+    # Try snake_case version
+    snake_key = _camel_to_snake(key)
+    if snake_key in available_keys:
+        return snake_key
+
+    return None
+
+
+def check_if_part_exists_in_parts(
+    parts: List[PartType], part: PartType, excluded_keys: List[str] = []
+) -> bool:
+    """
+    Check if a part exists in a list of parts
+    Handles both camelCase and snake_case key variations (e.g., function_call vs functionCall)
+    """
+    keys_to_compare = set(part.keys()) - set(excluded_keys)
+    for p in parts:
+        p_keys = set(p.keys())
+        # Check if all keys in part have equivalent values in p
+        match_found = True
+        for key in keys_to_compare:
+            equivalent_key = _get_equivalent_key(key, p_keys)
+            if equivalent_key is None or p.get(equivalent_key, None) != part.get(
+                key, None
+            ):
+                match_found = False
+                break
+
+        if match_found:
+            return True
+    return False
 
 
 def _gemini_convert_messages_with_history(  # noqa: PLR0915
@@ -204,7 +263,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif (
                     _message_content is not None
                     and isinstance(_message_content, str)
-                    and len(_message_content) > 0
                 ):
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
@@ -236,10 +294,34 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
                 _message_content = assistant_msg.get("content", None)
                 reasoning_content = assistant_msg.get("reasoning_content", None)
+                thinking_blocks = assistant_msg.get("thinking_blocks")
                 if reasoning_content is not None:
                     assistant_content.append(
                         PartType(thought=True, text=reasoning_content)
                     )
+                if thinking_blocks is not None:
+                    for block in thinking_blocks:
+                        if block["type"] == "thinking":
+                            block_thinking_str = block.get("thinking")
+                            block_signature = block.get("signature")
+                            if (
+                                block_thinking_str is not None
+                                and block_signature is not None
+                            ):
+                                try:
+                                    assistant_content.append(
+                                        PartType(
+                                            thoughtSignature=block_signature,
+                                            **json.loads(block_thinking_str),
+                                        )
+                                    )
+                                except Exception:
+                                    assistant_content.append(
+                                        PartType(
+                                            thoughtSignature=block_signature,
+                                            text=block_thinking_str,
+                                        )
+                                    )
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:
@@ -252,9 +334,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif (
                     _message_content is not None
                     and isinstance(_message_content, str)
-                    and _message_content
                 ):
-                    assistant_text = _message_content  # either string or none
+                    assistant_text = _message_content
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL
@@ -262,9 +343,17 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     assistant_msg.get("tool_calls", []) is not None
                     or assistant_msg.get("function_call") is not None
                 ):  # support assistant tool invoke conversion
-                    assistant_content.extend(
-                        convert_to_gemini_tool_call_invoke(assistant_msg)
+                    gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
+                        assistant_msg
                     )
+                    ## check if gemini_tool_call already exists in assistant_content
+                    for gemini_tool_call_part in gemini_tool_call_parts:
+                        if not check_if_part_exists_in_parts(
+                            assistant_content,
+                            gemini_tool_call_part,
+                            excluded_keys=["thoughtSignature"],
+                        ):
+                            assistant_content.append(gemini_tool_call_part)
                     last_message_with_tool_calls = assistant_msg
 
                 msg_i += 1
@@ -298,6 +387,19 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 )
         if len(tool_call_responses) > 0:
             contents.append(ContentType(parts=tool_call_responses))
+
+        if len(contents) == 0:
+            verbose_logger.warning(
+                """
+                No contents in messages. Contents are required. See
+                https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.publishers.models/generateContent#request-body.
+                If the original request did not comply to OpenAI API requirements it should have failed by now,
+                but LiteLLM does not check for missing messages.
+                Setting an empty content to prevent an 400 error.
+                Relevant Issue - https://github.com/BerriAI/litellm/issues/9733
+                """
+            )
+            contents.append(ContentType(role="user", parts=[PartType(text=" ")]))
         return contents
     except Exception as e:
         raise e
@@ -368,7 +470,7 @@ def _transform_request_body(
             metadata = litellm_params["metadata"]
             if metadata is not None and "requester_metadata" in metadata:
                 rm = metadata["requester_metadata"]
-                labels = {k: v for k, v in rm.items() if type(v) is str}
+                labels = {k: v for k, v in rm.items() if isinstance(v, str)}
 
         filtered_params = {
             k: v for k, v in optional_params.items() if k in config_fields
@@ -411,28 +513,35 @@ def sync_transform_request_body(
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    vertex_auth_header: Optional[str],
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints = ContextCachingEndpoints()
 
-    if gemini_api_key is not None:
-        messages, optional_params, cached_content = (
-            context_caching_endpoints.check_and_create_cache(
-                messages=messages,
-                optional_params=optional_params,
-                api_key=gemini_api_key,
-                api_base=api_base,
-                model=model,
-                client=client,
-                timeout=timeout,
-                extra_headers=extra_headers,
-                cached_content=optional_params.pop("cached_content", None),
-                logging_obj=logging_obj,
-            )
-        )
-    else:  # [TODO] implement context caching for gemini as well
-        cached_content = optional_params.pop("cached_content", None)
+    (
+    messages,
+    optional_params,
+    cached_content,
+    ) = context_caching_endpoints.check_and_create_cache(
+        messages=messages,
+        optional_params=optional_params,
+        api_key=gemini_api_key or "dummy",
+        api_base=api_base,
+        model=model,
+        client=client,
+        timeout=timeout,
+        extra_headers=extra_headers,
+        cached_content=optional_params.pop("cached_content", None),
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        vertex_auth_header=vertex_auth_header,
+    )
+
 
     return _transform_request_body(
         messages=messages,
@@ -456,30 +565,34 @@ async def async_transform_request_body(
     logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    vertex_auth_header: Optional[str],
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints = ContextCachingEndpoints()
 
-    if gemini_api_key is not None:
-        (
-            messages,
-            optional_params,
-            cached_content,
-        ) = await context_caching_endpoints.async_check_and_create_cache(
-            messages=messages,
-            optional_params=optional_params,
-            api_key=gemini_api_key,
-            api_base=api_base,
-            model=model,
-            client=client,
-            timeout=timeout,
-            extra_headers=extra_headers,
-            cached_content=optional_params.pop("cached_content", None),
-            logging_obj=logging_obj,
-        )
-    else:  # [TODO] implement context caching for gemini as well
-        cached_content = optional_params.pop("cached_content", None)
+    (
+    messages,
+    optional_params,
+    cached_content,
+    ) = await context_caching_endpoints.async_check_and_create_cache(
+        messages=messages,
+        optional_params=optional_params,
+        api_key=gemini_api_key or "dummy",
+        api_base=api_base,
+        model=model,
+        client=client,
+        timeout=timeout,
+        extra_headers=extra_headers,
+        cached_content=optional_params.pop("cached_content", None),
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        vertex_auth_header=vertex_auth_header,
+    )
 
     return _transform_request_body(
         messages=messages,
@@ -489,6 +602,15 @@ async def async_transform_request_body(
         cached_content=cached_content,
         optional_params=optional_params,
     )
+
+
+def _default_user_message_when_system_message_passed() -> ChatCompletionUserMessage:
+    """
+    Returns a default user message when a "system" message is passed in gemini fails.
+
+    This adds a blank user message to the messages list, to ensure that gemini doesn't fail the request.
+    """
+    return ChatCompletionUserMessage(content=".", role="user")
 
 
 def _transform_system_message(
@@ -525,6 +647,13 @@ def _transform_system_message(
                 messages.pop(idx)
 
     if len(system_content_blocks) > 0:
+        #########################################################
+        # If no messages are passed in, add a blank user message
+        # Relevant Issue - https://github.com/BerriAI/litellm/issues/13769
+        #########################################################
+        if len(messages) == 0:
+            messages.append(_default_user_message_when_system_message_passed())
+        #########################################################
         return SystemInstructions(parts=system_content_blocks), messages
 
     return None, messages

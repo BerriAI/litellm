@@ -63,7 +63,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                         analyze_url, json=analyze_payload
                     ) as response:
                         redacted_text = await response.json()
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     f"LLM Guard: Received response - {redacted_text}"
                 )
                 if redacted_text is not None:
@@ -128,6 +128,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         """

@@ -86,7 +86,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         if not self.api_key:
             raise ValueError("OpenAI Moderation: api_key is required. Set OPENAI_API_KEY environment variable or pass it in configuration.")
 
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Initialized OpenAI Moderation Guardrail: {guardrail_name} with model: {self.model}"
         )
 
@@ -201,7 +201,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         Raises HTTPException if content should be blocked.
         """
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "OpenAI Moderation: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
@@ -219,7 +219,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         user_prompt = self.get_user_prompt(new_messages)
         if user_prompt:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"OpenAI Moderation: User prompt: {user_prompt[:100]}..."  # Log first 100 chars for debugging
             )
             
@@ -256,7 +256,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         Raises HTTPException if content should be blocked.
         """
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "OpenAI Moderation: Running moderation hook, on call_type: %s",
             call_type,
         )
@@ -295,14 +295,14 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         Raises HTTPException if response should be blocked.
         """
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "OpenAI Moderation: Running post-call response scan"
         )
 
         # Extract response text for moderation
         response_text = self._extract_response_text(response)
         if response_text:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"OpenAI Moderation: Response text: {response_text[:100]}..."  # Log first 100 chars
             )
             
@@ -333,7 +333,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import TextCompletionResponse
 
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "OpenAI Moderation: Running streaming response scan"
         )
 
@@ -362,7 +362,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         # Extract response text for moderation
         response_text = self._extract_response_text(assembled_model_response)
         if response_text:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"OpenAI Moderation: Streaming response text: {response_text[:100]}..."  # Log first 100 chars
             )
             

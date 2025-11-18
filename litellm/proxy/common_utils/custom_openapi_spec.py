@@ -72,7 +72,8 @@ class CustomOpenAPISpec:
     @staticmethod
     def add_request_body_to_paths(openapi_schema: Dict[str, Any], paths: List[str], schema_ref: str) -> None:
         """
-        Add request body schema reference to specified paths.
+        Add request body with expanded form fields for better Swagger UI display.
+        This keeps the request body but expands it to show individual fields in the UI.
         
         Args:
             openapi_schema: The OpenAPI schema dict to modify
@@ -81,16 +82,99 @@ class CustomOpenAPISpec:
         """
         for path in paths:
             if path in openapi_schema.get("paths", {}) and "post" in openapi_schema["paths"][path]:
+                # Get the actual schema to extract ALL field definitions
+                schema_name = schema_ref.split("/")[-1]  # Extract "ProxyChatCompletionRequest" from the ref
+                actual_schema = openapi_schema.get("components", {}).get("schemas", {}).get(schema_name, {})
+                schema_properties = actual_schema.get("properties", {})
+                required_fields = actual_schema.get("required", [])
+                
+                # Create an expanded inline schema instead of just a $ref
+                # This makes Swagger UI show all individual fields in the request body editor
+                expanded_schema = {
+                    "type": "object",
+                    "required": required_fields,
+                    "properties": {}
+                }
+                
+                # Add all properties with their full definitions
+                for field_name, field_def in schema_properties.items():
+                    expanded_field = CustomOpenAPISpec._expand_field_definition(field_def)
+                    
+                    # Add a simple example for the messages field
+                    if field_name == "messages":
+                        expanded_field["example"] = [
+                            {"role": "user", "content": "Hello, how are you?"}
+                        ]
+                    
+                    expanded_schema["properties"][field_name] = expanded_field
+                
+                # Include $defs from the original schema to support complex types like AllMessageValues
+                # This ensures that message types and other complex union types work properly
+                if "$defs" in actual_schema:
+                    expanded_schema["$defs"] = actual_schema["$defs"]
+                
+                # Set the request body with the expanded schema
                 openapi_schema["paths"][path]["post"]["requestBody"] = {
                     "required": True,
                     "content": {
                         "application/json": {
-                            "schema": {
-                                "$ref": schema_ref
-                            }
+                            "schema": expanded_schema
                         }
                     }
                 }
+                
+                # Keep any existing parameters (like path parameters) but remove conflicting query params
+                if "parameters" in openapi_schema["paths"][path]["post"]:
+                    existing_params = openapi_schema["paths"][path]["post"]["parameters"]
+                    # Only keep path parameters, remove query params that conflict with request body
+                    filtered_params = [
+                        param for param in existing_params 
+                        if param.get("in") == "path"
+                    ]
+                    openapi_schema["paths"][path]["post"]["parameters"] = filtered_params
+    
+    @staticmethod
+    def _extract_field_schema(field_def: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract a simple schema from a Pydantic field definition for parameter display.
+        
+        Args:
+            field_def: Pydantic field definition
+            
+        Returns:
+            Simplified schema for OpenAPI parameter
+        """
+        # Handle simple types
+        if "type" in field_def:
+            return {"type": field_def["type"]}
+        
+        # Handle anyOf (Optional fields in Pydantic v2)
+        if "anyOf" in field_def:
+            any_of = field_def["anyOf"]
+            # Find the non-null type
+            for option in any_of:
+                if option.get("type") != "null":
+                    return option
+            # Fallback to string if all else fails
+            return {"type": "string"}
+        
+        # Default fallback
+        return {"type": "string"}
+    
+    @staticmethod
+    def _expand_field_definition(field_def: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Expand a Pydantic field definition for inline use in OpenAPI schema.
+        This creates a full field definition that Swagger UI can render as individual form fields.
+        
+        Args:
+            field_def: Pydantic field definition
+            
+        Returns:
+            Expanded field definition for OpenAPI schema
+        """
+        # Return the field definition as-is since Pydantic already provides proper schemas
+        return field_def.copy()
     
     @staticmethod
     def add_request_schema(

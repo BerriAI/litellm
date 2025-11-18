@@ -18,7 +18,7 @@ from io import BytesIO
 from typing import Dict, List
 from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
-    _get_router_metadata_variable_name,
+    _get_router_metadata_variable_name, InMemoryFile,
 )
 
 
@@ -57,6 +57,9 @@ def test_bytes_input(sample_jsonl_bytes):
     result = replace_model_in_jsonl(sample_jsonl_bytes, new_model)
 
     assert result is not None
+    assert isinstance(result, InMemoryFile)
+    assert result.name == "modified_file.jsonl"
+    assert result.content_type == "application/jsonl"
 
 
 def test_tuple_input(sample_jsonl_bytes):
@@ -66,6 +69,9 @@ def test_tuple_input(sample_jsonl_bytes):
     result = replace_model_in_jsonl(test_tuple, new_model)
 
     assert result is not None
+    assert isinstance(result, InMemoryFile)
+    assert result.name == "modified_file.jsonl"
+    assert result.content_type == "application/jsonl"
 
 
 def test_file_like_object(sample_file_like):
@@ -74,6 +80,9 @@ def test_file_like_object(sample_file_like):
     result = replace_model_in_jsonl(sample_file_like, new_model)
 
     assert result is not None
+    assert isinstance(result, InMemoryFile)
+    assert result.name == "modified_file.jsonl"
+    assert result.content_type == "application/jsonl"
 
 
 def test_router_metadata_variable_name():

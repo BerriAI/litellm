@@ -3,7 +3,7 @@ Hooks that are triggered when a litellm user event occurs
 """
 
 import asyncio
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Optional
 

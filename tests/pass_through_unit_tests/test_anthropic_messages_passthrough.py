@@ -273,6 +273,58 @@ async def test_anthropic_messages_litellm_router_routing_strategy():
     print(f"Non-streaming response: {json.dumps(response, indent=2)}")
     return response
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_fallbacks():
+    """
+    E2E test the anthropic_messages fallbacks from Anthropic API to Bedrock
+    """
+    litellm._turn_on_debug()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "anthropic/claude-opus-4-20250514",
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-4-20250514",
+                    "api_key": "bad-key",
+                },
+            },
+            {
+                "model_name": "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
+                },
+            }
+        ],
+        fallbacks=[
+            {
+                "anthropic/claude-opus-4-20250514": 
+                ["bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"]
+            }
+        ]
+    )
+
+    # Set up test parameters
+    messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+
+    # Call the handler
+    response = await router.aanthropic_messages(
+        messages=messages,
+        model="anthropic/claude-opus-4-20250514",
+        max_tokens=100,
+        metadata={
+            "user_id": "hello",
+        },
+    )
+
+    # Verify response
+    assert "id" in response
+    assert "content" in response
+    assert "model" in response
+    assert response["role"] == "assistant"
+
+    print(f"Non-streaming response: {json.dumps(response, indent=2)}")
+    return response
+
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_litellm_router_latency_metadata_tracking():

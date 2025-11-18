@@ -9,10 +9,24 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import asyncio
+
 import litellm
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(scope="session")
+def event_loop():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+
+
+@pytest.fixture(scope="module", autouse=True)
 def setup_and_teardown():
     """
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.

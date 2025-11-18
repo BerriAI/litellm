@@ -6,6 +6,7 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
+from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -17,13 +18,22 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
+class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     """
     Reference:
         https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
         https://docs.anthropic.com/claude/docs/models-overview#model-comparison
+        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
 
-    Supported Params for the Amazon / Anthropic Claude 3 models:
+    Supported Params for the Amazon / Anthropic Claude models (Claude 3, Claude 4, etc.):
+    Supports anthropic_beta parameter for beta features like:
+    - computer-use-2025-01-24 (Claude 3.7 Sonnet)
+    - computer-use-2024-10-22 (Claude 3.5 Sonnet v2)
+    - token-efficient-tools-2025-02-19 (Claude 3.7 Sonnet)
+    - interleaved-thinking-2025-05-14 (Claude 4 models)
+    - output-128k-2025-02-19 (Claude 3.7 Sonnet)
+    - dev-full-thinking-2025-05-14 (Claude 4 models)
+    - context-1m-2025-08-07 (Claude Sonnet 4)
     """
 
     anthropic_version: str = "bedrock-2023-05-31"
@@ -50,6 +60,7 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
             drop_params,
         )
 
+
     def transform_request(
         self,
         model: str,
@@ -71,6 +82,11 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
         _anthropic_request.pop("stream", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
+
+        # Handle anthropic_beta from user headers
+        anthropic_beta_list = get_anthropic_beta_from_headers(headers)
+        if anthropic_beta_list:
+            _anthropic_request["anthropic_beta"] = anthropic_beta_list
 
         return _anthropic_request
 

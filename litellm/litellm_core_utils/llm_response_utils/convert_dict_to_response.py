@@ -1,14 +1,16 @@
 import asyncio
 import json
-import re
 import time
 import traceback
-import uuid
 from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_reasoning_content,
+)
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
@@ -29,6 +31,7 @@ from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from litellm.types.utils import (
     Message,
     ModelResponse,
+    ModelResponseStream,
     RerankResponse,
     StreamingChoices,
     TextChoices,
@@ -43,13 +46,13 @@ from .get_headers import get_response_headers
 def _safe_convert_created_field(created_value) -> int:
     """
     Safely convert a 'created' field value to an integer.
-    
-    Some providers (like SambaNova) return the 'created' field as a float 
+
+    Some providers (like SambaNova) return the 'created' field as a float
     (Unix timestamp with fractional seconds), but LiteLLM expects an integer.
-    
+
     Args:
         created_value: The value from response_object["created"]
-        
+
     Returns:
         int: Unix timestamp as integer
     """
@@ -106,12 +109,12 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     if response_object is None:
         raise Exception("Error in response object format")
 
-    model_response_object = ModelResponse(stream=True)
+    model_response_object = ModelResponseStream()
 
     if model_response_object is None:
         raise Exception("Error in response creating model response object")
 
-    choice_list = []
+    choice_list: List[StreamingChoices] = []
 
     for idx, choice in enumerate(response_object["choices"]):
         if (
@@ -161,7 +164,9 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = _safe_convert_created_field(response_object["created"])
+        model_response_object.created = _safe_convert_created_field(
+            response_object["created"]
+        )
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -178,8 +183,8 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
     if response_object is None:
         raise Exception("Error in response object format")
 
-    model_response_object = ModelResponse(stream=True)
-    choice_list = []
+    model_response_object = ModelResponseStream()
+    choice_list: List[StreamingChoices] = []
     for idx, choice in enumerate(response_object["choices"]):
         delta = Delta(**choice["message"])
         finish_reason = choice.get("finish_reason", None)
@@ -209,7 +214,9 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = _safe_convert_created_field(response_object["created"])
+        model_response_object.created = _safe_convert_created_field(
+            response_object["created"]
+        )
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -268,49 +275,6 @@ def _handle_invalid_parallel_tool_calls(
     except json.JSONDecodeError:
         # if there is a JSONDecodeError, return the original tool_calls
         return tool_calls
-
-
-def _parse_content_for_reasoning(
-    message_text: Optional[str],
-) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Parse the content for reasoning
-
-    Returns:
-    - reasoning_content: The content of the reasoning
-    - content: The content of the message
-    """
-    if not message_text:
-        return None, message_text
-
-    reasoning_match = re.match(
-        r"<(?:think|thinking)>(.*?)</(?:think|thinking)>(.*)", message_text, re.DOTALL
-    )
-
-    if reasoning_match:
-        return reasoning_match.group(1), reasoning_match.group(2)
-
-    return None, message_text
-
-
-def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Extract reasoning content and main content from a message.
-
-    Args:
-        message (dict): The message dictionary that may contain reasoning_content
-
-    Returns:
-        tuple[Optional[str], Optional[str]]: A tuple of (reasoning_content, content)
-    """
-    message_content = message.get("content")
-    if "reasoning_content" in message:
-        return message["reasoning_content"], message["content"]
-    elif "reasoning" in message:
-        return message["reasoning"], message["content"]
-    elif isinstance(message_content, str):
-        return _parse_content_for_reasoning(message_content)
-    return None, message_content
 
 
 class LiteLLMResponseObjectHandler:
@@ -497,7 +461,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
             if stream is True:
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
-            choice_list = []
+            choice_list: List[Choices] = []
 
             assert response_object["choices"] is not None and isinstance(
                 response_object["choices"], Iterable
@@ -557,9 +521,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields[
-                            "reasoning_content"
-                        ] = reasoning_content
+                        provider_specific_fields["reasoning_content"] = (
+                            reasoning_content
+                        )
 
                     message = Message(
                         content=content,
@@ -571,6 +535,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
                         annotations=choice["message"].get("annotations", None),
+                        images=choice["message"].get("images", None),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:
@@ -600,13 +565,15 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     provider_specific_fields=provider_specific_fields,
                 )
                 choice_list.append(choice)
-            model_response_object.choices = choice_list
+            model_response_object.choices = choice_list  # type: ignore
 
             if "usage" in response_object and response_object["usage"] is not None:
                 usage_object = litellm.Usage(**response_object["usage"])
                 setattr(model_response_object, "usage", usage_object)
             if "created" in response_object:
-                model_response_object.created = _safe_convert_created_field(response_object["created"])
+                model_response_object.created = _safe_convert_created_field(
+                    response_object["created"]
+                )
 
             if "id" in response_object:
                 model_response_object.id = response_object["id"] or str(uuid.uuid4())

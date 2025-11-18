@@ -11,21 +11,14 @@ import json
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
-from litellm._logging import verbose_logger
-
-try:
-    from litellm_enterprise.enterprise_callbacks.session_handler import (
-        _ENTERPRISE_ResponsesSessionHandler,
-    )
-except Exception as e:
-    verbose_logger.debug(
-        f"[Non-Blocking] Unable to import _ENTERPRISE_ResponsesSessionHandler - LiteLLM Enterprise Feature - {str(e)}"
-    )
-    _ENTERPRISE_ResponsesSessionHandler = None
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.responses.litellm_completion_transformation.session_handler import (
+    ResponsesSessionHandler,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -44,7 +37,7 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
-    ResponseTextConfig,
+    ResponsesAPIStatus,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
@@ -79,13 +72,6 @@ class ChatCompletionSession(TypedDict, total=False):
     litellm_session_id: Optional[str]
 
 
-class ChatCompletionImageItem(TypedDict):
-    """TypedDict for image items in chat completion content"""
-
-    type: Literal["image"]
-    image_url: ChatCompletionImageUrlObject
-
-
 ########### End of Initialize Classes used for Responses API  ###########
 
 
@@ -105,6 +91,7 @@ class LiteLLMCompletionResponsesConfig:
             "previous_response_id",
             "stream",
             "temperature",
+            "text",
             "tool_choice",
             "tools",
             "top_p",
@@ -118,6 +105,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: Optional[str] = None,
         stream: Optional[bool] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> dict:
         """
@@ -126,6 +114,14 @@ class LiteLLMCompletionResponsesConfig:
         tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
             responses_api_request.get("tools") or []  # type: ignore
         )
+
+        response_format = None
+        text_param = responses_api_request.get("text")
+        if text_param:
+            response_format = LiteLLMCompletionResponsesConfig._transform_text_format_to_response_format(
+                text_param
+            )
+
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
@@ -143,8 +139,10 @@ class LiteLLMCompletionResponsesConfig:
             "metadata": kwargs.get("metadata"),
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
+            "response_format": response_format,
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
         }
 
         # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
@@ -216,7 +214,7 @@ class LiteLLMCompletionResponsesConfig:
         
         PATCH: Added Redis-first lookup to fix conversation context timing issues
         """
-        
+
         # PATCH: Try Redis first for immediate availability
         redis_session = await LiteLLMCompletionResponsesConfig._patch_get_session_from_redis(previous_response_id)
         if redis_session:
@@ -225,7 +223,7 @@ class LiteLLMCompletionResponsesConfig:
             litellm_completion_request["messages"] = session_messages + _messages
             litellm_completion_request["litellm_trace_id"] = redis_session.get("session_id")
             return litellm_completion_request
-        
+
         # PATCH: Fallback to existing enterprise/database logic
         if _ENTERPRISE_ResponsesSessionHandler is not None:
             chat_completion_session = ChatCompletionSession(
@@ -241,7 +239,7 @@ class LiteLLMCompletionResponsesConfig:
             litellm_completion_request[
                 "litellm_trace_id"
             ] = chat_completion_session.get("litellm_session_id")
-        
+
         return litellm_completion_request
 
     @staticmethod
@@ -472,14 +470,14 @@ class LiteLLMCompletionResponsesConfig:
             ),
             index=0,
         )
-        
+
         # Create an assistant message with the tool call
         chat_completion_response_message = ChatCompletionResponseMessage(
             tool_calls=[tool_call],
             role="assistant",
             content=None,  # Function calls don't have content
         )
-        
+
         return [chat_completion_response_message]
 
     @staticmethod
@@ -503,7 +501,7 @@ class LiteLLMCompletionResponsesConfig:
         return new_item
 
     @staticmethod
-    def _transform_input_image_item_to_image_item(item: Dict[str, Any]) -> ChatCompletionImageItem:
+    def _transform_input_image_item_to_image_item(item: Dict[str, Any]) -> ChatCompletionImageObject:
         """
         Transform a Responses API input_image item to a Chat Completion image item
         """
@@ -512,8 +510,8 @@ class LiteLLMCompletionResponsesConfig:
             detail=item.get("detail") or "auto"
         )
 
-        return ChatCompletionImageItem(
-            type="image",
+        return ChatCompletionImageObject(
+            type="image_url",
             image_url=image_url_obj
         )
 
@@ -524,7 +522,6 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API content into a Chat Completion content
         """
-
         if isinstance(content, str):
             return content
         elif isinstance(content, list):
@@ -653,6 +650,34 @@ class LiteLLMCompletionResponsesConfig:
         return responses_tools
 
     @staticmethod
+    def _map_chat_completion_finish_reason_to_responses_status(
+        finish_reason: Optional[str],
+    ) -> ResponsesAPIStatus:
+        """
+        Map chat completion finish_reason to responses API status.
+
+        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call"
+        Responses API status values are: "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
+
+        Args:
+            finish_reason: The finish_reason from a chat completion response
+
+        Returns:
+            The corresponding responses API status value (one of ResponsesAPIStatus)
+        """
+        if finish_reason is None:
+            return "completed"
+
+        # Map finish reasons to status
+        if finish_reason in ["stop", "tool_calls", "function_call"]:
+            return "completed"
+        elif finish_reason in ["length", "content_filter"]:
+            return "incomplete"
+        else:
+            # Default to completed for unknown finish reasons
+            return "completed"
+
+    @staticmethod
     def transform_chat_completion_response_to_responses_api_response(
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
@@ -663,6 +688,12 @@ class LiteLLMCompletionResponsesConfig:
         """
         if isinstance(chat_completion_response, dict):
             chat_completion_response = ModelResponse(**chat_completion_response)
+        # Get finish_reason from the first choice to determine overall status
+        finish_reason: Optional[str] = None
+        choices: List[Choices] = getattr(chat_completion_response, "choices", [])
+        if choices and len(choices) > 0:
+            finish_reason = choices[0].finish_reason
+
         responses_api_response: ResponsesAPIResponse = ResponsesAPIResponse(
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
@@ -692,8 +723,10 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response, "previous_response_id", None
             ),
             reasoning=Reasoning(),
-            status=getattr(chat_completion_response, "status", "completed"),
-            text=ResponseTextConfig(),
+            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                finish_reason
+            ),
+            text={},
             truncation=getattr(chat_completion_response, "truncation", None),
             usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
                 chat_completion_response=chat_completion_response
@@ -741,8 +774,10 @@ class LiteLLMCompletionResponsesConfig:
                     return [
                         GenericResponseOutputItem(
                             type="reasoning",
-                            id=f"{chat_completion_response.id}_reasoning",
-                            status=choice.finish_reason,
+                            id=f"rs_{hash(str(message.reasoning_content))}",
+                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                                choice.finish_reason
+                            ),
                             role="assistant",
                             content=[
                                 OutputText(
@@ -766,7 +801,9 @@ class LiteLLMCompletionResponsesConfig:
                 GenericResponseOutputItem(
                     type="message",
                     id=chat_completion_response.id,
-                    status=choice.finish_reason,
+                    status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                        choice.finish_reason
+                    ),
                     role=choice.message.role,
                     content=[
                         LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
@@ -833,12 +870,15 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_message_to_response_output_text(
         message: Message,
     ) -> OutputText:
+        annotations = getattr(message, "annotations", None)
+        transformed_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+            annotations=annotations
+        )
+
         return OutputText(
             type="output_text",
             text=message.content,
-            annotations=LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
-                annotations=getattr(message, "annotations", None)
-            ),
+            annotations=transformed_annotations,
         )
 
     @staticmethod
@@ -884,11 +924,17 @@ class LiteLLMCompletionResponsesConfig:
                 output_tokens=0,
                 total_tokens=0,
             )
-        return ResponseAPIUsage(
+
+        response_usage = ResponseAPIUsage(
             input_tokens=usage.prompt_tokens,
             output_tokens=usage.completion_tokens,
             total_tokens=usage.total_tokens,
         )
+        # Preserve cost field if it exists (for streaming usage with cost calculation)
+        if hasattr(usage, "cost") and usage.cost is not None:
+            setattr(response_usage, "cost", usage.cost)
+
+        return response_usage
 
 
 # =============================================================================
@@ -902,16 +948,16 @@ class LiteLLMCompletionResponsesConfig:
         """PATCH: Store session immediately in Redis to avoid batch processing delay"""
         try:
             import litellm
-            
+
             if litellm.cache is None or not hasattr(litellm.cache, 'cache') or not hasattr(litellm.cache.cache, 'init_async_client'):
                 return  # No Redis - graceful fallback to existing logic
-                
+
             session_data = {
                 "messages": messages,
                 "session_id": session_id,
                 "timestamp": datetime.utcnow().isoformat()
             }
-            
+
             # Store with 24-hour TTL using the async Redis client
             async_redis_client = litellm.cache.cache.init_async_client()
             await async_redis_client.set(
@@ -919,8 +965,8 @@ class LiteLLMCompletionResponsesConfig:
                 value=json.dumps(session_data),
                 ex=86400  # 24 hours
             )
-            
-            
+
+
         except Exception:
             # PATCH: Silent fail - don't break existing functionality
             pass
@@ -930,25 +976,78 @@ class LiteLLMCompletionResponsesConfig:
         """PATCH: Get session from Redis if available"""
         try:
             import litellm
-            
+
             if litellm.cache is None or not hasattr(litellm.cache, 'cache') or not hasattr(litellm.cache.cache, 'init_async_client'):
                 return None
-                
+
             # Decode response ID to get actual request ID
             from litellm.responses.utils import ResponsesAPIRequestUtils
             actual_request_id = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
                 previous_response_id
             )
-            
+
             # Get session data from Redis using the async Redis client
             async_redis_client = litellm.cache.cache.init_async_client()
             session_json = await async_redis_client.get(name=f"litellm_patch:session:{actual_request_id}")
-            
+
             if session_json:
                 return json.loads(session_json)
-                
+
             return None
-            
+
         except Exception:
             # PATCH: Silent fail - fallback to existing logic
             return None
+
+    @staticmethod
+    def _transform_text_format_to_response_format(
+        text_param: Union[Dict[str, Any], Any],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Transform Responses API text.format parameter to Chat Completion response_format parameter.
+
+        Responses API text parameter structure:
+        {
+            "format": {
+                "type": "json_schema",
+                "name": "schema_name",
+                "schema": {...},
+                "strict": True
+            }
+        }
+
+        Chat Completion response_format structure:
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "schema_name",
+                "schema": {...},
+                "strict": True
+            }
+        }
+        """
+        if not text_param:
+            return None
+
+        if isinstance(text_param, dict):
+            format_param = text_param.get("format")
+            if format_param and isinstance(format_param, dict):
+                format_type = format_param.get("type")
+
+                if format_type == "json_schema":
+                    return {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": format_param.get("name", "response_schema"),
+                            "schema": format_param.get("schema", {}),
+                            "strict": format_param.get("strict", False),
+                        }
+                    }
+                elif format_type == "json_object":
+                    return {
+                        "type": "json_object"
+                    }
+                elif format_type == "text":
+                    return None
+
+        return None

@@ -5,6 +5,10 @@ import TabItem from '@theme/TabItem';
 # ✨ SSO for Admin UI
 
 :::info
+From v1.76.0, SSO is now Free for up to 5 users.
+:::
+
+:::info
 
 ✨ SSO is on LiteLLM Enterprise
 
@@ -76,6 +80,23 @@ MICROSOFT_TENANT="5a39737
     ```shell
     http://localhost:4000/sso/callback
     ```
+
+**Using App Roles for User Permissions**
+
+You can assign user roles directly from Entra ID using App Roles. LiteLLM will automatically read the app roles from the JWT token and assign the corresponding role to the user.
+
+Supported roles:
+- `proxy_admin` - Admin over the platform
+- `proxy_admin_viewer` - Can login, view all keys, view all spend (read-only)
+- `internal_user` - Normal user. Can login, view spend and depending on team-member permissions - view/create/delete their own keys.
+
+
+To set up app roles:
+1. Navigate to your App Registration on https://portal.azure.com/
+2. Go to "App roles" and create a new app role
+3. Use one of the supported role names above (e.g., `proxy_admin`)
+4. Assign users to these roles in your Enterprise Application
+5. When users sign in via SSO, LiteLLM will automatically assign them the corresponding role
 
 </TabItem>
 
@@ -235,6 +256,13 @@ Example setting a local image (on your container)
 ```shell
 UI_LOGO_PATH="ui_images/logo.jpg"
 ```
+
+#### Or set your logo directly from Admin UI:
+<div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+  <Image img={require('../../img/admin_settings_ui_theme.png')} />
+  <Image img={require('../../img/admin_settings_ui_theme_logo.png')} />
+</div>
+
 #### Set Custom Color Theme
 - Navigate to [/enterprise/enterprise_ui](https://github.com/BerriAI/litellm/blob/main/enterprise/enterprise_ui/_enterprise_colors.json)
 - Inside the `enterprise_ui` directory, rename `_enterprise_colors.json` to `enterprise_colors.json`
@@ -291,6 +319,16 @@ Okta requires the `GENERIC_CLIENT_STATE` parameter:
 ```bash
 GENERIC_CLIENT_STATE="random-string" # Required for Okta
 ```
+
+### Okta PKCE
+
+If your Okta application is configured to require PKCE (Proof Key for Code Exchange), enable it by setting:
+
+```bash
+GENERIC_CLIENT_USE_PKCE="true"
+```
+
+This is required when your Okta app settings enforce PKCE for enhanced security. LiteLLM will automatically handle PKCE parameter generation and verification during the OAuth flow.
 
 ### Common Configuration Issues
 

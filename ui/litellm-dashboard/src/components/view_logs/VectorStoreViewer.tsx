@@ -49,32 +49,32 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
 
   const toggleResult = (index: number, resultIndex: number) => {
     const key = `${index}-${resultIndex}`;
-    setExpandedResults(prev => ({
+    setExpandedResults((prev) => ({
       ...prev,
-      [key]: !prev[key]
+      [key]: !prev[key],
     }));
   };
 
   return (
     <div className="bg-white rounded-lg shadow mb-6">
-      <div 
+      <div
         className="flex justify-between items-center p-4 border-b cursor-pointer hover:bg-gray-50"
         onClick={() => setSectionExpanded(!sectionExpanded)}
       >
         <div className="flex items-center">
-          <svg 
-            className={`w-5 h-5 mr-2 text-gray-600 transition-transform ${sectionExpanded ? 'transform rotate-90' : ''}`}
-            fill="none" 
-            stroke="currentColor" 
+          <svg
+            className={`w-5 h-5 mr-2 text-gray-600 transition-transform ${sectionExpanded ? "transform rotate-90" : ""}`}
+            fill="none"
+            stroke="currentColor"
             viewBox="0 0 24 24"
           >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
           <h3 className="text-lg font-medium">Vector Store Requests</h3>
         </div>
-        <span className="text-sm text-gray-500">{sectionExpanded ? 'Click to collapse' : 'Click to expand'}</span>
+        <span className="text-sm text-gray-500">{sectionExpanded ? "Click to collapse" : "Click to expand"}</span>
       </div>
-      
+
       {sectionExpanded && (
         <div className="p-4">
           {data.map((request, index) => (
@@ -97,13 +97,7 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                           const { logo, displayName } = getProviderLogoAndName(request.custom_llm_provider);
                           return (
                             <>
-                              {logo && (
-                                <img 
-                                  src={logo} 
-                                  alt={`${displayName} logo`} 
-                                  className="h-5 w-5 mr-2" 
-                                />
-                              )}
+                              {logo && <img src={logo} alt={`${displayName} logo`} className="h-5 w-5 mr-2" />}
                               {displayName}
                             </>
                           );
@@ -132,17 +126,17 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
               <div className="space-y-2">
                 {request.vector_store_search_response.data.map((result, resultIndex) => {
                   const isExpanded = expandedResults[`${index}-${resultIndex}`] || false;
-                  
+
                   return (
                     <div key={resultIndex} className="border rounded-lg overflow-hidden">
-                      <div 
+                      <div
                         className="flex items-center p-3 bg-gray-50 cursor-pointer"
                         onClick={() => toggleResult(index, resultIndex)}
                       >
-                        <svg 
-                          className={`w-5 h-5 mr-2 transition-transform ${isExpanded ? 'transform rotate-90' : ''}`}
-                          fill="none" 
-                          stroke="currentColor" 
+                        <svg
+                          className={`w-5 h-5 mr-2 transition-transform ${isExpanded ? "transform rotate-90" : ""}`}
+                          fill="none"
+                          stroke="currentColor"
                           viewBox="0 0 24 24"
                         >
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -154,7 +148,7 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                           </span>
                         </div>
                       </div>
-                      
+
                       {isExpanded && (
                         <div className="p-3 border-t bg-white">
                           {result.content.map((content, contentIndex) => (
@@ -177,4 +171,4 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
       )}
     </div>
   );
-} 
+}

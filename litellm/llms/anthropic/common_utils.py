@@ -10,10 +10,11 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import TokenCountResponse
 
 
 class AnthropicError(BaseLLMException):
@@ -229,7 +230,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             litellm_model_names.append(litellm_model_name)
         return litellm_model_names
 
-    def get_token_counter(self) -> Optional["AnthropicTokenCounter"]:
+    def get_token_counter(self) -> Optional[BaseTokenCounter]:
         """
         Factory method to create an Anthropic token counter.
         
@@ -239,32 +240,24 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicTokenCounter()
 
 
-class AnthropicTokenCounter:
+class AnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Anthropic provider."""
-    
-    def supports_provider(
+
+    def should_use_token_counting_api(
         self, 
-        deployment: Optional[Dict[str, Any]] = None,
-        from_endpoint: bool = False
+        custom_llm_provider: Optional[str] = None,
     ) -> bool:
-        if not from_endpoint:
-            return False
-            
-        if deployment is None:
-            return False
-            
-        full_model = deployment.get("litellm_params", {}).get("model", "")
-        is_anthropic_provider = full_model.startswith("anthropic/") or "anthropic" in full_model.lower()
-        
-        return is_anthropic_provider
+        from litellm.types.utils import LlmProviders
+        return custom_llm_provider == LlmProviders.ANTHROPIC.value
     
     async def count_tokens(
         self,
         model_to_use: str,
         messages: Optional[List[Dict[str, Any]]],
+        contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[TokenCountResponse]:
         from litellm.proxy.utils import count_tokens_with_anthropic_api
         
         result = await count_tokens_with_anthropic_api(
@@ -274,12 +267,13 @@ class AnthropicTokenCounter:
         )
         
         if result is not None:
-            return {
-                "total_tokens": result["total_tokens"],
-                "request_model": request_model,
-                "model_used": model_to_use,
-                "tokenizer_type": result["tokenizer_used"],
-            }
+            return TokenCountResponse(
+                total_tokens=result.get("total_tokens", 0),
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type=result.get("tokenizer_used", ""),
+                original_response=result,
+            )
         
         return None
 

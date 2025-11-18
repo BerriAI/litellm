@@ -35,6 +35,16 @@ class BaseFilesConfig(BaseConfig):
     def custom_llm_provider(self) -> LlmProviders:
         pass
 
+    @property
+    def file_upload_http_method(self) -> str:
+        """
+        HTTP method to use for file uploads.
+        Override this in provider configs if they need different methods.
+        Default is POST (used by most providers like OpenAI, Anthropic).
+        S3-based providers like Bedrock should return "PUT".
+        """
+        return "POST"
+
     @abstractmethod
     def get_supported_openai_params(
         self, model: str

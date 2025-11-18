@@ -109,6 +109,9 @@ class PagerDutyAlerting(SlackAlerting):
                 error_llm_provider=error_info.get("llm_provider"),
                 user_api_key_hash=_meta.get("user_api_key_hash"),
                 user_api_key_alias=_meta.get("user_api_key_alias"),
+                user_api_key_spend=_meta.get("user_api_key_spend"),
+                user_api_key_max_budget=_meta.get("user_api_key_max_budget"),
+                user_api_key_budget_reset_at=_meta.get("user_api_key_budget_reset_at"),
                 user_api_key_org_id=_meta.get("user_api_key_org_id"),
                 user_api_key_team_id=_meta.get("user_api_key_team_id"),
                 user_api_key_user_id=_meta.get("user_api_key_user_id"),
@@ -116,6 +119,7 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_end_user_id=_meta.get("user_api_key_end_user_id"),
                 user_api_key_user_email=_meta.get("user_api_key_user_email"),
                 user_api_key_request_route=_meta.get("user_api_key_request_route"),
+                user_api_key_auth_metadata=_meta.get("user_api_key_auth_metadata"),
             )
         )
 
@@ -148,6 +152,7 @@ class PagerDutyAlerting(SlackAlerting):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
         """
@@ -191,6 +196,13 @@ class PagerDutyAlerting(SlackAlerting):
                 error_llm_provider="HangingRequest",
                 user_api_key_hash=user_api_key_dict.api_key,
                 user_api_key_alias=user_api_key_dict.key_alias,
+                user_api_key_spend=user_api_key_dict.spend,
+                user_api_key_max_budget=user_api_key_dict.max_budget,
+                user_api_key_budget_reset_at=(
+                    user_api_key_dict.budget_reset_at.isoformat()
+                    if user_api_key_dict.budget_reset_at
+                    else None
+                ),
                 user_api_key_org_id=user_api_key_dict.org_id,
                 user_api_key_team_id=user_api_key_dict.team_id,
                 user_api_key_user_id=user_api_key_dict.user_id,
@@ -198,6 +210,7 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_user_email=user_api_key_dict.user_email,
                 user_api_key_request_route=user_api_key_dict.request_route,
+                user_api_key_auth_metadata=user_api_key_dict.metadata,
             )
         )
 

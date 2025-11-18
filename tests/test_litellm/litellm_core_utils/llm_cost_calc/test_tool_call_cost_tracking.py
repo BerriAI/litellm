@@ -157,6 +157,70 @@ def test_get_cost_for_gemini_web_search(model):
     assert cost > 0.0
 
 
+@pytest.mark.parametrize(
+    "model,custom_llm_provider",
+    [
+        ("vertex_ai/gemini-2.5-flash", "vertex_ai"),
+        ("gemini-2.5-flash", "vertex_ai"),
+    ],
+)
+def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
+    """
+    Test that Vertex AI Gemini web search costs are tracked when passing
+    a ModelResponse with usage.prompt_tokens_details.web_search_requests.
+
+    This tests the fix for: https://github.com/BerriAI/litellm/issues/XXXXX
+
+    The issue: When a ModelResponse is passed, the detection logic only checks
+    for url_citation annotations, not usage.prompt_tokens_details.web_search_requests.
+    This causes Vertex AI grounding costs to not be tracked.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage, Choices, Message
+
+    # Create a realistic ModelResponse like what Vertex AI returns
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="Test response with grounding",
+                    role="assistant"
+                )
+            )
+        ],
+        created=1234567890,
+        model=model,
+        object="chat.completion",
+        system_fingerprint=None,
+    )
+
+    # Add usage with web_search_requests (how Vertex AI indicates grounding was used)
+    usage = Usage(
+        prompt_tokens=11,
+        completion_tokens=100,
+        total_tokens=111,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=11,
+            web_search_requests=1  # This should trigger grounding cost
+        )
+    )
+    response.usage = usage
+
+    # Calculate cost - should include grounding cost
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=response,  # Pass the ModelResponse
+        custom_llm_provider=custom_llm_provider,
+        standard_built_in_tools_params=None,
+    )
+
+    # Vertex AI charges $0.035 per grounded request
+    assert cost == 0.035, f"Expected $0.035 grounding cost, got ${cost}"
+
+
 def test_azure_assistant_features_integrated_cost_tracking():
     """
     Test integrated cost tracking for Azure assistant features.

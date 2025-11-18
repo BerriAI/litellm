@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# CHANGELOG: 2025-07-23 - Added support for using LiteLLM_SpendLogs table for CBF mapping (ishaan-jaff)
 # CHANGELOG: 2025-01-19 - Refactored to use daily spend tables for proper CBF mapping (erik.peterson)
 # CHANGELOG: 2025-01-19 - Migrated from pandas to polars for database operations (erik.peterson)
 # CHANGELOG: 2025-01-19 - Initial database module for LiteLLM data extraction (erik.peterson)
 
 """Database connection and data extraction for LiteLLM."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 import polars as pl
@@ -37,61 +36,88 @@ class LiteLLMDatabase:
             )
         return prisma_client
 
-    async def get_usage_data_for_hour(self, target_hour: datetime, limit: Optional[int] = 1000) -> pl.DataFrame:
-        """Retrieve spend logs for a specific hour from LiteLLM_SpendLogs table with batching."""
+    async def get_usage_data(
+        self, 
+        limit: Optional[int] = None,
+        start_time_utc: Optional[datetime] = None,
+        end_time_utc: Optional[datetime] = None
+    ) -> pl.DataFrame:
+        """Retrieve usage data from LiteLLM daily user spend table."""
         client = self._ensure_prisma_client()
         
-        # Calculate hour range
-        hour_start = target_hour.replace(minute=0, second=0, microsecond=0)
-        hour_end = hour_start + timedelta(hours=1)
+        # Build WHERE clause for time filtering
+        where_conditions = []
+        if start_time_utc:
+            where_conditions.append(f"dus.created_at >= '{start_time_utc.isoformat()}'")
+        if end_time_utc:
+            where_conditions.append(f"dus.created_at <= '{end_time_utc.isoformat()}'")
         
-        # Convert datetime objects to ISO format strings for PostgreSQL compatibility
-        hour_start_str = hour_start.isoformat()
-        hour_end_str = hour_end.isoformat()
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
         
-        # Query to get spend logs for the specific hour
-        query = """
-        SELECT *
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" >= $1::timestamp 
-          AND "startTime" < $2::timestamp
-        ORDER BY "startTime" ASC
+        # Query to get user spend data with team information
+        query = f"""
+        SELECT
+            dus.id,
+            dus.date,
+            dus.user_id,
+            dus.api_key,
+            dus.model,
+            dus.model_group,
+            dus.custom_llm_provider,
+            dus.prompt_tokens,
+            dus.completion_tokens,
+            dus.spend,
+            dus.api_requests,
+            dus.successful_requests,
+            dus.failed_requests,
+            dus.cache_creation_input_tokens,
+            dus.cache_read_input_tokens,
+            dus.created_at,
+            dus.updated_at,
+            vt.team_id,
+            vt.key_alias as api_key_alias,
+            tt.team_alias
+        FROM "LiteLLM_DailyUserSpend" dus
+        LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token
+        LEFT JOIN "LiteLLM_TeamTable" tt ON vt.team_id = tt.team_id
+        {where_clause}
+        ORDER BY dus.date DESC, dus.created_at DESC
         """
 
         if limit:
             query += f" LIMIT {limit}"
 
         try:
-            db_response = await client.db.query_raw(query, hour_start_str, hour_end_str)
-            # Convert the response to polars DataFrame
-            return pl.DataFrame(db_response) if db_response else pl.DataFrame()
+            db_response = await client.db.query_raw(query)
+            # Convert the response to polars DataFrame with full schema inference
+            # This prevents schema mismatch errors when data types vary across rows
+            return pl.DataFrame(db_response, infer_schema_length=None)
         except Exception as e:
-            raise Exception(f"Error retrieving spend logs for hour {target_hour}: {str(e)}")
-
+            raise Exception(f"Error retrieving usage data: {str(e)}")
 
     async def get_table_info(self) -> Dict[str, Any]:
-        """Get information about the LiteLLM_SpendLogs table."""
+        """Get information about the daily user spend table."""
         client = self._ensure_prisma_client()
         
         try:
-            # Get row count from SpendLogs table
-            spend_logs_count = await self._get_table_row_count('LiteLLM_SpendLogs')
+            # Get row count from user spend table
+            user_count = await self._get_table_row_count('LiteLLM_DailyUserSpend')
 
-            # Get column structure from spend logs table
+            # Get column structure from user spend table
             query = """
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
-            WHERE table_name = 'LiteLLM_SpendLogs'
+            WHERE table_name = 'LiteLLM_DailyUserSpend'
             ORDER BY ordinal_position;
             """
             columns_response = await client.db.query_raw(query)
 
             return {
                 'columns': columns_response,
-                'row_count': spend_logs_count,
-                'table_breakdown': {
-                    'spend_logs': spend_logs_count
-                }
+                'row_count': user_count,
+                'table_name': 'LiteLLM_DailyUserSpend'
             }
         except Exception as e:
             raise Exception(f"Error getting table info: {str(e)}")

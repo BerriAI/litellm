@@ -6,9 +6,21 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from typing import (
+    Any,
+    Coroutine,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    get_type_hints,
+    overload,
+)
 
 import httpx
+
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -16,7 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.mistral import MistralToolCallMessage
+from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 from litellm.utils import convert_to_model_response_object
@@ -144,10 +156,13 @@ class MistralConfig(OpenAIGPTConfig):
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
-            if param == "max_completion_tokens":  # max_completion_tokens should take priority
+            if (
+                param == "max_completion_tokens"
+            ):  # max_completion_tokens should take priority
                 optional_params["max_tokens"] = value
             if param == "tools":
-                optional_params["tools"] = value
+                # Clean tools to remove problematic schema fields for Mistral API
+                optional_params["tools"] = self._clean_tool_schema_for_mistral(value)
             if param == "stream" and value is True:
                 optional_params["stream"] = value
             if param == "temperature":
@@ -157,7 +172,9 @@ class MistralConfig(OpenAIGPTConfig):
             if param == "stop":
                 optional_params["stop"] = value
             if param == "tool_choice" and isinstance(value, str):
-                optional_params["tool_choice"] = self._map_tool_choice(tool_choice=value)
+                optional_params["tool_choice"] = self._map_tool_choice(
+                    tool_choice=value
+                )
             if param == "seed":
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
@@ -183,7 +200,9 @@ class MistralConfig(OpenAIGPTConfig):
         )  # type: ignore
 
         # if api_base does not end with /v1 we add it
-        if api_base is not None and not api_base.endswith("/v1"):  # Mistral always needs a /v1 at the end
+        if api_base is not None and not api_base.endswith(
+            "/v1"
+        ):  # Mistral always needs a /v1 at the end
             api_base = api_base + "/v1"
         dynamic_api_key = (
             api_key
@@ -192,10 +211,13 @@ class MistralConfig(OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
+    # fmt: off
+
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: 
+        ...
 
     @overload
     def _transform_messages(
@@ -203,7 +225,9 @@ class MistralConfig(OpenAIGPTConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> List[AllMessageValues]: 
+        ...
+    # fmt: on
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -214,18 +238,20 @@ class MistralConfig(OpenAIGPTConfig):
         - if image passed in, then just return as is (user-intended)
         - if `name` is passed, then drop it for mistral API: https://github.com/BerriAI/litellm/issues/6696
 
-        Motivation: mistral api doesn't support content as a list
+        Motivation: mistral api doesn't support content as a list.
+        The above statement is not valid now. Need to plan to remove all the #1,2,3 
+        Mistral API supports content as a list.
         """
-        ## 1. If 'image_url' in content, then return as is
+        ## 1. If 'image_url' or 'file' in content, then transform with base class and mistral-specific handling
         for m in messages:
             _content_block = m.get("content")
             if _content_block and isinstance(_content_block, list):
-                for c in _content_block:
-                    if c.get("type") == "image_url":
-                        if is_async:
-                            return super()._transform_messages(messages, model, True)
-                        else:
-                            return super()._transform_messages(messages, model, False)
+                if any(c.get("type") in ["image_url", "file"] for c in _content_block):
+                    if is_async:
+                        return self._transform_messages_async(messages, model)
+                    else:
+                        messages = self._transform_messages_sync(messages, model)
+                        return messages
 
         ## 2. If content is list, then convert to string
         messages = handle_messages_with_content_list_to_str_conversion(messages)
@@ -235,6 +261,8 @@ class MistralConfig(OpenAIGPTConfig):
         for m in messages:
             m = MistralConfig._handle_name_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
+            if MistralConfig._is_empty_assistant_message(m):
+                continue
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
             new_messages.append(m)
 
@@ -242,6 +270,51 @@ class MistralConfig(OpenAIGPTConfig):
             return super()._transform_messages(new_messages, model, True)
         else:
             return super()._transform_messages(new_messages, model, False)
+
+    async def _transform_messages_async(self,
+        messages: List[AllMessageValues], model: str
+    ) -> List[AllMessageValues]:
+        """
+        Handle modification of messages for Mistral API in an async context.
+        """
+        # Call parent async method to handle basic transformations
+        # and then apply Mistral-specific handling for files
+        messages = await super()._transform_messages(messages, model, True)
+        messages = self._handle_message_with_file(messages)
+        return messages
+
+    def _transform_messages_sync(self,
+        messages: List[AllMessageValues], model: str
+    ) -> List[AllMessageValues]:
+        """ Handle modification of messages for Mistral API in a sync context.
+        """
+        # Call parent sync method to handle basic transformations
+        # and then apply Mistral-specific handling for files
+        # This is the sync version of the async method above
+        messages = super()._transform_messages(messages, model, False)
+        messages = self._handle_message_with_file(messages)
+        return messages
+
+    def _handle_message_with_file(
+        self,
+        messages: List[AllMessageValues]) -> List[AllMessageValues]:
+        """
+        Mistral API supports only 'file_id' in message content with type 'file'.
+        """
+        for m in messages:
+            _content_block = m.get("content")
+            if _content_block and isinstance(_content_block, list):                
+                if any(c.get("type") == "file" for c in _content_block):
+                    # If file content is present, we get file_id from 'file' attribute of content block
+                    # then replace 'file' with 'file_id' and assign the value of 'file_id' attribute to it.
+                    file_contents = [c for c in _content_block if c.get("type") == "file"]
+                    for file_content in file_contents:
+                        file_id = file_content.get("file", {}).get("file_id")
+                        if file_id:
+                            # Replace 'file' with 'file_id'
+                            file_content["file_id"] = file_id # type: ignore
+                            file_content.pop("file", None)
+        return messages
 
     def _add_reasoning_system_prompt_if_needed(
         self, messages: List[AllMessageValues], optional_params: dict
@@ -265,26 +338,70 @@ class MistralConfig(OpenAIGPTConfig):
                     # Handle both string and list content, preserving original format
                     if isinstance(existing_content, str):
                         # String content - prepend reasoning prompt
-                        new_content: Union[str, list] = f"{reasoning_prompt}\n\n{existing_content}"
+                        new_content: Union[str, list] = (
+                            f"{reasoning_prompt}\n\n{existing_content}"
+                        )
                     elif isinstance(existing_content, list):
                         # List content - prepend reasoning prompt as text block
-                        new_content = [{"type": "text", "text": reasoning_prompt + "\n\n"}] + existing_content
+                        new_content = [
+                            {"type": "text", "text": reasoning_prompt + "\n\n"}
+                        ] + existing_content
                     else:
                         # Fallback for any other type - convert to string
                         new_content = f"{reasoning_prompt}\n\n{str(existing_content)}"
 
-                    messages[i] = cast(AllMessageValues, {**msg, "content": new_content})
+                    messages[i] = cast(
+                        AllMessageValues, {**msg, "content": new_content}
+                    )
                     break
         else:
             # Add new system message with reasoning instructions
             reasoning_message: AllMessageValues = cast(
-                AllMessageValues, {"role": "system", "content": self._get_mistral_reasoning_system_prompt()}
+                AllMessageValues,
+                {
+                    "role": "system",
+                    "content": self._get_mistral_reasoning_system_prompt(),
+                },
             )
             messages = [reasoning_message] + messages
 
         # Remove the internal flag
         optional_params.pop("_add_reasoning_prompt", None)
         return messages
+
+    @classmethod
+    def _clean_tool_schema_for_mistral(cls, tools: list) -> list:
+        """
+        Clean tool schemas to remove fields that cause issues with Mistral API.
+
+        Removes:
+        - $id and $schema fields (cause grammar validation errors)
+        - additionalProperties=False (causes OpenAI API schema errors)
+        - strict field (not supported by Mistral)
+
+        Args:
+            tools: List of tool definitions
+            max_depth: Maximum recursion depth for schema cleaning (default: 10)
+
+        Returns:
+            Cleaned tools list
+        """
+        if not tools:
+            return tools
+
+        import copy
+
+        from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+        from litellm.utils import _remove_json_schema_refs
+
+        cleaned_tools = copy.deepcopy(tools)
+
+        # Apply all cleaning functions with max_depth protection
+        cleaned_tools = _remove_json_schema_refs(
+            cleaned_tools, max_depth=DEFAULT_MAX_RECURSE_DEPTH
+        )
+
+        return cleaned_tools
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
@@ -324,6 +441,25 @@ class MistralConfig(OpenAIGPTConfig):
             message["tool_calls"] = mistral_tool_calls  # type: ignore
         return message
 
+    @classmethod
+    def _is_empty_assistant_message(cls, message: AllMessageValues) -> bool:
+        """
+        Mistral API does not support empty string in assistant content.
+        """
+        from litellm.types.llms.openai import ChatCompletionAssistantMessage
+
+        set_keys = get_type_hints(ChatCompletionAssistantMessage).keys()
+
+        all_expected_values_are_empty = True
+        for key in set_keys:
+            if key != "role" and message.get(key) is not None:
+                if key == "content" and message.get(key) == "":
+                    continue
+                else:
+                    all_expected_values_are_empty = False
+                    break
+        return all_expected_values_are_empty
+
     @staticmethod
     def _handle_empty_content_response(response_data: dict) -> dict:
         """
@@ -344,6 +480,58 @@ class MistralConfig(OpenAIGPTConfig):
                     choice["message"]["content"] = None
         return response_data
 
+    @staticmethod
+    def _convert_thinking_block_to_reasoning_content(
+        thinking_blocks: MistralThinkingBlock,
+    ) -> str:
+        """
+        Convert Mistral thinking blocks to reasoning content.
+        """
+        return "\n".join(
+            [block.get("text", "") for block in thinking_blocks["thinking"]]
+        )
+
+    @staticmethod
+    def _handle_content_list_to_str_conversion(response_data: dict) -> dict:
+        """
+        Handle Mistral's content list format and extract thinking content.
+
+        Map mistral's content list to string and extract thinking blocks:
+        - Thinking block -> reasoning_content field
+        - Text block -> content field
+        """
+
+        if response_data.get("choices") and len(response_data["choices"]) > 0:
+            for choice in response_data["choices"]:
+                if choice.get("message") and choice["message"].get("content"):
+                    content = choice["message"]["content"]
+
+                    # Only process if content is a list
+                    if isinstance(content, list):
+                        thinking_content = ""
+                        text_content = ""
+
+                        # Process each content block
+                        for block in content:
+                            if block.get("type") == "thinking":
+                                thinking_blocks = block.get("thinking", [])
+                                thinking_texts = []
+                                for thinking_block in thinking_blocks:
+                                    if thinking_block.get("type") == "text":
+                                        thinking_texts.append(
+                                            thinking_block.get("text", "")
+                                        )
+                                thinking_content = "\n".join(thinking_texts)
+                            elif block.get("type") == "text":
+                                text_content = block.get("text", "")
+
+                        # Set the extracted content
+                        choice["message"]["content"] = text_content
+                        if thinking_content:
+                            choice["message"]["reasoning_content"] = thinking_content
+
+        return response_data
+
     def transform_request(
         self,
         model: str,
@@ -360,8 +548,12 @@ class MistralConfig(OpenAIGPTConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         # Add reasoning system prompt if needed (for magistral models)
-        if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
-            messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
+        if "magistral" in model.lower() and optional_params.get(
+            "_add_reasoning_prompt", False
+        ):
+            messages = self._add_reasoning_system_prompt_if_needed(
+                messages, optional_params
+            )
 
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(
@@ -388,14 +580,16 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> ModelResponse:
         """
         Transform the raw response from Mistral API.
-        Handles Mistral-specific behavior like converting empty string content to None.
+        Handles Mistral-specific behavior like converting empty string content to None
+        and extracting thinking content from content lists.
         """
         logging_obj.post_call(original_response=raw_response.text)
         logging_obj.model_call_details["response_headers"] = raw_response.headers
 
-        # Handle Mistral-specific empty string content conversion to None
+        # Handle Mistral-specific response transformations
         response_data = raw_response.json()
         response_data = self._handle_empty_content_response(response_data)
+        response_data = self._handle_content_list_to_str_conversion(response_data)
 
         final_response_obj = cast(
             ModelResponse,

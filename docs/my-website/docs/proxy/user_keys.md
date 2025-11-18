@@ -357,6 +357,106 @@ assert user.age == 25
 </TabItem>
 </Tabs>
 
+## Using Tags for Categorization and Tracking
+
+Tags allow you to categorize, filter, and track your LLM requests. Add tags to your metadata for better organization and analytics.
+
+<Tabs>
+<TabItem value="openai-python" label="OpenAI Python">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hello!"}],
+    extra_body={
+        "metadata": {
+            "tags": ["production", "customer-support", "urgent"],
+            "generation_name": "support-bot",
+            "trace_user_id": "user-123"
+        }
+    }
+)
+```
+
+</TabItem>
+
+<TabItem value="langchain-python" label="LangChain Python">
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model="gpt-4o",
+    extra_body={
+        "metadata": {
+            "tags": ["langchain-integration", "content-gen"],
+            "trace_user_id": "user-456"
+        }
+    }
+)
+
+response = chat.invoke([HumanMessage(content="Generate a blog post")])
+```
+
+</TabItem>
+
+<TabItem value="curl" label="Curl">
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "metadata": {
+        "tags": ["api-test", "development"],
+        "trace_user_id": "test-user"
+    }
+}'
+```
+
+</TabItem>
+
+<TabItem value="openai-js" label="OpenAI JS">
+
+```js
+const { OpenAI } = require('openai');
+
+const openai = new OpenAI({
+  apiKey: "sk-1234",
+  baseURL: "http://0.0.0.0:4000"
+});
+
+async function main() {
+  const response = await openai.chat.completions.create({
+    messages: [{ role: 'user', content: 'Hello!' }],
+    model: 'gpt-3.5-turbo',
+    metadata: {
+      tags: ["javascript-client", "api-test"],
+      trace_user_id: "js-user-789"
+    }
+  });
+}
+```
+
+</TabItem>
+</Tabs>
+
+### Tag Benefits
+
+- **Cost Tracking**: Monitor spending by project/team/feature
+- **Analytics**: Filter requests by tags in logs and dashboards  
+- **Routing**: Use tags for conditional model routing
+- **Debugging**: Easier troubleshooting with categorized requests
+
 ### Response Format
 
 ```json

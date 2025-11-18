@@ -18,10 +18,9 @@ class LeastBusyLoggingHandler(CustomLogger):
     logged_success: int = 0
     logged_failure: int = 0
 
-    def __init__(self, router_cache: DualCache, model_list: list):
+    def __init__(self, router_cache: DualCache):
         self.router_cache = router_cache
-        self.mapping_deployment_to_id: dict = {}
-        self.model_list = model_list
+
 
     def log_pre_api_call(self, model, messages, kwargs):
         """

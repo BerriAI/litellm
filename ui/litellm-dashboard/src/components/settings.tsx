@@ -23,32 +23,20 @@ import {
 
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 
-import {
-  Modal,
-  Typography,
-  Form,
-  Input,
-  Select,
-  Button as Button2,
-  message,
-} from "antd";
+import { Modal, Typography, Form, Input, Select, Button as Button2 } from "antd";
+import NotificationsManager from "./molecules/notifications_manager";
 import EmailSettings from "./email_settings";
 
 const { Title, Paragraph } = Typography;
 
-import {
-  getCallbacksCall,
-  setCallbacksCall,
-  serviceHealthCheck,
-  deleteCallback,
-} from "./networking";
+import { getCallbacksCall, setCallbacksCall, serviceHealthCheck, deleteCallback } from "./networking";
 import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
 import {
-  callback_map,
-  callbackInfo,
-  Callbacks,
+  CALLBACK_CONFIGS,
+  getCallbackById,
 } from "./callback_info_helpers";
+import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -75,36 +63,35 @@ interface AlertingObject {
   variables: AlertingVariables;
 }
 
-const Settings: React.FC<SettingsPageProps> = ({
-  accessToken,
-  userRole,
-  userID,
-  premiumUser,
-}) => {
+const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [form] = Form.useForm();
+  const [addForm] = Form.useForm();
+  const [editForm] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
   const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
-  const [alertToWebhooks, setAlertToWebhooks] = useState<
-    Record<string, string>
-  >({});
+  const [alertToWebhooks, setAlertToWebhooks] = useState<Record<string, string>>({});
   const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
 
   const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
   const [allCallbacks, setAllCallbacks] = useState<genericCallbackParams[]>([]);
 
-  const [selectedCallbackParams, setSelectedCallbackParams] = useState<
-    string[]
-  >([]);
+  const [selectedCallbackParams, setSelectedCallbackParams] = useState<string[]>([]);
 
   const [showEditCallback, setShowEditCallback] = useState(false);
-  const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(
-    null
-  );
+  const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(null);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [callbackToDelete, setCallbackToDelete] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (showEditCallback && selectedEditCallback) {
+      const normalized = Object.fromEntries(
+        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""]),
+      );
+      editForm.setFieldsValue(normalized);
+    }
+  }, [showEditCallback, selectedEditCallback, editForm]);
 
   const handleSwitchChange = (alertName: string) => {
     if (activeAlerts.includes(alertName)) {
@@ -155,7 +142,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   };
 
   const updateCallbackCall = async (formValues: Record<string, any>) => {
-    if (!accessToken) {
+    if (!accessToken || !selectedEditCallback) {
       return;
     }
 
@@ -167,17 +154,26 @@ const Settings: React.FC<SettingsPageProps> = ({
       }
     });
     let payload = {
-      environment_variables: env_vars,
+      environment_variables: formValues,
+      litellm_settings: {
+        success_callback: [selectedEditCallback.name],
+      },
     };
 
     try {
       await setCallbacksCall(accessToken, payload);
-      message.success(`Callback added successfully`);
-      setIsModalVisible(false);
-      form.resetFields();
-      setSelectedCallback(null);
+      NotificationsManager.success("Callback updated successfully");
+      setShowEditCallback(false);
+      editForm.resetFields();
+      setSelectedEditCallback(null);
+
+      // Refresh the callbacks list
+      if (userID && userRole) {
+        const updatedData = await getCallbacksCall(accessToken, userID, userRole);
+        setCallbacks(updatedData.callbacks);
+      }
     } catch (error) {
-      message.error("Failed to add callback: " + error, 20);
+      NotificationsManager.fromBackend(error);
     }
   };
 
@@ -196,7 +192,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     });
 
     let payload = {
-      environment_variables: env_vars,
+      environment_variables: formValues,
       litellm_settings: {
         success_callback: [new_callback],
       },
@@ -204,37 +200,43 @@ const Settings: React.FC<SettingsPageProps> = ({
 
     try {
       await setCallbacksCall(accessToken, payload);
-      message.success(`Callback ${new_callback} added successfully`);
-      setIsModalVisible(false);
-      form.resetFields();
+      NotificationsManager.success(`Callback ${new_callback} added successfully`);
+      setShowAddCallbacksModal(false);
+      addForm.resetFields();
       setSelectedCallback(null);
+      setSelectedCallbackParams([]);
+
+      // Refresh the callbacks list
+      const updatedData = await getCallbacksCall(accessToken, userID || "", userRole || "");
+      setCallbacks(updatedData.callbacks);
     } catch (error) {
-      message.error("Failed to add callback: " + error, 20);
+      NotificationsManager.fromBackend(error);
     }
   };
 
-  const handleSelectedCallbackChange = (
-    callbackObject: genericCallbackParams
-  ) => {
-    setSelectedCallback(callbackObject.litellm_callback_name);
-
-    if (callbackObject && callbackObject.litellm_callback_params) {
-      setSelectedCallbackParams(callbackObject.litellm_callback_params);
+  const handleSelectedCallbackChange = (callbackName: string) => {
+    setSelectedCallback(callbackName);
+    
+    // Get the callback configuration using the new clean structure
+    const callbackConfig = getCallbackById(callbackName);
+    
+    // Get the parameters from the callback configuration
+    if (callbackConfig?.dynamic_params) {
+      const params = Object.keys(callbackConfig.dynamic_params);
+      setSelectedCallbackParams(params);
     } else {
       setSelectedCallbackParams([]);
     }
   };
-
-  const handleSaveAlerts = () => {
+  
+  const handleSaveAlerts = async () => {
     if (!accessToken) {
       return;
     }
 
     const updatedAlertToWebhooks: Record<string, string> = {};
     Object.entries(alerts_to_UI_NAME).forEach(([key, value]) => {
-      const webhookInput = document.querySelector(
-        `input[name="${key}"]`
-      ) as HTMLInputElement;
+      const webhookInput = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
       const newWebhookValue = webhookInput?.value || "";
       updatedAlertToWebhooks[key] = newWebhookValue;
     });
@@ -247,12 +249,11 @@ const Settings: React.FC<SettingsPageProps> = ({
     };
 
     try {
-      setCallbacksCall(accessToken, payload);
+      await setCallbacksCall(accessToken, payload);
     } catch (error) {
-      message.error("Failed to update alerts: " + error, 20);
+      NotificationsManager.fromBackend(error);
     }
-
-    message.success("Alerts updated successfully");
+    NotificationsManager.success("Alerts updated successfully");
   };
   const handleSaveChanges = (callback: any) => {
     if (!accessToken) {
@@ -262,9 +263,8 @@ const Settings: React.FC<SettingsPageProps> = ({
     const updatedVariables = Object.fromEntries(
       Object.entries(callback.variables).map(([key, value]) => [
         key,
-        (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)
-          ?.value || value,
-      ])
+        (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value,
+      ]),
     );
 
     const payload = {
@@ -277,10 +277,9 @@ const Settings: React.FC<SettingsPageProps> = ({
     try {
       setCallbacksCall(accessToken, payload);
     } catch (error) {
-      message.error("Failed to update callback: " + error, 20);
+      NotificationsManager.fromBackend(error);
     }
-
-    message.success("Callback updated successfully");
+    NotificationsManager.success("Callback updated successfully");
   };
 
   const handleOk = () => {
@@ -288,10 +287,10 @@ const Settings: React.FC<SettingsPageProps> = ({
       return;
     }
     // Handle form submission
-    form.validateFields().then((values) => {
+    addForm.validateFields().then((values) => {
       // Call API to add the callback
       let payload;
-      if (values.callback === "langfuse") {
+      if (values.callback === "langfuse" || values.callback === "langfuse_otel") {
         payload = {
           environment_variables: {
             LANGFUSE_PUBLIC_KEY: values.langfusePublicKey,
@@ -365,7 +364,7 @@ const Settings: React.FC<SettingsPageProps> = ({
         };
       }
       setIsModalVisible(false);
-      form.resetFields();
+      addForm.resetFields();
       setSelectedCallback(null);
     });
   };
@@ -382,7 +381,7 @@ const Settings: React.FC<SettingsPageProps> = ({
 
     try {
       await deleteCallback(accessToken, callbackToDelete);
-      message.success(`Callback ${callbackToDelete} deleted successfully`);
+      NotificationsManager.success(`Callback ${callbackToDelete} deleted successfully`);
 
       // Refresh the callbacks list
       if (userID && userRole) {
@@ -394,7 +393,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       setCallbackToDelete(null);
     } catch (error) {
       console.error("Failed to delete callback:", error);
-      message.error(`Failed to delete callback: ${error}`);
+      NotificationsManager.fromBackend(error);
     }
   };
 
@@ -444,15 +443,18 @@ const Settings: React.FC<SettingsPageProps> = ({
                               <Icon
                                 icon={TrashIcon}
                                 size="sm"
-                                onClick={() =>
-                                  handleDeleteCallback(callback.name)
-                                }
+                                onClick={() => handleDeleteCallback(callback.name)}
                                 className="text-red-500 hover:text-red-700 cursor-pointer"
                               />
                               <Button
-                                onClick={() =>
-                                  serviceHealthCheck(accessToken, callback.name)
-                                }
+                                onClick={async () => {
+                                  try {
+                                    await serviceHealthCheck(accessToken, callback.name);
+                                    NotificationsManager.success("Health check triggered");
+                                  } catch (error) {
+                                    NotificationsManager.fromBackend(parseErrorMessage(error));
+                                  }
+                                }}
                                 className="ml-2"
                                 variant="secondary"
                               >
@@ -466,23 +468,15 @@ const Settings: React.FC<SettingsPageProps> = ({
                   </Table>
                 </Card>
               </Grid>
-              <Button
-                className="mt-2"
-                onClick={() => setShowAddCallbacksModal(true)}
-              >
+              <Button className="mt-2" onClick={() => setShowAddCallbacksModal(true)}>
                 Add Callback
               </Button>
             </TabPanel>
             <TabPanel>
               <Card>
                 <Text className="my-2">
-                  Alerts are only supported for Slack Webhook URLs. Get your
-                  webhook urls from{" "}
-                  <a
-                    href="https://api.slack.com/messaging/webhooks"
-                    target="_blank"
-                    style={{ color: "blue" }}
-                  >
+                  Alerts are only supported for Slack Webhook URLs. Get your webhook urls from{" "}
+                  <a href="https://api.slack.com/messaging/webhooks" target="_blank" style={{ color: "blue" }}>
                     here
                   </a>
                 </Text>
@@ -496,54 +490,49 @@ const Settings: React.FC<SettingsPageProps> = ({
                   </TableHead>
 
                   <TableBody>
-                    {Object.entries(alerts_to_UI_NAME).map(
-                      ([key, value], index) => (
-                        <TableRow key={index}>
-                          <TableCell>
-                            {key == "region_outage_alerts" ? (
-                              premiumUser ? (
-                                <Switch
-                                  id="switch"
-                                  name="switch"
-                                  checked={isAlertOn(key)}
-                                  onChange={() => handleSwitchChange(key)}
-                                />
-                              ) : (
-                                <Button className="flex items-center justify-center">
-                                  <a
-                                    href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                                    target="_blank"
-                                  >
-                                    ✨ Enterprise Feature
-                                  </a>
-                                </Button>
-                              )
-                            ) : (
+                    {Object.entries(alerts_to_UI_NAME).map(([key, value], index) => (
+                      <TableRow key={index}>
+                        <TableCell>
+                          {key == "region_outage_alerts" ? (
+                            premiumUser ? (
                               <Switch
                                 id="switch"
                                 name="switch"
                                 checked={isAlertOn(key)}
                                 onChange={() => handleSwitchChange(key)}
                               />
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Text>{value}</Text>
-                          </TableCell>
-                          <TableCell>
-                            <TextInput
-                              name={key}
-                              type="password"
-                              defaultValue={
-                                alertToWebhooks && alertToWebhooks[key]
-                                  ? alertToWebhooks[key]
-                                  : (catchAllWebhookURL as string)
-                              }
-                            ></TextInput>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    )}
+                            ) : (
+                              <Button className="flex items-center justify-center">
+                                <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                                  ✨ Enterprise Feature
+                                </a>
+                              </Button>
+                            )
+                          ) : (
+                            <Switch
+                              id="switch"
+                              name="switch"
+                              checked={isAlertOn(key)}
+                              onChange={() => handleSwitchChange(key)}
+                            />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Text>{value}</Text>
+                        </TableCell>
+                        <TableCell>
+                          <TextInput
+                            name={key}
+                            type="password"
+                            defaultValue={
+                              alertToWebhooks && alertToWebhooks[key]
+                                ? alertToWebhooks[key]
+                                : (catchAllWebhookURL as string)
+                            }
+                          ></TextInput>
+                        </TableCell>
+                      </TableRow>
+                    ))}
                   </TableBody>
                 </Table>
                 <Button size="xs" className="mt-2" onClick={handleSaveAlerts}>
@@ -551,7 +540,16 @@ const Settings: React.FC<SettingsPageProps> = ({
                 </Button>
 
                 <Button
-                  onClick={() => serviceHealthCheck(accessToken, "slack")}
+                  onClick={async () => {
+                    try {
+                      await serviceHealthCheck(accessToken, "slack");
+                      NotificationsManager.success(
+                        "Alert test triggered. Test request to slack made - check logs/alerts on slack to verify",
+                      );
+                    } catch (error) {
+                      NotificationsManager.fromBackend(parseErrorMessage(error));
+                    }
+                  }}
                   className="mx-2"
                 >
                   Test Alerts
@@ -559,17 +557,10 @@ const Settings: React.FC<SettingsPageProps> = ({
               </Card>
             </TabPanel>
             <TabPanel>
-              <AlertingSettings
-                accessToken={accessToken}
-                premiumUser={premiumUser}
-              />
+              <AlertingSettings accessToken={accessToken} premiumUser={premiumUser} />
             </TabPanel>
             <TabPanel>
-              <EmailSettings
-                accessToken={accessToken}
-                premiumUser={premiumUser}
-                alerts={alerts}
-              />
+              <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} />
             </TabPanel>
           </TabPanels>
         </TabGroup>
@@ -579,7 +570,11 @@ const Settings: React.FC<SettingsPageProps> = ({
         title="Add Logging Callback"
         visible={showAddCallbacksModal}
         width={800}
-        onCancel={() => setShowAddCallbacksModal(false)}
+        onCancel={() => {
+          setShowAddCallbacksModal(false);
+          setSelectedCallback(null);
+          setSelectedCallbackParams([]);
+        }}
         footer={null}
       >
         <a
@@ -593,80 +588,130 @@ const Settings: React.FC<SettingsPageProps> = ({
         </a>
 
         <Form
-          form={form}
+          form={addForm}
           onFinish={addNewCallbackCall}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <>
             <FormItem
               label="Callback"
               name="callback"
               rules={[{ required: true, message: "Please select a callback" }]}
             >
               <Select
+                placeholder="Choose a logging callback..."
+                size="large"
+                className="w-full"
+                showSearch
+                filterOption={(input, option) =>
+                  (option?.children?.toString() ?? "")
+                    .toLowerCase()
+                    .includes(input.toLowerCase())
+                }
                 onChange={(value) => {
-                  const selectedCallback = allCallbacks[value];
-                  if (selectedCallback) {
-                    handleSelectedCallbackChange(selectedCallback);
-                  }
+                  handleSelectedCallbackChange(value);
                 }}
               >
-                {Object.entries(Callbacks).map(
-                  ([callbackEnum, callbackDisplayName]) => (
-                    <SelectItem
-                      key={callbackDisplayName}
-                      value={callback_map[callbackEnum]}
-                    >
-                      <div className="flex items-center space-x-2">
-                        {callbackInfo[callbackDisplayName]?.logo ? (
-                          <div className="w-5 h-5 flex items-center justify-center">
-                            <img
-                              src={callbackInfo[callbackDisplayName].logo}
-                              alt={`${callbackEnum} logo`}
-                              className="w-5 h-5"
-                              onError={(e) => {
-                                e.currentTarget.style.display = 'none';
-                              }}
-                            />
-                          </div>
-                        ) : (
-                          <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
-                            {(callbackDisplayName as string)
-                              .charAt(0)
-                              .toUpperCase()}
-                          </div>
-                        )}
-                        <span>{callbackDisplayName}</span>
+                                {CALLBACK_CONFIGS.map((callbackConfig) => (
+                  <SelectItem
+                    key={callbackConfig.id}
+                    value={callbackConfig.id}
+                  >
+                    <div className="flex items-center space-x-3 py-1">
+                      <div className="w-6 h-6 flex items-center justify-center">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={callbackConfig.logo}
+                          alt={`${callbackConfig.displayName} logo`}
+                          className="w-6 h-6 rounded object-contain"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
                       </div>
-                    </SelectItem>
-                  )
-                )}
+                      <span className="font-medium text-gray-900">
+                        {callbackConfig.displayName}
+                      </span>
+                    </div>
+                  </SelectItem>
+                ))}
               </Select>
             </FormItem>
 
-            {selectedCallbackParams &&
-              selectedCallbackParams.map((param) => (
-                <FormItem
-                  label={param}
-                  name={param}
-                  key={param}
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter the value for " + param,
-                    },
-                  ]}
-                >
-                  <TextInput type="password" />
-                </FormItem>
-              ))}
+            {selectedCallbackParams && selectedCallbackParams.length > 0 && (
+              <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
+                {selectedCallbackParams.map((param) => {
+                  // Get the callback configuration to look up parameter types
+                  const callbackConfig = getCallbackById(selectedCallback || '');
+                  const paramType = callbackConfig?.dynamic_params[param] || "text";
+                  
+                  const fieldLabel = param.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+                  
+                  return (
+                    <FormItem
+                      label={
+                        <span className="text-sm font-medium text-gray-700">
+                          {fieldLabel}
+                          <span className="text-red-500 ml-1">*</span>
+                        </span>
+                      }
+                      name={param}
+                      key={param}
+                      className="mb-4"
+                      rules={[
+                        {
+                          required: true,
+                          message: `Please enter the ${fieldLabel.toLowerCase()}`,
+                        },
+                      ]}
+                    >
+                      {paramType === "password" ? (
+                        <Input.Password 
+                          size="large"
+                          placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                          className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                        />
+                      ) : paramType === "number" ? (
+                        <Input 
+                          type="number" 
+                          size="large"
+                          placeholder={`Enter ${fieldLabel.toLowerCase()}`}
+                          className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                          min={0}
+                          max={1}
+                          step={0.1}
+                        />
+                      ) : (
+                        <Input 
+                          size="large"
+                          placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                          className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                        />
+                      )}
+                    </FormItem>
+                  );
+                })}
+              </div>
+            )}
 
-            <div style={{ textAlign: "right", marginTop: "10px" }}>
-              <Button2 htmlType="submit">Save</Button2>
+            <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+              <Button
+                onClick={() => {
+                  setShowAddCallbacksModal(false);
+                  setSelectedCallback(null);
+                  setSelectedCallbackParams([]);
+                  addForm.resetFields();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button2
+                htmlType="submit"
+              >
+                Add Callback
+              </Button2>
             </div>
-          </>
         </Form>
       </Modal>
 
@@ -674,11 +719,14 @@ const Settings: React.FC<SettingsPageProps> = ({
         visible={showEditCallback}
         width={800}
         title={`Edit ${selectedEditCallback?.name} Settings`}
-        onCancel={() => setShowEditCallback(false)}
+        onCancel={() => {
+          setShowEditCallback(false);
+          setSelectedEditCallback(null);
+        }}
         footer={null}
       >
         <Form
-          form={form}
+          form={editForm}
           onFinish={updateCallbackCall}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
@@ -687,13 +735,21 @@ const Settings: React.FC<SettingsPageProps> = ({
           <>
             {selectedEditCallback &&
               selectedEditCallback.variables &&
-              Object.entries(selectedEditCallback.variables).map(
-                ([param, value]) => (
-                  <FormItem label={param} name={param} key={param}>
-                    <TextInput type="password" defaultValue={value as string} />
-                  </FormItem>
-                )
-              )}
+              Object.entries(selectedEditCallback.variables).map(([param]) => (
+                <FormItem
+                  label={param}
+                  name={param}
+                  key={param}
+                  rules={[
+                    {
+                      required: true,
+                      message: `Please enter the value for ${param}`,
+                    },
+                  ]}
+                >
+                  <Input.Password />
+                </FormItem>
+              ))}
           </>
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
@@ -714,10 +770,7 @@ const Settings: React.FC<SettingsPageProps> = ({
         cancelText="Cancel"
         okButtonProps={{ danger: true }}
       >
-        <p>
-          Are you sure you want to delete the callback - {callbackToDelete}?
-          This action cannot be undone.
-        </p>
+        <p>Are you sure you want to delete the callback - {callbackToDelete}? This action cannot be undone.</p>
       </Modal>
     </div>
   );

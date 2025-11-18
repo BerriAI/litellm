@@ -34,7 +34,7 @@ async def test_openai_moderation_error_raising():
     """
 
     openai_mod = _ENTERPRISE_OpenAI_Moderation()
-    litellm.openai_moderations_model_name = "text-moderation-latest"
+    litellm.openai_moderations_model_name = "omni-moderation-latest"
     _api_key = "sk-12345"
     _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -45,9 +45,9 @@ async def test_openai_moderation_error_raising():
     llm_router = litellm.Router(
         model_list=[
             {
-                "model_name": "text-moderation-latest",
+                "model_name": "omni-moderation-latest",
                 "litellm_params": {
-                    "model": "text-moderation-latest",
+                    "model": "omni-moderation-latest",
                     "api_key": os.environ["OPENAI_API_KEY"],
                 },
             }

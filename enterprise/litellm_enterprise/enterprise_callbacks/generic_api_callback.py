@@ -9,7 +9,7 @@ Callback to log events to a Generic API Endpoint
 import asyncio
 import os
 import traceback
-import uuid
+from litellm._uuid import uuid
 from typing import Dict, List, Optional, Union
 
 import litellm

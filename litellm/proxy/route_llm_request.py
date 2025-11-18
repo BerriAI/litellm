@@ -24,6 +24,14 @@ ROUTE_ENDPOINT_MAPPING = {
     "aresponses": "/responses",
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
+    "acancel_responses": "/responses/{response_id}/cancel",
+    "aocr": "/ocr",
+    "asearch": "/search",
+    "avideo_generation": "/videos",
+    "avideo_list": "/videos",
+    "avideo_status": "/videos/{video_id}",
+    "avideo_content": "/videos/{video_id}/content",
+    "avideo_remix": "/videos/{video_id}/remix",
 }
 
 
@@ -54,6 +62,23 @@ def get_team_id_from_data(data: dict) -> Optional[str]:
     return None
 
 
+def add_shared_session_to_data(data: dict) -> None:
+    """
+    Add shared aiohttp session for connection reuse (prevents cold starts).
+    Silently continues without session reuse if import fails or session is unavailable.
+    
+    Args:
+        data: Dictionary to add the shared session to
+    """
+    try:
+        from litellm.proxy.proxy_server import shared_aiohttp_session
+        if shared_aiohttp_session is not None and not shared_aiohttp_session.closed:
+            data["shared_session"] = shared_aiohttp_session
+    except Exception:
+        # Silently continue without session reuse if import fails or session unavailable
+        pass
+
+
 async def route_request(
     data: dict,
     llm_router: Optional[LitellmRouter],
@@ -70,6 +95,8 @@ async def route_request(
         "aresponses",
         "aget_responses",
         "adelete_responses",
+        "acancel_responses",
+        "acreate_response_reply",
         "alist_input_items",
         "_arealtime",  # private function for realtime API
         "aimage_edit",
@@ -78,13 +105,28 @@ async def route_request(
         "allm_passthrough_route",
         "avector_store_search",
         "avector_store_create",
+        "aocr",
+        "asearch",
+        "avideo_generation",
+        "avideo_list",
+        "avideo_status",
+        "avideo_content",
+        "avideo_remix",
     ],
 ):
     """
     Common helper to route the request
     """
+    add_shared_session_to_data(data)
+    
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
+
+    # Preprocess Google GenAI generate content requests
+    if route_type in ["agenerate_content", "agenerate_content_stream"]:
+        # Map generationConfig to config parameter for Google GenAI compatibility
+        if "generationConfig" in data and "config" not in data:
+            data["config"] = data.pop("generationConfig")
     if "api_key" in data or "api_base" in data:
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
@@ -121,26 +163,22 @@ async def route_request(
 
         elif (
             data["model"] in router_model_names
-            or data["model"] in llm_router.get_model_ids()
+            or llm_router.has_model_id(data["model"])
         ):
-
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif (
             llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):
-
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] in llm_router.deployment_names:
-
             return getattr(llm_router, f"{route_type}")(
                 **data, specific_deployment=True
             )
 
         elif data["model"] not in router_model_names:
-
             if llm_router.router_general_settings.pass_through_all_models:
                 return getattr(litellm, f"{route_type}")(**data)
             elif (
@@ -152,9 +190,11 @@ async def route_request(
                 "amoderation",
                 "aget_responses",
                 "adelete_responses",
+                "acancel_responses",
                 "alist_input_items",
                 "avector_store_create",
                 "avector_store_search",
+                "asearch"
             ]:
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)
@@ -162,7 +202,6 @@ async def route_request(
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)
     elif route_type == "allm_passthrough_route":
-
         return getattr(litellm, f"{route_type}")(**data)
 
     # if no route found then it's a bad request

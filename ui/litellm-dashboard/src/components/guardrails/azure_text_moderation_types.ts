@@ -34,18 +34,15 @@ export interface AzureTextModerationGuardrail {
 export const AZURE_TEXT_MODERATION_CATEGORIES = [
   {
     name: "Hate",
-    description:
-      "Content that attacks or uses discriminatory language based on protected characteristics",
+    description: "Content that attacks or uses discriminatory language based on protected characteristics",
   },
   {
     name: "Sexual",
-    description:
-      "Content that describes sexual activity or other sexual content",
+    description: "Content that describes sexual activity or other sexual content",
   },
   {
     name: "SelfHarm",
-    description:
-      "Content that promotes, encourages, or depicts acts of self-harm",
+    description: "Content that promotes, encourages, or depicts acts of self-harm",
   },
   {
     name: "Violence",

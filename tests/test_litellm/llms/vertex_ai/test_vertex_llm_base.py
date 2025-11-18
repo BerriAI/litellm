@@ -704,3 +704,177 @@ class TestVertexBase:
             vertex_base.get_api_base(api_base=api_base, vertex_location=vertex_location)
             == expected
         ), f"Expected {expected} with api_base {api_base} and vertex_location {vertex_location}"
+
+    @pytest.mark.parametrize(
+        "api_base, custom_llm_provider, gemini_api_key, endpoint, stream, auth_header, url, model, expected_auth_header, expected_url",
+        [
+            # Test case 1: Gemini with custom API base
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                False,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                "test-api-key",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+            ),
+            # Test case 2: Gemini with custom API base and streaming
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                True,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                "test-api-key",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
+            ),
+            # Test case 3: Non-Gemini provider with custom API base
+            (
+                "https://custom-vertex-api.com",
+                "vertex_ai",
+                None,
+                "generateContent",
+                False,
+                "Bearer token123",
+                "https://aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent",
+                "gemini-pro",
+                "Bearer token123",
+                "https://custom-vertex-api.com:generateContent"
+            ),
+            # Test case 4: No API base provided (should return original values)
+            (
+                None,
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                False,
+                "Bearer token123",
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                "Bearer token123",
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+            ),
+            # Test case 5: Gemini without API key (should raise ValueError)
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                None,
+                "generateContent",
+                False,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                None,  # This should raise an exception
+                None
+            ),
+        ],
+    )
+    def test_check_custom_proxy(
+        self, 
+        api_base, 
+        custom_llm_provider, 
+        gemini_api_key, 
+        endpoint, 
+        stream, 
+        auth_header, 
+        url, 
+        model, 
+        expected_auth_header, 
+        expected_url
+    ):
+        """Test the _check_custom_proxy method for handling custom API base URLs"""
+        vertex_base = VertexBase()
+        
+        if custom_llm_provider == "gemini" and api_base and gemini_api_key is None:
+            # Test case 5: Should raise ValueError for Gemini without API key
+            with pytest.raises(ValueError, match="Missing gemini_api_key"):
+                vertex_base._check_custom_proxy(
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    gemini_api_key=gemini_api_key,
+                    endpoint=endpoint,
+                    stream=stream,
+                    auth_header=auth_header,
+                    url=url,
+                    model=model,
+                )
+        else:
+            # Test cases 1-4: Should work correctly
+            result_auth_header, result_url = vertex_base._check_custom_proxy(
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                gemini_api_key=gemini_api_key,
+                endpoint=endpoint,
+                stream=stream,
+                auth_header=auth_header,
+                url=url,
+                model=model,
+            )
+            
+            assert result_auth_header == expected_auth_header, f"Expected auth_header {expected_auth_header}, got {result_auth_header}"
+            assert result_url == expected_url, f"Expected URL {expected_url}, got {result_url}"
+
+    def test_check_custom_proxy_gemini_url_construction(self):
+        """Test that Gemini URLs are constructed correctly with custom API base"""
+        vertex_base = VertexBase()
+        
+        # Test various Gemini models with custom API base
+        test_cases = [
+            ("gemini-2.5-flash-lite", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"),
+            ("gemini-2.5-pro", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
+            ("gemini-1.5-flash", "streamGenerateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent"),
+        ]
+        
+        for model, endpoint, expected_url in test_cases:
+            _, result_url = vertex_base._check_custom_proxy(
+                api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                custom_llm_provider="gemini",
+                gemini_api_key="test-api-key",
+                endpoint=endpoint,
+                stream=False,
+                auth_header=None,
+                url=f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{endpoint}",
+                model=model,
+            )
+            
+            assert result_url == expected_url, f"Expected {expected_url}, got {result_url} for model {model}"
+
+    def test_check_custom_proxy_streaming_parameter(self):
+        """Test that streaming parameter correctly adds ?alt=sse to URLs"""
+        vertex_base = VertexBase()
+        
+        # Test with streaming enabled
+        _, result_url_streaming = vertex_base._check_custom_proxy(
+            api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+            custom_llm_provider="gemini",
+            gemini_api_key="test-api-key",
+            endpoint="generateContent",
+            stream=True,
+            auth_header=None,
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            model="gemini-2.5-flash-lite",
+        )
+        
+        expected_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
+        assert result_url_streaming == expected_streaming_url, f"Expected {expected_streaming_url}, got {result_url_streaming}"
+        
+        # Test with streaming disabled
+        _, result_url_no_streaming = vertex_base._check_custom_proxy(
+            api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+            custom_llm_provider="gemini",
+            gemini_api_key="test-api-key",
+            endpoint="generateContent",
+            stream=False,
+            auth_header=None,
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            model="gemini-2.5-flash-lite",
+        )
+        
+        expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+        assert result_url_no_streaming == expected_no_streaming_url, f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"

@@ -168,6 +168,10 @@ class MlflowLogger(CustomLogger):
         for key in ["functions", "tools", "stream", "tool_choice", "user"]:
             if value := kwargs.get("optional_params", {}).pop(key, None):
                 inputs[key] = value
+
+        if prediction := kwargs.get("prediction"):
+            inputs["prediction"] = prediction
+
         return inputs
 
     def _extract_attributes(self, kwargs):
@@ -183,15 +187,17 @@ class MlflowLogger(CustomLogger):
             "call_type": kwargs.get("call_type"),
             "model": kwargs.get("model"),
         }
-        standard_obj: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+        standard_obj: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object"
+        )
         if standard_obj:
             attributes.update(
                 {
                     "api_base": standard_obj.get("api_base"),
                     "cache_hit": standard_obj.get("cache_hit"),
-                    "usage": {
-                        "completion_tokens": standard_obj.get("completion_tokens"),
-                        "prompt_tokens": standard_obj.get("prompt_tokens"),
+                    "mlflow.chat.tokenUsage": {
+                        "input_tokens": standard_obj.get("prompt_tokens"),
+                        "output_tokens": standard_obj.get("completion_tokens"),
                         "total_tokens": standard_obj.get("total_tokens"),
                     },
                     "raw_llm_response": standard_obj.get("response"),
@@ -232,7 +238,6 @@ class MlflowLogger(CustomLogger):
         """
         import mlflow
 
-
         call_type = kwargs.get("call_type", "completion")
         span_name = f"litellm-{call_type}"
         span_type = self._get_span_type(call_type)
@@ -257,11 +262,25 @@ class MlflowLogger(CustomLogger):
                 span_type=span_type,
                 inputs=inputs,
                 attributes=attributes,
-                tags=self._transform_tag_list_to_dict(attributes.get("request_tags", [])),
+                tags=self._transform_tag_list_to_dict(
+                    attributes.get("request_tags", [])
+                ),
                 start_time_ns=start_time_ns,
             )
+
     def _transform_tag_list_to_dict(self, tag_list: list) -> dict:
-        return {tag: "" for tag in tag_list}
+        """
+        Transform a list of colon-separated tags into a dictionary.
+        Tags without colons are stored with empty string as the value.
+        """
+        tags = {}
+        for tag in tag_list:
+            if ":" in tag:
+                k, v = tag.split(":", 1)
+                tags[k.strip()] = v.strip()
+            else:
+                tags[tag.strip()] = ""
+        return tags
 
     def _end_span_or_trace(self, span, outputs, end_time_ns, status):
         """End an MLflow span or a trace."""

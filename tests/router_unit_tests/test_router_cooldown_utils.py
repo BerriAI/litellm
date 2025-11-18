@@ -18,6 +18,7 @@ from litellm.router_utils.cooldown_handlers import (
     _should_run_cooldown_logic,
     _should_cooldown_deployment,
     cast_exception_status_to_int,
+    _is_cooldown_required,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -30,6 +31,7 @@ from litellm import Router
 from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
 
 load_dotenv()
+
 
 @pytest.mark.asyncio
 async def test_router_cooldown_event_callback_no_deployment():
@@ -397,3 +399,18 @@ def test_mixed_success_failure(mock_failures, mock_successes, router):
     assert (
         should_cooldown is False
     ), "Should not cooldown when failure rate is below threshold"
+
+
+def test_is_cooldown_required_empty_string_exception_status(testing_litellm_router):
+    """
+    Test that _is_cooldown_required returns False when exception_status is an empty string
+    """
+    result = _is_cooldown_required(
+        litellm_router_instance=testing_litellm_router,
+        model_id="test_deployment",
+        exception_status="",
+    )
+
+    assert (
+        result is False
+    ), "Should not require cooldown when exception_status is empty string"

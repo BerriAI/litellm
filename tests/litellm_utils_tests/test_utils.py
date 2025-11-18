@@ -339,10 +339,10 @@ def test_aget_valid_models():
 
     # list of openai supported llms on litellm
     expected_models = (
-        litellm.open_ai_chat_completion_models + litellm.open_ai_text_completion_models
+        litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
     )
 
-    assert valid_models == expected_models
+    assert set(valid_models) == set(expected_models)
 
     # reset replicate env key
     os.environ = old_environ
@@ -355,7 +355,7 @@ def test_aget_valid_models():
     valid_models = get_valid_models()
 
     print(valid_models)
-    assert valid_models == expected_models
+    assert set(valid_models) == set(expected_models)
 
     # reset replicate env key
     os.environ = old_environ
@@ -376,7 +376,7 @@ def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
     )
     print(valid_models)
     assert len(valid_models) > 0
-    assert provider_config.get_models() == valid_models
+    assert set(provider_config.get_models()) == set(valid_models)
 
 
 # test_get_valid_models()
@@ -406,6 +406,18 @@ def test_validate_environment_empty_model():
 
 def test_validate_environment_api_key():
     response_obj = validate_environment(model="gpt-3.5-turbo", api_key="sk-my-test-key")
+    assert (
+        response_obj["keys_in_environment"] is True
+    ), f"Missing keys={response_obj['missing_keys']}"
+
+
+def test_validate_environment_api_version():
+    response_obj = validate_environment(
+        model="azure/openai-deployment",
+        api_key="sk-my-test-key",
+        api_base="https://fake.openai.azure.com/",
+        api_version="2024-02-15",
+    )
     assert (
         response_obj["keys_in_environment"] is True
     ), f"Missing keys={response_obj['missing_keys']}"
@@ -508,7 +520,6 @@ def test_function_to_dict():
         ("gpt-3.5-turbo", True),
         ("azure/gpt-4-1106-preview", True),
         ("groq/gemma-7b-it", True),
-        ("anthropic.claude-instant-v1", False),
         ("gemini/gemini-1.5-flash", True),
     ],
 )
@@ -1049,7 +1060,7 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
         ("gemini/gemini-1.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
         ("gpt-3.5-turbo", False),
-        ("groq/llama3-70b-8192", True),
+        ("groq/llama-3.3-70b-versatile", True),
     ],
 )
 def test_supports_response_schema(model, expected_bool):
@@ -1171,10 +1182,8 @@ def test_async_http_handler(mock_async_client):
         assert call_args["transport"] == mock_transport
         assert call_args["event_hooks"] == event_hooks
         assert call_args["headers"] == headers
-        assert isinstance(call_args["limits"], httpx.Limits)
-        assert call_args["limits"].max_connections == concurrent_limit
-        assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
+        assert call_args["follow_redirects"] is True
 
 
 @mock.patch("httpx.AsyncClient")
@@ -1213,12 +1222,10 @@ def test_async_http_handler_force_ipv4(mock_async_client):
         # Assert other parameters match
         assert call_args["event_hooks"] == event_hooks
         assert call_args["headers"] == headers
-        assert isinstance(call_args["limits"], httpx.Limits)
-        assert call_args["limits"].max_connections == concurrent_limit
-        assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
         assert isinstance(call_args["verify"], ssl.SSLContext)
         assert call_args["cert"] is None
+        assert call_args["follow_redirects"] is True
 
     finally:
         # Reset force_ipv4 to default
@@ -1364,6 +1371,9 @@ def test_models_by_provider():
             or v["litellm_provider"] == "bedrock_converse"
         ):
             continue
+        elif v.get("mode") == "search":
+            # Skip search providers as they don't have traditional models
+            continue
         else:
             providers.add(v["litellm_provider"])
 
@@ -1413,6 +1423,44 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         )
         == expected_end_user_id
     )
+
+
+@pytest.mark.parametrize(
+    "litellm_params, expected_end_user_id",
+    [
+        # Test with only metadata field (old behavior)
+        ({"metadata": {"user_api_key_end_user_id": "user_from_metadata"}}, "user_from_metadata"),
+        # Test with only litellm_metadata field (new behavior)
+        ({"litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, "user_from_litellm_metadata"),
+        # Test with both fields - metadata should take precedence for user_api_key fields
+        ({"metadata": {"user_api_key_end_user_id": "user_from_metadata"}, 
+          "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, 
+         "user_from_metadata"),
+        # Test with user_api_key_end_user_id in litellm_params (should take precedence over metadata)
+        ({"user_api_key_end_user_id": "user_from_params", 
+          "metadata": {"user_api_key_end_user_id": "user_from_metadata"}}, 
+         "user_from_params"),
+        # Test with empty metadata but valid litellm_metadata
+        ({"metadata": {}, "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, 
+         "user_from_litellm_metadata"),
+        # Test with no metadata fields
+        ({}, None),
+    ],
+)
+def test_get_end_user_id_for_cost_tracking_metadata_handling(
+    litellm_params, expected_end_user_id
+):
+    """
+    Test that get_end_user_id_for_cost_tracking correctly handles both metadata and litellm_metadata
+    fields using the get_litellm_metadata_from_kwargs helper function.
+    """
+    from litellm.utils import get_end_user_id_for_cost_tracking
+    
+    # Ensure cost tracking is enabled for this test
+    litellm.disable_end_user_cost_tracking = False
+    
+    result = get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
+    assert result == expected_end_user_id
 
 
 def test_is_prompt_caching_enabled_error_handling():
@@ -1683,15 +1731,6 @@ def test_pick_cheapest_chat_model_from_llm_provider():
     assert len(pick_cheapest_chat_models_from_llm_provider("openai", n=3)) == 3
 
     assert len(pick_cheapest_chat_models_from_llm_provider("unknown", n=1)) == 0
-
-
-def test_get_potential_model_names():
-    from litellm.utils import _get_potential_model_names
-
-    assert _get_potential_model_names(
-        model="bedrock/ap-northeast-1/anthropic.claude-instant-v1",
-        custom_llm_provider="bedrock",
-    )
 
 
 @pytest.mark.parametrize("num_retries", [0, 1, 5])
@@ -2315,7 +2354,7 @@ def test_get_whitelisted_models():
     """
     whitelisted_models = []
     for model, info in litellm.model_cost.items():
-        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat":
+        if info.get("litellm_provider") == "bedrock" and info.get("mode") == "chat":
             whitelisted_models.append(model)
 
         # Write to a local file
@@ -2324,3 +2363,62 @@ def test_get_whitelisted_models():
             file.write(f"{model}\n")
 
     print("whitelisted_models written to whitelisted_bedrock_models.txt")
+
+
+def test_delta_tool_calls_sequential_indices():
+    """
+    Test that multiple tool calls without explicit indices receive sequential indices.
+
+    When providers don't include index fields in tool calls, the Delta class
+    should automatically assign sequential indices (0, 1, 2, ...) instead of
+    defaulting all tool calls to index=0.
+    """
+    import json
+    from litellm.types.utils import Delta
+
+    # Simulate tool calls from streaming responses without explicit indices
+    tool_calls_without_indices = [
+        {
+            "id": "call_1",
+            "function": {
+                "name": "get_weather_for_dallas",
+                "arguments": json.dumps({})
+            },
+            "type": "function",
+            # Note: no "index" field - simulates provider response
+        },
+        {
+            "id": "call_2",
+            "function": {
+                "name": "get_weather_precise",
+                "arguments": json.dumps({"location": "Dallas, TX"})
+            },
+            "type": "function",
+            # Note: no "index" field - simulates provider response
+        }
+    ]
+
+    # Create Delta object as LiteLLM would when processing streaming response
+    delta = Delta(
+        content=None,
+        tool_calls=tool_calls_without_indices
+    )
+
+    # Verify tool calls have sequential indices
+    assert delta.tool_calls is not None, "Tool calls should not be None"
+    assert len(delta.tool_calls) == 2
+    assert delta.tool_calls[0].index == 0, f"First tool call should have index 0, got {delta.tool_calls[0].index}"
+    assert delta.tool_calls[1].index == 1, f"Second tool call should have index 1, got {delta.tool_calls[1].index}"
+
+    # Verify tool call details are preserved
+    assert delta.tool_calls[0].function.name == "get_weather_for_dallas"
+    assert delta.tool_calls[1].function.name == "get_weather_precise"
+
+def test_completion_with_no_model():
+    """
+    Ensure error is raised when no model is provided
+    """
+    # test on empty
+    with pytest.raises(TypeError):
+        response = litellm.completion(messages=[{"role": "user", "content": "Hello, how are you?"}])
+        

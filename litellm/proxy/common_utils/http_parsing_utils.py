@@ -1,11 +1,15 @@
 import json
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Collection, Dict, List, Optional
 
 import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException
+from litellm.proxy.common_utils.callback_utils import (
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.types.router import Deployment
 
 
@@ -51,8 +55,6 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                     body_str = body.decode("utf-8") if isinstance(body, bytes) else body
 
                     # Replace invalid surrogate pairs
-                    import re
-
                     # This regex finds incomplete surrogate pairs
                     body_str = re.sub(
                         r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str
@@ -147,7 +149,7 @@ def _safe_get_request_headers(request: Optional[Request]) -> dict:
 def check_file_size_under_limit(
     request_data: dict,
     file: UploadFile,
-    router_model_names: List[str],
+    router_model_names: Collection[str],
 ) -> bool:
     """
     Check if any files passed in request are under max_file_size_mb
@@ -234,14 +236,44 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
     """
     Read the request body and parse it as JSON.
     """
-    if request.headers.get("content-type") == "application/json":
-        return await _read_request_body(request)
-    elif (
-        request.headers.get("content-type") == "multipart/form-data"
-        or request.headers.get("content-type") == "application/x-www-form-urlencoded"
-    ):
-        return await get_form_data(request)
-    else:
-        raise ValueError(
-            f"Unsupported content type: {request.headers.get('content-type')}"
-        )
+    if request.method == "POST":
+        if request.headers.get("content-type", "") == "application/json":
+            return await _read_request_body(request)
+        elif (
+            "multipart/form-data" in request.headers.get("content-type", "")
+            or "application/x-www-form-urlencoded" in request.headers.get("content-type", "")
+        ):
+            return await get_form_data(request)
+        else:
+            raise ValueError(
+                f"Unsupported content type: {request.headers.get('content-type')}"
+            )
+    return {}
+
+
+def get_tags_from_request_body(request_body: dict) -> List[str]:
+    """
+    Extract tags from request body metadata.
+    
+    Args:
+        request_body: The request body dictionary
+        
+    Returns:
+        List of tag names (strings), empty list if no valid tags found
+    """
+    metadata_variable_name = get_metadata_variable_name_from_kwargs(request_body)
+    metadata = request_body.get(metadata_variable_name, {})
+    tags_in_metadata: Any = metadata.get("tags", [])
+    tags_in_request_body: Any = request_body.get("tags", [])
+    combined_tags: List[str] = []
+
+    ######################################
+    # Only combine tags if they are lists
+    ######################################
+    if isinstance(tags_in_metadata, list):
+        combined_tags.extend(tags_in_metadata)
+    if isinstance(tags_in_request_body, list):
+        combined_tags.extend(tags_in_request_body)
+    ######################################
+    return [tag for tag in combined_tags if isinstance(tag, str)]
+

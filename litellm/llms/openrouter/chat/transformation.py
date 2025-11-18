@@ -6,7 +6,8 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
+from enum import Enum
+from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -18,6 +19,12 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
+
+
+class CacheControlSupportedModels(str, Enum):
+    """Models that support cache_control in content blocks."""
+    CLAUDE = "claude"
+    GEMINI = "gemini"
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
@@ -48,18 +55,75 @@ class OpenrouterConfig(OpenAIGPTConfig):
         )
         return mapped_openai_params
 
+    def _supports_cache_control_in_content(self, model: str) -> bool:
+        """
+        Check if the model supports cache_control in content blocks.
+        
+        Returns:
+            bool: True if model supports cache_control (Claude or Gemini models)
+        """
+        model_lower = model.lower()
+        return any(
+            supported_model.value in model_lower
+            for supported_model in CacheControlSupportedModels
+        )
+
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
         messages: List[AllMessageValues],
         tools: Optional[List["ChatCompletionToolParam"]] = None,
     ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
-        if "claude" in model.lower():  # don't remove 'cache_control' flag
+        if self._supports_cache_control_in_content(model):
             return messages, tools
         else:
             return super().remove_cache_control_flag_from_messages_and_tools(
                 model, messages, tools
             )
+
+    def _move_cache_control_to_content(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        Move cache_control from message level to content blocks.
+        OpenRouter requires cache_control to be inside content blocks, not at message level.
+        
+        To avoid exceeding Anthropic's limit of 4 cache breakpoints, cache_control is only
+        added to the LAST content block in each message.
+        """
+        transformed_messages: List[AllMessageValues] = []
+        for message in messages:
+            message_dict = dict(message)
+            cache_control = message_dict.pop("cache_control", None)
+            
+            if cache_control is not None:
+                content = message_dict.get("content")
+                
+                if isinstance(content, list):
+                    # Content is already a list, add cache_control only to the last block
+                    if len(content) > 0:
+                        content_copy = []
+                        for i, block in enumerate(content):
+                            block_dict = dict(block)
+                            # Only add cache_control to the last content block
+                            if i == len(content) - 1:
+                                block_dict["cache_control"] = cache_control
+                            content_copy.append(block_dict)
+                        message_dict["content"] = content_copy
+                else:
+                    # Content is a string, convert to structured format
+                    message_dict["content"] = [
+                        {
+                            "type": "text",
+                            "text": content,
+                            "cache_control": cache_control,
+                        }
+                    ]
+            
+            # Cast back to AllMessageValues after modification
+            transformed_messages.append(cast(AllMessageValues, message_dict))
+        
+        return transformed_messages
 
     def transform_request(
         self,
@@ -75,12 +139,77 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
+        if self._supports_cache_control_in_content(model):
+            messages = self._move_cache_control_to_content(messages)
+        
         extra_body = optional_params.pop("extra_body", {})
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
         response.update(extra_body)
+
+        # ALWAYS add usage parameter to get cost data from OpenRouter
+        # This ensures cost tracking works for all OpenRouter models
+        if "usage" not in response:
+            response["usage"] = {"include": True}
+
         return response
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: Any,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        """
+        Transform the response from OpenRouter API.
+
+        Extracts cost information from response headers if available.
+
+        Returns:
+            ModelResponse: The transformed response with cost information.
+        """
+        # Call parent transform_response to get the standard ModelResponse
+        model_response = super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
+        # Extract cost from OpenRouter response body
+        # OpenRouter returns cost information in the usage object when usage.include=true
+        try:
+            response_json = raw_response.json()
+            if "usage" in response_json and response_json["usage"]:
+                response_cost = response_json["usage"].get("cost")
+                if response_cost is not None:
+                    # Store cost in hidden params for the cost calculator to use
+                    if not hasattr(model_response, "_hidden_params"):
+                        model_response._hidden_params = {}
+                    if "additional_headers" not in model_response._hidden_params:
+                        model_response._hidden_params["additional_headers"] = {}
+                    model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(response_cost)
+        except Exception:
+            # If we can't extract cost, continue without it - don't fail the response
+            pass
+
+        return model_response
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

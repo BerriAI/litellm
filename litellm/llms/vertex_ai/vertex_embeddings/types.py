@@ -3,7 +3,9 @@ Types for Vertex Embeddings Requests
 """
 
 from enum import Enum
-from typing import List, Optional, TypedDict, Union
+from typing import List, Optional, Union
+
+from typing_extensions import TypedDict
 
 
 class TaskType(str, Enum):

@@ -6,6 +6,14 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 
+SEARCH_PROVIDERS = [
+    "tavily",
+    "dataforseo",
+    "google_pse",
+    "parallel_ai",
+    "exa_ai",
+]
+
 ALLOWED_FILES_IN_LLMS_FOLDER = [
     "__init__",
     "base",
@@ -13,7 +21,7 @@ ALLOWED_FILES_IN_LLMS_FOLDER = [
     "custom_httpx",
     "custom_llm",
     "deprecated_providers",
-]
+] + SEARCH_PROVIDERS
 
 
 def get_unique_names_from_llms_dir(base_dir: str):

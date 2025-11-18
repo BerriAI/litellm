@@ -113,10 +113,10 @@ class VertexAILlama3Config(OpenAIGPTConfig):
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
-        model_response.model = completion_response["model"]
-        model_response.id = completion_response["id"]
-        model_response.created = completion_response["created"]
-        setattr(model_response, "usage", Usage(**completion_response["usage"]))
+        model_response.model = completion_response.get("model", model)
+        model_response.id = completion_response.get("id", "")
+        model_response.created = completion_response.get("created", 0)
+        setattr(model_response, "usage", Usage(**completion_response.get("usage", {})))
 
         model_response.choices = self._transform_choices(  # type: ignore
             choices=completion_response["choices"],

@@ -106,7 +106,7 @@ class HashicorpSecretManager(BaseSecretManager):
             resp.raise_for_status()
             token = resp.json()["auth"]["client_token"]
             _lease_duration = resp.json()["auth"]["lease_duration"]
-            verbose_logger.info("Successfully obtained Vault token via TLS cert auth.")
+            verbose_logger.debug("Successfully obtained Vault token via TLS cert auth.")
             self.cache.set_cache(
                 key="hcp_vault_token", value=token, ttl=_lease_duration
             )

@@ -172,3 +172,71 @@ class TestSlackAlerting(unittest.TestCase):
 
         self.slack_alerting.update_values(alerting_args={"slack_alerting": "True"})
         assert self.slack_alerting.periodic_started == True
+        
+    @patch("litellm.integrations.SlackAlerting.slack_alerting.datetime")
+    def test_alert_type_in_formatted_message(self, mock_datetime):
+        # Setup mocks
+        mock_datetime.now.return_value.strftime.return_value = "12:34:56"
+        
+        # Import required types
+        from litellm.types.integrations.slack_alerting import AlertType
+        
+        # Create a simple test message to check formatting
+        alert_type = AlertType.llm_exceptions
+        level = "Medium"
+        message = "Test alert message"
+        current_time = "12:34:56"
+        
+        # Test the specific formatting logic we're interested in
+        alert_type_formatted = f"Alert type: `{alert_type.name}`\n"
+        formatted_message = f"{alert_type_formatted}\n Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+        
+        # Verify alert_type is in the formatted message as expected
+        self.assertIn("Alert type: `llm_exceptions`", formatted_message)
+        self.assertIn("Level: `Medium`", formatted_message)
+        self.assertIn("Timestamp: `12:34:56`", formatted_message)
+        self.assertIn("Message: Test alert message", formatted_message)
+
+    def test_original_redis_error_reproduction(self):
+        """Test that reproduces the original Redis serialization error."""
+        # This test verifies that the original error would occur without our fix
+        outage_value = {
+            "alerts": [408],
+            "deployment_ids": {"zapier-multi-provider-gemini-2.5-flash-1ite-vertex"},
+            "last_updated_at": 1760601633.6620142,
+            "major_alert_sent": False,
+            "minor_alert_sent": False,
+            "provider_region_id": "vertex_aius-east1"
+        }
+        
+        # This should raise a TypeError due to set not being JSON serializable
+        with self.assertRaises(TypeError) as context:
+            json.dumps(outage_value)
+        
+        # Verify the specific error message
+        self.assertIn("Object of type set is not JSON serializable", str(context.exception))
+
+    def test_fixed_redis_serialization(self):
+        """Test that our fix resolves the Redis serialization error."""
+        # Same data that caused the original error
+        outage_value = {
+            "alerts": [408],
+            "deployment_ids": {"zapier-multi-provider-gemini-2.5-flash-1ite-vertex"},
+            "last_updated_at": 1760601633.6620142,
+            "major_alert_sent": False,
+            "minor_alert_sent": False,
+            "provider_region_id": "vertex_aius-east1"
+        }
+        
+        # Apply our fix
+        cache_value = self.slack_alerting._prepare_outage_value_for_cache(outage_value)
+        
+        # This should now work without errors
+        json_str = json.dumps(cache_value)
+        self.assertIsInstance(json_str, str)
+        
+        # Verify the data is correct
+        parsed_data = json.loads(json_str)
+        self.assertEqual(parsed_data["deployment_ids"], ["zapier-multi-provider-gemini-2.5-flash-1ite-vertex"])
+        self.assertEqual(parsed_data["alerts"], [408])
+        self.assertEqual(parsed_data["provider_region_id"], "vertex_aius-east1")

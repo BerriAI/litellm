@@ -3,7 +3,7 @@ Functions to create audit logs for LiteLLM Proxy
 """
 
 import json
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 
 import litellm

@@ -154,6 +154,30 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         return _message
 
 
+class ImageFetchError(BadRequestError):
+    def __init__(
+        self,
+        message,
+        model=None,
+        llm_provider=None,
+        response: Optional[httpx.Response] = None,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
+        body: Optional[dict] = None,
+    ):
+        super().__init__(
+            message=message,
+            model=model,
+            llm_provider=llm_provider,
+            response=response,
+            litellm_debug_info=litellm_debug_info,
+            max_retries=max_retries,
+            num_retries=num_retries,
+            body=body,
+        )
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
     def __init__(
         self,
@@ -888,6 +912,20 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         if self.original_exception:
             _message += f" Original exception: {type(self.original_exception).__name__}: {str(self.original_exception)}"
         return _message
+
+    def __repr__(self):
+        return self.__str__()
+
+
+class GuardrailInterventionNormalStringError(
+    Exception
+):  # custom exception to raise when a guardrail intervenes, but we want to return a normal string to the user
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
+
+    def __str__(self):
+        return self.message
 
     def __repr__(self):
         return self.__str__()

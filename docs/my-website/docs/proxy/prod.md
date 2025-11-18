@@ -62,13 +62,23 @@ These specifications provide:
 - Adequate memory for request processing and caching
 
 
-## 3. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
+## 3. On Kubernetes — Match Uvicorn Workers to CPU Count [Suggested CMD]
 
-Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
+Use this Docker `CMD`. It automatically matches Uvicorn workers to the pod’s CPU count, ensuring each worker uses one core efficiently for better throughput and stable latency.
 
-(Ensure that you're not setting `run_gunicorn` or `num_workers` in the CMD). 
 ```shell
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)"]
+```
+
+> **Optional:** If you observe gradual memory growth under sustained load, consider recycling workers after a fixed number of requests to mitigate leaks.
+> You can configure this either via CLI or environment variable:
+
+```shell
+# CLI
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)", "--max_requests_before_restart", "10000"]
+
+# or ENV (for deployment manifests / containers)
+export MAX_REQUESTS_BEFORE_RESTART=10000
 ```
 
 
@@ -90,7 +100,7 @@ Recommended to do this for prod:
 
 ```yaml
 router_settings:
-  routing_strategy: usage-based-routing-v2 
+  routing_strategy: simple-shuffle # (default) - recommended for best performance
   # redis_url: "os.environ/REDIS_URL"
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
@@ -104,6 +114,9 @@ litellm_settings:
     port: os.environ/REDIS_PORT
     password: os.environ/REDIS_PASSWORD
 ```
+
+> **WARNING**
+**Usage-based routing is not recommended for production due to performance impacts.** Use `simple-shuffle` (default) for optimal performance in high-traffic scenarios.
 
 ## 5. Disable 'load_dotenv'
 
@@ -199,7 +212,7 @@ USE_PRISMA_MIGRATE="True"
 <TabItem value="cli" label="CLI">
 
 ```bash
-litellm --use_prisma_migrate
+litellm
 ```
 
 </TabItem>

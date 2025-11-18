@@ -1,6 +1,6 @@
-import React, { useState } from "react"
-import { Card, Text, Button, Grid, Col, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react"
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline"
+import React, { useState } from "react";
+import { Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
   userInfoCall,
   userDeleteCall,
@@ -8,40 +8,43 @@ import {
   modelAvailableCall,
   invitationCreateCall,
   getProxyBaseUrl,
-} from "../networking"
-import { message, Button as AntdButton } from "antd"
-import { rolesWithWriteAccess } from "../../utils/roles"
-import { UserEditView } from "../user_edit_view"
-import OnboardingModal, { InvitationLink } from "../onboarding_link"
-import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
+} from "../networking";
+import { Button as AntdButton } from "antd";
+import { rolesWithWriteAccess } from "../../utils/roles";
+import { UserEditView } from "../user_edit_view";
+import OnboardingModal, { InvitationLink } from "../onboarding_link";
+import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CopyIcon, CheckIcon } from "lucide-react";
+import NotificationsManager from "../molecules/notifications_manager";
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 
 interface UserInfoViewProps {
-  userId: string
-  onClose: () => void
-  accessToken: string | null
-  userRole: string | null
-  onDelete?: () => void
-  possibleUIRoles: Record<string, Record<string, string>> | null
-  initialTab?: number // 0 for Overview, 1 for Details
-  startInEditMode?: boolean
+  userId: string;
+  onClose: () => void;
+  accessToken: string | null;
+  userRole: string | null;
+  onDelete?: () => void;
+  possibleUIRoles: Record<string, Record<string, string>> | null;
+  initialTab?: number; // 0 for Overview, 1 for Details
+  startInEditMode?: boolean;
 }
 
 interface UserInfo {
-  user_id: string
+  user_id: string;
   user_info: {
-    user_email: string | null
-    user_role: string | null
-    teams: any[] | null
-    models: string[] | null
-    max_budget: number | null
-    spend: number | null
-    metadata: Record<string, any> | null
-    created_at: string | null
-    updated_at: string | null
-  }
-  keys: any[] | null
-  teams: any[] | null
+    user_email: string | null;
+    user_role: string | null;
+    teams: any[] | null;
+    models: string[] | null;
+    max_budget: number | null;
+    budget_duration: string | null;
+    spend: number | null;
+    metadata: Record<string, any> | null;
+    created_at: string | null;
+    updated_at: string | null;
+  };
+  keys: any[] | null;
+  teams: any[] | null;
 }
 
 export default function UserInfoView({
@@ -64,69 +67,70 @@ export default function UserInfoView({
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(initialTab);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [isTeamsExpanded, setIsTeamsExpanded] = useState(false);
 
   React.useEffect(() => {
-    setBaseUrl(getProxyBaseUrl())
-  }, [])
+    setBaseUrl(getProxyBaseUrl());
+  }, []);
 
   React.useEffect(() => {
-    console.log(`userId: ${userId}, userRole: ${userRole}, accessToken: ${accessToken}`)
+    console.log(`userId: ${userId}, userRole: ${userRole}, accessToken: ${accessToken}`);
     const fetchData = async () => {
       try {
-        if (!accessToken) return
-        const data = await userInfoCall(accessToken, userId, userRole || "", false, null, null, true)
-        setUserData(data)
+        if (!accessToken) return;
+        const data = await userInfoCall(accessToken, userId, userRole || "", false, null, null, true);
+        setUserData(data);
 
         // Fetch available models
-        const modelDataResponse = await modelAvailableCall(accessToken, userId, userRole || "")
-        const availableModels = modelDataResponse.data.map((model: any) => model.id)
-        setUserModels(availableModels)
+        const modelDataResponse = await modelAvailableCall(accessToken, userId, userRole || "");
+        const availableModels = modelDataResponse.data.map((model: any) => model.id);
+        setUserModels(availableModels);
       } catch (error) {
-        console.error("Error fetching user data:", error)
-        message.error("Failed to fetch user data")
+        console.error("Error fetching user data:", error);
+        NotificationsManager.fromBackend("Failed to fetch user data");
       } finally {
-        setIsLoading(false)
+        setIsLoading(false);
       }
-    }
+    };
 
-    fetchData()
-  }, [accessToken, userId, userRole])
+    fetchData();
+  }, [accessToken, userId, userRole]);
 
   const handleResetPassword = async () => {
     if (!accessToken) {
-      message.error("Access token not found")
-      return
+      NotificationsManager.fromBackend("Access token not found");
+      return;
     }
     try {
-      message.success("Generating password reset link...")
-      const data = await invitationCreateCall(accessToken, userId)
-      setInvitationLinkData(data)
-      setIsInvitationLinkModalVisible(true)
+      NotificationsManager.success("Generating password reset link...");
+      const data = await invitationCreateCall(accessToken, userId);
+      setInvitationLinkData(data);
+      setIsInvitationLinkModalVisible(true);
     } catch (error) {
-      message.error("Failed to generate password reset link")
+      NotificationsManager.fromBackend("Failed to generate password reset link");
     }
-  }
+  };
 
   const handleDelete = async () => {
     try {
-      if (!accessToken) return
-      await userDeleteCall(accessToken, [userId])
-      message.success("User deleted successfully")
+      if (!accessToken) return;
+      await userDeleteCall(accessToken, [userId]);
+      NotificationsManager.success("User deleted successfully");
       if (onDelete) {
-        onDelete()
+        onDelete();
       }
-      onClose()
+      onClose();
     } catch (error) {
-      console.error("Error deleting user:", error)
-      message.error("Failed to delete user")
+      console.error("Error deleting user:", error);
+      NotificationsManager.fromBackend("Failed to delete user");
     }
-  }
+  };
 
   const handleUserUpdate = async (formValues: Record<string, any>) => {
     try {
-      if (!accessToken || !userData) return
+      if (!accessToken || !userData) return;
 
-      const response = await userUpdateUserCall(accessToken, formValues, null)
+      const response = await userUpdateUserCall(accessToken, formValues, null);
 
       // Update local state with new values
       setUserData({
@@ -136,17 +140,18 @@ export default function UserInfoView({
           user_email: formValues.user_email,
           models: formValues.models,
           max_budget: formValues.max_budget,
+          budget_duration: formValues.budget_duration,
           metadata: formValues.metadata,
         },
-      })
+      });
 
-      message.success("User updated successfully")
-      setIsEditing(false)
+      NotificationsManager.success("User updated successfully");
+      setIsEditing(false);
     } catch (error) {
-      console.error("Error updating user:", error)
-      message.error("Failed to update user")
+      console.error("Error updating user:", error);
+      NotificationsManager.fromBackend("Failed to update user");
     }
-  }
+  };
 
   if (isLoading) {
     return (
@@ -156,7 +161,7 @@ export default function UserInfoView({
         </Button>
         <Text>Loading user data...</Text>
       </div>
-    )
+    );
   }
 
   if (!userData) {
@@ -167,7 +172,7 @@ export default function UserInfoView({
         </Button>
         <Text>User not found</Text>
       </div>
-    )
+    );
   }
 
   const copyToClipboard = async (text: string, key: string) => {
@@ -196,9 +201,9 @@ export default function UserInfoView({
               icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(userData.user_id, "user-id")}
               className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["user-id"] 
-                  ? 'text-green-600 bg-green-50 border-green-200' 
-                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                copiedStates["user-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
               }`}
             />
           </div>
@@ -280,7 +285,35 @@ export default function UserInfoView({
               <Card>
                 <Text>Teams</Text>
                 <div className="mt-2">
-                  <Text>{userData.teams?.length || 0} teams</Text>
+                  {userData.teams?.length && userData.teams?.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {userData.teams?.slice(0, isTeamsExpanded ? userData.teams.length : 20).map((team, index) => (
+                        <Badge key={index} color="blue" title={team.team_alias}>
+                          {team.team_alias}
+                        </Badge>
+                      ))}
+                      {!isTeamsExpanded && userData.teams?.length > 20 && (
+                        <Badge
+                          color="gray"
+                          className="cursor-pointer hover:bg-gray-200 transition-colors"
+                          onClick={() => setIsTeamsExpanded(true)}
+                        >
+                          +{userData.teams.length - 20} more
+                        </Badge>
+                      )}
+                      {isTeamsExpanded && userData.teams?.length > 20 && (
+                        <Badge
+                          color="gray"
+                          className="cursor-pointer hover:bg-gray-200 transition-colors"
+                          onClick={() => setIsTeamsExpanded(false)}
+                        >
+                          Show Less
+                        </Badge>
+                      )}
+                    </div>
+                  ) : (
+                    <Text>No teams</Text>
+                  )}
                 </div>
               </Card>
 
@@ -340,9 +373,9 @@ export default function UserInfoView({
                         icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
                         onClick={() => copyToClipboard(userData.user_id, "user-id")}
                         className={`left-2 z-10 transition-all duration-200 ${
-                          copiedStates["user-id"] 
-                            ? 'text-green-600 bg-green-50 border-green-200' 
-                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          copiedStates["user-id"]
+                            ? "text-green-600 bg-green-50 border-green-200"
+                            : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                         }`}
                       />
                     </div>
@@ -354,7 +387,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Role</Text>
+                    <Text className="font-medium">Global Proxy Role</Text>
                     <Text>{userData.user_info?.user_role || "Not Set"}</Text>
                   </div>
 
@@ -380,11 +413,33 @@ export default function UserInfoView({
                     <Text className="font-medium">Teams</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.teams?.length && userData.teams?.length > 0 ? (
-                        userData.teams?.map((team, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
-                            {team.team_alias || team.team_id}
-                          </span>
-                        ))
+                        <>
+                          {userData.teams?.slice(0, isTeamsExpanded ? userData.teams.length : 20).map((team, index) => (
+                            <span
+                              key={index}
+                              className="px-2 py-1 bg-blue-100 rounded text-xs"
+                              title={team.team_alias || team.team_id}
+                            >
+                              {team.team_alias || team.team_id}
+                            </span>
+                          ))}
+                          {!isTeamsExpanded && userData.teams?.length > 20 && (
+                            <span
+                              className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
+                              onClick={() => setIsTeamsExpanded(true)}
+                            >
+                              +{userData.teams.length - 20} more
+                            </span>
+                          )}
+                          {isTeamsExpanded && userData.teams?.length > 20 && (
+                            <span
+                              className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
+                              onClick={() => setIsTeamsExpanded(false)}
+                            >
+                              Show Less
+                            </span>
+                          )}
+                        </>
                       ) : (
                         <Text>No teams</Text>
                       )}
@@ -392,7 +447,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Models</Text>
+                    <Text className="font-medium">Personal Models</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
                         userData.user_info?.models?.map((model, index) => (
@@ -422,6 +477,20 @@ export default function UserInfoView({
                   </div>
 
                   <div>
+                    <Text className="font-medium">Max Budget</Text>
+                    <Text>
+                      {userData.user_info?.max_budget !== null && userData.user_info?.max_budget !== undefined
+                        ? `$${formatNumberWithCommas(userData.user_info.max_budget, 4)}`
+                        : "Unlimited"}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Budget Reset</Text>
+                    <Text>{getBudgetDurationLabel(userData.user_info?.budget_duration ?? null)}</Text>
+                  </div>
+
+                  <div>
                     <Text className="font-medium">Metadata</Text>
                     <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
                       {JSON.stringify(userData.user_info?.metadata || {}, null, 2)}
@@ -441,5 +510,5 @@ export default function UserInfoView({
         modalType="resetPassword"
       />
     </div>
-  )
+  );
 }

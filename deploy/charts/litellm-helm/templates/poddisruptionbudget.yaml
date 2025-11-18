@@ -1,0 +1,33 @@
+{{- /*
+PodDisruptionBudget for LiteLLM proxy
+Controlled via .Values.pdb.enabled and .Values.pdb.{minAvailable|maxUnavailable}
+Only one of minAvailable / maxUnavailable should be set. If both are set, minAvailable wins.
+*/ -}}
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+  {{- with .Values.pdb.labels }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.pdb.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- /* Match the Deployment selector to target the same pod set */ -}}
+      {{- include "litellm.selectorLabels" . | nindent 6 }}
+  {{- if .Values.pdb.minAvailable }}
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  {{- else if .Values.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  {{- else }}
+  # Safe default if enabled but not configured
+  maxUnavailable: 1
+  {{- end }}
+{{- end }}

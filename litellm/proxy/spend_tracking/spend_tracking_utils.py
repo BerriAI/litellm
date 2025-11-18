@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -21,6 +21,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
     StandardLoggingVectorStoreRequest,
+    VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -53,6 +54,7 @@ def _get_spend_logs_metadata(
     guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
+    cold_storage_object_key: Optional[str] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -75,6 +77,7 @@ def _get_spend_logs_metadata(
             model_map_information=None,
             usage_object=None,
             guardrail_information=None,
+            cold_storage_object_key=cold_storage_object_key,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -98,6 +101,8 @@ def _get_spend_logs_metadata(
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
+    clean_metadata["cold_storage_object_key"] = cold_storage_object_key
+
     return clean_metadata
 
 
@@ -137,6 +142,48 @@ def get_spend_logs_id(
     return id
 
 
+def _extract_usage_for_ocr_call(
+    response_obj: Any, response_obj_dict: dict
+) -> dict:
+    """
+    Extract usage information for OCR/AOCR calls.
+    
+    OCR responses use usage_info (with pages_processed) instead of token-based usage.
+    
+    Args:
+        response_obj: The raw response object (can be dict, BaseModel, or other)
+        response_obj_dict: Dictionary representation of the response object
+    
+    Returns:
+        A dict with prompt_tokens=0, completion_tokens=0, total_tokens=0,
+        and pages_processed from usage_info.
+    """
+    usage_info = None
+    
+    # Try to extract usage_info from dict
+    if isinstance(response_obj_dict, dict):
+        usage_info = response_obj_dict.get("usage_info", {})
+    
+    # Try to extract usage_info from object attributes
+    elif hasattr(response_obj, "usage_info"):
+        usage_info = response_obj.usage_info
+        if hasattr(usage_info, "model_dump"):
+            usage_info = usage_info.model_dump()
+        elif hasattr(usage_info, "__dict__"):
+            usage_info = vars(usage_info)
+    
+    # For OCR, we track pages instead of tokens
+    if usage_info:
+        return {
+            "prompt_tokens": 0,  # OCR doesn't use traditional tokens
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "pages_processed": usage_info.get("pages_processed", 0) if isinstance(usage_info, dict) else 0
+        }
+    else:
+        return {}
+
+
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
@@ -154,16 +201,22 @@ def get_logging_payload(  # noqa: PLR0915
     completion_start_time = kwargs.get("completion_start_time", end_time)
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
-    usage = cast(dict, response_obj).get("usage", None) or {}
-    if isinstance(usage, litellm.Usage):
-        usage = dict(usage)
-
+    
+    # Convert response_obj to dict first
     if isinstance(response_obj, dict):
         response_obj_dict = response_obj
     elif isinstance(response_obj, BaseModel):
         response_obj_dict = response_obj.model_dump()
     else:
         response_obj_dict = {}
+    
+    # Handle OCR responses which use usage_info instead of usage
+    if call_type in ["ocr", "aocr"]:
+        usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
+    else:
+        usage = cast(dict, response_obj).get("usage", None) or {}
+        if isinstance(usage, litellm.Usage):
+            usage = dict(usage)
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
     standard_logging_payload = cast(
@@ -267,6 +320,11 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        cold_storage_object_key=(
+            standard_logging_payload["metadata"].get("cold_storage_object_key", None)
+            if standard_logging_payload is not None
+            else None
+        ),
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
@@ -288,7 +346,9 @@ def get_logging_payload(  # noqa: PLR0915
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
     mcp_namespaced_tool_name = None
-    mcp_tool_call_metadata = clean_metadata.get("mcp_tool_call_metadata", {})
+    mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = clean_metadata.get(
+        "mcp_tool_call_metadata"
+    )
     if mcp_tool_call_metadata is not None:
         mcp_namespaced_tool_name = mcp_tool_call_metadata.get(
             "namespaced_tool_name", None
@@ -361,7 +421,7 @@ def _get_session_id_for_spend_log(
     This ensures each spend log is associated with a unique session id.
 
     """
-    import uuid
+    from litellm._uuid import uuid
 
     if (
         standard_logging_payload is not None
@@ -472,9 +532,9 @@ def _sanitize_request_body_for_spend_logs_payload(
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
-    Truncates strings longer than 1000 characters and handles nested dictionaries.
+    Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
     """
-    MAX_STRING_LENGTH = 1000
+    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
 
     if visited is None:
         visited = set()
@@ -491,8 +551,35 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
-            if len(value) > MAX_STRING_LENGTH:
-                return f"{value[:MAX_STRING_LENGTH]}... (truncated {len(value) - MAX_STRING_LENGTH} chars)"
+            if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
+                # Keep 35% from beginning and 65% from end (end is usually more important)
+                # This split ensures we keep more context from the end of conversations
+                start_ratio = 0.35
+                end_ratio = 0.65
+
+                # Calculate character distribution
+                start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
+                end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * end_ratio)
+
+                # Ensure we don't exceed the total limit
+                total_keep = start_chars + end_chars
+                if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
+                    end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
+
+                # If the string length is less than what we want to keep, just truncate normally
+                if len(value) <= MAX_STRING_LENGTH_PROMPT_IN_DB:
+                    return value
+
+                # Calculate how many characters are being skipped
+                skipped_chars = len(value) - total_keep
+
+                # Build the truncated string: beginning + truncation marker + end
+                truncated_value = (
+                    f"{value[:start_chars]}"
+                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+                    f"{value[-end_chars:]}"
+                )
+                return truncated_value
             return value
         return value
 
@@ -531,8 +618,9 @@ def _get_vector_store_request_for_spend_logs_payload(
     if vector_store_request_metadata is None:
         return None
     for vector_store_request in vector_store_request_metadata:
-        vector_store_search_response = (
-            vector_store_request.get("vector_store_search_response", {}) or {}
+        vector_store_search_response: VectorStoreSearchResponse = (
+            vector_store_request.get("vector_store_search_response")
+            or VectorStoreSearchResponse()
         )
         response_data = vector_store_search_response.get("data", []) or []
         for response_item in response_data:

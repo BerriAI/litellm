@@ -1,16 +1,7 @@
 import json
-from typing import Any, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from typing_extensions import (
-    TYPE_CHECKING,
-    Protocol,
-    Required,
-    Self,
-    TypeGuard,
-    get_origin,
-    override,
-    runtime_checkable,
-)
+from typing_extensions import TYPE_CHECKING, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -92,6 +83,16 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
     text: str
 
 
+class GuardrailConverseTextBlock(TypedDict, total=False):
+    text: str
+
+
+class GuardrailConverseContentBlock(TypedDict, total=False):
+    """Content block for selective guardrail evaluation in Bedrock Converse API"""
+
+    text: GuardrailConverseTextBlock
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
@@ -101,6 +102,7 @@ class ContentBlock(TypedDict, total=False):
     toolUse: ToolUseBlock
     cachePoint: CachePointBlock
     reasoningContent: BedrockConverseReasoningContentBlock
+    guardContent: GuardrailConverseContentBlock
 
 
 class MessageBlock(TypedDict):
@@ -224,6 +226,7 @@ class CommonRequestObject(
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
     performanceConfig: Optional[PerformanceConfigBlock]
+    requestMetadata: Optional[Dict[str, str]]
 
 
 class RequestObject(CommonRequestObject, total=False):
@@ -321,15 +324,22 @@ class CohereEmbeddingResponse(TypedDict):
     texts: List[str]
 
 
-class AmazonTitanV2EmbeddingRequest(TypedDict):
-    inputText: str
+class AmazonTitanV2EmbeddingRequest(TypedDict, total=False):
+    inputText: Required[str]
     dimensions: int
     normalize: bool
+    embeddingTypes: List[Literal["float", "binary"]]
 
 
-class AmazonTitanV2EmbeddingResponse(TypedDict):
-    embedding: List[float]
-    inputTextTokenCount: int
+class AmazonTitanV2EmbeddingsByType(TypedDict, total=False):
+    binary: List[int]  # Array of integers for binary format
+    float: List[float]  # Array of floats for float format
+
+
+class AmazonTitanV2EmbeddingResponse(TypedDict, total=False):
+    embedding: List[float]  # Legacy field - array of floats (backward compatibility)
+    embeddingsByType: AmazonTitanV2EmbeddingsByType  # New format per AWS schema
+    inputTextTokenCount: Required[int]  # Always present in AWS response
 
 
 class AmazonTitanG1EmbeddingRequest(TypedDict):
@@ -355,6 +365,66 @@ class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
     embedding: List[float]
     inputTextTokenCount: int
     message: str  # Specifies any errors that occur during generation.
+
+
+# TwelveLabs Marengo Embed 2.7 types
+TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]
+TWELVELABS_EMBEDDING_OPTIONS = Literal["visual-text", "visual-image", "audio"]
+
+
+class TwelveLabsS3Location(TypedDict, total=False):
+    uri: str
+    bucketOwner: str
+
+
+class TwelveLabsMediaSource(TypedDict, total=False):
+    base64String: str
+    s3Location: TwelveLabsS3Location
+
+
+class TwelveLabsMarengoEmbeddingRequest(TypedDict, total=False):
+    inputType: Required[TWELVELABS_EMBEDDING_INPUT_TYPES]
+    inputText: str
+    mediaSource: TwelveLabsMediaSource
+    textTruncate: Literal["end", "none"]
+    startSec: float
+    lengthSec: float
+    useFixedLengthSec: float
+    minClipSec: int
+    embeddingOption: List[TWELVELABS_EMBEDDING_OPTIONS]
+
+
+class TwelveLabsMarengoEmbeddingResponse(TypedDict):
+    embedding: List[float]
+    embeddingOption: TWELVELABS_EMBEDDING_OPTIONS
+    startSec: float
+    endSec: float
+
+
+class TwelveLabsS3OutputDataConfig(TypedDict):
+    s3Uri: str
+
+
+class TwelveLabsOutputDataConfig(TypedDict):
+    s3OutputDataConfig: TwelveLabsS3OutputDataConfig
+
+
+class TwelveLabsAsyncInvokeRequest(TypedDict):
+    modelId: str
+    modelInput: TwelveLabsMarengoEmbeddingRequest
+    outputDataConfig: TwelveLabsOutputDataConfig
+
+
+class TwelveLabsAsyncInvokeStatusResponse(TypedDict):
+    invocationArn: str
+    modelArn: str
+    status: str  # "InProgress" | "Completed" | "Failed"
+    submitTime: str
+    lastModifiedTime: str
+    endTime: Optional[str]
+    outputDataConfig: TwelveLabsOutputDataConfig
+    clientRequestToken: Optional[str]
+    failureMessage: Optional[str]
 
 
 AmazonEmbeddingRequest = Union[
@@ -391,6 +461,15 @@ class AmazonStability3TextToImageResponse(TypedDict, total=False):
     images: List[str]
     seeds: List[str]
     finish_reasons: List[str]
+
+
+class AmazonTitanTextToImageParams(TypedDict, total=False):
+    """
+    Params for Amazon Titan Text to Image API
+    """
+
+    text: Required[str]
+    negativeText: str
 
 
 class AmazonNovaCanvasRequestBase(TypedDict, total=False):
@@ -502,6 +581,16 @@ class AmazonNovaCanvasInpaintingRequest(
     imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
 
 
+class AmazonTitanImageGenerationRequestBody(TypedDict, total=False):
+    """
+    Config for Amazon Titan Image Generation API
+    """
+
+    taskType: Literal["TEXT_IMAGE", "COLOR_GUIDED_GENERATION", "INPAINTING"]
+    textToImageParams: AmazonTitanTextToImageParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
 else:
@@ -573,3 +662,86 @@ class AmazonDeepSeekR1StreamingResponse(TypedDict):
     generation_token_count: int
     stop_reason: Optional[str]
     prompt_token_count: int
+
+
+################ Bedrock Batch Types #################
+
+
+class BedrockS3InputDataConfig(TypedDict):
+    """S3 input data configuration for Bedrock batch jobs."""
+
+    s3Uri: str
+
+
+class BedrockInputDataConfig(TypedDict):
+    """Input data configuration for Bedrock batch jobs."""
+
+    s3InputDataConfig: BedrockS3InputDataConfig
+
+
+class BedrockS3OutputDataConfig(TypedDict):
+    """S3 output data configuration for Bedrock batch jobs."""
+
+    s3Uri: str
+
+
+class BedrockOutputDataConfig(TypedDict):
+    """Output data configuration for Bedrock batch jobs."""
+
+    s3OutputDataConfig: BedrockS3OutputDataConfig
+
+
+class BedrockCreateBatchRequest(TypedDict, total=False):
+    """
+    Request structure for creating a Bedrock batch inference job.
+
+    Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_CreateModelInvocationJob.html
+    """
+
+    jobName: str
+    roleArn: str
+    modelId: str
+    inputDataConfig: BedrockInputDataConfig
+    outputDataConfig: BedrockOutputDataConfig
+    timeoutDurationInHours: Optional[int]
+    clientRequestToken: Optional[str]
+    tags: Optional[List[dict]]
+
+
+BedrockBatchJobStatus = Literal[
+    "Submitted", "InProgress", "Completed", "Failed", "Stopping", "Stopped"
+]
+
+
+class BedrockCreateBatchResponse(TypedDict):
+    """
+    Response structure from creating a Bedrock batch inference job.
+
+    Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_CreateModelInvocationJob.html
+    """
+
+    jobArn: str
+    jobName: str
+    status: BedrockBatchJobStatus
+
+
+class BedrockGetBatchResponse(TypedDict, total=False):
+    """
+    Response structure from getting a Bedrock batch inference job.
+
+    Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetModelInvocationJob.html
+    """
+
+    jobArn: str
+    jobName: str
+    modelId: str
+    roleArn: str
+    status: BedrockBatchJobStatus
+    message: Optional[str]
+    submitTime: Optional[str]
+    lastModifiedTime: Optional[str]
+    endTime: Optional[str]
+    inputDataConfig: BedrockInputDataConfig
+    outputDataConfig: BedrockOutputDataConfig
+    timeoutDurationInHours: Optional[int]
+    clientRequestToken: Optional[str]

@@ -32,10 +32,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
     logged_failure: int = 0
 
     def __init__(
-        self, router_cache: DualCache, model_list: list, routing_args: dict = {}
+        self, router_cache: DualCache, routing_args: dict = {}
     ):
         self.router_cache = router_cache
-        self.model_list = model_list
         self.routing_args = RoutingArgs(**routing_args)
 
     def log_success_event(  # noqa: PLR0915
@@ -108,7 +107,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         if final_value is not None:
                             final_value = float(final_value)
                         else:
-                            final_value = response_ms
+                            final_value = response_seconds
 
                         if time_to_first_token_response_time is not None:
                             if isinstance(time_to_first_token_response_time, timedelta):

@@ -4,12 +4,12 @@
 import asyncio
 import base64
 import json
-import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException
 
 from litellm import Router, verbose_logger
+from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
@@ -152,7 +152,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "status": file_object.status,
                 },
                 "update": {},  # don't do anything if it already exists
-            }
+            },
         )
 
     async def get_unified_file_id(
@@ -224,9 +224,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 where={"unified_object_id": unified_object_id}
             )
         )
+
         if managed_object:
             return managed_object.created_by == user_id
-        return False
+        return True  # don't raise error if managed object is not found
 
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
@@ -291,6 +292,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "alist_fine_tuning_jobs",
             "acancel_fine_tuning_job",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, Dict, None]:
         """

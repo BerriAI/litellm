@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { Select } from 'antd';
-import { Tag } from './types';
-import { tagListCall } from '../networking';
+import React, { useEffect, useState } from "react";
+import { Select } from "antd";
+import { Tag } from "./types";
+import { tagListCall } from "../networking";
 
 interface TagSelectorProps {
   onChange: (selectedTags: string[]) => void;
@@ -37,16 +37,16 @@ const TagSelector: React.FC<TagSelectorProps> = ({ onChange, value, className, a
       value={value}
       loading={loading}
       className={className}
-      options={tags.map(tag => ({
+      options={tags.map((tag) => ({
         label: tag.name,
         value: tag.name,
         title: tag.description || tag.name,
       }))}
       optionFilterProp="label"
       showSearch
-      style={{ width: '100%' }}
+      style={{ width: "100%" }}
     />
   );
 };
 
-export default TagSelector; 
+export default TagSelector;

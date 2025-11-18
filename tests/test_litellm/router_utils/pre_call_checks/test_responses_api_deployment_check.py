@@ -17,7 +17,6 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
-    ResponseTextConfig,
 )
 from litellm.types.utils import StandardLoggingPayload
 

@@ -1,5 +1,5 @@
 import json
-import uuid
+from litellm._uuid import uuid
 from typing import Any, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
