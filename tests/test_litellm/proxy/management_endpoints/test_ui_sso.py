@@ -1392,22 +1392,35 @@ class TestCLIKeyRegenerationFlow:
     """Test the end-to-end CLI key regeneration flow"""
 
     @pytest.mark.asyncio
-    async def test_cli_sso_callback_regenerate_existing_key(self):
-        """Test CLI SSO callback regenerating an existing key"""
+    async def test_cli_sso_callback_stores_session(self):
+        """Test CLI SSO callback stores session data in cache for JWT generation"""
+        from litellm._types import LiteLLM_UserTable
         from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
 
         # Mock request
         mock_request = MagicMock(spec=Request)
 
         # Test data
-        existing_key = "sk-existing-key-123"
-        new_key = "sk-new-key-456"
+        session_key = "sk-session-456"
+        
+        # Mock user info
+        mock_user_info = LiteLLM_UserTable(
+            user_id="test-user-123",
+            user_role="internal_user",
+            teams=["team1", "team2"],
+            models=["gpt-4"]
+        )
 
-        # Mock the regenerate helper function
+        # Mock cache
+        mock_cache = MagicMock()
+        
         with patch(
-            "litellm.proxy.management_endpoints.ui_sso._regenerate_cli_key"
-        ) as mock_regenerate, patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+            return_value=mock_user_info
+        ), patch(
             "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ), patch(
             "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
             return_value="<html>Success</html>",
@@ -1415,46 +1428,65 @@ class TestCLIKeyRegenerationFlow:
 
             # Act
             result = await cli_sso_callback(
-                request=mock_request, key=new_key, existing_key=existing_key
+                request=mock_request, key=session_key, existing_key=None
             )
 
-            # Assert
-            mock_regenerate.assert_called_once_with(
-                existing_key=existing_key, new_key=new_key, user_id=None
-            )
+            # Assert - verify session was stored in cache
+            mock_cache.set_cache.assert_called_once()
+            call_args = mock_cache.set_cache.call_args
+            
+            # Verify cache key format
+            assert "cli_sso_session:" in call_args.kwargs["key"]
+            assert session_key in call_args.kwargs["key"]
+            
+            # Verify session data structure
+            session_data = call_args.kwargs["value"]
+            assert session_data["user_id"] == "test-user-123"
+            assert session_data["user_role"] == "internal_user"
+            assert session_data["teams"] == ["team1", "team2"]
+            assert session_data["models"] == ["gpt-4"]
+            
+            # Verify TTL
+            assert call_args.kwargs["ttl"] == 600  # 10 minutes
+            
             assert result.status_code == 200
-            assert "Success" in result.body.decode()
+            # Verify response contains success message (response is HTML)
+            assert result.body is not None
 
     @pytest.mark.asyncio
-    async def test_cli_sso_callback_create_new_key(self):
-        """Test CLI SSO callback creating a new key when no existing key provided"""
-        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
-
-        # Mock request
-        mock_request = MagicMock(spec=Request)
+    async def test_cli_poll_key_returns_teams_for_selection(self):
+        """Test CLI poll endpoint returns teams for user selection when multiple teams exist"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
 
         # Test data
-        new_key = "sk-new-key-789"
+        session_key = "sk-session-789"
+        session_data = {
+            "user_id": "test-user-456",
+            "user_role": "internal_user",
+            "teams": ["team-a", "team-b", "team-c"],
+            "models": ["gpt-4"]
+        }
 
-        # Mock the create helper function
+        # Mock cache
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = session_data
+        
         with patch(
-            "litellm.proxy.management_endpoints.ui_sso._create_new_cli_key"
-        ) as mock_create, patch(
-            "litellm.proxy.proxy_server.prisma_client", MagicMock()
-        ), patch(
-            "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
-            return_value="<html>Success</html>",
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ):
 
-            # Act
-            result = await cli_sso_callback(
-                request=mock_request, key=new_key, existing_key=None
-            )
+            # Act - First poll without team_id
+            result = await cli_poll_key(key_id=session_key, team_id=None)
 
-            # Assert
-            mock_create.assert_called_once_with(key=new_key, user_id=None)
-            assert result.status_code == 200
-            assert "Success" in result.body.decode()
+            # Assert - should return teams list for selection
+            assert result["status"] == "ready"
+            assert result["requires_team_selection"] is True
+            assert result["user_id"] == "test-user-456"
+            assert result["teams"] == ["team-a", "team-b", "team-c"]
+            assert "key" not in result  # JWT should not be generated yet
+            
+            # Verify session was NOT deleted
+            mock_cache.delete_cache.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_auth_callback_routes_to_cli_with_existing_key(self):
@@ -1543,40 +1575,65 @@ class TestCLIKeyRegenerationFlow:
             assert "https://test.litellm.ai/sso/callback" == redirect_url
 
     @pytest.mark.asyncio
-    async def test_cli_sso_callback_regenerate_vs_create_flow(self):
-        """Test CLI SSO callback calls regenerate_key_fn when existing_key provided, generate_key_helper_fn when not"""
-        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+    async def test_cli_poll_key_generates_jwt_with_team(self):
+        """Test CLI poll endpoint generates JWT when team_id is provided"""
+        from litellm._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
 
-        mock_request = MagicMock(spec=Request)
+        # Test data
+        session_key = "sk-session-999"
+        selected_team = "team-b"
+        session_data = {
+            "user_id": "test-user-789",
+            "user_role": "internal_user",
+            "teams": ["team-a", "team-b", "team-c"],
+            "models": ["gpt-4"],
+            "user_email": "test@example.com"
+        }
+        
+        # Mock user info
+        mock_user_info = LiteLLM_UserTable(
+            user_id="test-user-789",
+            user_role="internal_user",
+            teams=["team-a", "team-b", "team-c"],
+            models=["gpt-4"]
+        )
 
+        # Mock cache
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = session_data
+        
+        mock_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token"
+        
         with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn"
-        ) as mock_regenerate, patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
-        ) as mock_generate, patch(
-            "litellm.proxy._types.UserAPIKeyAuth.get_litellm_cli_user_api_key_auth"
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ), patch(
-            "litellm.proxy.proxy_server.prisma_client", MagicMock()
-        ), patch(
-            "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
-            return_value="<html>Success</html>",
-        ):
+            "litellm.proxy.proxy_server.prisma_client"
+        ) as mock_prisma, patch(
+            "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+            return_value=mock_jwt_token
+        ) as mock_get_jwt:
+            
+            # Mock the user lookup
+            mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user_info)
 
-            # Test regeneration path
-            await cli_sso_callback(
-                mock_request, key="sk-new-123", existing_key="sk-existing-456"
-            )
-            mock_regenerate.assert_called_once()
-            mock_generate.assert_not_called()
+            # Act - Second poll with team_id
+            result = await cli_poll_key(key_id=session_key, team_id=selected_team)
 
-            # Reset mocks
-            mock_regenerate.reset_mock()
-            mock_generate.reset_mock()
-
-            # Test creation path
-            await cli_sso_callback(mock_request, key="sk-new-789", existing_key=None)
-            mock_regenerate.assert_not_called()
-            mock_generate.assert_called_once()
+            # Assert - should return JWT
+            assert result["status"] == "ready"
+            assert result["key"] == mock_jwt_token
+            assert result["user_id"] == "test-user-789"
+            assert result["team_id"] == selected_team
+            assert result["teams"] == ["team-a", "team-b", "team-c"]
+            
+            # Verify JWT was generated with correct team
+            mock_get_jwt.assert_called_once()
+            jwt_call_args = mock_get_jwt.call_args
+            assert jwt_call_args.kwargs["team_id"] == selected_team
+            
+            # Verify session was deleted after JWT generation
+            mock_cache.delete_cache.assert_called_once()
 
 
 class TestGetAppRolesFromIdToken:

@@ -249,6 +249,10 @@ class TestCallbackManagementEndpoints:
         # Verify dynamic_params structure
         assert isinstance(first_config["dynamic_params"], dict)
         
-        
+        # Check if at least one callback has detailed parameter configuration
+        has_detailed_params = any(
+            config.get("dynamic_params") and len(config.get("dynamic_params", {})) > 0
+            for config in response_data
+        )
         assert has_detailed_params, "Expected at least one callback to have detailed parameter configuration"
 
