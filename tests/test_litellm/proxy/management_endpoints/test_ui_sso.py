@@ -533,6 +533,75 @@ def test_apply_user_info_values_to_sso_user_defined_values_with_models():
     assert sso_user_defined_values["models"] == ["no-default-models"]
 
 
+def test_apply_user_info_values_sso_role_takes_precedence():
+    """
+    Test that SSO role takes precedence over DB role.
+    
+    When Microsoft SSO returns a user_role, it should be used instead of the role stored in the database.
+    This ensures SSO is the authoritative source for user roles.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import (
+        apply_user_info_values_to_sso_user_defined_values,
+    )
+
+    user_info = LiteLLM_UserTable(
+        user_id="123",
+        user_email="test@example.com",
+        user_role="internal_user_viewer",
+        models=["model-1"],
+    )
+
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
+        "user_id": "456",
+        "user_email": "test@example.com",
+        "user_role": "proxy_admin_viewer",
+        "max_budget": None,
+        "budget_duration": None,
+    }
+
+    sso_user_defined_values = apply_user_info_values_to_sso_user_defined_values(
+        user_info=user_info,
+        user_defined_values=user_defined_values,
+    )
+
+    assert sso_user_defined_values is not None
+    assert sso_user_defined_values["user_id"] == "123"
+    assert sso_user_defined_values["user_role"] == "proxy_admin_viewer"
+    assert sso_user_defined_values["models"] == ["model-1"]
+
+
+def test_get_user_email_and_id_extracts_microsoft_role():
+    """
+    Test that _get_user_email_and_id_from_result extracts user_role from Microsoft SSO.
+    
+    This ensures Microsoft SSO roles (from app_roles in id_token) are properly
+    extracted and converted from enum to string.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    result = CustomOpenID(
+        id="test-user-id",
+        email="test@example.com",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=["team-1"],
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+
+    parsed = SSOAuthenticationHandler._get_user_email_and_id_from_result(
+        result=result,
+        generic_client_id=None,
+    )
+
+    assert parsed.get("user_email") == "test@example.com"
+    assert parsed.get("user_id") == "test-user-id"
+    assert parsed.get("user_role") == "proxy_admin_viewer"
+
+
 @pytest.mark.asyncio
 async def test_get_user_info_from_db():
     """
@@ -2068,6 +2137,7 @@ class TestProcessSSOJWTAccessToken:
 async def test_get_ui_settings_includes_api_doc_base_url():
     """Ensure the UI settings endpoint surfaces the optional API doc override."""
     from fastapi import Request
+
     from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
 
     mock_request = Request(
