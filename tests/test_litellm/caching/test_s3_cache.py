@@ -294,11 +294,18 @@ async def test_s3_cache_concurrent_async_operations(mock_s3_dependencies):
     assert cache.s3_client.put_object.call_count == 5
 
     # Verify each call had correct parameters
+    # Collect all keys from calls (order may vary due to concurrency)
     calls = cache.s3_client.put_object.call_args_list
-    for i, call in enumerate(calls):
+    actual_keys = set()
+    expected_keys = {f"concurrent_key_{i}" for i in range(5)}
+    
+    for call in calls:
         call_args = call[1]
         assert call_args["Bucket"] == "test-bucket"
-        assert f"concurrent_key_{i}" == call_args["Key"]
+        actual_keys.add(call_args["Key"])
+    
+    # Verify all expected keys are present (order doesn't matter for concurrent operations)
+    assert actual_keys == expected_keys
 
 
 @pytest.mark.asyncio

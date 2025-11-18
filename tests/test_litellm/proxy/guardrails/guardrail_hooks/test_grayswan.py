@@ -200,20 +200,21 @@ def test_get_guardrail_custom_headers_missing_header(grayswan_guardrail: GraySwa
     assert custom_headers == {}
 
 
-def test_prepare_payload_priority_custom_headers_over_dynamic_body(grayswan_guardrail: GraySwanGuardrail) -> None:
-    """Test that custom headers take priority over dynamic_body."""
+def test_prepare_payload_ignores_custom_headers_for_config_params(grayswan_guardrail: GraySwanGuardrail) -> None:
+    """Test that custom headers are NOT used for config params like policy_id and reasoning_mode."""
     messages = [{"role": "user", "content": "hello"}]
     custom_headers = {"policy_id": "header-policy", "reasoning_mode": "thinking"}
     dynamic_body = {"policy_id": "dynamic-policy", "reasoning_mode": "hybrid"}
     
     payload = grayswan_guardrail._prepare_payload(messages, dynamic_body, custom_headers)
     
-    assert payload["policy_id"] == "header-policy"  # Custom header wins
-    assert payload["reasoning_mode"] == "thinking"  # Custom header wins
+    # Custom headers should be ignored - dynamic_body takes priority
+    assert payload["policy_id"] == "dynamic-policy"  # Dynamic body wins, not custom header
+    assert payload["reasoning_mode"] == "hybrid"  # Dynamic body wins, not custom header
 
 
 def test_prepare_payload_priority_dynamic_body_over_config(grayswan_guardrail: GraySwanGuardrail) -> None:
-    """Test that dynamic_body takes priority over config when no custom headers."""
+    """Test that dynamic_body takes priority over config."""
     messages = [{"role": "user", "content": "hello"}]
     custom_headers = {}
     dynamic_body = {"policy_id": "dynamic-policy"}
@@ -225,7 +226,7 @@ def test_prepare_payload_priority_dynamic_body_over_config(grayswan_guardrail: G
 
 
 def test_prepare_payload_priority_config_fallback(grayswan_guardrail: GraySwanGuardrail) -> None:
-    """Test that config values are used when no custom headers or dynamic_body."""
+    """Test that config values are used when dynamic_body is empty."""
     messages = [{"role": "user", "content": "hello"}]
     custom_headers = {}
     dynamic_body = {}
@@ -234,26 +235,6 @@ def test_prepare_payload_priority_config_fallback(grayswan_guardrail: GraySwanGu
     
     assert payload["policy_id"] == "default-policy"  # Config value
     assert payload["reasoning_mode"] == "hybrid"  # Config value
-
-
-def test_prepare_headers_merges_custom_headers(grayswan_guardrail: GraySwanGuardrail) -> None:
-    """Test that custom headers are merged into request headers, but config params are excluded."""
-    custom_headers = {
-        "custom-header": "custom-value",
-        "Content-Type": "application/xml",
-        "policy_id": "should-not-be-in-headers",  # Config param, should be excluded
-        "reasoning_mode": "thinking",  # Config param, should be excluded
-    }
-    
-    headers = grayswan_guardrail._prepare_headers(custom_headers)
-    
-    assert headers["Authorization"] == "Bearer test-key"
-    assert headers["grayswan-api-key"] == "test-key"
-    assert headers["custom-header"] == "custom-value"
-    assert headers["Content-Type"] == "application/xml"  # Custom header overrides default
-    # Config parameters should NOT be in HTTP headers
-    assert "policy_id" not in headers
-    assert "reasoning_mode" not in headers
 
 
 @pytest.mark.asyncio
