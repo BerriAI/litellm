@@ -4107,7 +4107,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = video_generation_provider_config.validate_environment(
-            api_key=api_key,
+            api_key=api_key or litellm_params.get("api_key", None),
             headers=video_generation_optional_request_params.get("extra_headers", {})
             or {},
             model=model,
@@ -4207,7 +4207,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = video_generation_provider_config.validate_environment(
-            api_key=api_key,
+            api_key=api_key or litellm_params.get("api_key", None),
             headers=video_generation_optional_request_params.get("extra_headers", {})
             or {},
             model=model,
