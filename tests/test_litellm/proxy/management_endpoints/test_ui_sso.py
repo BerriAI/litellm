@@ -2064,6 +2064,34 @@ class TestProcessSSOJWTAccessToken:
             assert result.team_ids == []
 
 
+@pytest.mark.asyncio
+async def test_get_ui_settings_includes_api_doc_base_url():
+    """Ensure the UI settings endpoint surfaces the optional API doc override."""
+    from fastapi import Request
+    from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
+
+    mock_request = Request(
+        scope={
+            "type": "http",
+            "headers": [],
+            "method": "GET",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": "/sso/get/ui_settings",
+            "query_string": b"",
+        }
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "LITELLM_UI_API_DOC_BASE_URL": "https://custom.docs",
+        },
+    ):
+        response = await get_ui_settings(mock_request)
+        assert response["LITELLM_UI_API_DOC_BASE_URL"] == "https://custom.docs"
+
+
 class TestGenericResponseConvertorNestedAttributes:
     """Test generic_response_convertor with nested attribute paths"""
 
