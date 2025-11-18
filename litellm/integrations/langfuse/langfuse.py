@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
+import json
 import os
 import traceback
 from datetime import datetime
@@ -456,7 +457,11 @@ class LangFuseLogger:
                 sanitized[sanitized_key] = LangFuseLogger._sanitize_optional_params(
                     item, _seen
                 )
-            return sanitized
+
+            try:
+                return json.dumps(sanitized)
+            except Exception:
+                return str(sanitized)
 
         if isinstance(value, list):
             return [
