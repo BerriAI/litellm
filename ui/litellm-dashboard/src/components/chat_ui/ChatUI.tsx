@@ -67,9 +67,20 @@ interface ChatUIProps {
   userRole: string | null;
   userID: string | null;
   disabledPersonalKeyCreation: boolean;
+  proxySettings?: {
+    PROXY_BASE_URL?: string;
+    LITELLM_UI_API_DOC_BASE_URL?: string | null;
+  };
 }
 
-const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, disabledPersonalKeyCreation }) => {
+const ChatUI: React.FC<ChatUIProps> = ({
+  accessToken,
+  token,
+  userRole,
+  userID,
+  disabledPersonalKeyCreation,
+  proxySettings,
+}) => {
   const [isMCPToolsModalVisible, setIsMCPToolsModalVisible] = useState(false);
   const [mcpTools, setMCPTools] = useState<MCPTool[]>([]);
   const [selectedMCPTools, setSelectedMCPTools] = useState<string[]>(() => {
@@ -214,6 +225,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
         selectedModel,
         selectedSdk,
         selectedVoice,
+        proxySettings,
       });
       setGeneratedCode(code);
     }
@@ -231,6 +243,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     selectedMCPTools,
     endpointType,
     selectedModel,
+    proxySettings,
   ]);
 
   useEffect(() => {

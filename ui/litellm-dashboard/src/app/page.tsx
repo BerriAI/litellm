@@ -368,6 +368,10 @@ export default function CreateKeyPage() {
                     token={token}
                     accessToken={accessToken}
                     disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+                    proxySettings={{
+                      PROXY_BASE_URL: proxySettings.PROXY_BASE_URL,
+                      LITELLM_UI_API_DOC_BASE_URL: proxySettings.LITELLM_UI_API_DOC_BASE_URL,
+                    }}
                   />
                 ) : page == "users" ? (
                   <ViewUserDashboard
