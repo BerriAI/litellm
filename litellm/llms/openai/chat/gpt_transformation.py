@@ -40,6 +40,8 @@ from litellm.types.llms.openai import (
     ChatCompletionFileObjectFile,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
     OpenAIChatCompletionChoices,
     OpenAIMessageContentListBlock,
 )
@@ -176,6 +178,69 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
         return base_params + model_specific_params
 
+    @staticmethod
+    def _map_thinking_to_reasoning_effort(
+        thinking: Optional[dict],
+    ) -> Optional[str]:
+        """
+        Convert Anthropic thinking parameter to OpenAI reasoning_effort.
+        
+        Mapping:
+        - budget_tokens: <= 128 → "minimal"
+        - budget_tokens: <= 1024 → "low"
+        - budget_tokens: <= 2048 → "medium"
+        - budget_tokens: > 2048 → "high"
+        - Other/missing budget_tokens → "medium" (default)
+        - type != "enabled" → None
+        
+        Args:
+            thinking: Anthropic thinking parameter dict with 'type' and 'budget_tokens'
+            
+        Returns:
+            OpenAI reasoning_effort value or None
+        """
+        if not thinking or thinking.get("type") != "enabled":
+            return None
+        
+        budget_tokens = thinking.get("budget_tokens")
+        if budget_tokens is None:
+            return "medium"  # Default for enabled thinking without specific budget
+        
+        # Map to closest reasoning_effort level based on budget_tokens
+        if budget_tokens <= 128:
+            return "minimal"
+        elif budget_tokens <= 1024:
+            return "low"
+        elif budget_tokens <= 2048:
+            return "medium"
+        else:  # > 2048 (typically 4096)
+            return "high"
+
+    @staticmethod
+    def _convert_reasoning_content_to_thinking_blocks(
+        reasoning_content: Optional[str],
+    ) -> Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ]:
+        """
+        Convert OpenAI reasoning_content to Anthropic thinking_blocks format.
+        
+        Args:
+            reasoning_content: The reasoning content string from OpenAI response
+            
+        Returns:
+            List of thinking blocks in Anthropic format, or None if no reasoning content
+        """
+        if not reasoning_content:
+            return None
+        
+        thinking_block: ChatCompletionThinkingBlock = {
+            "type": "thinking",
+            "thinking": reasoning_content,
+            "signature": "",  # Empty string instead of None for proper typing
+        }
+        return [thinking_block]
+
     def _map_openai_params(
         self,
         non_default_params: dict,
@@ -195,7 +260,20 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             dict: Updated optional_params with supported non-default parameters.
         """
         supported_openai_params = self.get_supported_openai_params(model)
+        
+        # Handle Anthropic 'thinking' parameter conversion to OpenAI 'reasoning_effort'
+        if "thinking" in non_default_params:
+            thinking_param = non_default_params.get("thinking")
+            reasoning_effort = self._map_thinking_to_reasoning_effort(thinking_param)
+            if reasoning_effort and "reasoning_effort" in supported_openai_params:
+                optional_params["reasoning_effort"] = reasoning_effort
+                # Store original thinking param to enable Anthropic-format response conversion
+                optional_params["_original_thinking_param"] = thinking_param
+        
         for param, value in non_default_params.items():
+            # Skip 'thinking' as it's already handled above
+            if param == "thinking":
+                continue
             if param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
@@ -565,11 +643,23 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     content_str,
                 ) = _extract_reasoning_content(cast(dict, choice["message"]))
 
+                # Check if we need to convert reasoning_content to Anthropic thinking_blocks format
+                thinking_blocks_for_response = None
+                if (
+                    optional_params 
+                    and optional_params.get("_original_thinking_param") 
+                    and reasoning_content
+                ):
+                    # Convert reasoning_content to thinking_blocks for Anthropic-format response
+                    thinking_blocks_for_response = self._convert_reasoning_content_to_thinking_blocks(
+                        reasoning_content
+                    )
+
                 translated_message = Message(
                     role="assistant",
                     content=content_str,
                     reasoning_content=reasoning_content,
-                    thinking_blocks=None,
+                    thinking_blocks=thinking_blocks_for_response,
                     tool_calls=new_tool_calls,
                 )
 
