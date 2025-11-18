@@ -1,10 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
+import { Card, Button, Progress, Badge, Space, Statistic, Row, Col } from "antd";
 import {
   Zap,
   Users,
@@ -137,40 +134,55 @@ export default function SkypieaDashboard({ userRole, userID, accessToken, onNavi
             </div>
 
             <div className="flex flex-wrap justify-center gap-4 mb-12">
-              <Badge variant="secondary" className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white border-yellow-300 px-4 py-2 text-sm shadow-lg animate-pulse">
-                <Rocket className="w-4 h-4 mr-2 animate-bounce" />
-                One Piece Powered
-              </Badge>
-              <Badge variant="secondary" className="bg-gradient-to-r from-blue-400 to-cyan-500 text-white border-blue-300 px-4 py-2 text-sm shadow-lg">
-                <Eye className="w-4 h-4 mr-2" />
-                Vision Ready
-              </Badge>
-              <Badge variant="secondary" className="bg-gradient-to-r from-green-400 to-emerald-500 text-white border-green-300 px-4 py-2 text-sm shadow-lg">
-                <Activity className="w-4 h-4 mr-2" />
-                Real-time Monitoring
-              </Badge>
-              <Badge variant="secondary" className="bg-gradient-to-r from-purple-500 to-pink-500 text-white border-purple-300 px-4 py-2 text-sm shadow-lg animate-pulse delay-300">
-                <Globe className="w-4 h-4 mr-2 animate-spin" />
-                250+ Providers
-              </Badge>
+              <div className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white px-4 py-2 text-sm shadow-lg animate-pulse rounded-full flex items-center gap-2">
+                <Rocket style={{ fontSize: 16 }} className="animate-bounce" />
+                <span>One Piece Powered</span>
+              </div>
+              <div className="bg-gradient-to-r from-blue-400 to-cyan-500 text-white px-4 py-2 text-sm shadow-lg rounded-full flex items-center gap-2">
+                <Eye style={{ fontSize: 16 }} />
+                <span>Vision Ready</span>
+              </div>
+              <div className="bg-gradient-to-r from-green-400 to-emerald-500 text-white px-4 py-2 text-sm shadow-lg rounded-full flex items-center gap-2">
+                <Activity style={{ fontSize: 16 }} />
+                <span>Real-time Monitoring</span>
+              </div>
+              <div className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-4 py-2 text-sm shadow-lg animate-pulse delay-300 rounded-full flex items-center gap-2">
+                <Globe style={{ fontSize: 16 }} className="animate-spin" />
+                <span>250+ Providers</span>
+              </div>
             </div>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button
-                size="lg"
-                className="bg-white text-sky-600 hover:bg-sky-50 font-semibold px-8 py-3 text-lg"
+                type="primary"
+                size="large"
+                style={{
+                  background: 'white',
+                  color: '#0284c7',
+                  borderColor: 'white',
+                  fontWeight: '600',
+                  padding: '12px 32px',
+                  fontSize: '18px'
+                }}
+                className="hover:bg-sky-50"
                 onClick={() => onNavigate("api-keys")}
               >
-                <Key className="w-5 h-5 mr-2" />
+                <Key style={{ fontSize: 20, marginRight: 8 }} />
                 Get Started
               </Button>
               <Button
-                size="lg"
-                variant="outline"
-                className="border-white text-white hover:bg-white/10 font-semibold px-8 py-3 text-lg"
+                size="large"
+                style={{
+                  borderColor: 'white',
+                  color: 'white',
+                  fontWeight: '600',
+                  padding: '12px 32px',
+                  fontSize: '18px'
+                }}
+                className="hover:bg-white/10"
                 onClick={() => onNavigate("llm-playground")}
               >
-                <PlayCircle className="w-5 h-5 mr-2" />
+                <PlayCircle style={{ fontSize: 20, marginRight: 8 }} />
                 Try Playground
               </Button>
             </div>
@@ -189,7 +201,7 @@ export default function SkypieaDashboard({ userRole, userID, accessToken, onNavi
           </div>
         </div>
         <div className="absolute bottom-20 left-20 animate-pulse delay-1000">
-          <div className="w-18 h-18 bg-gradient-to-br from-blue-400 to-cyan-500 rounded-full flex items-center justify-center shadow-lg">
+          <div className="w-16 h-16 bg-gradient-to-br from-blue-400 to-cyan-500 rounded-full flex items-center justify-center shadow-lg">
             <Eye className="w-8 h-8 text-white" />
           </div>
         </div>
@@ -210,142 +222,176 @@ export default function SkypieaDashboard({ userRole, userID, accessToken, onNavi
 
       {/* Metrics Dashboard */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
-          <Card className="bg-gradient-to-br from-blue-500 to-blue-600 text-white border-0 shadow-lg hover:shadow-xl transition-shadow">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium opacity-90 flex items-center gap-2">
-                <Activity className="w-4 h-4" />
-                Total API Calls
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">
-                {isLoading ? "..." : metrics.totalCalls.toLocaleString()}
-              </div>
-              <div className="flex items-center gap-1 mt-2">
-                <TrendingUp className="w-3 h-3 text-green-300" />
-                <span className="text-xs opacity-75">+23% from last month</span>
-              </div>
-            </CardContent>
-          </Card>
+        <Row gutter={[16, 16]} className="mb-12">
+          <Col xs={24} sm={12} lg={6}>
+            <Card
+              style={{
+                background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                border: 'none',
+                color: 'white'
+              }}
+              className="shadow-lg"
+            >
+              <Statistic
+                title={<Space><Activity style={{ fontSize: 16 }} />Total API Calls</Space>}
+                value={isLoading ? "..." : metrics.totalCalls}
+                valueStyle={{ color: 'white', fontSize: '24px' }}
+                suffix={<Space className="text-green-300 text-xs"><TrendingUp />+23%</Space>}
+              />
+            </Card>
+          </Col>
 
-          <Card className="bg-gradient-to-br from-green-500 to-green-600 text-white border-0 shadow-lg hover:shadow-xl transition-shadow">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium opacity-90 flex items-center gap-2">
-                <Zap className="w-4 h-4" />
-                Active Models
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">
-                {isLoading ? "..." : metrics.activeModels}
-              </div>
-              <div className="flex items-center gap-1 mt-2">
-                <TrendingUp className="w-3 h-3 text-green-300" />
-                <span className="text-xs opacity-75">+5 new this week</span>
-              </div>
-            </CardContent>
-          </Card>
+          <Col xs={24} sm={12} lg={6}>
+            <Card
+              style={{
+                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                border: 'none',
+                color: 'white'
+              }}
+              className="shadow-lg"
+            >
+              <Statistic
+                title={<Space><Zap style={{ fontSize: 16 }} />Active Models</Space>}
+                value={isLoading ? "..." : metrics.activeModels}
+                valueStyle={{ color: 'white', fontSize: '24px' }}
+                suffix={<Space className="text-green-300 text-xs"><TrendingUp />+5</Space>}
+              />
+            </Card>
+          </Col>
 
-          <Card className="bg-gradient-to-br from-purple-500 to-purple-600 text-white border-0 shadow-lg hover:shadow-xl transition-shadow">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium opacity-90 flex items-center gap-2">
-                <Shield className="w-4 h-4" />
-                System Uptime
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">
-                {isLoading ? "..." : `${metrics.uptime}%`}
-              </div>
-              <Progress value={metrics.uptime} className="mt-2 bg-white/20" />
-            </CardContent>
-          </Card>
+          <Col xs={24} sm={12} lg={6}>
+            <Card
+              style={{
+                background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                border: 'none',
+                color: 'white'
+              }}
+              className="shadow-lg"
+            >
+              <Statistic
+                title={<Space><Shield style={{ fontSize: 16 }} />System Uptime</Space>}
+                value={isLoading ? "..." : metrics.uptime}
+                suffix="%"
+                valueStyle={{ color: 'white', fontSize: '24px' }}
+              />
+              <Progress
+                percent={metrics.uptime}
+                showInfo={false}
+                strokeColor="rgba(255,255,255,0.8)"
+                trailColor="rgba(255,255,255,0.2)"
+                className="mt-2"
+              />
+            </Card>
+          </Col>
 
-          <Card className="bg-gradient-to-br from-orange-500 to-orange-600 text-white border-0 shadow-lg hover:shadow-xl transition-shadow">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium opacity-90 flex items-center gap-2">
-                <BarChart3 className="w-4 h-4" />
-                Cost Savings
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">
-                {isLoading ? "..." : `$${metrics.costSavings.toLocaleString()}`}
-              </div>
-              <div className="flex items-center gap-1 mt-2">
-                <TrendingUp className="w-3 h-3 text-green-300" />
-                <span className="text-xs opacity-75">12% reduction</span>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+          <Col xs={24} sm={12} lg={6}>
+            <Card
+              style={{
+                background: 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
+                border: 'none',
+                color: 'white'
+              }}
+              className="shadow-lg"
+            >
+              <Statistic
+                title={<Space><BarChart3 style={{ fontSize: 16 }} />Cost Savings</Space>}
+                value={isLoading ? "..." : metrics.costSavings}
+                prefix="$"
+                valueStyle={{ color: 'white', fontSize: '24px' }}
+                suffix={<Space className="text-green-300 text-xs"><TrendingUp />12%</Space>}
+              />
+            </Card>
+          </Col>
+        </Row>
 
         {/* Quick Actions */}
         <div className="mb-12">
           <h2 className="text-3xl font-bold text-gray-900 mb-8 text-center">Quick Actions</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <Row gutter={[16, 16]}>
             {quickActions.filter(action => action.available).map((action, index) => (
-              <Card key={index} className="group hover:shadow-lg transition-all duration-300 hover:-translate-y-1 cursor-pointer border-2 hover:border-sky-200" onClick={action.action}>
-                <CardHeader className="text-center pb-4">
-                  <div className={`w-16 h-16 rounded-full ${action.color} flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform`}>
-                    {action.icon}
+              <Col xs={24} sm={12} lg={6} key={index}>
+                <Card
+                  hoverable
+                  className="text-center cursor-pointer transition-all duration-300 hover:shadow-lg"
+                  onClick={action.action}
+                  style={{ height: '100%' }}
+                >
+                  <div className="flex flex-col items-center p-4">
+                    <div className={`w-16 h-16 rounded-full ${action.color} flex items-center justify-center mb-4 hover:scale-110 transition-transform`}>
+                      {action.icon}
+                    </div>
+                    <h3 className="text-lg font-semibold mb-2">{action.title}</h3>
+                    <p className="text-gray-600 text-sm">{action.description}</p>
                   </div>
-                  <CardTitle className="text-lg">{action.title}</CardTitle>
-                  <CardDescription className="text-sm">{action.description}</CardDescription>
-                </CardHeader>
-              </Card>
+                </Card>
+              </Col>
             ))}
-          </div>
+          </Row>
         </div>
 
         {/* Advanced Features */}
         <div className="mb-12">
           <h2 className="text-3xl font-bold text-gray-900 mb-8 text-center">Advanced Features</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <Row gutter={[16, 16]}>
             {advancedFeatures.map((feature, index) => (
-              <Card key={index} className="hover:shadow-lg transition-shadow cursor-pointer border hover:border-indigo-200" onClick={() => onNavigate(feature.page)}>
-                <CardHeader className="flex flex-row items-center space-y-0 pb-2">
-                  <div className="p-2 bg-indigo-100 rounded-lg mr-3">
-                    {feature.icon}
+              <Col xs={24} sm={12} lg={6} key={index}>
+                <Card
+                  hoverable
+                  className="cursor-pointer transition-shadow h-full"
+                  onClick={() => onNavigate(feature.page)}
+                  style={{ height: '100%' }}
+                >
+                  <div className="flex items-center p-4">
+                    <div className="p-3 bg-indigo-100 rounded-lg mr-4">
+                      {feature.icon}
+                    </div>
+                    <div>
+                      <h4 className="text-base font-semibold mb-1">{feature.title}</h4>
+                      <p className="text-gray-600 text-sm">{feature.description}</p>
+                    </div>
                   </div>
-                  <div>
-                    <CardTitle className="text-base">{feature.title}</CardTitle>
-                    <CardDescription className="text-sm">{feature.description}</CardDescription>
-                  </div>
-                </CardHeader>
-              </Card>
+                </Card>
+              </Col>
             ))}
-          </div>
+          </Row>
         </div>
 
         {/* System Status */}
-        <Card className="bg-gradient-to-r from-gray-50 to-gray-100 border-2 border-gray-200">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="w-5 h-5 text-green-600" />
-              System Status: All Systems Operational
-            </CardTitle>
-            <CardDescription>
-              Skypiea Gateway is running smoothly with 99.8% uptime. All providers are responding normally.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-green-600">250+</div>
-                <div className="text-sm text-gray-600">LLM Providers</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-blue-600">&lt;100ms</div>
-                <div className="text-sm text-gray-600">Avg Response Time</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-purple-600">24/7</div>
-                <div className="text-sm text-gray-600">Monitoring</div>
-              </div>
+        <Card
+          style={{
+            background: 'linear-gradient(to right, #f9fafb, #f3f4f6)',
+            border: '2px solid #e5e7eb'
+          }}
+        >
+          <div className="p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Activity style={{ fontSize: 20, color: '#16a34a' }} />
+              <h3 className="text-lg font-semibold">System Status: All Systems Operational</h3>
             </div>
-          </CardContent>
+            <p className="text-gray-600 mb-6">
+              Skypiea Gateway is running smoothly with 99.8% uptime. All providers are responding normally.
+            </p>
+            <Row gutter={[16, 16]}>
+              <Col xs={24} md={8}>
+                <div className="text-center">
+                  <div className="text-3xl font-bold text-green-600">250+</div>
+                  <div className="text-sm text-gray-600">LLM Providers</div>
+                </div>
+              </Col>
+              <Col xs={24} md={8}>
+                <div className="text-center">
+                  <div className="text-3xl font-bold text-blue-600">&lt;100ms</div>
+                  <div className="text-sm text-gray-600">Avg Response Time</div>
+                </div>
+              </Col>
+              <Col xs={24} md={8}>
+                <div className="text-center">
+                  <div className="text-3xl font-bold text-purple-600">24/7</div>
+                  <div className="text-sm text-gray-600">Monitoring</div>
+                </div>
+              </Col>
+            </Row>
+          </div>
         </Card>
       </div>
     </div>
