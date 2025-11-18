@@ -294,6 +294,7 @@ def _handle_team_selection_during_polling(
     console.print(table)
     
     # Simple selection
+    team_id: Optional[str] = None
     while True:
         try:
             choice = click.prompt(

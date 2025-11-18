@@ -770,7 +770,7 @@ async def cli_sso_callback(
         from litellm.constants import CLI_SSO_SESSION_CACHE_KEY_PREFIX
 
         # Get all teams from user_info - CLI will let user select which one
-        teams = []
+        teams: List[str] = []
         if hasattr(user_info, "teams") and user_info.teams:
             teams = user_info.teams if isinstance(user_info.teams, list) else []
 
