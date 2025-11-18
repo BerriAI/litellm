@@ -7,6 +7,11 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 warnings.filterwarnings(
     "ignore", message=".*Accessing the.*attribute on the instance is deprecated.*"
 )
+
+# Skypiea Gateway branding
+__version__ = "1.0.0-skypiea"
+__name__ = "🚀 Skypiea Gateway - Modern LLM Proxy"
+
 ### INIT VARIABLES #######################
 import threading
 import os

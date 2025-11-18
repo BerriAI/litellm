@@ -54,7 +54,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
         pkg_version = importlib.metadata.version("litellm")  # type: ignore
-        click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
+        click.echo(f"\n🚀 Skypiea Gateway: Current Version = 1.0.0-skypiea (powered by LiteLLM {pkg_version})\n")
 
     @staticmethod
     def _run_health_check(host, port):
@@ -410,7 +410,7 @@ class ProxyInitializationHelpers:
     default=False,
     is_flag=True,
     type=bool,
-    help="Print LiteLLM version",
+    help="Print Skypiea Gateway version",
 )
 @click.option(
     "--health",

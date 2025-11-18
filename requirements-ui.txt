@@ -1,0 +1,2 @@
+streamlit-shadcn-components==0.0.5
+streamlit-shadcn==0.0.2
