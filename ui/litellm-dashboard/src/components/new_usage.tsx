@@ -6,58 +6,66 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   BarChart,
   Card,
-  Title,
-  Text,
-  Grid,
   Col,
-  TabGroup,
-  TabList,
-  Tab,
-  TabPanel,
-  TabPanels,
+  DateRangePickerValue,
   DonutChart,
+  Grid,
+  Tab,
+  TabGroup,
   Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
   TableBody,
   TableCell,
-  DateRangePickerValue,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+  TabList,
+  TabPanel,
+  TabPanels,
+  Text,
+  Title,
 } from "@tremor/react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert } from "antd";
 
-import { userDailyActivityCall, userDailyActivityAggregatedCall, tagListCall } from "./networking";
-import { Tag } from "./tag_management/types";
-import ViewUserSpend from "./view_user_spend";
-import TopKeyView from "./top_key_view";
-import { ActivityMetrics, processActivityData } from "./activity_metrics";
-import UserAgentActivity from "./user_agent_activity";
-import { DailyData, MetricWithMetadata, KeyMetricWithMetadata } from "./usage/types";
-import EntityUsage from "./entity_usage";
-import { all_admin_roles } from "../utils/roles";
-import { Team } from "./key_team_helpers/key_list";
-import { EntityList } from "./entity_usage";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { valueFormatterSpend } from "./usage/utils/value_formatters";
-import CloudZeroExportModal from "./cloudzero_export_modal";
-import { ChartLoader } from "./shared/chart_loader";
-import { getProviderLogoAndName } from "./provider_info_helpers";
-import EntityUsageExportModal from "./EntityUsageExport";
-import AdvancedDatePicker from "./shared/advanced_date_picker";
 import { Button } from "@tremor/react";
+import { all_admin_roles } from "../utils/roles";
+import { ActivityMetrics, processActivityData } from "./activity_metrics";
+import CloudZeroExportModal from "./cloudzero_export_modal";
+import EntityUsage, { EntityList } from "./entity_usage";
+import EntityUsageExportModal from "./EntityUsageExport";
+import { Team } from "./key_team_helpers/key_list";
+import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "./networking";
+import { getProviderLogoAndName } from "./provider_info_helpers";
+import AdvancedDatePicker from "./shared/advanced_date_picker";
+import { ChartLoader } from "./shared/chart_loader";
+import { Tag } from "./tag_management/types";
+import TopKeyView from "./top_key_view";
+import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "./usage/types";
+import { valueFormatterSpend } from "./usage/utils/value_formatters";
+import UserAgentActivity from "./user_agent_activity";
+import ViewUserSpend from "./view_user_spend";
 
 interface NewUsagePageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
   teams: Team[];
+  organizations: Organization[];
   premiumUser: boolean;
 }
 
-const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, userID, teams, premiumUser }) => {
+const NewUsagePage: React.FC<NewUsagePageProps> = ({
+  accessToken,
+  userRole,
+  userID,
+  teams,
+  organizations,
+  premiumUser,
+}) => {
   const [userSpendData, setUserSpendData] = useState<{
     results: DailyData[];
     metadata: any;
@@ -81,6 +89,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
+  const [showOrganizationBanner, setShowOrganizationBanner] = useState(true);
 
   const getAllTags = async () => {
     if (!accessToken) {
@@ -408,354 +417,407 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         </div>
       )} */}
 
-      <TabGroup>
-        <TabList variant="solid" className="mt-1">
-          {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
-          <Tab>Team Usage</Tab>
-          {all_admin_roles.includes(userRole || "") ? <Tab>Tag Usage</Tab> : <></>}
-          {all_admin_roles.includes(userRole || "") ? <Tab>User Agent Activity</Tab> : <></>}
-        </TabList>
-        <TabPanels>
-          {/* Your Usage Panel */}
-          <TabPanel>
-            <Grid numItems={2} className="gap-10 w-full mb-4">
-              <Col>
-                <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
-              </Col>
-            </Grid>
-            <TabGroup>
-              <div className="flex justify-between items-center">
-                <TabList variant="solid" className="mt-1">
-                  <Tab>Cost</Tab>
-                  <Tab>Model Activity</Tab>
-                  <Tab>Key Activity</Tab>
-                  <Tab>MCP Server Activity</Tab>
-                </TabList>
-                <Button
-                  onClick={() => setIsGlobalExportModalOpen(true)}
-                  icon={() => (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                      />
-                    </svg>
-                  )}
-                >
-                  Export Data
-                </Button>
-              </div>
-              <TabPanels>
-                {/* Cost Panel */}
-                <TabPanel>
-                  <Grid numItems={2} className="gap-2 w-full">
-                    {/* Total Spend Card */}
-                    <Col numColSpan={2}>
-                      <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
-                        Project Spend{" "}
-                        {new Date().toLocaleString("default", {
-                          month: "long",
-                        })}{" "}
-                        1 - {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
-                      </Text>
-
-                      <ViewUserSpend
-                        userID={userID}
-                        userRole={userRole}
-                        accessToken={accessToken}
-                        userSpend={totalSpend}
-                        selectedTeam={null}
-                        userMaxBudget={null}
-                      />
-                    </Col>
-
-                    <Col numColSpan={2}>
-                      <Card>
-                        <Title>Usage Metrics</Title>
-                        <Grid numItems={5} className="gap-4 mt-4">
-                          <Card>
-                            <Title>Total Requests</Title>
-                            <Text className="text-2xl font-bold mt-2">
-                              {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
-                            </Text>
-                          </Card>
-                          <Card>
-                            <Title>Successful Requests</Title>
-                            <Text className="text-2xl font-bold mt-2 text-green-600">
-                              {userSpendData.metadata?.total_successful_requests?.toLocaleString() || 0}
-                            </Text>
-                          </Card>
-                          <Card>
-                            <Title>Failed Requests</Title>
-                            <Text className="text-2xl font-bold mt-2 text-red-600">
-                              {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
-                            </Text>
-                          </Card>
-                          <Card>
-                            <Title>Total Tokens</Title>
-                            <Text className="text-2xl font-bold mt-2">
-                              {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                            </Text>
-                          </Card>
-                          <Card>
-                            <Title>Average Cost per Request</Title>
-                            <Text className="text-2xl font-bold mt-2">
-                              $
-                              {formatNumberWithCommas(
-                                (totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1),
-                                4,
-                              )}
-                            </Text>
-                          </Card>
-                        </Grid>
-                      </Card>
-                    </Col>
-
-                    {/* Daily Spend Chart */}
-                    <Col numColSpan={2}>
-                      <Card>
-                        <Title>Daily Spend</Title>
-                        {loading ? (
-                          <ChartLoader isDateChanging={isDateChanging} />
-                        ) : (
-                          <BarChart
-                            data={[...userSpendData.results].sort(
-                              (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+      {/* Global Date Picker and Tabs - Single Row */}
+      <div className="flex items-end justify-between gap-6 mb-6">
+        <div className="flex-1">
+          <TabGroup>
+            <div className="flex items-end justify-start gap-6 mb-6">
+              <TabList variant="solid">
+                {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
+                {all_admin_roles.includes(userRole || "") ? (
+                  <Tab>Organization Usage</Tab>
+                ) : (
+                  <Tab>Your Organization Usage</Tab>
+                )}
+                <Tab>Team Usage</Tab>
+                {all_admin_roles.includes(userRole || "") ? <Tab>Tag Usage</Tab> : <></>}
+                {all_admin_roles.includes(userRole || "") ? <Tab>User Agent Activity</Tab> : <></>}
+              </TabList>
+              <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            </div>
+            <TabPanels>
+              {/* Your Usage Panel */}
+              <TabPanel>
+                <TabGroup>
+                  <div className="flex justify-between items-center">
+                    <TabList variant="solid" className="mt-1">
+                      <Tab>Cost</Tab>
+                      <Tab>Model Activity</Tab>
+                      <Tab>Key Activity</Tab>
+                      <Tab>MCP Server Activity</Tab>
+                    </TabList>
+                    <Button
+                      onClick={() => setIsGlobalExportModalOpen(true)}
+                      icon={() => (
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                          />
+                        </svg>
+                      )}
+                    >
+                      Export Data
+                    </Button>
+                  </div>
+                  <TabPanels>
+                    {/* Cost Panel */}
+                    <TabPanel>
+                      <Grid numItems={2} className="gap-2 w-full">
+                        {/* Total Spend Card */}
+                        <Col numColSpan={2}>
+                          <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
+                            Project Spend{" "}
+                            {dateValue.from && dateValue.to && (
+                              <>
+                                {dateValue.from.toLocaleDateString("en-US", {
+                                  month: "short",
+                                  day: "numeric",
+                                  year:
+                                    dateValue.from.getFullYear() !== dateValue.to.getFullYear() ? "numeric" : undefined,
+                                })}
+                                {" - "}
+                                {dateValue.to.toLocaleDateString("en-US", {
+                                  month: "short",
+                                  day: "numeric",
+                                  year: "numeric",
+                                })}
+                              </>
                             )}
-                            index="date"
-                            categories={["metrics.spend"]}
-                            colors={["cyan"]}
-                            valueFormatter={valueFormatterSpend}
-                            yAxisWidth={100}
-                            showLegend={false}
-                            customTooltip={({ payload, active }) => {
-                              if (!active || !payload?.[0]) return null;
-                              const data = payload[0].payload;
-                              return (
-                                <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                  <p className="font-bold">{data.date}</p>
-                                  <p className="text-cyan-500">
-                                    Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
-                                  </p>
-                                  <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                                  <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                                  <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                                  <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
-                                </div>
-                              );
-                            }}
-                          />
-                        )}
-                      </Card>
-                    </Col>
-                    {/* Top API Keys */}
-                    <Col numColSpan={1}>
-                      <Card className="h-full">
-                        <Title>Top API Keys</Title>
-                        <TopKeyView
-                          topKeys={getTopKeys()}
-                          accessToken={accessToken}
-                          userID={userID}
-                          userRole={userRole}
-                          teams={null}
-                          premiumUser={premiumUser}
-                        />
-                      </Card>
-                    </Col>
+                          </Text>
 
-                    {/* Top Models */}
-                    <Col numColSpan={1}>
-                      <Card className="h-full">
-                        <div className="flex justify-between items-center mb-4">
-                          <Title>{modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models"}</Title>
-                          <div className="flex bg-gray-100 rounded-lg p-1">
-                            <button
-                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                                modelViewType === "groups"
-                                  ? "bg-white shadow-sm text-gray-900"
-                                  : "text-gray-600 hover:text-gray-900"
-                              }`}
-                              onClick={() => setModelViewType("groups")}
-                            >
-                              Public Model Name
-                            </button>
-                            <button
-                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                                modelViewType === "individual"
-                                  ? "bg-white shadow-sm text-gray-900"
-                                  : "text-gray-600 hover:text-gray-900"
-                              }`}
-                              onClick={() => setModelViewType("individual")}
-                            >
-                              Litellm Model Name
-                            </button>
-                          </div>
-                        </div>
-                        {loading ? (
-                          <ChartLoader isDateChanging={isDateChanging} />
-                        ) : (
-                          <BarChart
-                            className="mt-4 h-40"
-                            data={modelViewType === "groups" ? getTopModelGroups() : getTopModels()}
-                            index="key"
-                            categories={["spend"]}
-                            colors={["cyan"]}
-                            valueFormatter={valueFormatterSpend}
-                            layout="vertical"
-                            yAxisWidth={200}
-                            showLegend={false}
-                            customTooltip={({ payload, active }) => {
-                              if (!active || !payload?.[0]) return null;
-                              const data = payload[0].payload;
-                              return (
-                                <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                  <p className="font-bold">{data.key}</p>
-                                  <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
-                                  <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
-                                  <p className="text-green-600">
-                                    Successful: {data.successful_requests.toLocaleString()}
-                                  </p>
-                                  <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
-                                  <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
-                                </div>
-                              );
-                            }}
+                          <ViewUserSpend
+                            userID={userID}
+                            userRole={userRole}
+                            accessToken={accessToken}
+                            userSpend={totalSpend}
+                            selectedTeam={null}
+                            userMaxBudget={null}
                           />
-                        )}
-                      </Card>
-                    </Col>
+                        </Col>
 
-                    {/* Spend by Provider */}
-                    <Col numColSpan={2}>
-                      <Card className="h-full">
-                        <div className="flex justify-between items-center mb-4">
-                          <Title>Spend by Provider</Title>
-                        </div>
-                        {loading ? (
-                          <ChartLoader isDateChanging={isDateChanging} />
-                        ) : (
-                          <Grid numItems={2}>
-                            <Col numColSpan={1}>
-                              <DonutChart
-                                className="mt-4 h-40"
-                                data={getProviderSpend()}
-                                index="provider"
-                                category="spend"
-                                valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                        <Col numColSpan={2}>
+                          <Card>
+                            <Title>Usage Metrics</Title>
+                            <Grid numItems={5} className="gap-4 mt-4">
+                              <Card>
+                                <Title>Total Requests</Title>
+                                <Text className="text-2xl font-bold mt-2">
+                                  {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
+                                </Text>
+                              </Card>
+                              <Card>
+                                <Title>Successful Requests</Title>
+                                <Text className="text-2xl font-bold mt-2 text-green-600">
+                                  {userSpendData.metadata?.total_successful_requests?.toLocaleString() || 0}
+                                </Text>
+                              </Card>
+                              <Card>
+                                <Title>Failed Requests</Title>
+                                <Text className="text-2xl font-bold mt-2 text-red-600">
+                                  {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
+                                </Text>
+                              </Card>
+                              <Card>
+                                <Title>Total Tokens</Title>
+                                <Text className="text-2xl font-bold mt-2">
+                                  {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
+                                </Text>
+                              </Card>
+                              <Card>
+                                <Title>Average Cost per Request</Title>
+                                <Text className="text-2xl font-bold mt-2">
+                                  $
+                                  {formatNumberWithCommas(
+                                    (totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1),
+                                    4,
+                                  )}
+                                </Text>
+                              </Card>
+                            </Grid>
+                          </Card>
+                        </Col>
+
+                        {/* Daily Spend Chart */}
+                        <Col numColSpan={2}>
+                          <Card>
+                            <Title>Daily Spend</Title>
+                            {loading ? (
+                              <ChartLoader isDateChanging={isDateChanging} />
+                            ) : (
+                              <BarChart
+                                data={[...userSpendData.results].sort(
+                                  (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+                                )}
+                                index="date"
+                                categories={["metrics.spend"]}
                                 colors={["cyan"]}
+                                valueFormatter={valueFormatterSpend}
+                                yAxisWidth={100}
+                                showLegend={false}
+                                customTooltip={({ payload, active }) => {
+                                  if (!active || !payload?.[0]) return null;
+                                  const data = payload[0].payload;
+                                  return (
+                                    <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                      <p className="font-bold">{data.date}</p>
+                                      <p className="text-cyan-500">
+                                        Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                                      </p>
+                                      <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
+                                      <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                                      <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
+                                      <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
+                                    </div>
+                                  );
+                                }}
                               />
-                            </Col>
-                            <Col numColSpan={1}>
-                              <Table>
-                                <TableHead>
-                                  <TableRow>
-                                    <TableHeaderCell>Provider</TableHeaderCell>
-                                    <TableHeaderCell>Spend</TableHeaderCell>
-                                    <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                                    <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                                    <TableHeaderCell>Tokens</TableHeaderCell>
-                                  </TableRow>
-                                </TableHead>
-                                <TableBody>
-                                  {getProviderSpend()
-                                    .filter((provider) => provider.spend > 0)
-                                    .map((provider) => (
-                                      <TableRow key={provider.provider}>
-                                        <TableCell>
-                                          <div className="flex items-center space-x-2">
-                                            {provider.provider && (
-                                              <img
-                                                src={getProviderLogoAndName(provider.provider).logo}
-                                                alt={`${provider.provider} logo`}
-                                                className="w-4 h-4"
-                                                onError={(e) => {
-                                                  const target = e.target as HTMLImageElement;
-                                                  const parent = target.parentElement;
-                                                  if (parent) {
-                                                    const fallbackDiv = document.createElement("div");
-                                                    fallbackDiv.className =
-                                                      "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                                                    fallbackDiv.textContent = provider.provider?.charAt(0) || "-";
-                                                    parent.replaceChild(fallbackDiv, target);
-                                                  }
-                                                }}
-                                              />
-                                            )}
-                                            <span>{provider.provider}</span>
-                                          </div>
-                                        </TableCell>
-                                        <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
-                                        <TableCell className="text-green-600">
-                                          {provider.successful_requests.toLocaleString()}
-                                        </TableCell>
-                                        <TableCell className="text-red-600">
-                                          {provider.failed_requests.toLocaleString()}
-                                        </TableCell>
-                                        <TableCell>{provider.tokens.toLocaleString()}</TableCell>
+                            )}
+                          </Card>
+                        </Col>
+                        {/* Top API Keys */}
+                        <Col numColSpan={1}>
+                          <Card className="h-full">
+                            <Title>Top API Keys</Title>
+                            <TopKeyView
+                              topKeys={getTopKeys()}
+                              accessToken={accessToken}
+                              userID={userID}
+                              userRole={userRole}
+                              teams={null}
+                              premiumUser={premiumUser}
+                            />
+                          </Card>
+                        </Col>
+
+                        {/* Top Models */}
+                        <Col numColSpan={1}>
+                          <Card className="h-full">
+                            <div className="flex justify-between items-center mb-4">
+                              <Title>
+                                {modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models"}
+                              </Title>
+                              <div className="flex bg-gray-100 rounded-lg p-1">
+                                <button
+                                  className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                                    modelViewType === "groups"
+                                      ? "bg-white shadow-sm text-gray-900"
+                                      : "text-gray-600 hover:text-gray-900"
+                                  }`}
+                                  onClick={() => setModelViewType("groups")}
+                                >
+                                  Public Model Name
+                                </button>
+                                <button
+                                  className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                                    modelViewType === "individual"
+                                      ? "bg-white shadow-sm text-gray-900"
+                                      : "text-gray-600 hover:text-gray-900"
+                                  }`}
+                                  onClick={() => setModelViewType("individual")}
+                                >
+                                  Litellm Model Name
+                                </button>
+                              </div>
+                            </div>
+                            {loading ? (
+                              <ChartLoader isDateChanging={isDateChanging} />
+                            ) : (
+                              <BarChart
+                                className="mt-4 h-40"
+                                data={modelViewType === "groups" ? getTopModelGroups() : getTopModels()}
+                                index="key"
+                                categories={["spend"]}
+                                colors={["cyan"]}
+                                valueFormatter={valueFormatterSpend}
+                                layout="vertical"
+                                yAxisWidth={200}
+                                showLegend={false}
+                                customTooltip={({ payload, active }) => {
+                                  if (!active || !payload?.[0]) return null;
+                                  const data = payload[0].payload;
+                                  return (
+                                    <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                      <p className="font-bold">{data.key}</p>
+                                      <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
+                                      <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
+                                      <p className="text-green-600">
+                                        Successful: {data.successful_requests.toLocaleString()}
+                                      </p>
+                                      <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
+                                      <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
+                                    </div>
+                                  );
+                                }}
+                              />
+                            )}
+                          </Card>
+                        </Col>
+
+                        {/* Spend by Provider */}
+                        <Col numColSpan={2}>
+                          <Card className="h-full">
+                            <div className="flex justify-between items-center mb-4">
+                              <Title>Spend by Provider</Title>
+                            </div>
+                            {loading ? (
+                              <ChartLoader isDateChanging={isDateChanging} />
+                            ) : (
+                              <Grid numItems={2}>
+                                <Col numColSpan={1}>
+                                  <DonutChart
+                                    className="mt-4 h-40"
+                                    data={getProviderSpend()}
+                                    index="provider"
+                                    category="spend"
+                                    valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                                    colors={["cyan"]}
+                                  />
+                                </Col>
+                                <Col numColSpan={1}>
+                                  <Table>
+                                    <TableHead>
+                                      <TableRow>
+                                        <TableHeaderCell>Provider</TableHeaderCell>
+                                        <TableHeaderCell>Spend</TableHeaderCell>
+                                        <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                                        <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
+                                        <TableHeaderCell>Tokens</TableHeaderCell>
                                       </TableRow>
-                                    ))}
-                                </TableBody>
-                              </Table>
-                            </Col>
-                          </Grid>
-                        )}
-                      </Card>
-                    </Col>
+                                    </TableHead>
+                                    <TableBody>
+                                      {getProviderSpend()
+                                        .filter((provider) => provider.spend > 0)
+                                        .map((provider) => (
+                                          <TableRow key={provider.provider}>
+                                            <TableCell>
+                                              <div className="flex items-center space-x-2">
+                                                {provider.provider && (
+                                                  <img
+                                                    src={getProviderLogoAndName(provider.provider).logo}
+                                                    alt={`${provider.provider} logo`}
+                                                    className="w-4 h-4"
+                                                    onError={(e) => {
+                                                      const target = e.target as HTMLImageElement;
+                                                      const parent = target.parentElement;
+                                                      if (parent) {
+                                                        const fallbackDiv = document.createElement("div");
+                                                        fallbackDiv.className =
+                                                          "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                                                        fallbackDiv.textContent = provider.provider?.charAt(0) || "-";
+                                                        parent.replaceChild(fallbackDiv, target);
+                                                      }
+                                                    }}
+                                                  />
+                                                )}
+                                                <span>{provider.provider}</span>
+                                              </div>
+                                            </TableCell>
+                                            <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
+                                            <TableCell className="text-green-600">
+                                              {provider.successful_requests.toLocaleString()}
+                                            </TableCell>
+                                            <TableCell className="text-red-600">
+                                              {provider.failed_requests.toLocaleString()}
+                                            </TableCell>
+                                            <TableCell>{provider.tokens.toLocaleString()}</TableCell>
+                                          </TableRow>
+                                        ))}
+                                    </TableBody>
+                                  </Table>
+                                </Col>
+                              </Grid>
+                            )}
+                          </Card>
+                        </Col>
 
-                    {/* Usage Metrics */}
-                  </Grid>
-                </TabPanel>
+                        {/* Usage Metrics */}
+                      </Grid>
+                    </TabPanel>
 
-                {/* Activity Panel */}
-                <TabPanel>
-                  <ActivityMetrics modelMetrics={modelMetrics} />
-                </TabPanel>
-                <TabPanel>
-                  <ActivityMetrics modelMetrics={keyMetrics} />
-                </TabPanel>
-                <TabPanel>
-                  <ActivityMetrics modelMetrics={mcpServerMetrics} />
-                </TabPanel>
-              </TabPanels>
-            </TabGroup>
-          </TabPanel>
+                    {/* Activity Panel */}
+                    <TabPanel>
+                      <ActivityMetrics modelMetrics={modelMetrics} />
+                    </TabPanel>
+                    <TabPanel>
+                      <ActivityMetrics modelMetrics={keyMetrics} />
+                    </TabPanel>
+                    <TabPanel>
+                      <ActivityMetrics modelMetrics={mcpServerMetrics} />
+                    </TabPanel>
+                  </TabPanels>
+                </TabGroup>
+              </TabPanel>
 
-          {/* Team Usage Panel */}
-          <TabPanel>
-            <EntityUsage
-              accessToken={accessToken}
-              entityType="team"
-              userID={userID}
-              userRole={userRole}
-              entityList={
-                teams?.map((team) => ({
-                  label: team.team_alias,
-                  value: team.team_id,
-                })) || null
-              }
-              premiumUser={premiumUser}
-            />
-          </TabPanel>
+              {/* Organization Usage Panel */}
+              <TabPanel>
+                {showOrganizationBanner && (
+                  <Alert
+                    banner
+                    type="info"
+                    message="Organization usage is a new feature."
+                    description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
+                    closable
+                    onClose={() => setShowOrganizationBanner(false)}
+                    className="mb-5"
+                  />
+                )}
+                <EntityUsage
+                  accessToken={accessToken}
+                  entityType="organization"
+                  userID={userID}
+                  userRole={userRole}
+                  dateValue={dateValue}
+                  entityList={
+                    organizations?.map((organization) => ({
+                      label: organization.organization_alias,
+                      value: organization.organization_id,
+                    })) || null
+                  }
+                  premiumUser={premiumUser}
+                />
+              </TabPanel>
 
-          {/* Tag Usage Panel */}
-          <TabPanel>
-            <EntityUsage
-              accessToken={accessToken}
-              entityType="tag"
-              userID={userID}
-              userRole={userRole}
-              entityList={allTags}
-              premiumUser={premiumUser}
-            />
-          </TabPanel>
-          {/* User Agent Activity Panel */}
-          <TabPanel>
-            <UserAgentActivity accessToken={accessToken} userRole={userRole} />
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+              {/* Team Usage Panel */}
+              <TabPanel>
+                <EntityUsage
+                  accessToken={accessToken}
+                  entityType="team"
+                  userID={userID}
+                  userRole={userRole}
+                  entityList={
+                    teams?.map((team) => ({
+                      label: team.team_alias,
+                      value: team.team_id,
+                    })) || null
+                  }
+                  premiumUser={premiumUser}
+                  dateValue={dateValue}
+                />
+              </TabPanel>
+
+              {/* Tag Usage Panel */}
+              <TabPanel>
+                <EntityUsage
+                  accessToken={accessToken}
+                  entityType="tag"
+                  userID={userID}
+                  userRole={userRole}
+                  entityList={allTags}
+                  premiumUser={premiumUser}
+                  dateValue={dateValue}
+                />
+              </TabPanel>
+              {/* User Agent Activity Panel */}
+              <TabPanel>
+                <UserAgentActivity accessToken={accessToken} userRole={userRole} dateValue={dateValue} />
+              </TabPanel>
+            </TabPanels>
+          </TabGroup>
+        </div>
+      </div>
 
       {/* CloudZero Export Modal */}
       <CloudZeroExportModal

@@ -1935,3 +1935,43 @@ async def test_asearch_with_fallbacks_helper_missing_search_provider():
             original_generic_function=mock_original_function,
             query="test query"
         )
+
+
+def test_get_first_default_fallback():
+    """Test _get_first_default_fallback method"""
+    # Test with default fallback ("*")
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        }
+    ]
+    
+    router = Router(
+        model_list=model_list,
+        fallbacks=[{"*": ["gpt-3.5-turbo"]}]
+    )
+    
+    result = router._get_first_default_fallback()
+    assert result == "gpt-3.5-turbo"
+    
+    # Test with no fallbacks
+    router_no_fallbacks = Router(model_list=model_list)
+    result = router_no_fallbacks._get_first_default_fallback()
+    assert result is None
+    
+    # Test with fallbacks but no default
+    router_no_default = Router(
+        model_list=model_list,
+        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}]
+    )
+    result = router_no_default._get_first_default_fallback()
+    assert result is None
+    
+    # Test with empty default list
+    router_empty_list = Router(
+        model_list=model_list,
+        fallbacks=[{"*": []}]
+    )
+    result = router_empty_list._get_first_default_fallback()
+    assert result is None

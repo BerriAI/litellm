@@ -196,7 +196,7 @@ input=["good morning from litellm"]
       ]
     }
   ],
-  "model": "text-embedding-ada-002-v2",
+  "model": "text-embedding-ada-002",
   "usage": {
     "prompt_tokens": 10,
     "total_tokens": 10

@@ -585,7 +585,8 @@ class LiteLLMProxyRequestSetup:
                 if user_api_key_dict.budget_reset_at
                 else None
             ),
-            user_api_key_auth_metadata=None,
+            
+            user_api_key_auth_metadata=user_api_key_dict.metadata,
         )
         return user_api_key_logged_metadata
 
@@ -1157,7 +1158,7 @@ def _enforced_params_check(
     )
     if enforced_params is None:
         return True
-    if enforced_params is not None and premium_user is not True:
+    if enforced_params and premium_user is not True:
         raise ValueError(
             f"Enforced Params is an Enterprise feature. Enforced Params: {enforced_params}. {CommonProxyErrors.not_premium_user.value}"
         )
@@ -1190,6 +1191,8 @@ def _add_guardrails_from_key_or_team_metadata(
 ) -> None:
     """
     Helper add guardrails from key or team metadata to request data
+    
+    Key guardrails are set first, then team guardrails are appended (without duplicates).
 
     Args:
         key_metadata: The key metadata dictionary to check for guardrails
@@ -1200,14 +1203,24 @@ def _add_guardrails_from_key_or_team_metadata(
     """
     from litellm.proxy.utils import _premium_user_check
 
-    for _management_object_metadata in [key_metadata, team_metadata]:
-        if _management_object_metadata and "guardrails" in _management_object_metadata:
-            if len(_management_object_metadata["guardrails"]) > 0:
-                _premium_user_check()
-
-            data[metadata_variable_name]["guardrails"] = _management_object_metadata[
-                "guardrails"
-            ]
+    # Initialize guardrails set (avoiding duplicates)
+    combined_guardrails = set()
+    
+    # Add key-level guardrails first
+    if key_metadata and "guardrails" in key_metadata:
+        if isinstance(key_metadata["guardrails"], list) and len(key_metadata["guardrails"]) > 0:
+            _premium_user_check()
+            combined_guardrails.update(key_metadata["guardrails"])
+    
+    # Add team-level guardrails (set automatically handles duplicates)
+    if team_metadata and "guardrails" in team_metadata:
+        if isinstance(team_metadata["guardrails"], list) and len(team_metadata["guardrails"]) > 0:
+            _premium_user_check()
+            combined_guardrails.update(team_metadata["guardrails"])
+    
+    # Set combined guardrails in metadata as list
+    if combined_guardrails:
+        data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
 
 
 def move_guardrails_to_metadata(
@@ -1229,15 +1242,24 @@ def move_guardrails_to_metadata(
         metadata_variable_name=_metadata_variable_name,
     )
 
-    # Check request-level guardrails
+    #########################################################################################
+    # User's might send "guardrails" in the request body, we need to add them to the request metadata. 
+    # Since downstream logic requires "guardrails" to be in the request metadata
+    #########################################################################################
     if "guardrails" in data:
-        data[_metadata_variable_name]["guardrails"] = data["guardrails"]
-        del data["guardrails"]
-
+        request_body_guardrails = data.pop("guardrails")
+        if "guardrails" in data[_metadata_variable_name] and isinstance(data[_metadata_variable_name]["guardrails"], list):
+            data[_metadata_variable_name]["guardrails"].extend(request_body_guardrails)
+        else:
+            data[_metadata_variable_name]["guardrails"] = request_body_guardrails
+    
+    #########################################################################################
     if "guardrail_config" in data:
-        data[_metadata_variable_name]["guardrail_config"] = data["guardrail_config"]
-        del data["guardrail_config"]
-
+        request_body_guardrail_config = data.pop("guardrail_config")
+        if "guardrail_config" in data[_metadata_variable_name] and isinstance(data[_metadata_variable_name]["guardrail_config"], dict):
+            data[_metadata_variable_name]["guardrail_config"].update(request_body_guardrail_config)
+        else:
+            data[_metadata_variable_name]["guardrail_config"] = request_body_guardrail_config
 
 def add_provider_specific_headers_to_request(
     data: dict,

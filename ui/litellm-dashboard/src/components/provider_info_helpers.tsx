@@ -14,6 +14,7 @@ export enum Providers {
   Deepgram = "Deepgram",
   Deepseek = "Deepseek",
   ElevenLabs = "ElevenLabs",
+  FalAI = "Fal AI",
   FireworksAI = "Fireworks AI",
   Google_AI_Studio = "Google AI Studio",
   GradientAI = "GradientAI",
@@ -30,6 +31,7 @@ export enum Providers {
   Openrouter = "Openrouter",
   Oracle = "Oracle Cloud Infrastructure (OCI)",
   Perplexity = "Perplexity",
+  RunwayML = "RunwayML",
   Sambanova = "Sambanova",
   Snowflake = "Snowflake",
   TogetherAI = "TogetherAI",
@@ -64,6 +66,7 @@ export const provider_map: Record<string, string> = {
   Cerebras: "cerebras",
   Sambanova: "sambanova",
   Perplexity: "perplexity",
+  RunwayML: "runwayml",
   TogetherAI: "together_ai",
   Openrouter: "openrouter",
   Oracle: "oci",
@@ -73,6 +76,7 @@ export const provider_map: Record<string, string> = {
   Triton: "triton",
   Deepgram: "deepgram",
   ElevenLabs: "elevenlabs",
+  FalAI: "fal_ai",
   SageMaker: "sagemaker_chat",
   Voyage: "voyage",
   JinaAI: "jina_ai",
@@ -82,7 +86,7 @@ export const provider_map: Record<string, string> = {
   Infinity: "infinity",
 };
 
-const asset_logos_folder = "/ui/assets/logos/";
+const asset_logos_folder = "../ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
   [Providers.AIML]: `${asset_logos_folder}aiml_api.svg`,
@@ -111,6 +115,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Openrouter]: `${asset_logos_folder}openrouter.svg`,
   [Providers.Oracle]: `${asset_logos_folder}oracle.svg`,
   [Providers.Perplexity]: `${asset_logos_folder}perplexity-ai.svg`,
+  [Providers.RunwayML]: `${asset_logos_folder}runwayml.png`,
   [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
   [Providers.Snowflake]: `${asset_logos_folder}snowflake.svg`,
   [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
@@ -120,6 +125,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
   [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`,
   [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`,
+  [Providers.FalAI]: `${asset_logos_folder}fal_ai.jpg`,
   [Providers.Voyage]: `${asset_logos_folder}voyage.webp`,
   [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
   [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
@@ -183,6 +189,10 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "volcengine/<any-model-on-volcengine>";
   } else if (selectedProvider == Providers.DeepInfra) {
     return "deepinfra/<any-model-on-deepinfra>";
+  } else if (selectedProvider == Providers.FalAI) {
+    return "fal_ai/fal-ai/flux-pro/v1.1-ultra";
+  } else if (selectedProvider == Providers.RunwayML) {
+    return "runwayml/gen4_turbo";
   } else {
     return "gpt-3.5-turbo";
   }

@@ -1,38 +1,42 @@
-import React, { useState, useEffect } from "react";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Card,
-  Title,
-  Text,
+  Grid,
   Tab,
-  TabList,
   TabGroup,
+  TabList,
   TabPanel,
   TabPanels,
-  Grid,
-  Button as TremorButton,
+  Text,
   TextInput,
+  Title,
+  Button as TremorButton,
 } from "@tremor/react";
-import NumericalInput from "./shared/numerical_input";
-import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
+import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
+import { formItemValidateJSON, truncateString } from "../utils/textUtils";
+import CacheControlSettings from "./add_model/cache_control_settings";
+import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
+import ReuseCredentialsModal from "./model_add/reuse_credentials";
+import NotificationsManager from "./molecules/notifications_manager";
 import {
-  modelDeleteCall,
   CredentialItem,
-  credentialGetCall,
   credentialCreateCall,
+  credentialGetCall,
+  getGuardrailsList,
+  modelDeleteCall,
   modelInfoV1Call,
   modelPatchUpdateCall,
-  getGuardrailsList,
+  tagListCall,
+  testConnectionRequest,
 } from "./networking";
-import { Button, Form, Input, Select, Modal, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import NumericalInput from "./shared/numerical_input";
+import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
-import ReuseCredentialsModal from "./model_add/reuse_credentials";
-import CacheControlSettings from "./add_model/cache_control_settings";
-import { CheckIcon, CopyIcon } from "lucide-react";
-import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
-import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
-import NotificationsManager from "./molecules/notifications_manager";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -73,7 +77,9 @@ export default function ModelInfoView({
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
-  const canEditModel = userRole === "Admin" || modelData?.model_info?.created_by === userID;
+  const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
+  const canEditModel =
+    (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
   const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
@@ -82,6 +88,8 @@ export default function ModelInfoView({
     modelData?.litellm_params?.litellm_credential_name != undefined;
   console.log("usingExistingCredential, ", usingExistingCredential);
   console.log("modelData.litellm_params.litellm_credential_name, ", modelData?.litellm_params?.litellm_credential_name);
+
+  console.log("tagsList, ", modelData.litellm_params?.tags);
 
   useEffect(() => {
     const getExistingCredential = async () => {
@@ -131,9 +139,20 @@ export default function ModelInfoView({
       }
     };
 
+    const fetchTags = async () => {
+      if (!accessToken) return;
+      try {
+        const response = await tagListCall(accessToken);
+        setTagsList(response);
+      } catch (error) {
+        console.error("Failed to fetch tags:", error);
+      }
+    };
+
     getExistingCredential();
     getModelInfo();
     fetchGuardrails();
+    fetchTags();
   }, [accessToken, modelId]);
 
   const handleReuseCredential = async (values: any) => {
@@ -159,8 +178,19 @@ export default function ModelInfoView({
 
       console.log("values.model_name, ", values.model_name);
 
+      // Parse LiteLLM extra params from JSON text area
+      let parsedExtraParams: Record<string, any> = {};
+      try {
+        parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
+      } catch (e) {
+        NotificationsManager.fromBackend("Invalid JSON in LiteLLM Params");
+        setIsSaving(false);
+        return;
+      }
+
       let updatedLitellmParams = {
-        ...localModelData.litellm_params,
+        ...values.litellm_params,
+        ...parsedExtraParams,
         model: values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,
@@ -172,6 +202,7 @@ export default function ModelInfoView({
         stream_timeout: values.stream_timeout,
         input_cost_per_token: values.input_cost / 1_000_000,
         output_cost_per_token: values.output_cost / 1_000_000,
+        tags: values.tags,
       };
       if (values.guardrails) {
         updatedLitellmParams.guardrails = values.guardrails;
@@ -244,6 +275,37 @@ export default function ModelInfoView({
     );
   }
 
+  const handleTestConnection = async () => {
+    if (!accessToken) return;
+    try {
+      NotificationsManager.info("Testing connection...");
+      const response = await testConnectionRequest(
+        accessToken,
+        {
+          custom_llm_provider: localModelData.litellm_params.custom_llm_provider,
+          litellm_credential_name: localModelData.litellm_params.litellm_credential_name,
+          model: localModelData.litellm_model_name,
+        },
+        {
+          mode: localModelData.model_info?.mode,
+        },
+        localModelData.model_info?.mode,
+      );
+
+      if (response.status === "success") {
+        NotificationsManager.success("Connection test successful!");
+      } else {
+        throw new Error(response?.result?.error || response?.message || "Unknown error");
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        NotificationsManager.error("Error testing connection: " + truncateString(error.message, 100));
+      } else {
+        NotificationsManager.error("Error testing connection: " + String(error));
+      }
+    }
+  };
+
   const handleDelete = async () => {
     try {
       if (!accessToken) return;
@@ -305,26 +367,36 @@ export default function ModelInfoView({
           </div>
         </div>
         <div className="flex gap-2">
-          {isAdmin && (
-            <TremorButton
-              icon={KeyIcon}
-              variant="secondary"
-              onClick={() => setIsCredentialModalOpen(true)}
-              className="flex items-center"
-            >
-              Re-use Credentials
-            </TremorButton>
-          )}
-          {canEditModel && (
-            <TremorButton
-              icon={TrashIcon}
-              variant="secondary"
-              onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center"
-            >
-              Delete Model
-            </TremorButton>
-          )}
+          <TremorButton
+            variant="secondary"
+            icon={RefreshIcon}
+            onClick={handleTestConnection}
+            className="flex items-center gap-2"
+            data-testid="test-connection-button"
+          >
+            Test Connection
+          </TremorButton>
+
+          <TremorButton
+            icon={KeyIcon}
+            variant="secondary"
+            onClick={() => setIsCredentialModalOpen(true)}
+            className="flex items-center"
+            disabled={!isAdmin}
+            data-testid="reuse-credentials-button"
+          >
+            Re-use Credentials
+          </TremorButton>
+          <TremorButton
+            icon={TrashIcon}
+            variant="secondary"
+            onClick={() => setIsDeleteModalOpen(true)}
+            className="flex items-center text-red-500 border-red-500"
+            disabled={!canEditModel}
+            data-testid="delete-model-button"
+          >
+            Delete Model
+          </TremorButton>
         </div>
       </div>
 
@@ -347,15 +419,20 @@ export default function ModelInfoView({
                       alt={`${modelData.provider} logo`}
                       className="w-4 h-4"
                       onError={(e) => {
-                        // Create a div with provider initial as fallback
-                        const target = e.target as HTMLImageElement;
+                        const target = e.currentTarget as HTMLImageElement;
                         const parent = target.parentElement;
-                        if (parent) {
+                        if (!parent || !parent.contains(target)) {
+                          return;
+                        }
+
+                        try {
                           const fallbackDiv = document.createElement("div");
                           fallbackDiv.className =
                             "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
                           fallbackDiv.textContent = modelData.provider?.charAt(0) || "-";
                           parent.replaceChild(fallbackDiv, target);
+                        } catch (error) {
+                          console.error("Failed to replace provider logo fallback:", error);
                         }
                       }}
                     />
@@ -421,18 +498,20 @@ export default function ModelInfoView({
                 <Title>Model Settings</Title>
                 <div className="flex gap-2">
                   {isAutoRouter && canEditModel && !isEditing && (
-                    <TremorButton
-                      variant="primary"
-                      onClick={() => setIsAutoRouterModalOpen(true)}
-                      className="flex items-center"
-                    >
+                    <TremorButton onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
                       Edit Auto Router
                     </TremorButton>
                   )}
-                  {canEditModel && !isEditing && (
-                    <TremorButton variant="secondary" onClick={() => setIsEditing(true)} className="flex items-center">
-                      Edit Model
-                    </TremorButton>
+                  {canEditModel ? (
+                    !isEditing && (
+                      <TremorButton onClick={() => setIsEditing(true)} className="flex items-center">
+                        Edit Settings
+                      </TremorButton>
+                    )
+                  ) : (
+                    <Tooltip title="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
+                      <InfoCircleOutlined />
+                    </Tooltip>
                   )}
                 </div>
               </div>
@@ -465,6 +544,8 @@ export default function ModelInfoView({
                     guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
                       ? localModelData.litellm_params.guardrails
                       : [],
+                    tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
+                    litellm_extra_params: JSON.stringify(localModelData.litellm_params || {}, null, 2),
                   }}
                   layout="vertical"
                   onValuesChange={() => setIsDirty(true)}
@@ -680,7 +761,7 @@ export default function ModelInfoView({
 
                       <div>
                         <Text className="font-medium">
-                          Guardrails{" "}
+                          Guardrails
                           <Tooltip title="Apply safety guardrails to this model to filter content or enforce policies">
                             <a
                               href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
@@ -739,6 +820,54 @@ export default function ModelInfoView({
                         )}
                       </div>
 
+                      <div>
+                        <Text className="font-medium">Tags</Text>
+                        {isEditing ? (
+                          <Form.Item name="tags" className="mb-0">
+                            <Select
+                              mode="tags"
+                              showSearch
+                              placeholder="Select existing tags or type to create new ones"
+                              optionFilterProp="children"
+                              tokenSeparators={[","]}
+                              maxTagCount="responsive"
+                              allowClear
+                              style={{ width: "100%" }}
+                              options={Object.values(tagsList).map((tag: Tag) => ({
+                                value: tag.name,
+                                label: tag.name,
+                                title: tag.description || tag.name,
+                              }))}
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData.litellm_params?.tags ? (
+                              Array.isArray(localModelData.litellm_params.tags) ? (
+                                localModelData.litellm_params.tags.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {localModelData.litellm_params.tags.map((tag: string, index: number) => (
+                                      <span
+                                        key={index}
+                                        className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800"
+                                      >
+                                        {tag}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  "No tags assigned"
+                                )
+                              ) : (
+                                localModelData.litellm_params.tags
+                              )
+                            ) : (
+                              "Not Set"
+                            )}
+                          </div>
+                        )}
+                      </div>
+
                       {/* Cache Control Section */}
                       {isEditing ? (
                         <CacheControlSettings
@@ -785,6 +914,39 @@ export default function ModelInfoView({
                           <div className="mt-1 p-2 bg-gray-50 rounded">
                             <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
                               {JSON.stringify(localModelData.model_info, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <Text className="font-medium">
+                          LiteLLM Params
+                          <Tooltip title="Optional litellm params used for making a litellm.completion() call. Some params are automatically added by LiteLLM.">
+                            <a
+                              href="https://docs.litellm.ai/docs/completion/input"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </a>
+                          </Tooltip>
+                        </Text>
+                        {isEditing ? (
+                          <Form.Item name="litellm_extra_params" rules={[{ validator: formItemValidateJSON }]}>
+                            <Input.TextArea
+                              rows={4}
+                              placeholder='{
+                  "rpm": 100,
+                  "timeout": 0,
+                  "stream_timeout": 0
+                }'
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                              {JSON.stringify(localModelData.litellm_params, null, 2)}
                             </pre>
                           </div>
                         )}

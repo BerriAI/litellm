@@ -33,7 +33,7 @@ def test_model_added():
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/gpt-4.1-nano",
+                "deployment": "azure/gpt-4.1-mini",
             },
             "model_info": {"id": "1234"},
         }
@@ -47,7 +47,7 @@ def test_get_available_deployments():
     test_cache = DualCache()
     least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
-    deployment = "azure/gpt-4.1-nano"
+    deployment = "azure/gpt-4.1-mini"
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -75,9 +75,8 @@ async def test_router_get_available_deployments(async_test):
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 1440,
             },
             "model_info": {"id": 1},
@@ -85,9 +84,8 @@ async def test_router_get_available_deployments(async_test):
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-35-turbo",
-                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
-                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 6,
             },
             "model_info": {"id": 2},
@@ -95,9 +93,8 @@ async def test_router_get_available_deployments(async_test):
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-35-turbo",
-                "api_key": "os.environ/AZURE_CANADA_API_KEY",
-                "api_base": "https://my-endpoint-canada-berri992.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 6,
             },
             "model_info": {"id": 3},
@@ -113,7 +110,6 @@ async def test_router_get_available_deployments(async_test):
     router.leastbusy_logger.test_flag = True
 
     model_group = "azure-model"
-    deployment = "azure/gpt-4.1-nano"
     request_count_dict = {1: 10, 2: 54, 3: 100}
     cache_key = f"{model_group}_request_count"
     if async_test is True:
@@ -156,9 +152,8 @@ async def test_router_atext_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 1440,
             },
             "model_info": {"id": 1},
@@ -166,9 +161,8 @@ async def test_router_atext_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 6,
             },
             "model_info": {"id": 2},
@@ -176,9 +170,8 @@ async def test_router_atext_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 6,
             },
             "model_info": {"id": 3},
@@ -226,9 +219,8 @@ async def test_router_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 1440,
             },
             "model_info": {"id": 1},
@@ -236,9 +228,8 @@ async def test_router_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 6,
             },
             "model_info": {"id": 2},
@@ -246,9 +237,8 @@ async def test_router_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 6,
             },
             "model_info": {"id": 3},

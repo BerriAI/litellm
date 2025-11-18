@@ -1,17 +1,7 @@
 import json
 import time
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -41,6 +31,7 @@ from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
+from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
 from .llms.openai import (
     Batch,
@@ -55,6 +46,7 @@ from .llms.openai import (
     OpenAIChatCompletionChunk,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
+    ResponsesAPIResponse,
     WebSearchOptions,
 )
 from .rerank import RerankResponse
@@ -127,6 +119,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
+    cache_creation_input_token_cost_above_200k_tokens: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[
@@ -135,6 +128,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_above_200k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -239,6 +233,8 @@ class CallTypes(str, Enum):
     speech = "speech"
     rerank = "rerank"
     arerank = "arerank"
+    search = "search"
+    asearch = "asearch"
     arealtime = "_arealtime"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
@@ -276,6 +272,49 @@ class CallTypes(str, Enum):
     file_content = "file_content"
     create_fine_tuning_job = "create_fine_tuning_job"
     acreate_fine_tuning_job = "acreate_fine_tuning_job"
+
+    #########################################################
+    # Video Generation Call Types
+    #########################################################
+    create_video = "create_video"
+    acreate_video = "acreate_video"
+    avideo_retrieve = "avideo_retrieve"
+    video_retrieve = "video_retrieve"
+    avideo_content = "avideo_content"
+    video_content = "video_content"
+    video_remix = "video_remix"
+    avideo_remix = "avideo_remix"
+    video_list = "video_list"
+    avideo_list = "avideo_list"
+    video_retrieve_job = "video_retrieve_job"
+    avideo_retrieve_job = "avideo_retrieve_job"
+    video_delete = "video_delete"
+    avideo_delete = "avideo_delete"
+    vector_store_file_create = "vector_store_file_create"
+    avector_store_file_create = "avector_store_file_create"
+    vector_store_file_list = "vector_store_file_list"
+    avector_store_file_list = "avector_store_file_list"
+    vector_store_file_retrieve = "vector_store_file_retrieve"
+    avector_store_file_retrieve = "avector_store_file_retrieve"
+    vector_store_file_content = "vector_store_file_content"
+    avector_store_file_content = "avector_store_file_content"
+    vector_store_file_update = "vector_store_file_update"
+    avector_store_file_update = "avector_store_file_update"
+    vector_store_file_delete = "vector_store_file_delete"
+    avector_store_file_delete = "avector_store_file_delete"
+
+    #########################################################
+    # Container Call Types
+    #########################################################
+    create_container = "create_container"
+    acreate_container = "acreate_container"
+    list_containers = "list_containers"
+    alist_containers = "alist_containers"
+    retrieve_container = "retrieve_container"
+    aretrieve_container = "aretrieve_container"
+    delete_container = "delete_container"
+    adelete_container = "adelete_container"
+
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
     alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
@@ -321,6 +360,8 @@ CallTypesLiteral = Literal[
     "speech",
     "rerank",
     "arerank",
+    "search",
+    "asearch",
     "_arealtime",
     "create_batch",
     "acreate_batch",
@@ -334,6 +375,23 @@ CallTypesLiteral = Literal[
     "agenerate_content_stream",
     "ocr",
     "aocr",
+    "avector_store_search",
+    "vector_store_search",
+    "vector_store_file_create",
+    "avector_store_file_create",
+    "vector_store_file_list",
+    "avector_store_file_list",
+    "vector_store_file_retrieve",
+    "avector_store_file_retrieve",
+    "vector_store_file_content",
+    "avector_store_file_content",
+    "vector_store_file_update",
+    "avector_store_file_update",
+    "vector_store_file_delete",
+    "avector_store_file_delete",
+    "call_mcp_tool",
+    "aresponses",
+    "responses",
 ]
 
 
@@ -600,9 +658,7 @@ class Message(OpenAIObject):
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
     ] = None
-    provider_specific_fields: Optional[Dict[str, Any]] = Field(
-        default=None, exclude=True
-    )
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
     annotations: Optional[List[ChatCompletionAnnotation]] = None
 
     def __init__(
@@ -781,6 +837,8 @@ class Delta(OpenAIObject):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
                         current_index += 1
+                    if tool_call.get("type", None) is None:
+                        tool_call["type"] = "function"
                     self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
                 elif isinstance(tool_call, ChatCompletionDeltaToolCall):
                     self.tool_calls.append(tool_call)
@@ -1153,9 +1211,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-from openai.types.chat import ChatCompletionChunk
-
-
 class ModelResponseBase(OpenAIObject):
     id: str
     """A unique identifier for the completion."""
@@ -1257,7 +1312,7 @@ class ModelResponse(ModelResponseBase):
     choices: List[Union[Choices, StreamingChoices]]
     """The list of completion choices the model generated for the input prompt."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         id=None,
         choices=None,
@@ -1736,6 +1791,10 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             total_tokens=0,
         )
         super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
+
+        self.quality = kwargs.get("quality", None)
+        self.output_format = kwargs.get("output_format", None)
+        self.size = kwargs.get("size", None)
         self._hidden_params = hidden_params or {}
 
     def __contains__(self, key):
@@ -1762,8 +1821,29 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             return self.dict()
 
 
+class TranscriptionUsageDurationObject(BaseModel):
+    type: Literal["duration"]
+    seconds: int
+
+
+class TranscriptionUsageInputTokenDetailsObject(BaseModel):
+    audio_tokens: int
+    text_tokens: int
+
+
+class TranscriptionUsageTokensObject(BaseModel):
+    type: Literal["tokens"]
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    input_token_details: TranscriptionUsageInputTokenDetailsObject
+
+
 class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
+    usage: Optional[
+        Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject]
+    ] = None
 
     _hidden_params: dict = {}
     _response_headers: Optional[dict] = None
@@ -2048,11 +2128,9 @@ class GuardrailMode(TypedDict, total=False):
 
 
 GuardrailStatus = Literal[
-    "success",
-    "guardrail_intervened", 
-    "guardrail_failed_to_respond",
-    "not_run"
+    "success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"
 ]
+
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
@@ -2104,7 +2182,9 @@ class CostBreakdown(TypedDict, total=False):
     """
 
     input_cost: float  # Cost of input/prompt tokens
-    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
+    output_cost: (
+        float  # Cost of output/completion tokens (includes reasoning if applicable)
+    )
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
     original_cost: float  # Cost before discount (optional)
@@ -2114,6 +2194,7 @@ class CostBreakdown(TypedDict, total=False):
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """Status fields for easy filtering and analytics"""
+
     llm_api_status: StandardLoggingPayloadStatus
     """Status of the LLM API call - 'success' if completed, 'failure' if errored"""
     guardrail_status: GuardrailStatus
@@ -2164,7 +2245,7 @@ class StandardLoggingPayload(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
-    guardrail_information: Optional[StandardLoggingGuardrailInformation]
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 
@@ -2186,7 +2267,7 @@ class CustomStreamingDecoder:
 
 
 class StandardPassThroughResponseObject(TypedDict):
-    response: str
+    response: Union[str, dict]
 
 
 OPENAI_RESPONSE_HEADERS = [
@@ -2235,6 +2316,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
 
+
 class CustomPricingLiteLLMParams(BaseModel):
     ## CUSTOM PRICING ##
     input_cost_per_token: Optional[float] = None
@@ -2243,7 +2325,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_second: Optional[float] = None
     input_cost_per_pixel: Optional[float] = None
     output_cost_per_pixel: Optional[float] = None
-    
+
     # Include all ModelInfoBase fields as optional
     # This allows any model_info parameter to be set in litellm_params
     input_cost_per_token_flex: Optional[float] = None
@@ -2289,106 +2371,111 @@ class CustomPricingLiteLLMParams(BaseModel):
     citation_cost_per_token: Optional[float] = None
     tiered_pricing: Optional[List[Dict[str, Any]]] = None
 
-all_litellm_params = [
-    "metadata",
-    "litellm_metadata",
-    "litellm_trace_id",
-    "litellm_request_debug",
-    "guardrails",
-    "tags",
-    "acompletion",
-    "aimg_generation",
-    "atext_completion",
-    "text_completion",
-    "caching",
-    "mock_response",
-    "mock_timeout",
-    "disable_add_transform_inline_image_block",
-    "litellm_proxy_rate_limit_response",
-    "api_key",
-    "api_version",
-    "prompt_id",
-    "provider_specific_header",
-    "prompt_variables",
-    "prompt_version",
-    "api_base",
-    "force_timeout",
-    "logger_fn",
-    "verbose",
-    "custom_llm_provider",
-    "model_file_id_mapping",
-    "litellm_logging_obj",
-    "litellm_call_id",
-    "use_client",
-    "id",
-    "fallbacks",
-    "azure",
-    "headers",
-    "model_list",
-    "num_retries",
-    "context_window_fallback_dict",
-    "retry_policy",
-    "retry_strategy",
-    "roles",
-    "final_prompt_value",
-    "bos_token",
-    "eos_token",
-    "request_timeout",
-    "complete_response",
-    "self",
-    "client",
-    "rpm",
-    "tpm",
-    "max_parallel_requests",
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "input_cost_per_second",
-    "output_cost_per_second",
-    "hf_model_name",
-    "model_info",
-    "proxy_server_request",
-    "secret_fields",
-    "preset_cache_key",
-    "caching_groups",
-    "ttl",
-    "cache",
-    "no-log",
-    "base_model",
-    "stream_timeout",
-    "supports_system_message",
-    "region_name",
-    "allowed_model_region",
-    "model_config",
-    "fastest_response",
-    "cooldown_time",
-    "cache_key",
-    "max_retries",
-    "azure_ad_token_provider",
-    "tenant_id",
-    "client_id",
-    "azure_username",
-    "azure_password",
-    "azure_scope",
-    "client_secret",
-    "user_continue_message",
-    "configurable_clientside_auth_params",
-    "weight",
-    "ensure_alternating_roles",
-    "assistant_continue_message",
-    "user_continue_message",
-    "fallback_depth",
-    "max_fallbacks",
-    "max_budget",
-    "budget_duration",
-    "use_in_pass_through",
-    "merge_reasoning_content_in_choices",
-    "litellm_credential_name",
-    "allowed_openai_params",
-    "litellm_session_id",
-    "use_litellm_proxy",
-    "prompt_label",
-    "shared_session",
-] + list(StandardCallbackDynamicParams.__annotations__.keys()) + list(CustomPricingLiteLLMParams.model_fields.keys())
+
+all_litellm_params = (
+    [
+        "metadata",
+        "litellm_metadata",
+        "litellm_trace_id",
+        "litellm_request_debug",
+        "guardrails",
+        "tags",
+        "acompletion",
+        "aimg_generation",
+        "atext_completion",
+        "text_completion",
+        "caching",
+        "mock_response",
+        "mock_timeout",
+        "disable_add_transform_inline_image_block",
+        "litellm_proxy_rate_limit_response",
+        "api_key",
+        "api_version",
+        "prompt_id",
+        "provider_specific_header",
+        "prompt_variables",
+        "prompt_version",
+        "api_base",
+        "force_timeout",
+        "logger_fn",
+        "verbose",
+        "custom_llm_provider",
+        "model_file_id_mapping",
+        "litellm_logging_obj",
+        "litellm_call_id",
+        "use_client",
+        "id",
+        "fallbacks",
+        "azure",
+        "headers",
+        "model_list",
+        "num_retries",
+        "context_window_fallback_dict",
+        "retry_policy",
+        "retry_strategy",
+        "roles",
+        "final_prompt_value",
+        "bos_token",
+        "eos_token",
+        "request_timeout",
+        "complete_response",
+        "self",
+        "client",
+        "rpm",
+        "tpm",
+        "max_parallel_requests",
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "input_cost_per_second",
+        "output_cost_per_second",
+        "hf_model_name",
+        "model_info",
+        "proxy_server_request",
+        "secret_fields",
+        "preset_cache_key",
+        "caching_groups",
+        "ttl",
+        "cache",
+        "no-log",
+        "base_model",
+        "stream_timeout",
+        "supports_system_message",
+        "region_name",
+        "allowed_model_region",
+        "model_config",
+        "fastest_response",
+        "cooldown_time",
+        "cache_key",
+        "max_retries",
+        "azure_ad_token_provider",
+        "tenant_id",
+        "client_id",
+        "azure_username",
+        "azure_password",
+        "azure_scope",
+        "client_secret",
+        "user_continue_message",
+        "configurable_clientside_auth_params",
+        "weight",
+        "ensure_alternating_roles",
+        "assistant_continue_message",
+        "user_continue_message",
+        "fallback_depth",
+        "max_fallbacks",
+        "max_budget",
+        "budget_duration",
+        "use_in_pass_through",
+        "merge_reasoning_content_in_choices",
+        "litellm_credential_name",
+        "allowed_openai_params",
+        "litellm_session_id",
+        "use_litellm_proxy",
+        "prompt_label",
+        "shared_session",
+    ]
+    + list(StandardCallbackDynamicParams.__annotations__.keys())
+    + list(CustomPricingLiteLLMParams.model_fields.keys())
+)
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -2445,6 +2532,7 @@ class LlmProviders(str, Enum):
     ANTHROPIC_TEXT = "anthropic_text"
     BYTEZ = "bytez"
     REPLICATE = "replicate"
+    RUNWAYML = "runwayml"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
@@ -2469,6 +2557,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
     MISTRAL = "mistral"
+    MILVUS = "milvus"
     GROQ = "groq"
     NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
@@ -2513,9 +2602,6 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
-    TAVILY = "tavily"
-    PARALLEL_AI = "parallel_ai"
-    EXA_AI = "exa_ai"
     ASSEMBLYAI = "assemblyai"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
@@ -2525,6 +2611,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    FAL_AI = "fal_ai"
     HEROKU = "heroku"
     AIML = "aiml"
     COMETAPI = "cometapi"
@@ -2539,6 +2626,26 @@ class LlmProviders(str, Enum):
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
+
+
+class SearchProviders(str, Enum):
+    """
+    Enum for search provider types.
+    Separate from LlmProviders for semantic clarity.
+    """
+
+    PERPLEXITY = "perplexity"
+    TAVILY = "tavily"
+    PARALLEL_AI = "parallel_ai"
+    EXA_AI = "exa_ai"
+    GOOGLE_PSE = "google_pse"
+    DATAFORSEO = "dataforseo"
+    FIRECRAWL = "firecrawl"
+    SEARXNG = "searxng"
+
+
+# Create a set of all search provider values for quick lookup
+SearchProvidersSet = {provider.value for provider in SearchProviders}
 
 
 class LiteLLMLoggingBaseClass:
@@ -2717,7 +2824,15 @@ class SpecialEnums(Enum):
 
     LITELLM_MANAGED_BATCH_COMPLETE_STR = "litellm_proxy;model_id:{};llm_batch_id:{}"
 
+    LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR = (
+        "litellm_proxy:responses_api:response_id:{};user_id:{};team_id:{}"
+    )
+
     LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR = "litellm_proxy;model_id:{};generic_response_id:{}"  # generic implementation of 'managed batches' - used for finetuning and any future work.
+
+    LITELLM_MANAGED_VIDEO_COMPLETE_STR = (
+        "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
+    )
 
 
 class ServiceTier(Enum):
@@ -2734,6 +2849,8 @@ LLMResponseTypes = Union[
     OpenAIFileObject,
     LiteLLMBatch,
     LiteLLMFineTuningJob,
+    AnthropicMessagesResponse,
+    ResponsesAPIResponse,
 ]
 
 
@@ -2766,6 +2883,25 @@ CostResponseTypes = Union[
 ]
 
 
+class PriorityReservationDict(TypedDict, total=False):
+    """
+    Dictionary format for priority reservation values.
+
+    Used in litellm.priority_reservation to specify how much capacity to reserve
+    for each priority level. Supports three formats:
+    1. Percentage-based: {"type": "percent", "value": 0.9} -> 90% of capacity
+    2. RPM-based: {"type": "rpm", "value": 900} -> 900 requests per minute
+    3. TPM-based: {"type": "tpm", "value": 900000} -> 900,000 tokens per minute
+
+    Attributes:
+        type: The type of value - "percent", "rpm", or "tpm". Defaults to "percent".
+        value: The numeric value. For percent (0.0-1.0), for rpm/tpm (absolute value).
+    """
+
+    type: Literal["percent", "rpm", "tpm"]
+    value: float
+
+
 class PriorityReservationSettings(BaseModel):
     """
     Settings for priority-based rate limiting reservation.
@@ -2778,10 +2914,10 @@ class PriorityReservationSettings(BaseModel):
         default=0.25,
         description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation.",
     )
-    
+
     saturation_threshold: float = Field(
         default=0.50,
-        description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits."
+        description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
     )
 
     model_config = ConfigDict(protected_namespaces=())

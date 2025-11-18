@@ -23,12 +23,13 @@ import {
 } from "@tremor/react";
 import { ActivityMetrics, processActivityData } from "./activity_metrics";
 import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata, TagUsage } from "./usage/types";
-import { tagDailyActivityCall, teamDailyActivityCall } from "./networking";
+import { organizationDailyActivityCall, tagDailyActivityCall, teamDailyActivityCall } from "./networking";
 import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { UsageExportHeader } from "./EntityUsageExport";
+import TopModelView from "./top_model_view";
 
 interface EntityMetrics {
   metrics: {
@@ -67,12 +68,13 @@ export interface EntityList {
 
 interface EntityUsageProps {
   accessToken: string | null;
-  entityType: "tag" | "team";
+  entityType: "tag" | "team" | "organization";
   entityId?: string | null;
   userID: string | null;
   userRole: string | null;
   entityList: EntityList[] | null;
   premiumUser: boolean;
+  dateValue: DateRangePickerValue;
 }
 
 const EntityUsage: React.FC<EntityUsageProps> = ({
@@ -83,6 +85,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   userRole,
   entityList,
   premiumUser,
+  dateValue,
 }) => {
   const [spendData, setSpendData] = useState<EntitySpendData>({
     results: [],
@@ -98,10 +101,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const modelMetrics = processActivityData(spendData, "models");
   const keyMetrics = processActivityData(spendData, "api_keys");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
-    to: new Date(),
-  });
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -120,6 +119,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       setSpendData(data);
     } else if (entityType === "team") {
       const data = await teamDailyActivityCall(
+        accessToken,
+        startTime,
+        endTime,
+        1,
+        selectedTags.length > 0 ? selectedTags : null,
+      );
+      setSpendData(data);
+    } else if (entityType === "organization") {
+      const data = await organizationDailyActivityCall(
         accessToken,
         startTime,
         endTime,
@@ -326,16 +334,25 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     }));
   };
 
+  const getFilterLabel = (entityType: string) => {
+    return `Filter by ${entityType}`;
+  };
+
+  const getFilterPlaceholder = (entityType: string) => {
+    return `Select ${entityType} to filter...`;
+  };
+
+  const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
+
   return (
     <div style={{ width: "100%" }} className="relative">
       <UsageExportHeader
         dateValue={dateValue}
-        onDateChange={setDateValue}
         entityType={entityType}
         spendData={spendData}
         showFilters={entityList !== null && entityList.length > 0}
-        filterLabel={`Filter by ${entityType === "tag" ? "Tags" : "Teams"}`}
-        filterPlaceholder={`Select ${entityType === "tag" ? "tags" : "teams"} to filter...`}
+        filterLabel={getFilterLabel(entityType)}
+        filterPlaceholder={getFilterPlaceholder(entityType)}
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
@@ -352,7 +369,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               {/* Total Spend Card */}
               <Col numColSpan={2}>
                 <Card>
-                  <Title>{entityType === "tag" ? "Tag" : "Team"} Spend Overview</Title>
+                  <Title>{capitalizedEntityLabel} Spend Overview</Title>
                   <Grid numItems={5} className="gap-4 mt-4">
                     <Card>
                       <Title>Total Spend</Title>
@@ -415,10 +432,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
                           <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
                           <p className="text-gray-600">
-                            {entityType === "tag" ? "Total Tags" : "Total Teams"}: {entityCount}
+                            Total {capitalizedEntityLabel}s: {entityCount}
                           </p>
                           <div className="mt-2 border-t pt-2">
-                            <p className="font-semibold">Spend by {entityType === "tag" ? "Tag" : "Team"}:</p>
+                            <p className="font-semibold">Spend by {capitalizedEntityLabel}:</p>
                             {Object.entries(data.breakdown.entities || {})
                               .sort(([, a], [, b]) => {
                                 const spendA = (a as EntityMetrics).metrics.spend;
@@ -451,10 +468,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                 <Card>
                   <div className="flex flex-col space-y-4">
                     <div className="flex flex-col space-y-2">
-                      <Title>Spend Per {entityType === "tag" ? "Tag" : "Team"}</Title>
+                      <Title>Spend Per {capitalizedEntityLabel}</Title>
                       <Subtitle className="text-xs">Showing Top 5 by Spend</Subtitle>
                       <div className="flex items-center text-sm text-gray-500">
-                        <span>Get Started by Tracking cost per {entityType} </span>
+                        <span>Get Started by Tracking cost per {capitalizedEntityLabel} </span>
                         <a
                           href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
                           className="text-blue-500 hover:text-blue-700 ml-1"
@@ -498,7 +515,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           <Table>
                             <TableHead>
                               <TableRow>
-                                <TableHeaderCell>{entityType === "tag" ? "Tag" : "Team"}</TableHeaderCell>
+                                <TableHeaderCell>{capitalizedEntityLabel}</TableHeaderCell>
                                 <TableHeaderCell>Spend</TableHeaderCell>
                                 <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
                                 <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
@@ -550,17 +567,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               <Col numColSpan={1}>
                 <Card>
                   <Title>Top Models</Title>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={getTopModels()}
-                    index="display_key"
-                    categories={["spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-                    layout="vertical"
-                    yAxisWidth={200}
-                    showLegend={false}
-                  />
+                  <TopModelView topModels={getTopModels()} />
                 </Card>
               </Col>
 

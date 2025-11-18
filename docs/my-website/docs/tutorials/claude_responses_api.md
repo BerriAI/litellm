@@ -227,6 +227,9 @@ Limitations:
 
 1. Add the MCP server to your `config.yaml`
 
+<Tabs>
+<TabItem value="github" label="GitHub MCP">
+
 In this example, we'll add the Github MCP server to our `config.yaml`
 
 ```yaml title="config.yaml" showLineNumbers
@@ -234,12 +237,25 @@ mcp_servers:
   github_mcp:
     url: "https://api.githubcopilot.com/mcp"
     auth_type: oauth2
-    authorization_url: https://github.com/login/oauth/authorize
-    token_url: https://github.com/login/oauth/access_token
     client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
     client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
-    scopes: ["public_repo", "user:email"]
 ```
+
+</TabItem>
+<TabItem value="atlassian" label="Atlassian MCP">
+
+In this example, we'll add the Atlassian MCP server to our `config.yaml`
+
+```yaml title="config.yaml" showLineNumbers
+atlassian_mcp:
+  server_id: atlassian_mcp_id
+  url: "https://mcp.atlassian.com/v1/sse"
+  transport: "sse"
+  auth_type: oauth2
+```
+
+</TabItem>
+</Tabs>
 
 2. Start LiteLLM Proxy
 
@@ -254,6 +270,8 @@ litellm --config /path/to/config.yaml
 ```bash
 claude mcp add --transport http litellm_proxy http://0.0.0.0:4000/github_mcp/mcp --header "Authorization: Bearer sk-LITELLM_VIRTUAL_KEY"
 ```
+
+For MCP servers that require dynamic client registration (such as Atlassian), please set `x-litellm-api-key: Bearer sk-LITELLM_VIRTUAL_KEY` instead of using `Authorization: Bearer LITELLM_VIRTUAL_KEY`.
 
 4. Authenticate via Claude Code
 

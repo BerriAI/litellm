@@ -1,4 +1,5 @@
 import asyncio
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -90,18 +91,27 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     working_server.alias = "working"
     working_server.allowed_tools = None
     working_server.disallowed_tools = None
+    working_server.server_id = "working_server"
+    working_server.server_name = "working_server"
+    working_server.auth_type = None
+    working_server.extra_headers = None
 
     failing_server = MagicMock()
     failing_server.name = "failing_server"
     failing_server.alias = "failing"
     failing_server.allowed_tools = None
     failing_server.disallowed_tools = None
+    failing_server.server_id = "failing_server"
+    failing_server.server_name = "failing_server"
+    failing_server.auth_type = None
+    failing_server.extra_headers = None
 
     # Mock global_mcp_server_manager
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(
         return_value=["working_server", "failing_server"]
     )
+    mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[working_server, failing_server])
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         working_server if server_id == "working_server" else failing_server
     )
@@ -138,7 +148,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
             result = await _get_tools_from_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=None,
-                mcp_servers=None,
+                mcp_servers=["working_server", "failing_server"],
                 mcp_server_auth_headers=mcp_server_auth_headers,
             )
 
@@ -176,16 +186,29 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
     failing_server1 = MagicMock()
     failing_server1.name = "failing_server1"
     failing_server1.alias = "failing1"
+    failing_server1.allowed_tools = None
+    failing_server1.disallowed_tools = None
+    failing_server1.server_id = "failing_server1"
+    failing_server1.server_name = "failing_server1"
+    failing_server1.auth_type = None
+    failing_server1.extra_headers = None
 
     failing_server2 = MagicMock()
     failing_server2.name = "failing_server2"
     failing_server2.alias = "failing2"
+    failing_server2.allowed_tools = None
+    failing_server2.disallowed_tools = None
+    failing_server2.server_id = "failing_server2"
+    failing_server2.server_name = "failing_server2"
+    failing_server2.auth_type = None
+    failing_server2.extra_headers = None
 
     # Mock global_mcp_server_manager
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(
         return_value=["failing_server1", "failing_server2"]
     )
+    mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[failing_server1, failing_server2])
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
@@ -517,7 +540,6 @@ async def test_oauth2_headers_passed_to_mcp_client():
         )
         # Return a mock client that doesn't actually connect
         mock_client = MagicMock()
-        mock_client.disconnect = AsyncMock()
         return mock_client
 
     # Mock _fetch_tools_with_timeout to avoid actual network calls
@@ -592,13 +614,14 @@ async def test_list_tools_single_server_unprefixed_names():
     server.alias = "zapier"
     server.allowed_tools = None
     server.disallowed_tools = None
+    server.server_name = "server1"
+    server.auth_type = None
+    server.extra_headers = None
 
     # Mock manager: allow just one server and return a tool based on add_prefix flag
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
-    mock_manager.get_mcp_server_by_id = lambda server_id: (
-        server if server_id == "server1" else None
-    )
+    mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[server])
 
     async def mock_get_tools_from_server(
         server, mcp_auth_header=None, extra_headers=None, add_prefix=False
@@ -649,6 +672,9 @@ async def test_list_tools_multiple_servers_prefixed_names():
     server1.alias = "zapier"
     server1.allowed_tools = None
     server1.disallowed_tools = None
+    server1.server_name = "server1"
+    server1.auth_type = None
+    server1.extra_headers = None
 
     server2 = MagicMock()
     server2.server_id = "server2"
@@ -656,12 +682,16 @@ async def test_list_tools_multiple_servers_prefixed_names():
     server2.alias = "jira"
     server2.allowed_tools = None
     server2.disallowed_tools = None
+    server2.server_name = "server2"
+    server2.auth_type = None
+    server2.extra_headers = None
 
     # Mock manager
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(
         return_value=["server1", "server2"]
     )
+    mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[server1, server2])
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         server1 if server_id == "server1" else server2
     )
@@ -710,13 +740,35 @@ async def test_call_mcp_tool_user_unauthorized_access():
         object_permission_id="key-permission-123",
     )
 
-    # Mock global_mcp_server_manager.get_mcp_server_names_from_ids to return
+    # Mock global_mcp_server_manager.get_mcp_servers_from_ids to return
     # a list that doesn't include "restricted_server" (the server the user is trying to access)
     with patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_names_from_ids"
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+        AsyncMock(return_value=["allowed_server", "another_server"]),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_servers_from_ids"
     ) as mock_get_server_names:
-        # User has access to "allowed_server" but not "restricted_server"
-        mock_get_server_names.return_value = ["allowed_server", "another_server"]
+        allowed_server_obj = MagicMock()
+        allowed_server_obj.name = "allowed_server"
+        allowed_server_obj.server_name = "allowed_server"
+        allowed_server_obj.server_id = "allowed_server"
+        allowed_server_obj.alias = "allowed_server"
+        allowed_server_obj.allowed_tools = None
+        allowed_server_obj.disallowed_tools = None
+        allowed_server_obj.auth_type = None
+        allowed_server_obj.extra_headers = None
+
+        another_server_obj = MagicMock()
+        another_server_obj.name = "another_server"
+        another_server_obj.server_name = "another_server"
+        another_server_obj.server_id = "another_server"
+        another_server_obj.alias = "another_server"
+        another_server_obj.allowed_tools = None
+        another_server_obj.disallowed_tools = None
+        another_server_obj.auth_type = None
+        another_server_obj.extra_headers = None
+
+        mock_get_server_names.return_value = [allowed_server_obj, another_server_obj]
 
         # Try to call a tool from "restricted_server" - should raise HTTPException with 403 status
         with pytest.raises(HTTPException) as exc_info:
@@ -770,10 +822,14 @@ async def test_list_tools_filters_by_key_team_permissions():
     server.alias = "test"
     server.allowed_tools = None
     server.disallowed_tools = None
+    server.server_name = "server1"
+    server.auth_type = None
+    server.extra_headers = None
 
     # Mock manager
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
+    mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[server])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
 
     async def mock_get_tools_from_server(
@@ -868,10 +924,14 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     server.alias = "test"
     server.allowed_tools = None
     server.disallowed_tools = None
+    server.server_name = "server1"
+    server.auth_type = None
+    server.extra_headers = None
 
     # Mock manager
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
+    mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[server])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
 
     async def mock_get_tools_from_server(
@@ -951,10 +1011,14 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     server.alias = "test"
     server.allowed_tools = None
     server.disallowed_tools = None
+    server.server_name = "server1"
+    server.auth_type = None
+    server.extra_headers = None
 
     # Mock manager
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
+    mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[server])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
 
     async def mock_get_tools_from_server(
@@ -1044,7 +1108,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     # Mock manager
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["gitmcp_server"])
-    mock_manager.get_mcp_server_by_id = lambda server_id: server
+    mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[server])
 
     async def mock_get_tools_from_server(
         server, mcp_auth_header=None, extra_headers=None, add_prefix=True

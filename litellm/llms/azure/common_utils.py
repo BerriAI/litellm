@@ -500,23 +500,18 @@ class BaseAzureLLM(BaseOpenAILLM):
         azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
         # If we have api_key, then we have higher priority
         azure_ad_token = litellm_params.get("azure_ad_token")
-        tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
-        client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
-        client_secret = litellm_params.get(
-            "client_secret", os.getenv("AZURE_CLIENT_SECRET")
-        )
-        azure_username = litellm_params.get(
-            "azure_username", os.getenv("AZURE_USERNAME")
-        )
-        azure_password = litellm_params.get(
-            "azure_password", os.getenv("AZURE_PASSWORD")
-        )
-        scope = litellm_params.get(
-            "azure_scope",
-            os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
-        )
+
+        # litellm_params sometimes contains the key, but the value is None
+        # We should respect environment variables in this case
+        tenant_id = self._resolve_env_var(litellm_params, "tenant_id", "AZURE_TENANT_ID")
+        client_id = self._resolve_env_var(litellm_params, "client_id", "AZURE_CLIENT_ID")
+        client_secret = self._resolve_env_var(litellm_params, "client_secret", "AZURE_CLIENT_SECRET")
+        azure_username = self._resolve_env_var(litellm_params, "azure_username", "AZURE_USERNAME")
+        azure_password = self._resolve_env_var(litellm_params, "azure_password", "AZURE_PASSWORD")
+        scope = self._resolve_env_var(litellm_params, "azure_scope", "AZURE_SCOPE")
         if scope is None:
             scope = "https://cognitiveservices.azure.com/.default"
+
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
         if (
@@ -759,4 +754,17 @@ class BaseAzureLLM(BaseOpenAILLM):
     def _is_azure_v1_api_version(api_version: Optional[str]) -> bool:
         if api_version is None:
             return False
-        return api_version == "preview" or api_version == "latest"
+        return api_version in {"preview", "latest", "v1"}
+
+    def _resolve_env_var(self, litellm_params: Dict[str, Any], param_key: str, env_var_key: str) -> Optional[str]:
+        """Resolve the environment variable for a given parameter key.
+        
+        The logic here is different from `params.get(key, os.getenv(env_var))` because
+        litellm_params may contain the key with a None value, in which case we want
+        to fallback to the environment variable.
+        """
+        param_value = litellm_params.get(param_key)
+        if param_value is not None:
+            return param_value
+        return os.getenv(env_var_key)
+

@@ -456,7 +456,7 @@ def test_vertex_only_image_user_message():
                 {
                     "inline_data": {
                         "data": "/9j/2wCEAAgGBgcGBQ",
-                        "mime_type": "image/jpeg",
+                        "mimeType": "image/jpeg",
                     }
                 },
                 {"text": " "},

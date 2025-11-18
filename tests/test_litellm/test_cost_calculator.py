@@ -161,7 +161,7 @@ def test_custom_pricing_with_router_model_id():
             {
                 "model_name": "prod/claude-3-5-sonnet-20240620",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "test_api_key",
                 },
                 "model_info": {
@@ -175,7 +175,7 @@ def test_custom_pricing_with_router_model_id():
             {
                 "model_name": "claude-3-5-sonnet-20240620",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "test_api_key",
                 },
                 "model_info": {
@@ -204,7 +204,7 @@ def test_custom_pricing_with_router_model_id():
     )
 
     model_info = router.get_deployment_model_info(
-        model_id="my-unique-model-id", model_name="anthropic/claude-3-5-sonnet-20240620"
+        model_id="my-unique-model-id", model_name="anthropic/claude-sonnet-4-5-20250929"
     )
     assert model_info is not None
     assert model_info["input_cost_per_token"] == 0.000006
@@ -461,18 +461,18 @@ def test_gemini_25_implicit_caching_cost():
         model="gemini/gemini-2.5-flash",
     )
 
-    # From the issue:
-    # input: $0.15 / 1000000 tokens
-    # output: $0.60 / 1000000 tokens
-    # With caching: 0.15*0.25*(14316/1000000)+0.15*((15033-14316)/1000000)+0.6*(17/1000000) = 0.0006546
+    # Current pricing for gemini/gemini-2.5-flash:
+    # input: $0.30 / 1M tokens (3e-07 per token)
+    # cache_read: $0.03 / 1M tokens (3e-08 per token)
+    # output: $2.50 / 1M tokens (2.5e-06 per token)
 
     # Breakdown:
-    # - Cached tokens: 14316 * 0.15/1M * 0.25 = 0.00053685
-    # - Non-cached tokens: (15033-14316) * 0.15/1M = 717 * 0.15/1M = 0.00010755
-    # - Output tokens: 17 * 0.6/1M = 0.00001020
-    # Total: 0.00053685 + 0.00010755 + 0.00001020 = 0.0006546
+    # - Cached tokens: 14316 * 3e-08 = 0.00042948
+    # - Non-cached tokens: (15033-14316) * 3e-07 = 717 * 3e-07 = 0.00021510
+    # - Output tokens: 17 * 2.5e-06 = 0.00004250
+    # Total: 0.00042948 + 0.00021510 + 0.00004250 = 0.00068708
 
-    expected_cost = 0.0013312999999999999
+    expected_cost = 0.00068708
 
     # Allow for small floating point differences
     assert (
@@ -697,7 +697,7 @@ def test_cost_discount_vertex_ai():
 
     # Save original config
     original_discount_config = litellm.cost_discount_config.copy()
-    
+
     # Create mock response
     response = ModelResponse(
         id="test-id",
@@ -705,13 +705,9 @@ def test_cost_discount_vertex_ai():
         created=1234567890,
         model="gemini-pro",
         object="chat.completion",
-        usage=Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150
-        )
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
     )
-    
+
     # Calculate cost without discount
     litellm.cost_discount_config = {}
     cost_without_discount = completion_cost(
@@ -719,24 +715,24 @@ def test_cost_discount_vertex_ai():
         model="vertex_ai/gemini-pro",
         custom_llm_provider="vertex_ai",
     )
-    
+
     # Set 5% discount for vertex_ai
     litellm.cost_discount_config = {"vertex_ai": 0.05}
-    
+
     # Calculate cost with discount
     cost_with_discount = completion_cost(
         completion_response=response,
         model="vertex_ai/gemini-pro",
         custom_llm_provider="vertex_ai",
     )
-    
+
     # Restore original config
     litellm.cost_discount_config = original_discount_config
-    
+
     # Verify discount is applied (5% off means 95% of original cost)
     expected_cost = cost_without_discount * 0.95
     assert cost_with_discount == pytest.approx(expected_cost, rel=1e-9)
-    
+
     print(f"✓ Cost discount test passed:")
     print(f"  - Original cost: ${cost_without_discount:.6f}")
     print(f"  - Discounted cost (5% off): ${cost_with_discount:.6f}")
@@ -752,7 +748,7 @@ def test_cost_discount_not_applied_to_other_providers():
 
     # Save original config
     original_discount_config = litellm.cost_discount_config.copy()
-    
+
     # Create mock response for OpenAI
     response = ModelResponse(
         id="test-id",
@@ -760,23 +756,19 @@ def test_cost_discount_not_applied_to_other_providers():
         created=1234567890,
         model="gpt-4",
         object="chat.completion",
-        usage=Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150
-        )
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
     )
-    
+
     # Set discount only for vertex_ai (not openai)
     litellm.cost_discount_config = {"vertex_ai": 0.05}
-    
+
     # Calculate cost for OpenAI - should NOT have discount applied
     cost_with_selective_discount = completion_cost(
         completion_response=response,
         model="gpt-4",
         custom_llm_provider="openai",
     )
-    
+
     # Clear discount config
     litellm.cost_discount_config = {}
     cost_without_discount = completion_cost(
@@ -784,13 +776,67 @@ def test_cost_discount_not_applied_to_other_providers():
         model="gpt-4",
         custom_llm_provider="openai",
     )
-    
+
     # Restore original config
     litellm.cost_discount_config = original_discount_config
-    
+
     # Costs should be the same (no discount applied to OpenAI)
     assert cost_with_selective_discount == cost_without_discount
-    
+
     print(f"✓ Selective discount test passed:")
     print(f"  - OpenAI cost (no discount configured): ${cost_without_discount:.6f}")
     print(f"  - Cost remains unchanged: ${cost_with_selective_discount:.6f}")
+
+
+def test_azure_image_generation_cost_calculator():
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import (
+        ImageObject,
+        ImageResponse,
+        ImageUsage,
+        ImageUsageInputTokensDetails,
+    )
+
+    response_cost_calculator_kwargs = {
+        "response_object": ImageResponse(
+            created=1761785270,
+            background=None,
+            data=[
+                ImageObject(
+                    b64_json=None,
+                    revised_prompt="A futuristic, techno-inspired green duck wearing cool modern sunglasses. The duck has a sleek, metallic appearance with glowing neon green accents, standing on a high-tech urban background with holographic billboards and illuminated city lights in the distance. The duck's feathers have a glossy, high-tech sheen, resembling a robotic design but still maintaining its avian features. The scene has a vibrant, cyberpunk aesthetic with a neon color palette.",
+                    url="https://dalleprodsec.blob.core.windows.net/private/images/caa17dc4-357d-4257-8938-eeea9baa8d0a/generated_00.png?se=2025-10-31T00%3A47%3A59Z&sig=KHRjLz3vMahbw94JtxL02S6t2AueeRMaiqj4z35HKDM%3D&ske=2025-11-05T00%3A26%3A20Z&skoid=e52d5ed7-0657-4f62-bc12-7e5dbb260a96&sks=b&skt=2025-10-29T00%3A26%3A20Z&sktid=33e01921-4d64-4f8c-a055-5bdaffd5e33d&skv=2020-10-02&sp=r&spr=https&sr=b&sv=2020-10-02",
+                )
+            ],
+            output_format=None,
+            quality="hd",
+            size=None,
+            usage=ImageUsage(
+                input_tokens=0,
+                input_tokens_details=ImageUsageInputTokensDetails(
+                    image_tokens=0, text_tokens=0
+                ),
+                output_tokens=0,
+                total_tokens=0,
+            ),
+        ),
+        "model": "azure/dall-e-3",
+        "cache_hit": False,
+        "custom_llm_provider": "azure",
+        "base_model": "azure/dall-e-3",
+        "call_type": "aimage_generation",
+        "optional_params": {},
+        "custom_pricing": False,
+        "prompt": "",
+        "standard_built_in_tools_params": {
+            "web_search_options": None,
+            "file_search": None,
+        },
+        "router_model_id": "6738c432ffc9b733597c6b86613ca20dc5f49bde591fd3d03e7cd6aa25bb241e",
+        "litellm_logging_obj": MagicMock(),
+        "service_tier": None,
+    }
+
+    cost = response_cost_calculator(**response_cost_calculator_kwargs)
+    assert cost > 0.079

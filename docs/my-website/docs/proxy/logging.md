@@ -1335,6 +1335,7 @@ litellm_settings:
     s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
     s3_path: my-test-path # [OPTIONAL] set path in bucket you want to write logs to
     s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
+    s3_strip_base64_files: false # [OPTIONAL] remove base64 files before storing in s3
 ```
 
 **Step 3**: Start the proxy, make a test request
@@ -1365,14 +1366,12 @@ Your logs should be available on the specified s3 Bucket
 
 ### Team Alias Prefix in Object Key
 
-**This is a preview feature**
-
-You can add the team alias to the object key by setting the `team_alias` in the `config.yaml` file. This will prefix the object key with the team alias.
+You can add the team alias to the object key by setting the `team_alias` in the `config.yaml` file. 
+This will prefix the object key with the team alias.
 
 ```yaml
 litellm_settings:
   callbacks: ["s3_v2"]
-  enable_preview_features: true
   s3_callback_params:
     s3_bucket_name: logs-bucket-litellm
     s3_region_name: us-west-2
@@ -1384,6 +1383,28 @@ litellm_settings:
 ```
 
 On s3 bucket, you will see the object key as `my-test-path/my-team-alias/...`
+
+### Key Alias Prefix in Object Key
+
+You can add the user api key alias to the s3 object key by enabling s3_use_key_prefix.
+
+```yaml
+litellm_settings:
+  callbacks: ["s3_v2"]
+  s3_callback_params:
+    s3_bucket_name: logs-bucket-litellm
+    s3_region_name: us-west-2
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+    s3_path: my-test-path
+    s3_endpoint_url: https://s3.amazonaws.com
+    s3_use_key_prefix: true
+```
+
+On s3 bucket, you will see the object key as `my-test-path/my-key-alias/...`
+
+if both team alias and key alias are enabled then the path becomes
+`my-test-path/my-team-alias/my-key-alias/...`
 
 ## AWS SQS
 
@@ -1415,18 +1436,30 @@ AWS_REGION_NAME = ""
 
 ```yaml
 model_list:
- - model_name: gpt-4o
+  - model_name: gpt-4o
     litellm_params:
       model: gpt-4o
+
 litellm_settings:
   callbacks: ["aws_sqs"]
+
   aws_sqs_callback_params:
-    sqs_queue_url: https://sqs.us-west-2.amazonaws.com/123456789012/my-queue   # AWS SQS Queue URL
-    sqs_region_name: us-west-2              # AWS Region Name for SQS
-    sqs_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # use os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for SQS
-    sqs_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for SQS
-    sqs_batch_size: 10  # [OPTIONAL] Number of messages to batch before sending (default: 10)
-    sqs_flush_interval: 30  # [OPTIONAL] Time in seconds to wait before flushing batch (default: 30)
+    # --- 🧱 Required Parameters ---
+    sqs_queue_url: https://sqs.us-west-2.amazonaws.com/123456789012/my-queue
+    # The AWS SQS Queue URL to which LiteLLM will send log events.
+
+    sqs_region_name: us-west-2
+    # AWS Region for your SQS queue (e.g., us-east-1, eu-central-1, etc.)
+    
+    # --- Logging Controls ---
+    sqs_strip_base64_files: false
+    # If true, LiteLLM will remove or redact base64-encoded binary data (e.g., PDFs, images, audio)
+    # from logged messages to avoid large payloads. SQS has a 1 MB payload size limit.
+    s3_use_team_prefix: false
+    # If true, Litellm will add the team alias prefix to s3 path
+    s3_use_key_prefix: false
+    # If true, Litellm will add the key alias prefix to s3 path
+
 ```
 
 **Step 3**: Start the proxy, make a test request
@@ -2406,7 +2439,7 @@ Your logs should be available on DynamoDB
     "S": "{'user': 'ishaan-2'}"
   },
   "response": {
-    "S": "EmbeddingResponse(model='text-embedding-ada-002-v2', data=[{'embedding': [-0.03503197431564331, -0.020601635798811913, -0.015375726856291294,
+    "S": "EmbeddingResponse(model='text-embedding-ada-002', data=[{'embedding': [-0.03503197431564331, -0.020601635798811913, -0.015375726856291294,
   }
 }
 ```
