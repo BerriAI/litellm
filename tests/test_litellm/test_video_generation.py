@@ -262,6 +262,54 @@ class TestVideoGeneration:
         assert "Authorization" in headers
         assert headers["Authorization"] == "Bearer test-api-key"
 
+    def test_video_generation_uses_api_key_from_litellm_params(self):
+        """Test that video generation handler uses api_key from litellm_params when function parameter is None."""
+        handler = BaseLLMHTTPHandler()
+        config = OpenAIVideoConfig()
+        
+        # Mock the validate_environment method to capture the api_key passed to it
+        with patch.object(config, 'validate_environment') as mock_validate:
+            mock_validate.return_value = {"Authorization": "Bearer deployment-api-key"}
+            
+            # Mock the transform and HTTP client
+            with patch.object(config, 'transform_video_create_request') as mock_transform:
+                mock_transform.return_value = ({"model": "sora-2", "prompt": "test"}, [], "https://api.openai.com/v1/videos")
+                
+                mock_response = MagicMock()
+                mock_response.json.return_value = {
+                    "id": "video_123",
+                    "object": "video",
+                    "status": "queued",
+                    "created_at": 1712697600,
+                    "model": "sora-2"
+                }
+                mock_response.status_code = 200
+                
+                mock_client = MagicMock()
+                mock_client.post.return_value = mock_response
+                
+                with patch(
+                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    return_value=mock_client,
+                ):
+                    handler.video_generation_handler(
+                        model="sora-2",
+                        prompt="test prompt",
+                        video_generation_provider_config=config,
+                        video_generation_optional_request_params={},
+                        custom_llm_provider="openai",
+                        litellm_params={"api_key": "deployment-api-key", "api_base": "https://api.openai.com/v1"},
+                        logging_obj=MagicMock(),
+                        timeout=5.0,
+                        api_key=None,  # Function parameter is None
+                        _is_async=False,
+                    )
+                
+                # Verify validate_environment was called with api_key from litellm_params
+                mock_validate.assert_called_once()
+                call_args = mock_validate.call_args
+                assert call_args.kwargs["api_key"] == "deployment-api-key"
+
     def test_video_generation_url_generation(self):
         """Test video generation URL generation."""
         config = OpenAIVideoConfig()
