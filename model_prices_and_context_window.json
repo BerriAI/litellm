@@ -24174,7 +24174,7 @@
         "max_input_tokens": 1024,
         "max_tokens": 1024,
         "mode": "video_generation",
-        "output_cost_per_second": 0.4,
+        "output_cost_per_second": 0.15,
         "source": "https://ai.google.dev/gemini-api/docs/video",
         "supported_modalities": [
             "text"
@@ -24188,7 +24188,35 @@
         "max_input_tokens": 1024,
         "max_tokens": 1024,
         "mode": "video_generation",
-        "output_cost_per_second": 0.75,
+        "output_cost_per_second": 0.4,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "vertex_ai/veo-3.0-fast-generate-001": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "vertex_ai/veo-3.0-generate-001": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
         "source": "https://ai.google.dev/gemini-api/docs/video",
         "supported_modalities": [
             "text"
