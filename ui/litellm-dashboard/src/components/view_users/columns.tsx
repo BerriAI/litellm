@@ -17,7 +17,7 @@ interface SelectionOptions {
 export const columns = (
   possibleUIRoles: Record<string, Record<string, string>>,
   handleEdit: (user: UserInfo) => void,
-  handleDelete: (userId: string) => void,
+  handleDelete: (user: UserInfo) => void,
   handleResetPassword: (userId: string) => void,
   handleUserClick: (userId: string, openInEditMode?: boolean) => void,
   selectionOptions?: SelectionOptions,
@@ -124,7 +124,7 @@ export const columns = (
             <Icon
               icon={TrashIcon}
               size="sm"
-              onClick={() => handleDelete(row.original.user_id)}
+              onClick={() => handleDelete(row.original)}
               className="cursor-pointer hover:text-red-600"
             />
           </Tooltip>
