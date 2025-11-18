@@ -334,6 +334,25 @@ class OpenAIFileObject(BaseModel):
 CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune"]
 
 
+class FileExpiresAfter(TypedDict, total=False):
+    """
+    Expiration policy for a file.
+    
+    By default, files with purpose=batch expire after 30 days and all other files
+    are persisted until they are manually deleted.
+    """
+    anchor: Required[Literal["created_at"]]
+    """Anchor timestamp after which the expiration policy applies.
+    
+    Supported anchors: created_at.
+    """
+    seconds: Required[int]
+    """The number of seconds after the anchor time that the file will expire.
+    
+    Must be between 3600 (1 hour) and 2592000 (30 days).
+    """
+
+
 # OpenAI Files Types
 class CreateFileRequest(TypedDict, total=False):
     """
@@ -345,6 +364,7 @@ class CreateFileRequest(TypedDict, total=False):
         purpose: Literal['assistants', 'batch', 'fine-tune']
 
     Optional Params:
+        expires_after: Optional[FileExpiresAfter] - Expiration policy for the file
         extra_headers: Optional[Dict[str, str]]
         extra_body: Optional[Dict[str, str]] = None
         timeout: Optional[float] = None
@@ -352,6 +372,7 @@ class CreateFileRequest(TypedDict, total=False):
 
     file: Required[FileTypes]
     purpose: Required[CREATE_FILE_REQUESTS_PURPOSE]
+    expires_after: Optional[FileExpiresAfter]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]

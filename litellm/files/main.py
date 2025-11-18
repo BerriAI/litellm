@@ -28,6 +28,7 @@ from litellm.types.llms.openai import (
     FileTypes,
     HttpxBinaryResponseContent,
     OpenAIFileObject,
+    FileExpiresAfter
 )
 from litellm.types.router import *
 from litellm.types.utils import LlmProviders
@@ -96,6 +97,7 @@ def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
     custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock"]] = None,
+    expires_after: Optional[FileExpiresAfter] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -139,6 +141,7 @@ def create_file(
             purpose=purpose,
             extra_headers=extra_headers,
             extra_body=extra_body,
+            expires_after=expires_after,
         )
 
         provider_config = ProviderConfigManager.get_provider_files_config(
