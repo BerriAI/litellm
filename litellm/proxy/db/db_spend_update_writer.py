@@ -1000,7 +1000,7 @@ class DBSpendUpdateWriter:
                                 x[1].get(entity_id_field) or "",
                                 x[1]["api_key"],
                                 x[1]["model"],
-                                x[1]["custom_llm_provider"],
+                                x[1].get("custom_llm_provider") or "",
                             ),
                         )[:BATCH_SIZE]
                     )
