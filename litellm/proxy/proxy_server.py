@@ -3594,20 +3594,9 @@ class ProxyConfig:
         Returns:
             The PromptSpec object
         """
-        from litellm.types.prompts.init_prompts import PromptSpec
+        from litellm.proxy.prompts.prompt_endpoints import create_versioned_prompt_spec
         
-        prompt_dict = db_prompt.model_dump()
-        base_prompt_id = prompt_dict["prompt_id"]
-        version = prompt_dict.get("version", 1)
-        
-        # Store with versioned naming convention: {prompt_id}.v{version}
-        versioned_prompt_id = f"{base_prompt_id}.v{version}"
-        prompt_dict["prompt_id"] = versioned_prompt_id
-        
-        # Initialize the versioned prompt
-        prompt_spec = PromptSpec(**prompt_dict)
-
-        return prompt_spec
+        return create_versioned_prompt_spec(db_prompt=db_prompt)
 
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
