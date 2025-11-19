@@ -11,6 +11,7 @@ import DeveloperMessageCard from "./DeveloperMessageCard";
 import PromptMessagesCard from "./PromptMessagesCard";
 import ConversationPanel from "./ConversationPanel";
 import PublishModal from "./PublishModal";
+import DotpromptViewTab from "./DotpromptViewTab";
 
 const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess, accessToken }) => {
   const [prompt, setPrompt] = useState<PromptType>({
@@ -34,6 +35,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   const [showNameModal, setShowNameModal] = useState(false);
   const [editingToolIndex, setEditingToolIndex] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [viewMode, setViewMode] = useState<"pretty" | "dotprompt">("pretty");
 
   const addMessage = () => {
     setPrompt({
@@ -143,28 +145,15 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
     setIsSaving(true);
     try {
-      const variables = extractVariables(prompt);
+      const promptId = prompt.name.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
+      const dotpromptContent = convertToDotPrompt(prompt);
 
       const promptData = {
-        prompt_id: prompt.name.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase(),
+        prompt_id: promptId,
         litellm_params: {
           prompt_integration: "dotprompt",
-          prompt_id: prompt.name,
-          prompt_data: {
-            model: prompt.model,
-            input: {
-              schema: variables.reduce((acc, v) => {
-                acc[v] = "string";
-                return acc;
-              }, {} as Record<string, string>),
-            },
-            output: {
-              format: "text",
-            },
-            messages: prompt.messages,
-            tools: prompt.tools.map((t) => JSON.parse(t.json)),
-            config: prompt.config,
-          },
+          prompt_id: promptId,
+          prompt_data: dotpromptContent,
         },
         prompt_info: {
           prompt_type: "db",
@@ -197,7 +186,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
         <div className="flex-1 flex overflow-hidden">
           <div className="w-1/2 overflow-y-auto bg-white border-r border-gray-200">
-            <div className="p-6 space-y-4 pb-20">
+            <div className="border-b border-gray-200 bg-gray-50 p-4 flex items-center gap-3">
               <ModelConfigCard
                 model={prompt.model}
                 temperature={prompt.config.temperature}
@@ -218,26 +207,55 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                 }
               />
 
-              <ToolsCard
-                tools={prompt.tools}
-                onAddTool={() => openToolModal()}
-                onEditTool={openToolModal}
-                onRemoveTool={removeTool}
-              />
-
-              <DeveloperMessageCard
-                value={prompt.developerMessage}
-                onChange={(developerMessage) => setPrompt({ ...prompt, developerMessage })}
-              />
-
-              <PromptMessagesCard
-                messages={prompt.messages}
-                onAddMessage={addMessage}
-                onUpdateMessage={updateMessage}
-                onRemoveMessage={removeMessage}
-                onMoveMessage={moveMessage}
-              />
+              <div className="ml-auto inline-flex items-center bg-gray-200 rounded-full p-0.5">
+                <button
+                  className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+                    viewMode === "pretty"
+                      ? "bg-white text-gray-900 shadow-sm"
+                      : "text-gray-600"
+                  }`}
+                  onClick={() => setViewMode("pretty")}
+                >
+                  PRETTY
+                </button>
+                <button
+                  className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+                    viewMode === "dotprompt"
+                      ? "bg-white text-gray-900 shadow-sm"
+                      : "text-gray-600"
+                  }`}
+                  onClick={() => setViewMode("dotprompt")}
+                >
+                  DOTPROMPT
+                </button>
+              </div>
             </div>
+
+            {viewMode === "pretty" ? (
+              <div className="p-6 space-y-4 pb-20">
+                <ToolsCard
+                  tools={prompt.tools}
+                  onAddTool={() => openToolModal()}
+                  onEditTool={openToolModal}
+                  onRemoveTool={removeTool}
+                />
+
+                <DeveloperMessageCard
+                  value={prompt.developerMessage}
+                  onChange={(developerMessage) => setPrompt({ ...prompt, developerMessage })}
+                />
+
+                <PromptMessagesCard
+                  messages={prompt.messages}
+                  onAddMessage={addMessage}
+                  onUpdateMessage={updateMessage}
+                  onRemoveMessage={removeMessage}
+                  onMoveMessage={moveMessage}
+                />
+              </div>
+            ) : (
+              <DotpromptViewTab prompt={prompt} />
+            )}
           </div>
 
           <ConversationPanel />
