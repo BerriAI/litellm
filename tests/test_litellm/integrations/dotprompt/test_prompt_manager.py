@@ -195,6 +195,33 @@ def test_get_prompt_metadata():
     assert "output" in metadata
 
 
+def test_get_prompt_with_version():
+    """Test that get_prompt correctly retrieves versioned prompts."""
+    prompt_dir = Path(__file__).parent
+    manager = PromptManager(prompt_directory=str(prompt_dir))
+
+    # Get base prompt (no version)
+    base_prompt = manager.get_prompt(prompt_id="chat_prompt")
+    assert base_prompt is not None
+    assert "User: {{user_message}}" in base_prompt.content
+
+    # Get version 1
+    v1_prompt = manager.get_prompt(prompt_id="chat_prompt", version=1)
+    assert v1_prompt is not None
+    assert "Version 1:" in v1_prompt.content
+    assert v1_prompt.model == "gpt-3.5-turbo"
+
+    # Get version 2
+    v2_prompt = manager.get_prompt(prompt_id="chat_prompt", version=2)
+    assert v2_prompt is not None
+    assert "Version 2:" in v2_prompt.content
+    assert v2_prompt.model == "gpt-4"
+
+    # Get non-existent version (should return None)
+    non_existent = manager.get_prompt(prompt_id="chat_prompt", version=999)
+    assert non_existent is None
+
+
 def test_add_prompt_programmatically():
     """Test adding prompts programmatically."""
     prompt_dir = Path(
