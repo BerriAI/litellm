@@ -410,6 +410,15 @@ class NomaGuardrailConfigModel(BaseModel):
         default=None,
         description="If True, replaces sensitive content with anonymized version when only PII/PCI/secrets are detected. Only applies in blocking mode. Defaults to False if not provided",
     )
+    client_id: Optional[str] = Field(
+        default=None, description="Client ID for OAuth2 authentication"
+    )
+    client_secret: Optional[str] = Field(
+        default=None, description="Client Secret for OAuth2 authentication"
+    )
+    token_url: Optional[str] = Field(
+        default=None, description="OAuth2 Token URL. Defaults to https://api.noma.security/v1/oauth/token if not provided"
+    )
 
 
 class ToolPermissionGuardrailConfigModel(BaseModel):

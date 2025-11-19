@@ -106,6 +106,9 @@ class NomaGuardrail(CustomGuardrail):
         monitor_mode: Optional[bool] = None,
         block_failures: Optional[bool] = None,
         anonymize_input: Optional[bool] = None,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+        token_url: Optional[str] = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -118,6 +121,13 @@ class NomaGuardrail(CustomGuardrail):
         self.application_id = application_id or os.environ.get(
             "NOMA_APPLICATION_ID", "litellm"
         )
+
+        self.client_id = client_id or os.environ.get("NOMA_CLIENT_ID")
+        self.client_secret = client_secret or os.environ.get("NOMA_CLIENT_SECRET")
+        self.token_url = token_url or os.environ.get("NOMA_TOKEN_URL")
+        # Instance cache for access token
+        self._access_token = None
+        self._access_token_expires_at = 0.0
 
         if monitor_mode is None:
             self.monitor_mode = (
@@ -141,6 +151,45 @@ class NomaGuardrail(CustomGuardrail):
             self.anonymize_input = anonymize_input
 
         super().__init__(**kwargs)
+
+    async def _get_oauth_token(self) -> str:
+        """Get OAuth access token (cached or fresh)"""
+        import time
+
+        if (
+            self._access_token
+            and self._access_token_expires_at > time.time() + 60  # Buffer 60s
+        ):
+            return self._access_token
+
+        if not self.client_id or not self.client_secret:
+            raise ValueError("client_id and client_secret are required for OAuth2 auth")
+
+        # Determine token URL
+        token_endpoint = self.token_url
+        if not token_endpoint:
+            # Assume standard path if not provided
+            token_endpoint = urljoin(
+                self.api_base or "https://api.noma.security/", "/v1/oauth/token"
+            )
+
+        response = await self.async_handler.post(
+            token_endpoint,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        self._access_token = data["access_token"]
+        expires_in = data.get("expires_in", 3600)
+        self._access_token_expires_at = time.time() + expires_in
+
+        return self._access_token
 
     def _create_background_noma_check(
         self,
@@ -781,8 +830,14 @@ class NomaGuardrail(CustomGuardrail):
         extra_data: dict,
     ) -> dict:
         call_id = request_data.get("litellm_call_id")
+
+        # Auth logic: Prefer OAuth2 if configured, else fall back to API Key
+        token = self.api_key
+        if self.client_id and self.client_secret:
+            token = await self._get_oauth_token()
+
         headers = {
-            **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
+            **({"Authorization": f"Bearer {token}"} if token else {}),
             **({"X-Noma-Request-ID": call_id} if call_id else {}),
         }
         endpoint = urljoin(
@@ -846,6 +901,98 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.info(msg)
             else:
                 verbose_proxy_logger.debug(msg)
+
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[Any]] = None,
+        request_data: Optional[dict] = None,
+    ) -> str:
+        """
+        Scan a single text string with Noma and return:
+          - same text (allowed),
+          - anonymized text (if enabled and applicable),
+          - or raise NomaBlockedMessage (blocked).
+
+        This is used by the unified guardrail path which calls providers
+        per text segment and maps results back automatically.
+        """
+        try:
+            verbose_proxy_logger.debug("Noma Guardrail: apply_guardrail()")
+
+            # Determine phase by presence of request_data from unified handlers:
+            # - Pre-call (inputs): request_data is provided → treat as user message
+            # - Post-call (outputs): request_data may be None → treat as assistant message
+            is_output_phase: bool = request_data is None
+            msg_role: MessageRole = ASSISTANT_ROLE if is_output_phase else USER_ROLE
+
+            # Ensure we have a request context for logging and x-noma-context
+            rd = request_data or {"messages": [{"role": msg_role, "content": text}]}
+            extra_data = self.get_guardrail_dynamic_request_body_params(rd)
+            # Build minimal scan payload with appropriate role
+            payload = {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": msg_role,
+                        "content": [{"type": "input_text", "text": text}],
+                    }
+                ]
+            }
+
+            # Minimal auth context for x-noma-context headers
+            mock_user_auth = UserAPIKeyAuth()
+
+            start_time = datetime.now()
+            response_json = await self._call_noma_api(
+                payload=payload,
+                llm_request_id=None,
+                request_data=rd,
+                user_auth=mock_user_auth,
+                extra_data=extra_data,
+            )
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+
+            # Standardized logging (same as hook paths)
+            guardrail_status = self._determine_guardrail_status(response_json)
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider="noma",
+                guardrail_json_response=response_json,
+                request_data=rd,
+                guardrail_status=guardrail_status,
+                start_time=start_time.timestamp(),
+                end_time=end_time.timestamp(),
+                duration=duration,
+            )
+
+            # Monitor mode: never modify/block; just log
+            if self.monitor_mode:
+                await self._handle_verdict_background(msg_role, text, response_json)
+                return text
+
+            # If anonymization is available for this role, return anonymized text
+            if self.anonymize_input and self._should_anonymize(response_json, msg_role):
+                anonymized = self._extract_anonymized_content(response_json, msg_role)
+                if anonymized:
+                    verbose_proxy_logger.debug("Noma Guardrail: Content anonymized")
+                    return anonymized
+
+            # Otherwise, enforce verdict for the correct role
+            await self._check_verdict(msg_role, text, response_json)
+
+            verbose_proxy_logger.debug("Noma Guardrail: Successfully applied guardrail")
+            return text
+ 
+        except NomaBlockedMessage:
+            # Propagate block to caller for consistency with other hooks
+            raise
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Noma Guardrail: Failed to apply guardrail: %s", str(e)
+            )
+            raise Exception(f"Noma guardrail failed: {str(e)}")
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:

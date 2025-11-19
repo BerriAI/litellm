@@ -19,6 +19,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         monitor_mode=litellm_params.monitor_mode,
         block_failures=litellm_params.block_failures,
         anonymize_input=litellm_params.anonymize_input,
+        client_id=litellm_params.client_id,
+        client_secret=litellm_params.client_secret,
+        token_url=litellm_params.token_url,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )
