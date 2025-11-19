@@ -12,6 +12,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -52,10 +53,7 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import (
-    PromptTokensDetailsWrapper,
-    ServerToolUse,
-)
+from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -82,9 +80,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens: Optional[
-        int
-    ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
+    max_tokens: Optional[int] = (
+        DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
+    )
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -131,7 +129,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "parallel_tool_calls",
             "response_format",
             "user",
-            "web_search_options",
+            "web_search_options"
         ]
 
         if "claude-3-7-sonnet" in model or supports_reasoning(
@@ -378,6 +376,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
             )
+        elif reasoning_effort == "minimal":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+            )
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
@@ -464,11 +467,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
             if param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[
-                    AnthropicMessagesToolChoice
-                ] = self._map_tool_choice(
-                    tool_choice=non_default_params.get("tool_choice"),
-                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
+                    self._map_tool_choice(
+                        tool_choice=non_default_params.get("tool_choice"),
+                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                    )
                 )
 
                 if _tool_choice is not None:
@@ -576,9 +579,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content[
-                            "cache_control"
-                        ] = system_message_block["cache_control"]
+                        anthropic_system_message_content["cache_control"] = (
+                            system_message_block["cache_control"]
+                        )
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -592,9 +595,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content[
-                                "cache_control"
-                            ] = _content["cache_control"]
+                            anthropic_system_message_content["cache_control"] = (
+                                _content["cache_control"]
+                            )
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -643,6 +646,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         return tools
 
+    def _ensure_context_management_beta_header(self, headers: dict) -> None:
+        beta_value = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+        existing_beta = headers.get("anthropic-beta")
+        if existing_beta is None:
+            headers["anthropic-beta"] = beta_value
+            return
+        existing_values = [beta.strip() for beta in existing_beta.split(",")]
+        if beta_value not in existing_values:
+            headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
+
     def update_headers_with_optional_anthropic_beta(
         self, headers: dict, optional_params: dict
     ) -> dict:
@@ -652,15 +665,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if tool.get("type", None) and tool.get("type").startswith(
                 ANTHROPIC_HOSTED_TOOLS.WEB_FETCH.value
             ):
-                headers[
-                    "anthropic-beta"
-                ] = ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+                headers["anthropic-beta"] = (
+                    ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+                )
             elif tool.get("type", None) and tool.get("type").startswith(
                 ANTHROPIC_HOSTED_TOOLS.MEMORY.value
             ):
                 headers[
                     "anthropic-beta"
                 ] = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+        if optional_params.get("context_management") is not None:
+            self._ensure_context_management_beta_header(headers)
         return headers
 
     def transform_request(
@@ -779,9 +794,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _message
 
-    def extract_response_content(
-        self, completion_response: dict
-    ) -> Tuple[
+    def extract_response_content(self, completion_response: dict) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[
@@ -972,13 +985,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ):
                 text_content = prefix_prompt + text_content
 
+            context_management: Optional[Dict] = completion_response.get(
+                "context_management"
+            )
+
+            provider_specific_fields: Dict[str, Any] = {
+                "citations": citations,
+                "thinking_blocks": thinking_blocks,
+            }
+            if context_management is not None:
+                provider_specific_fields["context_management"] = context_management
+
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,
-                provider_specific_fields={
-                    "citations": citations,
-                    "thinking_blocks": thinking_blocks,
-                },
+                provider_specific_fields=provider_specific_fields,
                 thinking_blocks=thinking_blocks,
                 reasoning_content=reasoning_content,
             )
@@ -1010,6 +1031,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
+
+        context_management_response = completion_response.get("context_management")
+        if context_management_response is not None:
+            _hidden_params["context_management"] = context_management_response
+            try:
+                model_response.__dict__["context_management"] = (
+                    context_management_response
+                )
+            except Exception:
+                pass
 
         model_response._hidden_params = _hidden_params
 

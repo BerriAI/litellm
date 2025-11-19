@@ -22,7 +22,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   const [exportScope, setExportScope] = useState<ExportScope>("daily");
   const [isExporting, setIsExporting] = useState(false);
 
-  const entityLabel = entityType === "tag" ? "Tag" : "Team";
+  const entityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const modalTitle = customTitle || `Export ${entityLabel} Usage`;
 
   const handleExportCSV = () => {
@@ -110,4 +110,3 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
 };
 
 export default EntityUsageExportModal;
-

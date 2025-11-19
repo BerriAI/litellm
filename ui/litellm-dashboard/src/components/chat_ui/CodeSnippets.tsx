@@ -21,6 +21,10 @@ interface GenerateCodeParams {
   endpointType: string;
   selectedModel: string | undefined;
   selectedSdk: "openai" | "azure";
+  proxySettings?: {
+    PROXY_BASE_URL?: string;
+    LITELLM_UI_API_DOC_BASE_URL?: string | null;
+  };
 }
 
 export const generateCodeSnippet = (params: GenerateCodeParams): string => {
@@ -38,9 +42,18 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
     endpointType,
     selectedModel,
     selectedSdk,
+    proxySettings,
   } = params;
   const effectiveApiKey = apiKeySource === "session" ? accessToken : apiKey;
-  const apiBase = window.location.origin;
+
+  // Determine base URL with priority: LITELLM_UI_API_DOC_BASE_URL > PROXY_BASE_URL > window.location.origin
+  let apiBase = window.location.origin;
+  const customDocBaseUrl = proxySettings?.LITELLM_UI_API_DOC_BASE_URL;
+  if (customDocBaseUrl && customDocBaseUrl.trim()) {
+    apiBase = customDocBaseUrl;
+  } else if (proxySettings?.PROXY_BASE_URL) {
+    apiBase = proxySettings.PROXY_BASE_URL;
+  }
 
   // Always get the input message early on, regardless of what happens later
   const userPrompt = inputMessage || "Your prompt here"; // Fallback if inputMessage is empty

@@ -787,6 +787,16 @@ docker run --name litellm-proxy \
 </TabItem>
 </Tabs>
 
+### 6. Disable pulling live model prices
+
+Disable pulling the model prices from LiteLLM's [hosted model prices file](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), if you're seeing long cold start times or network security issues.
+
+```env
+export LITELLM_LOCAL_MODEL_COST_MAP="True"
+```
+
+This will use the local model prices file instead.
+
 ## Platform-specific Guide
 
 <Tabs>

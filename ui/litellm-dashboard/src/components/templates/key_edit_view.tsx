@@ -1,6 +1,6 @@
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { TextInput, Button as TremorButton } from "@tremor/react";
-import { Button as AntdButton, Form, Input, Select, Tooltip } from "antd";
+import { Form, Input, Select, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
@@ -521,6 +521,9 @@ export function KeyEditView({
           rotationInterval={rotationInterval}
           onRotationIntervalChange={setRotationInterval}
         />
+        <Form.Item name="duration" hidden initialValue="">
+          <Input />
+        </Form.Item>
       </div>
 
       {/* Hidden form field for token */}
@@ -548,7 +551,9 @@ export function KeyEditView({
 
       <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
         <div className="flex justify-end items-center gap-2">
-          <AntdButton onClick={onCancel}>Cancel</AntdButton>
+          <TremorButton variant="secondary" onClick={onCancel}>
+            Cancel
+          </TremorButton>
           <TremorButton type="submit">Save Changes</TremorButton>
         </div>
       </div>

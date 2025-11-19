@@ -120,7 +120,9 @@ describe("ChatUI", () => {
 
     // Open the "Select Model" dropdown (AntD renders options in a portal)
     const selectModelLabel = getByText("Select Model");
-    const modelSelect = selectModelLabel.parentElement?.querySelector(".ant-select-selector");
+    // The Select component is a sibling of the Text component, so we need to find it in the parent container
+    const modelSelectContainer = selectModelLabel.closest("div");
+    const modelSelect = modelSelectContainer?.querySelector(".ant-select-selector");
     expect(modelSelect).toBeTruthy();
 
     fireEvent.mouseDown(modelSelect!);
@@ -164,7 +166,9 @@ describe("ChatUI", () => {
 
     // Open model selector
     const selectModelLabel = getByText("Select Model");
-    const modelSelect = selectModelLabel.parentElement?.querySelector(".ant-select-selector");
+    // The Select component is a sibling of the Text component, so we need to find it in the parent container
+    const modelSelectContainer = selectModelLabel.closest("div");
+    const modelSelect = modelSelectContainer?.querySelector(".ant-select-selector");
     expect(modelSelect).toBeTruthy();
     act(() => {
       fireEvent.mouseDown(modelSelect!);

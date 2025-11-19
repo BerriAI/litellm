@@ -1048,7 +1048,7 @@ def test_vertex_ai_code_line_length():
     # Find the line that generates the ID
     id_line = None
     for line in source_lines:
-        if 'id=f"call_{uuid.uuid4().hex' in line:
+        if '"id": f"call_' in line and 'uuid.uuid4().hex[:28]' in line:
             id_line = line.strip()  # Remove indentation for length check
             break
     
@@ -1426,3 +1426,334 @@ def test_vertex_ai_annotation_empty_grounding_metadata():
         [metadata_empty_supports], "test content"
     )
     assert len(annotations) == 0
+
+
+# ==================== Gemini 3 Pro Preview Tests ====================
+
+def test_is_gemini_3_or_newer():
+    """Test the _is_gemini_3_or_newer method for version detection"""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Gemini 3 models
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro-preview") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-flash") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/gemini-3-pro-preview") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-3-pro-preview") == True
+
+    # Gemini 2.5 and older models
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.5-pro") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.5-flash") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.0-flash") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-1.5-pro") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-pro") == False
+
+    # Edge cases
+    assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
+
+
+def test_reasoning_effort_maps_to_thinking_level_gemini_3():
+    """Test that reasoning_effort maps to thinking_level for Gemini 3+ models"""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    model = "gemini-3-pro-preview"
+    optional_params = {}
+
+    # Test minimal -> low
+    non_default_params = {"reasoning_effort": "minimal"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+
+    # Test low -> low
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "low"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+
+    # Test medium -> high (medium not available yet)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "medium"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+
+    # Test high -> high
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "high"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+
+    # Test disable -> low (cannot fully disable in Gemini 3)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "disable"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+
+    # Test none -> low (cannot fully disable in Gemini 3)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "none"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+
+
+def test_temperature_default_for_gemini_3():
+    """Test that temperature defaults to 1.0 for Gemini 3+ models when not specified"""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    model = "gemini-3-pro-preview"
+    optional_params = {}
+
+    # No temperature specified
+    non_default_params = {}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+
+    # Should default to 1.0
+    assert "temperature" in result
+    assert result["temperature"] == 1.0
+
+
+def test_media_resolution_from_detail_parameter():
+    """Test that OpenAI's detail parameter is correctly mapped to media_resolution"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+        _map_openai_detail_to_media_resolution,
+    )
+
+    # Test detail -> media_resolution mapping
+    assert _map_openai_detail_to_media_resolution("low") == "low"
+    assert _map_openai_detail_to_media_resolution("high") == "high"
+    assert _map_openai_detail_to_media_resolution("auto") is None
+    assert _map_openai_detail_to_media_resolution(None) is None
+
+    # Test with actual message transformation using base64 image
+    # Using a minimal valid base64-encoded 1x1 PNG
+    base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image,
+                        "detail": "high"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Verify media_resolution is set in the inline_data
+    # Note: Gemini adds a blank text part when there's no text, so we expect 2 parts
+    assert len(contents) == 1
+    assert len(contents[0]["parts"]) >= 1
+    # Find the part with inline_data
+    image_part = None
+    for part in contents[0]["parts"]:
+        if "inline_data" in part:
+            image_part = part
+            break
+    assert image_part is not None
+    assert "inline_data" in image_part
+    # The TypedDict uses snake_case internally, but mediaResolution is camelCase in the dict
+    assert "mediaResolution" in image_part["inline_data"]
+    assert image_part["inline_data"]["mediaResolution"] == "high"
+
+
+def test_media_resolution_low_detail():
+    """Test that detail='low' maps to media_resolution='low'"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    # Using a minimal valid base64-encoded 1x1 PNG
+    base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image,
+                        "detail": "low"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Find the part with inline_data
+    image_part = None
+    for part in contents[0]["parts"]:
+        if "inline_data" in part:
+            image_part = part
+            break
+    assert image_part is not None
+    assert "inline_data" in image_part
+    assert image_part["inline_data"]["mediaResolution"] == "low"
+
+
+def test_media_resolution_auto_detail():
+    """Test that detail='auto' or None doesn't set media_resolution"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    # Using a minimal valid base64-encoded 1x1 PNG
+    base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    
+    # Test with auto
+    messages_auto = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image,
+                        "detail": "auto"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages_auto)
+    # Find the part with inline_data
+    image_part = None
+    for part in contents[0]["parts"]:
+        if "inline_data" in part:
+            image_part = part
+            break
+    assert image_part is not None
+    assert "inline_data" in image_part
+    # mediaResolution should not be set for auto
+    assert "mediaResolution" not in image_part["inline_data"] or image_part["inline_data"].get("mediaResolution") is None
+
+    # Test with None
+    messages_none = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages_none)
+    # Find the part with inline_data
+    image_part = None
+    for part in contents[0]["parts"]:
+        if "inline_data" in part:
+            image_part = part
+            break
+    assert image_part is not None
+    assert "inline_data" in image_part
+    # mediaResolution should not be set
+    assert "mediaResolution" not in image_part["inline_data"] or image_part["inline_data"].get("mediaResolution") is None
+
+
+def test_media_resolution_per_part():
+    """Test that different images can have different media_resolution values"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    # Using minimal valid base64-encoded 1x1 PNGs
+    base64_image1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    base64_image2 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image1,
+                        "detail": "low"
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "Compare these images"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image2,
+                        "detail": "high"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Should have one content with multiple parts
+    assert len(contents) == 1
+    assert len(contents[0]["parts"]) == 3  # image1, text, image2
+    
+    # First image should have low resolution (first part is the image)
+    image1_part = contents[0]["parts"][0]
+    assert "inline_data" in image1_part
+    assert image1_part["inline_data"]["mediaResolution"] == "low"
+    
+    # Second image should have high resolution (third part is the second image)
+    image2_part = contents[0]["parts"][2]
+    assert "inline_data" in image2_part
+    assert image2_part["inline_data"]["mediaResolution"] == "high"
+

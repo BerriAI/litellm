@@ -26,6 +26,9 @@ import { updateExistingKeys } from "@/utils/dataUtils";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "./molecules/notifications_manager";
+import { Modal, Typography, Descriptions } from "antd";
+
+const { Text, Title } = Typography;
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -71,7 +74,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [userToDelete, setUserToDelete] = useState<string | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
   const [activeTab, setActiveTab] = useState("users");
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 });
@@ -83,8 +87,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   const [selectionMode, setSelectionMode] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
 
-  const handleDelete = (userId: string) => {
-    setUserToDelete(userId);
+  const handleDelete = (user: UserInfo) => {
+    setUserToDelete(user);
     setIsDeleteModalOpen(true);
   };
 
@@ -148,12 +152,13 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   const confirmDelete = async () => {
     if (userToDelete && accessToken) {
       try {
-        await userDeleteCall(accessToken, [userToDelete]);
+        setIsDeletingUser(true);
+        await userDeleteCall(accessToken, [userToDelete.user_id]);
 
         // Update the user list after deletion
         queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
           if (previousData === undefined) return previousData;
-          const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete);
+          const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete.user_id);
           return { ...previousData, users: updatedUsers };
         });
 
@@ -161,10 +166,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
       } catch (error) {
         console.error("Error deleting user:", error);
         NotificationsManager.fromBackend("Failed to delete user");
+      } finally {
+        setIsDeleteModalOpen(false);
+        setUserToDelete(null);
+        setIsDeletingUser(false);
       }
     }
-    setIsDeleteModalOpen(false);
-    setUserToDelete(null);
   };
 
   const cancelDelete = () => {
@@ -372,39 +379,53 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
 
       {/* Delete Confirmation Modal */}
       {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
+        <Modal
+          title="Delete User?"
+          open={isDeleteModalOpen}
+          onCancel={cancelDelete}
+          onOk={confirmDelete}
+          okText={isDeletingUser ? "Deleting..." : "Delete"}
+          cancelText="Cancel"
+          cancelButtonProps={{ disabled: isDeletingUser }}
+          okButtonProps={{ danger: true }}
+          confirmLoading={isDeletingUser}
+        >
+          <div className="space-y-4">
+            <Text>Are you sure you want to delete this user? This action cannot be undone.</Text>
 
-            {/* Modal Panel */}
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            {/* Confirmation Modal Content */}
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete User</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this user?</p>
-                      <p className="text-sm font-medium text-gray-900 mt-2">User ID: {userToDelete}</p>
-                    </div>
-                  </div>
-                </div>
+            {userToDelete && (
+              <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
+                <Title level={5} className="mb-3 text-gray-900">
+                  User Information
+                </Title>
+                <Descriptions column={1} size="small">
+                  {userToDelete.user_email && (
+                    <Descriptions.Item label={<span className="font-semibold text-gray-700">Email</span>}>
+                      <Text className="text-sm">{userToDelete.user_email}</Text>
+                    </Descriptions.Item>
+                  )}
+                  <Descriptions.Item label={<span className="font-semibold text-gray-700">User ID</span>}>
+                    <Text code className="text-sm">
+                      {userToDelete.user_id}
+                    </Text>
+                  </Descriptions.Item>
+                  {userToDelete.user_role && (
+                    <Descriptions.Item label={<span className="font-semibold text-gray-700">Role</span>}>
+                      <Text className="text-sm">
+                        {possibleUIRoles?.[userToDelete.user_role]?.ui_label || userToDelete.user_role}
+                      </Text>
+                    </Descriptions.Item>
+                  )}
+                  {userToDelete.spend !== undefined && (
+                    <Descriptions.Item label={<span className="font-semibold text-gray-700">Total Spend</span>}>
+                      <Text className="text-sm">${userToDelete.spend.toFixed(2)}</Text>
+                    </Descriptions.Item>
+                  )}
+                </Descriptions>
               </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={confirmDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={cancelDelete}>Cancel</Button>
-              </div>
-            </div>
+            )}
           </div>
-        </div>
+        </Modal>
       )}
 
       <OnboardingModal
