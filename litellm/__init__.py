@@ -23,7 +23,8 @@ from typing import (
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+# HTTP handlers are lazy-loaded to reduce import-time memory cost
+# from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
@@ -410,10 +411,8 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
-module_level_aclient = AsyncHTTPHandler(
-    timeout=request_timeout, client_alias="module level aclient"
-)
-module_level_client = HTTPHandler(timeout=request_timeout)
+# module_level_aclient and module_level_client are lazy-loaded to reduce import-time memory cost
+# They are created on first access via __getattr__
 
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
@@ -1620,6 +1619,32 @@ def __getattr__(name: str) -> Any:
         from litellm.litellm_core_utils.default_encoding import encoding as _encoding
         globals()["encoding"] = _encoding
         return _encoding
+    
+    # Lazy-load HTTP handlers to reduce import-time memory cost
+    if name == "module_level_aclient":
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        _module_level_aclient = AsyncHTTPHandler(
+            timeout=request_timeout, client_alias="module level aclient"
+        )
+        globals()["module_level_aclient"] = _module_level_aclient
+        return _module_level_aclient
+    
+    if name == "module_level_client":
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        _module_level_client = HTTPHandler(timeout=request_timeout)
+        globals()["module_level_client"] = _module_level_client
+        return _module_level_client
+    
+    # Lazy-load HTTP handler classes for backward compatibility
+    if name == "AsyncHTTPHandler":
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as _AsyncHTTPHandler
+        globals()["AsyncHTTPHandler"] = _AsyncHTTPHandler
+        return _AsyncHTTPHandler
+    
+    if name == "HTTPHandler":
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler as _HTTPHandler
+        globals()["HTTPHandler"] = _HTTPHandler
+        return _HTTPHandler
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
