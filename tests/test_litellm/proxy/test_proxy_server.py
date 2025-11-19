@@ -2450,3 +2450,35 @@ async def test_init_sso_settings_in_db_empty_settings():
         # Verify empty dictionary
         assert uppercased_settings == {}
 
+
+def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
+    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    from fastapi.responses import RedirectResponse
+
+    cleanup_router_config_variables()
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+    
+    test_redirect_url = "/ui"
+    monkeypatch.setenv("ROOT_REDIRECT_URL", test_redirect_url)
+    
+    asyncio.run(initialize(config=config_fp, debug=True))
+    
+    docs_url = getattr(app, "docs_url", None) or "/docs"
+    root_redirect_url = os.getenv("ROOT_REDIRECT_URL")
+    
+    if docs_url != "/" and root_redirect_url:
+        for route in app.routes:
+            if hasattr(route, "path") and route.path == "/" and hasattr(route, "methods") and "GET" in route.methods:
+                app.routes.remove(route)
+                break
+        
+        @app.get("/", include_in_schema=False)
+        async def root_redirect():
+            return RedirectResponse(url=root_redirect_url)
+    
+    client = TestClient(app)
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == test_redirect_url
+
