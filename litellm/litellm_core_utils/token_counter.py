@@ -15,7 +15,7 @@ from typing import (
     cast,
 )
 
-import tiktoken
+# tiktoken is imported lazily when needed to avoid loading it at import time
 
 import litellm
 from litellm import verbose_logger
@@ -28,7 +28,7 @@ from litellm.constants import (
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
 )
-from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
+# default_encoding is imported lazily when needed to avoid loading tiktoken at import time
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
     AnthropicMessagesToolResultParam,
@@ -532,6 +532,8 @@ def _get_count_function(
                 return len(enc.ids)
 
         elif tokenizer_json["type"] == "openai_tokenizer":
+            # Import tiktoken lazily to avoid loading it at import time
+            import tiktoken
             model_to_use = _fix_model_name(model)  # type: ignore
             try:
                 if "gpt-4o" in model_to_use:
@@ -550,6 +552,8 @@ def _get_count_function(
     else:
 
         def count_tokens(text: str) -> int:
+            # Import default_encoding lazily to avoid loading tiktoken at import time
+            from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
             return len(default_encoding.encode(text, disallowed_special=()))
 
     return count_tokens
