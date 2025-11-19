@@ -7148,6 +7148,8 @@ class ProviderConfigManager:
             return litellm.AzureAIStudioConfig()
         elif litellm.LlmProviders.AZURE_TEXT == provider:
             return litellm.AzureOpenAITextConfig()
+        elif litellm.LlmProviders.AZURE_ANTHROPIC == provider:
+            return litellm.AzureAnthropicConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMChatConfig()
         elif litellm.LlmProviders.NLP_CLOUD == provider:
