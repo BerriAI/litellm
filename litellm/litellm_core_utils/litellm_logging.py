@@ -585,7 +585,10 @@ class Logging(LiteLLMLoggingBaseClass):
         custom_logger = (
             prompt_management_logger
             or self.get_custom_logger_for_prompt_management(
-                model=model, non_default_params=non_default_params
+                model=model,
+                non_default_params=non_default_params,
+                prompt_id=prompt_id,
+                dynamic_callback_params=self.standard_callback_dynamic_params,
             )
         )
 
@@ -622,7 +625,11 @@ class Logging(LiteLLMLoggingBaseClass):
         custom_logger = (
             prompt_management_logger
             or self.get_custom_logger_for_prompt_management(
-                model=model, tools=tools, non_default_params=non_default_params
+                model=model,
+                tools=tools,
+                non_default_params=non_default_params,
+                prompt_id=prompt_id,
+                dynamic_callback_params=self.standard_callback_dynamic_params,
             )
         )
 
@@ -646,19 +653,69 @@ class Logging(LiteLLMLoggingBaseClass):
         self.messages = messages
         return model, messages, non_default_params
 
+    def _auto_detect_prompt_management_logger(
+        self,
+        prompt_id: str,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+    ) -> Optional[CustomLogger]:
+        """
+        Auto-detect which prompt management system owns the given prompt_id.
+
+        This allows  a user to just pass prompt_id in the completion call and it will be auto-detected which system owns this prompt.
+
+        Args:
+            prompt_id: The prompt ID to check
+            dynamic_callback_params: Dynamic callback parameters for should_run_prompt_management checks
+
+        Returns:
+            A CustomLogger instance if a matching prompt management system is found, None otherwise
+        """
+        prompt_management_loggers = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=CustomPromptManagement
+            )
+        )
+
+        for logger in prompt_management_loggers:
+            if isinstance(logger, CustomPromptManagement):
+                try:
+                    if logger.should_run_prompt_management(
+                        prompt_id=prompt_id,
+                        dynamic_callback_params=dynamic_callback_params,
+                    ):
+                        self.model_call_details["prompt_integration"] = (
+                            logger.__class__.__name__
+                        )
+                        return logger
+                except Exception:
+                    # If check fails, continue to next logger
+                    continue
+        
+        return None
+
     def get_custom_logger_for_prompt_management(
-        self, model: str, non_default_params: Dict, tools: Optional[List[Dict]] = None
+        self,
+        model: str,
+        non_default_params: Dict,
+        tools: Optional[List[Dict]] = None,
+        prompt_id: Optional[str] = None,
+        dynamic_callback_params: Optional[StandardCallbackDynamicParams] = None,
     ) -> Optional[CustomLogger]:
         """
         Get a custom logger for prompt management based on model name or available callbacks.
 
         Args:
             model: The model name to check for prompt management integration
+            non_default_params: Non-default parameters passed to the completion call
+            tools: Optional tools passed to the completion call
+            prompt_id: Optional prompt ID to auto-detect which system owns this prompt
+            dynamic_callback_params: Dynamic callback parameters for should_run_prompt_management checks
 
         Returns:
             A CustomLogger instance if one is found, None otherwise
         """
         # First check if model starts with a known custom logger compatible callback
+        # This takes precedence for backward compatibility
         for callback_name in litellm._known_custom_logger_compatible_callbacks:
             if model.startswith(callback_name):
                 custom_logger = _init_custom_logger_compatible_class(
@@ -670,7 +727,16 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details["prompt_integration"] = model.split("/")[0]
                     return custom_logger
 
-        # Then check for any registered CustomPromptManagement loggers
+        # If prompt_id is provided, try to auto-detect which system has this prompt
+        if prompt_id and dynamic_callback_params is not None:
+            auto_detected_logger = self._auto_detect_prompt_management_logger(
+                prompt_id=prompt_id,
+                dynamic_callback_params=dynamic_callback_params,
+            )
+            if auto_detected_logger is not None:
+                return auto_detected_logger
+
+        # Then check for any registered CustomPromptManagement loggers (fallback)
         prompt_management_loggers = (
             litellm.logging_callback_manager.get_custom_loggers_for_type(
                 callback_type=CustomPromptManagement
