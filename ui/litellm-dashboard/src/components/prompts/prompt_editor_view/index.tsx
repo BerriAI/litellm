@@ -153,7 +153,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         litellm_params: {
           prompt_integration: "dotprompt",
           prompt_id: promptId,
-          prompt_data: dotpromptContent,
+          dotprompt_content: dotpromptContent,
         },
         prompt_info: {
           prompt_type: "db",
