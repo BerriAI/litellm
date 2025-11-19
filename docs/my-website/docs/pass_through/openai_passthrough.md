@@ -6,9 +6,10 @@ Pass-through endpoints for `/openai`
 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
-| Cost Tracking | ❌ | Not supported |
+| Cost Tracking | ✅ | When using router models |
 | Logging | ✅ | Works across all integrations |
 | Streaming | ✅ | Fully supported |
+| Load Balancing | ✅ | When using router models |
 
 ### When to use this?
 
@@ -17,10 +18,126 @@ Pass-through endpoints for `/openai`
 
 Simply replace `https://api.openai.com` with `LITELLM_PROXY_BASE_URL/openai`
 
-## Usage Examples
+## Quick Start
 
-Requirements:
-Set `OPENAI_API_KEY` in your environment variables.
+### 1. Setup config.yaml
+
+```yaml showLineNumbers
+model_list:
+  # Deployment 1
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY_1  # reads from environment
+  
+  # Deployment 2
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY_2  # reads from environment
+```
+
+Set OpenAI API keys in your environment:
+
+```bash showLineNumbers
+export OPENAI_API_KEY_1="your-first-api-key"
+export OPENAI_API_KEY_2="your-second-api-key"
+```
+
+### 2. Start Proxy
+
+```bash showLineNumbers
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+### 3. Use OpenAI SDK
+
+Replace `https://api.openai.com` with your proxy URL:
+
+```python showLineNumbers
+import openai
+
+client = openai.OpenAI(
+    base_url="http://0.0.0.0:4000/openai",
+    api_key="sk-1234"  # your litellm proxy api key
+)
+
+# Use any OpenAI endpoint
+assistant = client.beta.assistants.create(
+    name="Math Tutor",
+    instructions="You are a math tutor.",
+    model="gpt-4"  # uses router model from config.yaml
+)
+```
+
+## Load Balancing
+
+Define multiple deployments with the same `model_name` for automatic load balancing:
+
+```yaml showLineNumbers
+model_list:
+  # Deployment 1
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY_1
+  
+  # Deployment 2
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY_2
+```
+
+The proxy automatically distributes requests across both API keys.
+
+## Specifying Router Models
+
+For endpoints that don't have a `model` field in the request body (e.g., `/files/delete`), specify the router model using:
+
+### Option 1: Request Header
+
+```python showLineNumbers
+import openai
+
+client = openai.OpenAI(
+    base_url="http://0.0.0.0:4000/openai",
+    api_key="sk-1234",
+    default_headers={"X-LiteLLM-Target-Model": "gpt-4"}
+)
+
+# Delete a file using the specified router model
+client.files.delete(file_id="file-abc123")
+```
+
+### Option 2: Request Body
+
+```python showLineNumbers
+import openai
+
+client = openai.OpenAI(
+    base_url="http://0.0.0.0:4000/openai",
+    api_key="sk-1234"
+)
+
+# Upload file with target model
+file = client.files.create(
+    file=open("data.jsonl", "rb"),
+    purpose="batch",
+    extra_body={"target_model_names": "gpt-4"}
+)
+
+# Or with a list (first model will be used)
+file = client.files.create(
+    file=open("data.jsonl", "rb"),
+    purpose="batch",
+    extra_body={"target_model_names": ["gpt-4", "gpt-3.5-turbo"]}
+)
+```
+
+## Usage Examples
 
 ### Assistants API
 
