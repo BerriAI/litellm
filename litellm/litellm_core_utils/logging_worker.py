@@ -63,37 +63,46 @@ class LoggingWorker:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker_loop())
 
-    async def _process_log_task(self, task: LoggingTask):
-        """Acquires a semaphore lock, runs the logging task, and handles cleanup."""
-        if self._queue is None or self._sem is None:
-            # Worker not initialized; drop the task.
-            return
-
-        async with self._sem:
-            try:
-                # Run the coroutine in its original context
-                await asyncio.wait_for(
-                    task["context"].run(asyncio.create_task, task["coroutine"]),
-                    timeout=self.timeout,
-                )
-            except Exception as e:
-                verbose_logger.exception(f"LoggingWorker error: {e}")
-                pass
-            finally:
-                self._queue.task_done()
+    async def _process_log_task(self, task: LoggingTask, sem: asyncio.Semaphore):
+        """Runs the logging task and handles cleanup. Releases semaphore when done."""
+        try:
+            if self._queue is not None:
+                try:
+                    # Run the coroutine in its original context
+                    await asyncio.wait_for(
+                        task["context"].run(asyncio.create_task, task["coroutine"]),
+                        timeout=self.timeout,
+                    )
+                except Exception as e:
+                    verbose_logger.exception(f"LoggingWorker error: {e}")
+                finally:
+                    self._queue.task_done()
+        finally:
+            # Always release semaphore, even if queue is None
+            sem.release()
 
     async def _worker_loop(self) -> None:
         """Main worker loop that gets tasks and schedules them to run concurrently."""
         try:
-            if self._queue is None:
+            if self._queue is None or self._sem is None:
                 return
 
             while True:
-                task = await self._queue.get()
-                # Track each spawned coroutine so we can cancel on shutdown.
-                processing_task = asyncio.create_task(self._process_log_task(task))
-                self._running_tasks.add(processing_task)
-                processing_task.add_done_callback(self._running_tasks.discard)
+                # Acquire semaphore before removing task from queue to prevent
+                # unbounded growth of waiting tasks
+                await self._sem.acquire()
+                try:
+                    task = await self._queue.get()
+                    # Track each spawned coroutine so we can cancel on shutdown.
+                    processing_task = asyncio.create_task(
+                        self._process_log_task(task, self._sem)
+                    )
+                    self._running_tasks.add(processing_task)
+                    processing_task.add_done_callback(self._running_tasks.discard)
+                except Exception:
+                    # If task creation fails, release semaphore to prevent deadlock
+                    self._sem.release()
+                    raise
 
         except asyncio.CancelledError:
             verbose_logger.debug("LoggingWorker cancelled during shutdown")
