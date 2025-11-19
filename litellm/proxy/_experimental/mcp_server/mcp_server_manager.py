@@ -16,14 +16,18 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from httpx import HTTPStatusError
+from mcp import ReadResourceResult, Resource
 from mcp.types import (
     CallToolRequestParams as MCPCallToolRequestParams,
     GetPromptRequestParams,
     GetPromptResult,
     Prompt,
+    ResourceTemplate,
 )
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
+
+from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -769,6 +773,111 @@ class MCPServerManager:
             )
             return []
 
+    async def get_resources_from_server(
+        self,
+        server: MCPServer,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        add_prefix: bool = True,
+    ) -> List[Resource]:
+        """Fetch available resources from a single MCP server."""
+
+        verbose_logger.debug(f"Connecting to url: {server.url}")
+        verbose_logger.info(f"get_resources_from_server for {server.name}...")
+
+        client = None
+
+        try:
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
+
+            client = self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+            )
+
+            resources = await client.list_resources()
+
+            prefixed_resources = self._create_prefixed_resources(
+                resources, server, add_prefix=add_prefix
+            )
+
+            return prefixed_resources
+
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get resources from server {server.name}: {str(e)}"
+            )
+            return []
+
+    async def get_resource_templates_from_server(
+        self,
+        server: MCPServer,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        add_prefix: bool = True,
+    ) -> List[ResourceTemplate]:
+        """Fetch available resource templates from a single MCP server."""
+
+        verbose_logger.debug(f"Connecting to url: {server.url}")
+        verbose_logger.info(f"get_resource_templates_from_server for {server.name}...")
+
+        client = None
+
+        try:
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
+
+            client = self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+            )
+
+            resource_templates = await client.list_resource_templates()
+
+            prefixed_templates = self._create_prefixed_resource_templates(
+                resource_templates, server, add_prefix=add_prefix
+            )
+
+            return prefixed_templates
+
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get resource templates from server {server.name}: {str(e)}"
+            )
+            return []
+
+    async def read_resource_from_server(
+        self,
+        server: MCPServer,
+        url: AnyUrl,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> ReadResourceResult:
+        """Read resource contents from a specific MCP server."""
+
+        verbose_logger.debug(f"Connecting to url: {server.url}")
+        verbose_logger.info(f"read_resource_from_server for {server.name}...")
+
+        if server.static_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(server.static_headers)
+
+        client = self._create_mcp_client(
+            server=server,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=extra_headers,
+        )
+
+        return await client.read_resource(url)
+
     async def get_prompt_from_server(
         self,
         server: MCPServer,
@@ -1157,6 +1266,53 @@ class MCPServerManager:
             f"Successfully fetched {len(prefixed_prompts)} prompts from server {server.name}"
         )
         return prefixed_prompts
+
+    def _create_prefixed_resources(
+        self, resources: List[Resource], server: MCPServer, add_prefix: bool = True
+    ) -> List[Resource]:
+        """Prefix resource names and track origin server for read requests."""
+
+        prefixed_resources: List[Resource] = []
+        prefix = get_server_prefix(server)
+
+        for resource in resources:
+            name_to_use = (
+                add_server_prefix_to_name(resource.name, prefix)
+                if add_prefix
+                else resource.name
+            )
+            resource.name = name_to_use
+            prefixed_resources.append(resource)
+
+        verbose_logger.info(
+            f"Successfully fetched {len(prefixed_resources)} resources from server {server.name}"
+        )
+        return prefixed_resources
+
+    def _create_prefixed_resource_templates(
+        self,
+        resource_templates: List[ResourceTemplate],
+        server: MCPServer,
+        add_prefix: bool = True,
+    ) -> List[ResourceTemplate]:
+        """Prefix resource template names for multi-server scenarios."""
+
+        prefixed_templates: List[ResourceTemplate] = []
+        prefix = get_server_prefix(server)
+
+        for resource_template in resource_templates:
+            name_to_use = (
+                add_server_prefix_to_name(resource_template.name, prefix)
+                if add_prefix
+                else resource_template.name
+            )
+            resource_template.name = name_to_use
+            prefixed_templates.append(resource_template)
+
+        verbose_logger.info(
+            f"Successfully fetched {len(prefixed_templates)} resource templates from server {server.name}"
+        )
+        return prefixed_templates
 
     def check_allowed_or_banned_tools(self, tool_name: str, server: MCPServer) -> bool:
         """

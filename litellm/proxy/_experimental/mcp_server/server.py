@@ -8,8 +8,15 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from fastapi import FastAPI, HTTPException
-from mcp.types import GetPromptResult
-from pydantic import ConfigDict
+from mcp import ReadResourceResult, Resource
+from mcp.server.lowlevel.helper_types import ReadResourceContents
+from mcp.types import (
+    BlobResourceContents,
+    GetPromptResult,
+    ResourceTemplate,
+    TextResourceContents,
+)
+from pydantic import AnyUrl, ConfigDict
 from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_logger
@@ -388,6 +395,125 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
         )
 
+    @server.list_resources()
+    async def list_resources() -> List[Resource]:
+        """List all available resources."""
+        try:
+            (
+                user_api_key_auth,
+                mcp_auth_header,
+                mcp_servers,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+            ) = get_auth_context()
+            verbose_logger.debug(
+                f"MCP list_resources - User API Key Auth from context: {user_api_key_auth}"
+            )
+            verbose_logger.debug(
+                f"MCP list_resources - MCP servers from context: {mcp_servers}"
+            )
+            verbose_logger.debug(
+                f"MCP list_resources - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
+            )
+
+            resources = await _list_mcp_resources(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+            verbose_logger.info(
+                f"MCP list_resources - Successfully returned {len(resources)} resources"
+            )
+            return resources
+        except Exception as e:
+            verbose_logger.exception(f"Error in list_resources endpoint: {str(e)}")
+            return []
+
+    @server.list_resource_templates()
+    async def list_resource_templates() -> List[ResourceTemplate]:
+        """List all available resource templates."""
+        try:
+            (
+                user_api_key_auth,
+                mcp_auth_header,
+                mcp_servers,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+            ) = get_auth_context()
+            verbose_logger.debug(
+                f"MCP list_resource_templates - User API Key Auth from context: {user_api_key_auth}"
+            )
+            verbose_logger.debug(
+                f"MCP list_resource_templates - MCP servers from context: {mcp_servers}"
+            )
+            verbose_logger.debug(
+                f"MCP list_resource_templates - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
+            )
+
+            resource_templates = await _list_mcp_resource_templates(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+            verbose_logger.info(
+                "MCP list_resource_templates - Successfully returned "
+                f"{len(resource_templates)} resource templates"
+            )
+            return resource_templates
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error in list_resource_templates endpoint: {str(e)}"
+            )
+            return []
+
+    @server.read_resource()
+    async def read_resource(url: AnyUrl) -> list[ReadResourceContents]:
+        (
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
+        ) = get_auth_context()
+
+        read_resource_result = await mcp_read_resource(
+            url=url,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=mcp_servers,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
+
+        normalized_contents: List[ReadResourceContents] = []
+        for content in read_resource_result.contents:
+            if isinstance(content, TextResourceContents):
+                normalized_contents.append(
+                    ReadResourceContents(
+                        content=content.text,
+                        mime_type=content.mimeType,
+                    )
+                )
+            elif isinstance(content, BlobResourceContents):
+                normalized_contents.append(
+                    ReadResourceContents(
+                        content=content.blob,
+                        mime_type=None,
+                    )
+                )
+
+        return normalized_contents
+
     ########################################################
     ############ End of MCP Server Routes ##################
     ########################################################
@@ -713,6 +839,124 @@ if MCP_AVAILABLE:
 
         return all_prompts
 
+    async def _get_resources_from_mcp_servers(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str],
+        mcp_servers: Optional[List[str]],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> List[Resource]:
+        """Fetch resources from allowed MCP servers."""
+
+        if not MCP_AVAILABLE:
+            return []
+
+        allowed_mcp_servers = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+        )
+
+        add_prefix = not (len(allowed_mcp_servers) == 1)
+
+        all_resources: List[Resource] = []
+        for server in allowed_mcp_servers:
+            if server is None:
+                continue
+
+            server_auth_header, extra_headers = _prepare_mcp_server_headers(
+                server=server,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                mcp_auth_header=mcp_auth_header,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+
+            try:
+                resources = await global_mcp_server_manager.get_resources_from_server(
+                    server=server,
+                    mcp_auth_header=server_auth_header,
+                    extra_headers=extra_headers,
+                    add_prefix=add_prefix,
+                )
+                all_resources.extend(resources)
+
+                verbose_logger.debug(
+                    f"Successfully fetched {len(resources)} resources from server {server.name}"
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    f"Error getting resources from server {server.name}: {str(e)}"
+                )
+
+        verbose_logger.info(
+            f"Successfully fetched {len(all_resources)} resources total from all MCP servers"
+        )
+
+        return all_resources
+
+    async def _get_resource_templates_from_mcp_servers(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str],
+        mcp_servers: Optional[List[str]],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> List[ResourceTemplate]:
+        """Fetch resource templates from allowed MCP servers."""
+
+        if not MCP_AVAILABLE:
+            return []
+
+        allowed_mcp_servers = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+        )
+
+        add_prefix = not (len(allowed_mcp_servers) == 1)
+
+        all_resource_templates: List[ResourceTemplate] = []
+        for server in allowed_mcp_servers:
+            if server is None:
+                continue
+
+            server_auth_header, extra_headers = _prepare_mcp_server_headers(
+                server=server,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                mcp_auth_header=mcp_auth_header,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+
+            try:
+                resource_templates = (
+                    await global_mcp_server_manager.get_resource_templates_from_server(
+                        server=server,
+                        mcp_auth_header=server_auth_header,
+                        extra_headers=extra_headers,
+                        add_prefix=add_prefix,
+                    )
+                )
+                all_resource_templates.extend(resource_templates)
+                verbose_logger.debug(
+                    "Successfully fetched %s resource templates from server %s",
+                    len(resource_templates),
+                    server.name,
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "Error getting resource templates from server %s: %s",
+                    server.name,
+                    str(e),
+                )
+
+        verbose_logger.info(
+            "Successfully fetched %s resource templates total from all MCP servers",
+            len(all_resource_templates),
+        )
+
+        return all_resource_templates
+
     async def filter_tools_by_key_team_permissions(
         tools: List[MCPTool],
         server_id: str,
@@ -832,6 +1076,74 @@ if MCP_AVAILABLE:
             # Continue with empty managed tools list instead of failing completely
 
         return managed_prompts
+
+    async def _list_mcp_resources(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_servers: Optional[List[str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> List[Resource]:
+        """List all available MCP resources."""
+
+        if not MCP_AVAILABLE:
+            return []
+
+        managed_resources: List[Resource] = []
+        try:
+            managed_resources = await _get_resources_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+            verbose_logger.debug(
+                f"Successfully fetched {len(managed_resources)} resources from managed MCP servers"
+            )
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error getting resources from managed MCP servers: {str(e)}"
+            )
+
+        return managed_resources
+
+    async def _list_mcp_resource_templates(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_servers: Optional[List[str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> List[ResourceTemplate]:
+        """List all available MCP resource templates."""
+
+        if not MCP_AVAILABLE:
+            return []
+
+        managed_resource_templates: List[ResourceTemplate] = []
+        try:
+            managed_resource_templates = await _get_resource_templates_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+            verbose_logger.debug(
+                "Successfully fetched %s resource templates from managed MCP servers",
+                len(managed_resource_templates),
+            )
+        except Exception as e:
+            verbose_logger.exception(
+                "Error getting resource templates from managed MCP servers: %s",
+                str(e),
+            )
+
+        return managed_resource_templates
 
     @client
     async def call_mcp_tool(
@@ -1014,6 +1326,54 @@ if MCP_AVAILABLE:
             server=server,
             prompt_name=original_prompt_name,
             arguments=arguments,
+            mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
+        )
+
+    async def mcp_read_resource(
+        url: AnyUrl,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_servers: Optional[List[str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> ReadResourceResult:
+        """Read resource contents from upstream MCP servers."""
+
+        allowed_mcp_servers = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+        )
+
+        if not allowed_mcp_servers:
+            raise HTTPException(
+                status_code=403,
+                detail="User not allowed to read this resource.",
+            )
+
+        if len(allowed_mcp_servers) != 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Multiple MCP servers configured; read_resource currently "
+                    "supports exactly one allowed server."
+                ),
+            )
+
+        server = allowed_mcp_servers[0]
+
+        server_auth_header, extra_headers = _prepare_mcp_server_headers(
+            server=server,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            mcp_auth_header=mcp_auth_header,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
+
+        return await global_mcp_server_manager.read_resource_from_server(
+            server=server,
+            url=url,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
         )
