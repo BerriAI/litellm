@@ -768,7 +768,6 @@ async def test_generate_service_account_works_with_team_id():
     ) as mock_router, patch("litellm.proxy.proxy_server.premium_user", False), patch(
         "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
     ) as mock_generate_key:
-
         # Configure mocks
         mock_prisma.return_value = AsyncMock()
         mock_router.return_value = None
@@ -1172,7 +1171,6 @@ def test_validate_key_team_change_with_member_permissions():
                 with patch(
                     "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
                 ) as mock_has_perms:
-
                     mock_get_user.return_value = mock_member_object
                     mock_is_admin.return_value = False
                     mock_has_perms.return_value = True

@@ -65,7 +65,10 @@ def validate_standard_logging_payload(
     assert slp is not None, "Standard logging payload should not be None"
 
     # Validate token counts
-    print("VALIDATING STANDARD LOGGING PAYLOAD. response=", json.dumps(response, indent=4, default=str))
+    print(
+        "VALIDATING STANDARD LOGGING PAYLOAD. response=",
+        json.dumps(response, indent=4, default=str),
+    )
     print("FIELDS IN SLP=", json.dumps(slp, indent=4, default=str))
     print("SLP PROMPT TOKENS=", slp["prompt_tokens"])
     print("RESPONSE PROMPT TOKENS=", response["usage"]["input_tokens"])
@@ -1662,8 +1665,12 @@ async def test_openai_streaming_logging():
             ), f"Expected response_obj.usage to be of type Usage or dict, but got {type(response_obj.usage)}"
             # Verify it has the chat completion format fields
             if isinstance(response_obj.usage, dict):
-                assert "prompt_tokens" in response_obj.usage, "Usage dict should have prompt_tokens"
-                assert "completion_tokens" in response_obj.usage, "Usage dict should have completion_tokens"
+                assert (
+                    "prompt_tokens" in response_obj.usage
+                ), "Usage dict should have prompt_tokens"
+                assert (
+                    "completion_tokens" in response_obj.usage
+                ), "Usage dict should have completion_tokens"
             print("\n\nVALIDATED USAGE\n\n")
             self.validate_usage = True
 

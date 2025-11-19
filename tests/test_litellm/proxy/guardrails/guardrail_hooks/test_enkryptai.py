@@ -28,7 +28,7 @@ def enkryptai_guardrail():
         detectors={
             "nsfw": {"enabled": True},
             "toxicity": {"enabled": True},
-        }
+        },
     )
 
 
@@ -81,12 +81,14 @@ class TestEnkryptAIGuardrailConfiguration:
             api_key="test-key",
             api_base="https://api.test.enkryptai.com",
             policy_name="test-policy",
-            detectors={"toxicity": {"enabled": True}}
+            detectors={"toxicity": {"enabled": True}},
         )
         assert guardrail.api_key == "test-key"
         assert guardrail.api_base == "https://api.test.enkryptai.com"
         assert guardrail.policy_name == "test-policy"
-        assert guardrail.optional_params.get("detectors") == {"toxicity": {"enabled": True}}
+        assert guardrail.optional_params.get("detectors") == {
+            "toxicity": {"enabled": True}
+        }
 
     def test_init_with_env_vars(self):
         """Test initialization with environment variables"""
@@ -316,9 +318,7 @@ class TestEnkryptAIGuardrailHooks:
                 )
 
     @pytest.mark.asyncio
-    async def test_monitor_mode(
-        self, mock_user_api_key_dict, mock_request_data
-    ):
+    async def test_monitor_mode(self, mock_user_api_key_dict, mock_request_data):
         """Test monitor mode (block_on_violation=False)"""
         guardrail = EnkryptAIGuardrails(
             api_key="test-key",
@@ -335,9 +335,7 @@ class TestEnkryptAIGuardrailHooks:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(guardrail.async_handler, "post", return_value=mock_response):
             # Should not raise exception in monitor mode
             result = await guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
@@ -364,6 +362,3 @@ class TestEnkryptAIGuardrailHooks:
         response_json = "invalid"
         status = enkryptai_guardrail._determine_guardrail_status(response_json)
         assert status == "guardrail_failed_to_respond"
-
-
-

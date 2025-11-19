@@ -27,7 +27,6 @@ else:
 
 
 class BaseVectorStoreConfig:
-
     def get_supported_openai_params(
         self, model: str
     ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
@@ -61,7 +60,6 @@ class BaseVectorStoreConfig:
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> Tuple[str, Dict]:
-
         pass
 
     @abstractmethod

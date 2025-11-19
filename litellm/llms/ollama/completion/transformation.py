@@ -93,9 +93,9 @@ class OllamaConfig(BaseConfig):
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     seed: Optional[int] = None
-    stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
-    )
+    stop: Optional[
+        list
+    ] = None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -579,7 +579,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 )
             else:
                 # In this case, 'thinking' is not present in the chunk, chunk["done"] is false,
-                # and chunk["response"] is falsy (None or empty string), 
+                # and chunk["response"] is falsy (None or empty string),
                 # but Ollama is just starting to stream, so it should be processed as a normal dict
                 return ModelResponseStream(
                     choices=[

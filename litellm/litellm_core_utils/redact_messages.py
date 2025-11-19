@@ -63,10 +63,12 @@ def _redact_responses_api_output(output_items):
             for content_part in output_item.content:
                 if hasattr(content_part, "text"):
                     content_part.text = "redacted-by-litellm"
-        
+
         # Redact reasoning items in output array
         if hasattr(output_item, "type") and output_item.type == "reasoning":
-            if hasattr(output_item, "summary") and isinstance(output_item.summary, list):
+            if hasattr(output_item, "summary") and isinstance(
+                output_item.summary, list
+            ):
                 for summary_item in output_item.summary:
                     if hasattr(summary_item, "text"):
                         summary_item.text = "redacted-by-litellm"
@@ -95,19 +97,24 @@ def perform_redaction(model_call_details: dict, result):
         elif hasattr(_streaming_response, "output"):
             _redact_responses_api_output(_streaming_response.output)
             # Redact reasoning field in ResponsesAPIResponse
-            if hasattr(_streaming_response, "reasoning") and _streaming_response.reasoning is not None:
+            if (
+                hasattr(_streaming_response, "reasoning")
+                and _streaming_response.reasoning is not None
+            ):
                 _streaming_response.reasoning = None
 
     # Redact result
     if result is not None:
         # Check if result is a coroutine, async generator, or other async object - these cannot be deepcopied
-        if (asyncio.iscoroutine(result) or 
-            asyncio.iscoroutinefunction(result) or
-            hasattr(result, '__aiter__') or  # async generator
-            hasattr(result, '__anext__')):   # async iterator
+        if (
+            asyncio.iscoroutine(result)
+            or asyncio.iscoroutinefunction(result)
+            or hasattr(result, "__aiter__")
+            or hasattr(result, "__anext__")  # async generator
+        ):  # async iterator
             # For async objects, return a simple redacted response without deepcopy
             return {"text": "redacted-by-litellm"}
-        
+
         _result = copy.deepcopy(result)
         if isinstance(_result, litellm.ModelResponse):
             if hasattr(_result, "choices") and _result.choices is not None:
@@ -132,10 +139,10 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     Determine if message logging should be redacted.
     """
     litellm_params = model_call_details.get("litellm_params", {})
-    
+
     metadata_field = get_metadata_variable_name_from_kwargs(litellm_params)
     metadata = litellm_params.get(metadata_field, {})
-    
+
     # Get headers from the metadata
     request_headers = metadata.get("headers", {}) if isinstance(metadata, dict) else {}
 
@@ -191,9 +198,9 @@ def _get_turn_off_message_logging_from_dynamic_params(
 
     handles boolean and string values of `turn_off_message_logging`
     """
-    standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-        model_call_details.get("standard_callback_dynamic_params", None)
-    )
+    standard_callback_dynamic_params: Optional[
+        StandardCallbackDynamicParams
+    ] = model_call_details.get("standard_callback_dynamic_params", None)
     if standard_callback_dynamic_params:
         _turn_off_message_logging = standard_callback_dynamic_params.get(
             "turn_off_message_logging"

@@ -273,9 +273,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.finished = False
 
         # Event queues and generation flags
-        self.mcp_discovery_events: List[ResponsesAPIStreamingResponse] = (
-            mcp_events  # Pre-generated MCP discovery events
-        )
+        self.mcp_discovery_events: List[
+            ResponsesAPIStreamingResponse
+        ] = mcp_events  # Pre-generated MCP discovery events
         self.tool_execution_events: List[ResponsesAPIStreamingResponse] = []
         self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = (
@@ -284,9 +284,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.tool_server_map = tool_server_map
 
         # Iterator references
-        self.base_iterator: Optional[Union[Any, ResponsesAPIResponse]] = (
-            base_iterator  # Will be created when needed
-        )
+        self.base_iterator: Optional[
+            Union[Any, ResponsesAPIResponse]
+        ] = base_iterator  # Will be created when needed
         self.follow_up_iterator: Optional[Any] = None
 
         # Response collection for tool execution
@@ -434,9 +434,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Use the pre-fetched all_tools from original_request_params (no re-processing needed)
             params_for_llm = {}
             for key, value in params.items():
-                params_for_llm[key] = (
-                    value  # Copy all params as-is since tools are already processed
-                )
+                params_for_llm[
+                    key
+                ] = value  # Copy all params as-is since tools are already processed
 
             tools_count = (
                 len(params_for_llm.get("tools", []))
@@ -490,9 +490,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 return
 
             for tool_call in tool_calls:
-                tool_name, tool_arguments, tool_call_id = (
-                    LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
-                )
+                (
+                    tool_name,
+                    tool_arguments,
+                    tool_call_id,
+                ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
                 if tool_name and tool_call_id:
                     # Create MCP call events for this tool execution
                     call_events = create_mcp_call_events(

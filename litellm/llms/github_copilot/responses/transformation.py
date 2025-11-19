@@ -297,8 +297,6 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Check content field recursively
         if "content" in value and isinstance(value["content"], list):
-            return any(
-                self._contains_vision_content(item) for item in value["content"]
-            )
+            return any(self._contains_vision_content(item) for item in value["content"])
 
         return False

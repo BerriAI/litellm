@@ -554,7 +554,6 @@ async def cancel_batch(
 
             response = await llm_router.acancel_batch(model=model, **data)  # type: ignore
         else:
-
             custom_llm_provider = (
                 provider or data.pop("custom_llm_provider", None) or "openai"
             )

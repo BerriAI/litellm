@@ -461,7 +461,8 @@ def get_model_rate_limit_from_metadata(
     if getattr(user_api_key_dict, metadata_accessor_key):
         return getattr(user_api_key_dict, metadata_accessor_key).get(rate_limit_key)
     return None
-  
+
+
 def get_team_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:

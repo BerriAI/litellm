@@ -1216,14 +1216,14 @@ def convert_to_gemini_tool_call_invoke(
         _parts_list: List[VertexPartType] = []
         tool_calls = message.get("tool_calls", None)
         function_call = message.get("function_call", None)
-        
+
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
-                    gemini_function_call: Optional[VertexFunctionCall] = (
-                        _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
-                        )
+                    gemini_function_call: Optional[
+                        VertexFunctionCall
+                    ] = _gemini_tool_call_invoke_helper(
+                        function_call_params=tool["function"]
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {
@@ -1232,7 +1232,7 @@ def convert_to_gemini_tool_call_invoke(
                         thought_signature = _get_thought_signature_from_tool(dict(tool))
                         if thought_signature:
                             part_dict["thoughtSignature"] = thought_signature
-                        
+
                         _parts_list.append(part_dict)
                     else:  # don't silently drop params. Make it clear to user what's happening.
                         raise Exception(
@@ -1248,14 +1248,18 @@ def convert_to_gemini_tool_call_invoke(
                 part_dict_function: VertexPartType = {
                     "function_call": gemini_function_call
                 }
-                
+
                 # Extract thought signature from function_call's provider_specific_fields
-                provider_fields = function_call.get("provider_specific_fields") if isinstance(function_call, dict) else {}
+                provider_fields = (
+                    function_call.get("provider_specific_fields")
+                    if isinstance(function_call, dict)
+                    else {}
+                )
                 if isinstance(provider_fields, dict):
                     thought_signature = provider_fields.get("thought_signature")
                     if thought_signature:
                         part_dict_function["thoughtSignature"] = thought_signature
-                
+
                 _parts_list.append(part_dict_function)
             else:  # don't silently drop params. Make it clear to user what's happening.
                 raise Exception(
@@ -1758,9 +1762,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element["cache_control"] = (
-                                    _content_element["cache_control"]
-                                )
+                                _anthropic_content_element[
+                                    "cache_control"
+                                ] = _content_element["cache_control"]
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1798,9 +1802,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_content_text_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2566,17 +2570,19 @@ class BedrockImageProcessor:
     """Handles both sync and async image processing for Bedrock conversations."""
 
     @staticmethod
-    def _post_call_image_processing(response: httpx.Response, image_url: str = "") -> Tuple[str, str]:
+    def _post_call_image_processing(
+        response: httpx.Response, image_url: str = ""
+    ) -> Tuple[str, str]:
         # Check the response's content type to ensure it is an image
         content_type = response.headers.get("content-type")
-        
+
         # Use helper function to infer content type with fallback logic
         content_type = infer_content_type_from_url_and_content(
             url=image_url,
             content=response.content,
             current_content_type=content_type,
         )
-        
+
         content_type = _parse_content_type(content_type)
 
         # Convert the image content to base64 bytes
@@ -2595,7 +2601,9 @@ class BedrockImageProcessor:
             response = await client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response, image_url)
+            return BedrockImageProcessor._post_call_image_processing(
+                response, image_url
+            )
 
         except Exception as e:
             raise e
@@ -2608,7 +2616,9 @@ class BedrockImageProcessor:
             response = client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response, image_url)
+            return BedrockImageProcessor._post_call_image_processing(
+                response, image_url
+            )
 
         except Exception as e:
             raise e
@@ -3865,7 +3875,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             )
                         elif element["type"] == "text":
                             # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
-                            text_content = element["text"] if element["text"].strip() else "."
+                            text_content = (
+                                element["text"] if element["text"].strip() else "."
+                            )
                             assistants_part = BedrockContentBlock(text=text_content)
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":

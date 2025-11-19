@@ -25,10 +25,8 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
     vector_store_id: str,
 ) -> Dict:
     if litellm.vector_store_registry is not None:
-        vector_store_to_run = (
-            litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
-                vector_store_id=vector_store_id
-            )
+        vector_store_to_run = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
+            vector_store_id=vector_store_id
         )
         if vector_store_to_run is not None:
             if "custom_llm_provider" in vector_store_to_run:

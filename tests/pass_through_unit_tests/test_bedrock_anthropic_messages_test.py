@@ -1,4 +1,3 @@
-
 import json
 import os
 import sys
@@ -17,6 +16,7 @@ import litellm
 from base_anthropic_unified_messages_test import BaseAnthropicMessagesTest
 
 INSTANCE_BASE_ANTHROPIC_MESSAGES_TEST = BaseAnthropicMessagesTest()
+
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_litellm_router_bedrock():
@@ -38,10 +38,10 @@ async def test_anthropic_messages_litellm_router_bedrock():
                 "litellm_params": {
                     "model": "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
                 },
-            }
+            },
         ]
     )
-    
+
     # Set up test parameters
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
@@ -64,5 +64,3 @@ async def test_anthropic_messages_litellm_router_bedrock():
 
     # Verify response
     INSTANCE_BASE_ANTHROPIC_MESSAGES_TEST._validate_response(response)
-
-

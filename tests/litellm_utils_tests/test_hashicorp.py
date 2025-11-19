@@ -19,6 +19,7 @@ verbose_logger.setLevel(logging.DEBUG)
 
 # Minimal setup for module-level instantiation
 import litellm.proxy.proxy_server
+
 litellm.proxy.proxy_server.premium_user = True
 
 from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretManager
@@ -184,7 +185,7 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
             }
         }
         mock_response.raise_for_status.return_value = None
-        
+
         # Configure the mock client's post method
         mock_client_instance = MagicMock()
         mock_client_instance.post.return_value = mock_response
@@ -196,16 +197,16 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
         test_manager.tls_key_path = "key.pem"
         test_manager.vault_cert_role = "test-role"
         test_manager.vault_namespace = "test-namespace"
-        
+
         # Test the TLS auth method
         token = test_manager._auth_via_tls_cert()
 
         # Verify the token
         assert token == "test-client-token-12345"
-        
+
         # Verify Client was created with correct cert tuple
         mock_client.assert_called_once_with(cert=("cert.pem", "key.pem"))
-        
+
         # Verify post was called with correct parameters
         mock_client_instance.post.assert_called_once_with(
             f"{test_manager.vault_addr}/v1/auth/cert/login",
@@ -214,7 +215,9 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
         )
 
         # Verify the token was cached
-        assert test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
+        assert (
+            test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
+        )
 
 
 def test_hashicorp_secret_manager_approle_auth(monkeypatch):
@@ -222,7 +225,7 @@ def test_hashicorp_secret_manager_approle_auth(monkeypatch):
     Test AppRole authentication makes the expected POST request to the correct URL.
     """
     monkeypatch.setenv("HCP_VAULT_TOKEN", "test-token-12345")
-    
+
     with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -239,15 +242,15 @@ def test_hashicorp_secret_manager_approle_auth(monkeypatch):
         test_manager.approle_role_id = "test-role-id-123"
         test_manager.approle_secret_id = "test-secret-id-456"
         test_manager.approle_mount_path = "approle"
-        
+
         token = test_manager._auth_via_approle()
 
         assert token == "hvs.approle-token-67890"
-        
+
         expected_headers = {}
         if test_manager.vault_namespace:
             expected_headers["X-Vault-Namespace"] = test_manager.vault_namespace
-        
+
         mock_post.assert_called_once_with(
             url=f"{test_manager.vault_addr}/v1/auth/approle/login",
             headers=expected_headers,
@@ -257,7 +260,10 @@ def test_hashicorp_secret_manager_approle_auth(monkeypatch):
             },
         )
 
-        assert test_manager.cache.get_cache("hcp_vault_approle_token") == "hvs.approle-token-67890"
+        assert (
+            test_manager.cache.get_cache("hcp_vault_approle_token")
+            == "hvs.approle-token-67890"
+        )
 
 
 def test_hashicorp_custom_mount_and_prefix():
@@ -266,31 +272,37 @@ def test_hashicorp_custom_mount_and_prefix():
     original_mount = hashicorp_secret_manager.vault_mount_name
     original_prefix = hashicorp_secret_manager.vault_path_prefix
     original_namespace = hashicorp_secret_manager.vault_namespace
-    
+
     try:
         # Test that existing manager uses default "secret" mount and namespace "admin"
         url = hashicorp_secret_manager.get_url("my-secret")
         assert "/secret/data/" in url
         assert "my-secret" in url
-        
+
         # Test custom mount name
         hashicorp_secret_manager.vault_mount_name = "kv"
         hashicorp_secret_manager.vault_path_prefix = None
         hashicorp_secret_manager.vault_namespace = None
         url = hashicorp_secret_manager.get_url("my-secret")
         assert url == f"{hashicorp_secret_manager.vault_addr}/v1/kv/data/my-secret"
-        
+
         # Test path prefix
         hashicorp_secret_manager.vault_mount_name = "secret"
         hashicorp_secret_manager.vault_path_prefix = "myapp"
         url = hashicorp_secret_manager.get_url("my-secret")
-        assert url == f"{hashicorp_secret_manager.vault_addr}/v1/secret/data/myapp/my-secret"
-        
+        assert (
+            url
+            == f"{hashicorp_secret_manager.vault_addr}/v1/secret/data/myapp/my-secret"
+        )
+
         # Test both custom mount and prefix
         hashicorp_secret_manager.vault_mount_name = "kv"
         hashicorp_secret_manager.vault_path_prefix = "production"
         url = hashicorp_secret_manager.get_url("my-secret")
-        assert url == f"{hashicorp_secret_manager.vault_addr}/v1/kv/data/production/my-secret"
+        assert (
+            url
+            == f"{hashicorp_secret_manager.vault_addr}/v1/kv/data/production/my-secret"
+        )
     finally:
         # Restore original values
         hashicorp_secret_manager.vault_mount_name = original_mount

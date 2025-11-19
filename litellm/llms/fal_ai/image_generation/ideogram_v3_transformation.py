@@ -189,5 +189,3 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
             model_response._hidden_params["seed"] = response_data["seed"]
 
         return model_response
-
-

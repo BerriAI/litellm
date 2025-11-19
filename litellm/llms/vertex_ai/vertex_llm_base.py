@@ -155,7 +155,6 @@ class VertexBase:
         )
 
     def _credentials_from_default_auth(self, scopes):
-
         import google.auth as google_auth
 
         return google_auth.default(scopes=scopes)
@@ -309,7 +308,7 @@ class VertexBase:
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
                     )
                 if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment] 
+                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
             else:
                 url = "{}:{}".format(api_base, endpoint)
 
@@ -629,13 +628,13 @@ class VertexBase:
     def safe_get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI project without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_project(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI project ID or None
         """
@@ -650,13 +649,13 @@ class VertexBase:
     def safe_get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI credentials without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_credentials(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI credentials or None
         """
@@ -670,13 +669,13 @@ class VertexBase:
     def safe_get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI location without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_location(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI location/region or None
         """

@@ -536,7 +536,7 @@ def test_apply_user_info_values_to_sso_user_defined_values_with_models():
 def test_apply_user_info_values_sso_role_takes_precedence():
     """
     Test that SSO role takes precedence over DB role.
-    
+
     When Microsoft SSO returns a user_role, it should be used instead of the role stored in the database.
     This ensures SSO is the authoritative source for user roles.
     """
@@ -575,7 +575,7 @@ def test_apply_user_info_values_sso_role_takes_precedence():
 def test_get_user_email_and_id_extracts_microsoft_role():
     """
     Test that _get_user_email_and_id_from_result extracts user_role from Microsoft SSO.
-    
+
     This ensures Microsoft SSO roles (from app_roles in id_token) are properly
     extracted and converted from enum to string.
     """
@@ -1471,59 +1471,56 @@ class TestCLIKeyRegenerationFlow:
 
         # Test data
         session_key = "sk-session-456"
-        
+
         # Mock user info
         mock_user_info = LiteLLM_UserTable(
             user_id="test-user-123",
             user_role="internal_user",
             teams=["team1", "team2"],
-            models=["gpt-4"]
+            models=["gpt-4"],
         )
 
         # Mock SSO result
-        mock_sso_result = {
-            "user_email": "test@example.com",
-            "user_id": "test-user-123"
-        }
+        mock_sso_result = {"user_email": "test@example.com", "user_id": "test-user-123"}
 
         # Mock cache
         mock_cache = MagicMock()
-        
+
         with patch(
             "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
-            return_value=mock_user_info
-        ), patch(
-            "litellm.proxy.proxy_server.prisma_client", MagicMock()
-        ), patch(
+            return_value=mock_user_info,
+        ), patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
             "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ), patch(
             "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
             return_value="<html>Success</html>",
         ):
-
             # Act
             result = await cli_sso_callback(
-                request=mock_request, key=session_key, existing_key=None, result=mock_sso_result
+                request=mock_request,
+                key=session_key,
+                existing_key=None,
+                result=mock_sso_result,
             )
 
             # Assert - verify session was stored in cache
             mock_cache.set_cache.assert_called_once()
             call_args = mock_cache.set_cache.call_args
-            
+
             # Verify cache key format
             assert "cli_sso_session:" in call_args.kwargs["key"]
             assert session_key in call_args.kwargs["key"]
-            
+
             # Verify session data structure
             session_data = call_args.kwargs["value"]
             assert session_data["user_id"] == "test-user-123"
             assert session_data["user_role"] == "internal_user"
             assert session_data["teams"] == ["team1", "team2"]
             assert session_data["models"] == ["gpt-4"]
-            
+
             # Verify TTL
             assert call_args.kwargs["ttl"] == 600  # 10 minutes
-            
+
             assert result.status_code == 200
             # Verify response contains success message (response is HTML)
             assert result.body is not None
@@ -1539,17 +1536,14 @@ class TestCLIKeyRegenerationFlow:
             "user_id": "test-user-456",
             "user_role": "internal_user",
             "teams": ["team-a", "team-b", "team-c"],
-            "models": ["gpt-4"]
+            "models": ["gpt-4"],
         }
 
         # Mock cache
         mock_cache = MagicMock()
         mock_cache.get_cache.return_value = session_data
-        
-        with patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
-        ):
 
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
             # Act - First poll without team_id
             result = await cli_poll_key(key_id=session_key, team_id=None)
 
@@ -1559,7 +1553,7 @@ class TestCLIKeyRegenerationFlow:
             assert result["user_id"] == "test-user-456"
             assert result["teams"] == ["team-a", "team-b", "team-c"]
             assert "key" not in result  # JWT should not be generated yet
-            
+
             # Verify session was NOT deleted
             mock_cache.delete_cache.assert_not_called()
 
@@ -1663,34 +1657,33 @@ class TestCLIKeyRegenerationFlow:
             "user_role": "internal_user",
             "teams": ["team-a", "team-b", "team-c"],
             "models": ["gpt-4"],
-            "user_email": "test@example.com"
+            "user_email": "test@example.com",
         }
-        
+
         # Mock user info
         mock_user_info = LiteLLM_UserTable(
             user_id="test-user-789",
             user_role="internal_user",
             teams=["team-a", "team-b", "team-c"],
-            models=["gpt-4"]
+            models=["gpt-4"],
         )
 
         # Mock cache
         mock_cache = MagicMock()
         mock_cache.get_cache.return_value = session_data
-        
+
         mock_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token"
-        
-        with patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
-        ), patch(
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache), patch(
             "litellm.proxy.proxy_server.prisma_client"
         ) as mock_prisma, patch(
             "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
-            return_value=mock_jwt_token
+            return_value=mock_jwt_token,
         ) as mock_get_jwt:
-            
             # Mock the user lookup
-            mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user_info)
+            mock_prisma.db.litellm_usertable.find_unique = AsyncMock(
+                return_value=mock_user_info
+            )
 
             # Act - Second poll with team_id
             result = await cli_poll_key(key_id=session_key, team_id=selected_team)
@@ -1701,12 +1694,12 @@ class TestCLIKeyRegenerationFlow:
             assert result["user_id"] == "test-user-789"
             assert result["team_id"] == selected_team
             assert result["teams"] == ["team-a", "team-b", "team-c"]
-            
+
             # Verify JWT was generated with correct team
             mock_get_jwt.assert_called_once()
             jwt_call_args = mock_get_jwt.call_args
             assert jwt_call_args.kwargs["team_id"] == selected_team
-            
+
             # Verify session was deleted after JWT generation
             mock_cache.delete_cache.assert_called_once()
 

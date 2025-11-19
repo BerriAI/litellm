@@ -104,7 +104,9 @@ async def test_azure_responses_api_status_error():
                 "role": "assistant",
                 "type": "message",
                 "status": "completed",
-                "content": [{"type": "output_text", "text": "Here's an interesting fact."}],
+                "content": [
+                    {"type": "output_text", "text": "Here's an interesting fact."}
+                ],
             }
         ],
     }
@@ -120,7 +122,7 @@ async def test_azure_responses_api_status_error():
             captured_request_body = json.loads(kwargs["data"])
 
         import httpx
-        
+
         # Create a proper httpx Response object
         response_content = json.dumps(mock_response_data).encode("utf-8")
         response = httpx.Response(
@@ -145,18 +147,17 @@ async def test_azure_responses_api_status_error():
         )
 
     # Verify that 'status' field is not present in any of the input messages
-    print("Final request body:", json.dumps(captured_request_body, indent=4, default=str))
+    print(
+        "Final request body:", json.dumps(captured_request_body, indent=4, default=str)
+    )
     assert "input" in captured_request_body, "Request body should contain 'input' field"
-    
+
     expected_input = [
-        {
-            "content": "tell me an interesting fact",
-            "role": "user"
-        },
+        {"content": "tell me an interesting fact", "role": "user"},
         {
             "id": "rs_0ab687487834d9df0068e462a1b2d88197aabbc832c9ba5316",
             "summary": [],
-            "type": "reasoning"
+            "type": "reasoning",
         },
         {
             "id": "msg_0ab687487834d9df0068e462a1df188197b74b1eef05102c18",
@@ -165,18 +166,15 @@ async def test_azure_responses_api_status_error():
                     "annotations": [],
                     "text": "very good morning",
                     "type": "output_text",
-                    "logprobs": []
+                    "logprobs": [],
                 }
             ],
             "role": "assistant",
-            "type": "message"
+            "type": "message",
         },
-        {
-            "role": "user",
-            "content": "tell me another"
-        }
+        {"role": "user", "content": "tell me another"},
     ]
-    
+
     assert captured_request_body["input"] == expected_input, (
         f"Request body input should match expected format without 'status' field.\n"
         f"Expected: {json.dumps(expected_input, indent=2)}\n"

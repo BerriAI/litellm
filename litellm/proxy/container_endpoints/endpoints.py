@@ -90,10 +90,10 @@ async def create_container(
         or await get_custom_llm_provider_from_request_body(request=request)
         or "openai"
     )
-    
+
     # Add custom_llm_provider to data
     data["custom_llm_provider"] = custom_llm_provider
-    
+
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -183,7 +183,7 @@ async def list_containers(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    
+
     # Add custom_llm_provider to data
     data["custom_llm_provider"] = custom_llm_provider
 
@@ -277,7 +277,7 @@ async def retrieve_container(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    
+
     # Add custom_llm_provider to data
     data["custom_llm_provider"] = custom_llm_provider
 
@@ -371,7 +371,7 @@ async def delete_container(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    
+
     # Add custom_llm_provider to data
     data["custom_llm_provider"] = custom_llm_provider
 
@@ -403,4 +403,3 @@ async def delete_container(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-

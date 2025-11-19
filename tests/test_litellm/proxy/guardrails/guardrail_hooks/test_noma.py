@@ -177,11 +177,19 @@ class TestNomaBlockedMessage:
                     "role": "user",
                     "type": "message",
                     "results": {
-                        "harmfulContent": {"result": True, "probability": 0.9, "status": "SUCCESS"},
-                        "code": {"result": False, "probability": 0.1, "status": "SUCCESS"},
-                    }
+                        "harmfulContent": {
+                            "result": True,
+                            "probability": 0.9,
+                            "status": "SUCCESS",
+                        },
+                        "code": {
+                            "result": False,
+                            "probability": 0.1,
+                            "status": "SUCCESS",
+                        },
+                    },
                 }
-            ]
+            ],
         }
 
         exception = NomaBlockedMessage(response)
@@ -198,12 +206,20 @@ class TestNomaBlockedMessage:
                     "type": "message",
                     "results": {
                         "sensitiveData": {
-                            "PII": {"result": True, "probability": 0.8, "status": "SUCCESS"},
-                            "PCI": {"result": False, "probability": 0, "status": "SUCCESS"},
+                            "PII": {
+                                "result": True,
+                                "probability": 0.8,
+                                "status": "SUCCESS",
+                            },
+                            "PCI": {
+                                "result": False,
+                                "probability": 0,
+                                "status": "SUCCESS",
+                            },
                         },
-                    }
+                    },
                 }
-            ]
+            ],
         }
 
         exception = NomaBlockedMessage(response)
@@ -219,12 +235,20 @@ class TestNomaBlockedMessage:
                     "type": "message",
                     "results": {
                         "customLlm": {
-                            "topic1": {"result": True, "probability": 0.95, "status": "SUCCESS"},
-                            "topic2": {"result": False, "probability": 0.2, "status": "SUCCESS"},
+                            "topic1": {
+                                "result": True,
+                                "probability": 0.95,
+                                "status": "SUCCESS",
+                            },
+                            "topic2": {
+                                "result": False,
+                                "probability": 0.2,
+                                "status": "SUCCESS",
+                            },
                         },
-                    }
+                    },
                 }
-            ]
+            ],
         }
 
         exception = NomaBlockedMessage(response)
@@ -242,13 +266,7 @@ class TestNomaGuardrailHooks:
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "aggregatedScanResult": False,  # False means safe
-            "scanResult": [
-                {
-                    "role": "user",
-                    "type": "message",
-                    "results": {}
-                }
-            ]
+            "scanResult": [{"role": "user", "type": "message", "results": {}}],
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -267,7 +285,7 @@ class TestNomaGuardrailHooks:
 
             # Verify API call details
             call_args = mock_post.call_args
-            # Verify the URL endpoint  
+            # Verify the URL endpoint
             assert call_args.args[0].endswith("/ai-dr/v2/prompt/scan")
             # Verify headers and JSON payload
             if "headers" in call_args.kwargs:
@@ -293,10 +311,14 @@ class TestNomaGuardrailHooks:
                     "role": "user",
                     "type": "message",
                     "results": {
-                        "harmfulContent": {"result": True, "probability": 0.9, "status": "SUCCESS"}
-                    }
+                        "harmfulContent": {
+                            "result": True,
+                            "probability": 0.9,
+                            "status": "SUCCESS",
+                        }
+                    },
                 }
-            ]
+            ],
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -355,7 +377,9 @@ class TestNomaGuardrailHooks:
         )
 
         with patch.object(
-            guardrail, "_create_background_noma_check", side_effect=Exception("Task creation failed")
+            guardrail,
+            "_create_background_noma_check",
+            side_effect=Exception("Task creation failed"),
         ):
             # Should still return successfully even if background task creation fails
             result = await guardrail.async_pre_call_hook(
@@ -394,13 +418,7 @@ class TestNomaGuardrailHooks:
         mock_api_response = MagicMock()
         mock_api_response.json.return_value = {
             "aggregatedScanResult": False,  # False means safe
-            "scanResult": [
-                {
-                    "role": "assistant",
-                    "type": "message",
-                    "results": {}
-                }
-            ]
+            "scanResult": [{"role": "assistant", "type": "message", "results": {}}],
         }
         mock_api_response.raise_for_status = MagicMock()
 
@@ -430,13 +448,7 @@ class TestNomaGuardrailHooks:
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "aggregatedScanResult": False,  # False means safe
-            "scanResult": [
-                {
-                    "role": "user",
-                    "type": "message",
-                    "results": {}
-                }
-            ]
+            "scanResult": [{"role": "user", "type": "message", "results": {}}],
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -557,9 +569,9 @@ class TestBackgroundProcessing:
                     "type": "message",
                     "results": {
                         "harmfulContent": {"result": True, "status": "SUCCESS"}
-                    }
+                    },
                 }
-            ]
+            ],
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -585,22 +597,14 @@ class TestBackgroundProcessing:
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "aggregatedScanResult": False,  # False means safe
-            "scanResult": [
-                {
-                    "role": "user",
-                    "type": "message",
-                    "results": {}
-                }
-            ]
+            "scanResult": [{"role": "user", "type": "message", "results": {}}],
         }
         mock_response.raise_for_status = MagicMock()
 
         with patch.object(
             noma_guardrail.async_handler, "post", return_value=mock_response
         ) as mock_post:
-            with patch.object(
-                noma_guardrail, "_check_verdict"
-            ) as mock_check_verdict:
+            with patch.object(noma_guardrail, "_check_verdict") as mock_check_verdict:
                 result = await noma_guardrail._process_user_message_check(
                     mock_request_data, mock_user_api_key_dict
                 )
@@ -615,7 +619,7 @@ class TestBackgroundProcessing:
     ):
         """Test LLM response processing in monitor mode"""
         from litellm.types.utils import Choices, Message
-        
+
         response = ModelResponse(
             id="test-response-id",
             choices=[
@@ -637,13 +641,7 @@ class TestBackgroundProcessing:
         mock_api_response = MagicMock()
         mock_api_response.json.return_value = {
             "aggregatedScanResult": False,  # False means safe
-            "scanResult": [
-                {
-                    "role": "assistant",
-                    "type": "message",
-                    "results": {}
-                }
-            ]
+            "scanResult": [{"role": "assistant", "type": "message", "results": {}}],
         }
         mock_api_response.raise_for_status = MagicMock()
 
@@ -673,7 +671,9 @@ class TestBackgroundProcessing:
                 mock_request_data, mock_user_api_key_dict
             )
 
-            mock_process.assert_called_once_with(mock_request_data, mock_user_api_key_dict)
+            mock_process.assert_called_once_with(
+                mock_request_data, mock_user_api_key_dict
+            )
 
     @pytest.mark.asyncio
     async def test_check_user_message_background_exception_handling(
@@ -681,8 +681,9 @@ class TestBackgroundProcessing:
     ):
         """Test background user message check handles exceptions gracefully"""
         with patch.object(
-            monitor_mode_guardrail, "_process_user_message_check",
-            side_effect=Exception("API failed")
+            monitor_mode_guardrail,
+            "_process_user_message_check",
+            side_effect=Exception("API failed"),
         ):
             # Should not raise exception, just log error
             await monitor_mode_guardrail._check_user_message_background(
@@ -695,7 +696,7 @@ class TestBackgroundProcessing:
     ):
         """Test background LLM response check method"""
         from litellm.types.utils import Choices, Message
-        
+
         response = ModelResponse(
             id="test-response-id",
             choices=[
@@ -734,16 +735,16 @@ class TestBackgroundProcessing:
                     "type": "message",
                     "results": {
                         "harmfulContent": {"result": True, "status": "SUCCESS"}
-                    }
+                    },
                 }
-            ]
+            ],
         }
 
         with patch("litellm._logging.verbose_proxy_logger.warning") as mock_warning:
             await monitor_mode_guardrail._handle_verdict_background(
                 "user", "test message", response_json
             )
-            
+
             mock_warning.assert_called_once()
             assert "blocked user message" in mock_warning.call_args[0][0]
 
@@ -752,26 +753,21 @@ class TestBackgroundProcessing:
         """Test background verdict handling for allowed content"""
         response_json = {
             "aggregatedScanResult": False,  # False means safe
-            "scanResult": [
-                {
-                    "role": "assistant",
-                    "type": "message",
-                    "results": {}
-                }
-            ]
+            "scanResult": [{"role": "assistant", "type": "message", "results": {}}],
         }
 
         with patch("litellm._logging.verbose_proxy_logger.info") as mock_info:
             await monitor_mode_guardrail._handle_verdict_background(
                 "assistant", "test response", response_json
             )
-            
+
             mock_info.assert_called_once()
             assert "allowed assistant message" in mock_info.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_create_background_noma_check(self, monitor_mode_guardrail):
         """Test background task creation"""
+
         async def dummy_coroutine():
             return "completed"
 
@@ -782,10 +778,13 @@ class TestBackgroundProcessing:
     @pytest.mark.asyncio
     async def test_create_background_noma_check_exception(self, monitor_mode_guardrail):
         """Test background task creation with exception handling"""
+
         async def dummy_coroutine():
             return "completed"
 
-        with patch("asyncio.create_task", side_effect=Exception("Task creation failed")):
+        with patch(
+            "asyncio.create_task", side_effect=Exception("Task creation failed")
+        ):
             # Should not raise exception, just log error
             monitor_mode_guardrail._create_background_noma_check(dummy_coroutine())
 
@@ -882,7 +881,7 @@ class TestNomaImageProcessing:
     def test_extract_user_message_with_image_url(self, noma_guardrail):
         """Test extracting user message with image_url content"""
         import asyncio
-        
+
         data = {
             "messages": [
                 {
@@ -890,11 +889,9 @@ class TestNomaImageProcessing:
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/image.jpg"
-                            }
+                            "image_url": {"url": "https://example.com/image.jpg"},
                         }
-                    ]
+                    ],
                 }
             ]
         }
@@ -908,23 +905,18 @@ class TestNomaImageProcessing:
     def test_extract_user_message_with_mixed_content(self, noma_guardrail):
         """Test extracting user message with mixed text and image content"""
         import asyncio
-        
+
         data = {
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": "What's in this image?"
-                        },
+                        {"type": "text", "text": "What's in this image?"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/image.jpg"
-                            }
-                        }
-                    ]
+                            "image_url": {"url": "https://example.com/image.jpg"},
+                        },
+                    ],
                 }
             ]
         }
@@ -942,29 +934,22 @@ class TestNomaImageProcessing:
     def test_extract_user_message_with_multiple_images(self, noma_guardrail):
         """Test extracting user message with multiple images"""
         import asyncio
-        
+
         data = {
             "messages": [
                 {
                     "role": "user",
                     "content": [
+                        {"type": "text", "text": "Compare these images"},
                         {
-                            "type": "text",
-                            "text": "Compare these images"
+                            "type": "image_url",
+                            "image_url": {"url": "https://example.com/image1.jpg"},
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/image1.jpg"
-                            }
+                            "image_url": {"url": "https://example.com/image2.jpg"},
                         },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/image2.jpg"
-                            }
-                        }
-                    ]
+                    ],
                 }
             ]
         }
@@ -990,11 +975,9 @@ class TestNomaImageProcessing:
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/test-image.jpg"
-                            }
+                            "image_url": {"url": "https://example.com/test-image.jpg"},
                         }
-                    ]
+                    ],
                 }
             ],
             "litellm_call_id": "test-call-id",
@@ -1009,10 +992,14 @@ class TestNomaImageProcessing:
                     "role": "user",
                     "type": "message",
                     "results": {
-                        "harmfulContent": {"result": False, "probability": 0.1, "status": "SUCCESS"}
-                    }
+                        "harmfulContent": {
+                            "result": False,
+                            "probability": 0.1,
+                            "status": "SUCCESS",
+                        }
+                    },
                 }
-            ]
+            ],
         }
 
         mock_response = MagicMock()
@@ -1052,15 +1039,13 @@ class TestNomaImageProcessing:
                     "content": [
                         {
                             "type": "text",
-                            "text": "Analyze this image for harmful content"
+                            "text": "Analyze this image for harmful content",
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/test-image.jpg"
-                            }
-                        }
-                    ]
+                            "image_url": {"url": "https://example.com/test-image.jpg"},
+                        },
+                    ],
                 }
             ],
             "litellm_call_id": "test-call-id",
@@ -1074,10 +1059,14 @@ class TestNomaImageProcessing:
                     "role": "user",
                     "type": "message",
                     "results": {
-                        "harmfulContent": {"result": False, "probability": 0.05, "status": "SUCCESS"}
-                    }
+                        "harmfulContent": {
+                            "result": False,
+                            "probability": 0.05,
+                            "status": "SUCCESS",
+                        }
+                    },
                 }
-            ]
+            ],
         }
 
         mock_response = MagicMock()
@@ -1098,9 +1087,7 @@ class TestNomaImageProcessing:
             mock_post.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_image_content_blocked(
-        self, noma_guardrail, mock_user_api_key_dict
-    ):
+    async def test_image_content_blocked(self, noma_guardrail, mock_user_api_key_dict):
         """Test that image content can be blocked by Noma"""
         request_data = {
             "messages": [
@@ -1111,9 +1098,9 @@ class TestNomaImageProcessing:
                             "type": "image_url",
                             "image_url": {
                                 "url": "https://example.com/inappropriate-image.jpg"
-                            }
+                            },
                         }
-                    ]
+                    ],
                 }
             ],
             "litellm_call_id": "test-call-id",
@@ -1127,10 +1114,14 @@ class TestNomaImageProcessing:
                     "role": "user",
                     "type": "message",
                     "results": {
-                        "harmfulContent": {"result": True, "probability": 0.95, "status": "SUCCESS"}
-                    }
+                        "harmfulContent": {
+                            "result": True,
+                            "probability": 0.95,
+                            "status": "SUCCESS",
+                        }
+                    },
                 }
-            ]
+            ],
         }
 
         mock_response = MagicMock()
@@ -1166,9 +1157,9 @@ class TestNomaImageProcessing:
                             "type": "image_url",
                             "image_url": {
                                 "url": "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-                            }
+                            },
                         }
-                    ]
+                    ],
                 }
             ]
         }
@@ -1315,24 +1306,31 @@ class TestNomaAnonymizationLogic:
             "maliciousIntent": {"result": False, "status": "SUCCESS"},
             "code": {"result": False, "status": "SUCCESS"},
         }
-        
+
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is True
 
-    def test_should_only_data_detector_failed_false_other_detectors(self, anonymize_guardrail):
+    def test_should_only_data_detector_failed_false_other_detectors(
+        self, anonymize_guardrail
+    ):
         """Test _should_only_sensitive_data_failed when other detectors also triggered"""
         classification = {
             "sensitiveData": {
                 "PII": {"result": True, "status": "SUCCESS"},
             },
-            "harmfulContent": {"result": True, "status": "SUCCESS"},  # This should cause False
+            "harmfulContent": {
+                "result": True,
+                "status": "SUCCESS",
+            },  # This should cause False
             "maliciousIntent": {"result": False, "status": "SUCCESS"},
         }
-        
+
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is False
 
-    def test_should_only_data_detector_failed_false_no_data_detected(self, anonymize_guardrail):
+    def test_should_only_data_detector_failed_false_no_data_detected(
+        self, anonymize_guardrail
+    ):
         """Test _should_only_sensitive_data_failed when no sensitive data detected"""
         classification = {
             "sensitiveData": {
@@ -1342,22 +1340,27 @@ class TestNomaAnonymizationLogic:
             "harmfulContent": {"result": False, "status": "SUCCESS"},
             "maliciousIntent": {"result": False, "status": "SUCCESS"},
         }
-        
+
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is False
 
-    def test_should_only_data_detector_failed_with_nested_detectors(self, anonymize_guardrail):
+    def test_should_only_data_detector_failed_with_nested_detectors(
+        self, anonymize_guardrail
+    ):
         """Test _should_only_sensitive_data_failed with nested detectors like topicDetector"""
         classification = {
             "sensitiveData": {
                 "PII": {"result": True, "status": "SUCCESS"},
             },
             "customLlm": {
-                "topic1": {"result": True, "status": "SUCCESS"},  # This should cause False
+                "topic1": {
+                    "result": True,
+                    "status": "SUCCESS",
+                },  # This should cause False
             },
             "harmfulContent": {"result": False, "status": "SUCCESS"},
         }
-        
+
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is False
 
@@ -1372,11 +1375,11 @@ class TestNomaAnonymizationLogic:
                         "anonymizedContent": {
                             "anonymized": "My email is ******* and phone is *******"
                         }
-                    }
+                    },
                 }
             ]
         }
-        
+
         result = anonymize_guardrail._extract_anonymized_content(response_json, "user")
         assert result == "My email is ******* and phone is *******"
 
@@ -1391,26 +1394,22 @@ class TestNomaAnonymizationLogic:
                         "anonymizedContent": {
                             "anonymized": "I can't help with that request."
                         }
-                    }
+                    },
                 }
             ]
         }
-        
-        result = anonymize_guardrail._extract_anonymized_content(response_json, "assistant")
+
+        result = anonymize_guardrail._extract_anonymized_content(
+            response_json, "assistant"
+        )
         assert result == "I can't help with that request."
 
     def test_extract_anonymized_content_missing(self, anonymize_guardrail):
         """Test _extract_anonymized_content when anonymized content is missing"""
         response_json = {
-            "scanResult": [
-                {
-                    "role": "user",
-                    "type": "message",
-                    "results": {}
-                }
-            ]
+            "scanResult": [{"role": "user", "type": "message", "results": {}}]
         }
-        
+
         result = anonymize_guardrail._extract_anonymized_content(response_json, "user")
         assert result == ""
 
@@ -1418,15 +1417,9 @@ class TestNomaAnonymizationLogic:
         """Test _should_anonymize when aggregatedScanResult is False (safe)"""
         response_json = {
             "aggregatedScanResult": False,  # False means safe
-            "scanResult": [
-                {
-                    "role": "user",
-                    "type": "message",
-                    "results": {}
-                }
-            ]
+            "scanResult": [{"role": "user", "type": "message", "results": {}}],
         }
-        
+
         result = anonymize_guardrail._should_anonymize(response_json, "user")
         assert result is True
 
@@ -1441,11 +1434,11 @@ class TestNomaAnonymizationLogic:
                     "results": {
                         "sensitiveData": {"PCI": {"result": True, "status": "SUCCESS"}},
                         "harmfulContent": {"result": False, "status": "SUCCESS"},
-                    }
+                    },
                 }
-            ]
+            ],
         }
-        
+
         result = anonymize_guardrail._should_anonymize(response_json, "user")
         assert result is True
 
@@ -1460,11 +1453,11 @@ class TestNomaAnonymizationLogic:
                     "results": {
                         "sensitiveData": {"PCI": {"result": True, "status": "SUCCESS"}},
                         "harmfulContent": {"result": True, "status": "SUCCESS"},
-                    }
+                    },
                 }
-            ]
+            ],
         }
-        
+
         result = anonymize_guardrail._should_anonymize(response_json, "user")
         assert result is False
 
@@ -1474,16 +1467,10 @@ class TestNomaAnonymizationLogic:
             anonymize_input=True,
             monitor_mode=True,
         )
-        
+
         response_json = {
             "aggregatedScanResult": False,
-            "scanResult": [
-                {
-                    "role": "user",
-                    "type": "message",
-                    "results": {}
-                }
-            ]
+            "scanResult": [{"role": "user", "type": "message", "results": {}}],
         }
         result = guardrail._should_anonymize(response_json, "user")
         assert result is False
@@ -1494,16 +1481,10 @@ class TestNomaAnonymizationLogic:
             anonymize_input=False,
             monitor_mode=False,
         )
-        
+
         response_json = {
             "aggregatedScanResult": False,
-            "scanResult": [
-                {
-                    "role": "user",
-                    "type": "message",
-                    "results": {}
-                }
-            ]
+            "scanResult": [{"role": "user", "type": "message", "results": {}}],
         }
         result = guardrail._should_anonymize(response_json, "user")
         assert result is False
@@ -1518,14 +1499,16 @@ class TestNomaAnonymizationLogic:
                 {"role": "user", "content": "My phone is 123-456-7890"},
             ]
         }
-        
+
         anonymize_guardrail._replace_user_message_content(
             request_data, "My phone is *******"
         )
-        
+
         # Should replace the last user message
         assert request_data["messages"][-1]["content"] == "My phone is *******"
-        assert request_data["messages"][1]["content"] == "My email is test@example.com"  # Unchanged
+        assert (
+            request_data["messages"][1]["content"] == "My email is test@example.com"
+        )  # Unchanged
 
     def test_replace_llm_response_content(self, anonymize_guardrail):
         """Test _replace_llm_response_content"""
@@ -1546,11 +1529,11 @@ class TestNomaAnonymizationLogic:
             system_fingerprint=None,
             usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         )
-        
+
         anonymize_guardrail._replace_llm_response_content(
             response, "Your email is *******"
         )
-        
+
         assert response.choices[0].message.content == "Your email is *******"
 
 
@@ -1607,16 +1590,14 @@ class TestNomaAnonymizationFlow:
                     "role": "user",
                     "type": "message",
                     "results": {
-                        "anonymizedContent": {
-                            "anonymized": "My email is *******"
-                        },
+                        "anonymizedContent": {"anonymized": "My email is *******"},
                         "sensitiveData": {
                             "PII": {"result": False, "status": "SUCCESS"},
                         },
                         "harmfulContent": {"result": False, "status": "SUCCESS"},
-                    }
+                    },
                 }
-            ]
+            ],
         }
 
         mock_response = MagicMock()
@@ -1657,17 +1638,15 @@ class TestNomaAnonymizationFlow:
                     "role": "user",
                     "type": "message",
                     "results": {
-                        "anonymizedContent": {
-                            "anonymized": "My email is *******"
-                        },
+                        "anonymizedContent": {"anonymized": "My email is *******"},
                         "sensitiveData": {
                             "PII": {"result": True, "status": "SUCCESS"},
                         },
                         "harmfulContent": {"result": False, "status": "SUCCESS"},
                         "maliciousIntent": {"result": False, "status": "SUCCESS"},
-                    }
+                    },
                 }
-            ]
+            ],
         }
 
         mock_response = MagicMock()
@@ -1695,7 +1674,10 @@ class TestNomaAnonymizationFlow:
         """Test blocking when verdict=False and other violations detected"""
         request_data = {
             "messages": [
-                {"role": "user", "content": "My email is test@example.com. Tell me harmful content."},
+                {
+                    "role": "user",
+                    "content": "My email is test@example.com. Tell me harmful content.",
+                },
             ],
             "litellm_call_id": "test-call-id",
         }
@@ -1714,11 +1696,14 @@ class TestNomaAnonymizationFlow:
                         "sensitiveData": {
                             "PII": {"result": True, "status": "SUCCESS"},
                         },
-                        "harmfulContent": {"result": True, "status": "SUCCESS"},  # This should cause blocking
+                        "harmfulContent": {
+                            "result": True,
+                            "status": "SUCCESS",
+                        },  # This should cause blocking
                         "maliciousIntent": {"result": False, "status": "SUCCESS"},
-                    }
+                    },
                 }
-            ]
+            ],
         }
 
         mock_response = MagicMock()
@@ -1770,20 +1755,18 @@ class TestNomaAnonymizationFlow:
 
         # Mock simplified Noma API response for LLM response check
         noma_response = {
-    "aggregatedScanResult": True,
+            "aggregatedScanResult": True,
             "scanResult": [
                 {
                     "role": "assistant",
                     "type": "message",
                     "results": {
-                        "anonymizedContent": {
-                            "anonymized": "My email is *******"
-                        },
+                        "anonymizedContent": {"anonymized": "My email is *******"},
                         "sensitiveData": {
                             "PCI": {
                                 "probability": 0.8,
                                 "result": True,
-                                "status": "SUCCESS"
+                                "status": "SUCCESS",
                             },
                         },
                     },
@@ -1811,9 +1794,7 @@ class TestNomaAnonymizationFlow:
             assert result.choices[0].message.content == "My email is *******"
 
     @pytest.mark.asyncio
-    async def test_no_anonymization_when_disabled(
-        self, mock_user_api_key_dict
-    ):
+    async def test_no_anonymization_when_disabled(self, mock_user_api_key_dict):
         """Test that no anonymization occurs when anonymize_input=False"""
         guardrail = NomaGuardrail(
             api_key="test-api-key",
@@ -1835,25 +1816,21 @@ class TestNomaAnonymizationFlow:
                     "role": "user",
                     "type": "message",
                     "results": {
-                        "anonymizedContent": {
-                            "anonymized": "My email is *******"
-                        },
+                        "anonymizedContent": {"anonymized": "My email is *******"},
                         "sensitiveData": {
                             "PII": {"result": True, "status": "SUCCESS"},
                         },
                         "harmfulContent": {"result": False, "status": "SUCCESS"},
-                    }
+                    },
                 }
-            ]
+            ],
         }
 
         mock_response = MagicMock()
         mock_response.json.return_value = noma_response
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(guardrail.async_handler, "post", return_value=mock_response):
             # Should raise NomaBlockedMessage because anonymization is disabled
             with pytest.raises(NomaBlockedMessage):
                 await guardrail.async_pre_call_hook(
@@ -1864,9 +1841,7 @@ class TestNomaAnonymizationFlow:
                 )
 
     @pytest.mark.asyncio
-    async def test_no_anonymization_in_monitor_mode(
-        self, mock_user_api_key_dict
-    ):
+    async def test_no_anonymization_in_monitor_mode(self, mock_user_api_key_dict):
         """Test that no anonymization occurs in monitor mode"""
         guardrail = NomaGuardrail(
             api_key="test-api-key",
@@ -1893,7 +1868,9 @@ class TestNomaAnonymizationFlow:
 
             # Should return original data unchanged
             assert result == request_data
-            assert request_data["messages"][0]["content"] == "My email is test@example.com"
+            assert (
+                request_data["messages"][0]["content"] == "My email is test@example.com"
+            )
             mock_create_background.assert_called_once()
 
     @pytest.mark.asyncio
@@ -1918,9 +1895,9 @@ class TestNomaAnonymizationFlow:
                             "PII": {"result": True, "status": "SUCCESS"},
                         },
                         "harmfulContent": {"result": False, "status": "SUCCESS"},
-                    }
+                    },
                 }
-            ]
+            ],
         }
 
         mock_response = MagicMock()
@@ -1970,7 +1947,7 @@ class TestNomaAnonymizationFlow:
 
         # Mock Noma API response with no anonymized content available
         noma_response = {
-    "aggregatedScanResult": True,
+            "aggregatedScanResult": True,
             "scanResult": [
                 {
                     "role": "assistant",
@@ -1980,7 +1957,7 @@ class TestNomaAnonymizationFlow:
                             "PCI": {
                                 "probability": 0.8,
                                 "result": True,
-                                "status": "SUCCESS"
+                                "status": "SUCCESS",
                             },
                         },
                     },

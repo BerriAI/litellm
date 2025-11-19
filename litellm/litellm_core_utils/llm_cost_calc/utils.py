@@ -181,7 +181,6 @@ def _get_token_base_cost(
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
-
                     prompt_base_cost = cast(
                         float, _get_cost_per_unit(model_info, key, prompt_base_cost)
                     )

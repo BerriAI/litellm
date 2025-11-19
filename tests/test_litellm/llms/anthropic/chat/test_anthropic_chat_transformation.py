@@ -513,4 +513,7 @@ def test_transform_parsed_response_includes_context_management_metadata():
 
     assert result.__dict__.get("context_management") == context_management_payload
     provider_fields = result.choices[0].message.provider_specific_fields
-    assert provider_fields and provider_fields["context_management"] == context_management_payload
+    assert (
+        provider_fields
+        and provider_fields["context_management"] == context_management_payload
+    )

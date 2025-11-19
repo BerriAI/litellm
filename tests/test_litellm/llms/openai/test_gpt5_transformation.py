@@ -115,7 +115,6 @@ def test_gpt5_codex_temperature_error(config: OpenAIConfig):
         )
 
 
-
 def test_gpt5_codex_temperature_one_allowed(config: OpenAIConfig):
     """Test that GPT-5-Codex allows temperature=1."""
     params = config.map_openai_params(
@@ -181,6 +180,8 @@ def test_gpt5_verbosity_parameter(config: OpenAIConfig):
             drop_params=False,
         )
         assert params["verbosity"] == "low"
+
+
 def test_gpt5_1_reasoning_effort_none(config: OpenAIConfig):
     """Test that GPT-5.1 supports reasoning_effort='none' parameter.
 

@@ -123,9 +123,11 @@ class LiteLLM_Proxy_MCP_Handler:
         for server in allowed_mcp_servers:
             if server is None:
                 continue
-            server_name = getattr(server, "server_name", None) or getattr(
-                server, "alias", None
-            ) or getattr(server, "name", None)
+            server_name = (
+                getattr(server, "server_name", None)
+                or getattr(server, "alias", None)
+                or getattr(server, "name", None)
+            )
             if isinstance(server_name, str):
                 server_names.append(server_name)
 

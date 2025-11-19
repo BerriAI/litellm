@@ -766,4 +766,3 @@ def get_provider_create_metadata() -> List[ProviderCreateInfo]:
 
     providers.sort(key=lambda item: item.provider_display_name.lower())
     return providers
-

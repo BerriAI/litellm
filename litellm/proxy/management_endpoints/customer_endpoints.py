@@ -358,7 +358,7 @@ async def end_user_info(
                 param="end_user_id",
             )
         return user_info.model_dump(exclude_none=True)
-    
+
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.customer_endpoints.end_user_info(): Exception occured - {}".format(
@@ -366,6 +366,7 @@ async def end_user_info(
             )
         )
         raise handle_exception_on_proxy(e)
+
 
 @router.post(
     "/customer/update",
@@ -610,6 +611,7 @@ async def delete_end_user(
         )
         raise handle_exception_on_proxy(e)
 
+
 @router.get(
     "/customer/list",
     tags=["Customer Management"],
@@ -666,7 +668,7 @@ async def list_end_user(
         for item in response:
             returned_response.append(LiteLLM_EndUserTable(**item.model_dump()))
         return returned_response
-    
+
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - {}".format(

@@ -109,7 +109,9 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
     from litellm.proxy.utils import ProxyLogging
 
     # Mock create_file as an async function
-    mock_create_file = mocker.patch("litellm.files.main.create_file", new=mocker.AsyncMock())
+    mock_create_file = mocker.patch(
+        "litellm.files.main.create_file", new=mocker.AsyncMock()
+    )
 
     proxy_logging_obj = ProxyLogging(
         user_api_key_cache=DualCache(default_in_memory_ttl=1)
@@ -121,7 +123,14 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
     from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 
     class DummyManagedFiles(BaseFileEndpoints):
-        async def acreate_file(self, llm_router, create_file_request, target_model_names_list, litellm_parent_otel_span, user_api_key_dict):
+        async def acreate_file(
+            self,
+            llm_router,
+            create_file_request,
+            target_model_names_list,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+        ):
             # Handle both dict and object forms of create_file_request
             if isinstance(create_file_request, dict):
                 file_data = create_file_request.get("file")
@@ -129,7 +138,7 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
             else:
                 file_data = create_file_request.file
                 purpose_data = create_file_request.purpose
-                
+
             # Call the mocked litellm.files.main.create_file to ensure asserts work
             await litellm.files.main.create_file(
                 custom_llm_provider="azure",
@@ -147,6 +156,7 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
             )
             # Return a dummy response object as needed by the test
             from litellm.types.llms.openai import OpenAIFileObject
+
             return OpenAIFileObject(
                 id="dummy-id",
                 object="file",
@@ -156,16 +166,16 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
                 purpose=purpose_data,
                 status="uploaded",
             )
-        
+
         async def afile_retrieve(self, file_id, litellm_parent_otel_span):
             raise NotImplementedError("Not implemented for test")
-        
+
         async def afile_list(self, purpose, litellm_parent_otel_span):
             raise NotImplementedError("Not implemented for test")
-        
+
         async def afile_delete(self, file_id, litellm_parent_otel_span):
             raise NotImplementedError("Not implemented for test")
-        
+
         async def afile_content(self, file_id, litellm_parent_otel_span):
             raise NotImplementedError("Not implemented for test")
 

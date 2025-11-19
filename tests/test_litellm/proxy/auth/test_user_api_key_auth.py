@@ -62,7 +62,7 @@ def test_get_api_key_with_custom_litellm_key_header(
 def test_team_metadata_with_tags_flows_through_jwt_auth():
     """
     Test that team_metadata (specifically tags) flows through JWT authentication.
-    
+
     This is a regression test for the issue where JWT auth was not populating
     team_metadata, causing team-level tags to be missing in litellm_pre_call_utils.py
     """
@@ -77,7 +77,7 @@ def test_team_metadata_with_tags_flows_through_jwt_auth():
         rpm_limit=100,
         models=["gpt-4", "gpt-3.5-turbo"],
     )
-    
+
     # Simulate constructing UserAPIKeyAuth like we do in JWT auth
     # This is the pattern from user_api_key_auth.py lines 552-587
     user_api_key_auth = UserAPIKeyAuth(
@@ -90,14 +90,16 @@ def test_team_metadata_with_tags_flows_through_jwt_auth():
         user_role="internal_user",
         user_id="test-user",
     )
-    
+
     # Verify team_metadata is set
-    assert user_api_key_auth.team_metadata is not None, "team_metadata should be populated"
+    assert (
+        user_api_key_auth.team_metadata is not None
+    ), "team_metadata should be populated"
     assert user_api_key_auth.team_metadata == team_object.metadata, (
         f"team_metadata not correctly mapped. "
         f"Expected: {team_object.metadata}, Got: {user_api_key_auth.team_metadata}"
     )
-    
+
     # Specifically verify tags are present
     assert "tags" in user_api_key_auth.team_metadata, "tags should be in team_metadata"
     assert user_api_key_auth.team_metadata["tags"] == ["production", "high-priority"], (
@@ -108,7 +110,7 @@ def test_team_metadata_with_tags_flows_through_jwt_auth():
 
 def test_route_checks_is_llm_api_route():
     """Test RouteChecks.is_llm_api_route() correctly identifies LLM API routes including passthrough endpoints"""
-    
+
     # Test OpenAI routes
     openai_routes = [
         "/v1/chat/completions",
@@ -132,18 +134,22 @@ def test_route_checks_is_llm_api_route():
         "/v1/realtime",
         "/realtime",
     ]
-    
+
     for route in openai_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test Anthropic routes
     anthropic_routes = [
         "/v1/messages",
         "/v1/messages/count_tokens",
     ]
-    
+
     for route in anthropic_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test passthrough routes (this is the key improvement over the old route checking)
     passthrough_routes = [
@@ -161,9 +167,11 @@ def test_route_checks_is_llm_api_route():
         "/vllm/v1/chat/completions",
         "/mistral/v1/chat/completions",
     ]
-    
+
     for route in passthrough_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test MCP routes
     mcp_routes = [
@@ -171,9 +179,11 @@ def test_route_checks_is_llm_api_route():
         "/mcp/",
         "/mcp/test",
     ]
-    
+
     for route in mcp_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test routes with placeholders
     placeholder_routes = [
@@ -186,9 +196,11 @@ def test_route_checks_is_llm_api_route():
         "/v1/batches/batch_123",
         "/batches/batch_123",
     ]
-    
+
     for route in placeholder_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test Azure OpenAI routes
     azure_routes = [
@@ -197,9 +209,11 @@ def test_route_checks_is_llm_api_route():
         "/engines/gpt-4/chat/completions",
         "/engines/gpt-3.5-turbo/completions",
     ]
-    
+
     for route in azure_routes:
-        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+        assert RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should be identified as LLM API route"
 
     # Test non-LLM routes (should return False)
     non_llm_routes = [
@@ -216,9 +230,11 @@ def test_route_checks_is_llm_api_route():
         "/debug",
         "/test",
     ]
-    
+
     for route in non_llm_routes:
-        assert not RouteChecks.is_llm_api_route(route=route), f"Route {route} should NOT be identified as LLM API route"
+        assert not RouteChecks.is_llm_api_route(
+            route=route
+        ), f"Route {route} should NOT be identified as LLM API route"
 
     # Test invalid inputs
     invalid_inputs = [
@@ -228,6 +244,8 @@ def test_route_checks_is_llm_api_route():
         {},
         "",
     ]
-    
+
     for invalid_input in invalid_inputs:
-        assert not RouteChecks.is_llm_api_route(route=invalid_input), f"Invalid input {invalid_input} should return False"
+        assert not RouteChecks.is_llm_api_route(
+            route=invalid_input
+        ), f"Invalid input {invalid_input} should return False"

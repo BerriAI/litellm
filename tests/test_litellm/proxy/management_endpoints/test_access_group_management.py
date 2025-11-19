@@ -19,7 +19,7 @@ from litellm import Router
 async def test_create_duplicate_access_group_fails():
     """
     Test that creating an access group with a name that already exists returns 409 error.
-    
+
     Scenario: User creates "production-models" access group, then tries to create it again.
     Should fail with 409 Conflict.
     """
@@ -68,13 +68,12 @@ async def test_create_duplicate_access_group_fails():
     )
 
     # Mock the imported dependencies from proxy_server (where they're actually imported from)
-    with patch("litellm.proxy.proxy_server.llm_router", mock_router), \
-         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
-
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router), patch(
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma
+    ):
         # Should raise 409 Conflict
         with pytest.raises(HTTPException) as exc_info:
             await create_model_group(data=request_data, user_api_key_dict=mock_user)
 
         assert exc_info.value.status_code == 409
         assert "already exists" in str(exc_info.value.detail)
-

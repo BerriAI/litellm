@@ -23,7 +23,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
     """
     SageMaker embedding configuration factory for supporting embedding parameters
     """
-    
+
     def __init__(self) -> None:
         pass
 
@@ -31,10 +31,10 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
     def get_model_config(cls, model: str) -> "BaseEmbeddingConfig":
         """
         Factory method to get the appropriate embedding config based on model type
-        
+
         Args:
             model: The model name
-            
+
         Returns:
             Appropriate embedding config instance
         """
@@ -57,7 +57,6 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-    
         return optional_params
 
     def get_error_class(
@@ -98,8 +97,8 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
             response_data = raw_response.json()
         except Exception as e:
             raise SagemakerError(
-                message=f"Failed to parse response: {str(e)}", 
-                status_code=raw_response.status_code
+                message=f"Failed to parse response: {str(e)}",
+                status_code=raw_response.status_code,
             )
 
         if "embedding" not in response_data:

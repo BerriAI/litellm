@@ -30,7 +30,6 @@ def test_ollama_embeddings(mock_response_data, mock_embedding_response, mock_enc
     with patch("litellm.module_level_client.post") as mock_post, patch(
         "litellm.OllamaConfig.get_config", return_value={"truncate": 512}
     ):
-
         mock_response = MagicMock()
         mock_response.json.return_value = mock_response_data
         mock_post.return_value = mock_response
@@ -63,7 +62,6 @@ async def test_ollama_aembeddings(
     ) as mock_post, patch(
         "litellm.OllamaConfig.get_config", return_value={"truncate": 512}
     ):
-
         response = await ollama_aembeddings(
             api_base="http://localhost:11434",
             model="test-model",
@@ -89,7 +87,6 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
     with patch("litellm.module_level_client.post") as mock_post, patch(
         "litellm.OllamaConfig.get_config", return_value={}
     ):
-
         mock_response = MagicMock()
         mock_response.json.return_value = response_data
         mock_post.return_value = mock_response

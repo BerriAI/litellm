@@ -14,7 +14,6 @@ from litellm.types.utils import Choices, Message, ModelResponse
 
 @pytest.mark.asyncio
 async def test_azure_prompt_shield_guardrail_pre_call_hook():
-
     azure_prompt_shield_guardrail = AzureContentSafetyPromptShieldGuardrail(
         guardrail_name="azure_prompt_shield",
         api_key="azure_prompt_shield_api_key",

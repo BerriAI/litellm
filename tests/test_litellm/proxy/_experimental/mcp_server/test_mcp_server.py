@@ -111,7 +111,9 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     mock_manager.get_allowed_mcp_servers = AsyncMock(
         return_value=["working_server", "failing_server"]
     )
-    mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[working_server, failing_server])
+    mock_manager.get_mcp_servers_from_ids = MagicMock(
+        return_value=[working_server, failing_server]
+    )
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         working_server if server_id == "working_server" else failing_server
     )
@@ -208,7 +210,9 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
     mock_manager.get_allowed_mcp_servers = AsyncMock(
         return_value=["failing_server1", "failing_server2"]
     )
-    mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[failing_server1, failing_server2])
+    mock_manager.get_mcp_servers_from_ids = MagicMock(
+        return_value=[failing_server1, failing_server2]
+    )
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         failing_server1 if server_id == "failing_server1" else failing_server2
     )

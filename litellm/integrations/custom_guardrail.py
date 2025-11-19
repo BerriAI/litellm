@@ -279,7 +279,7 @@ class CustomGuardrail(CustomLogger):
                 data, self.event_hook
             )
             if result is not None:
-                return result        
+                return result
         return True
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:

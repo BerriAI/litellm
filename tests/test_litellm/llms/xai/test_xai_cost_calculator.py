@@ -27,6 +27,7 @@ class TestXAICostCalculator:
         """Set up test environment."""
         # Load the main model cost map directly to ensure we have the latest pricing
         import json
+
         try:
             with open("model_prices_and_context_window.json", "r") as f:
                 model_cost_map = json.load(f)
@@ -213,7 +214,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-fast-reasoning", usage=usage
+        )
 
         # Expected costs for grok-4-fast-reasoning with tiered pricing:
         # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
@@ -240,7 +243,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-fast-reasoning", usage=usage
+        )
 
         # Expected costs for grok-4-fast-reasoning with regular pricing:
         # Input: 100000 tokens * $0.2e-6 (regular rate) = $0.02
@@ -266,7 +271,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-latest", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-latest", usage=usage
+        )
 
         # Expected costs for grok-4-latest with tiered pricing:
         # Input: 200000 tokens * $6e-6 (ALL tokens at tiered rate since input > 128k) = $1.2
@@ -292,7 +299,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-fast-reasoning", usage=usage
+        )
 
         # Expected costs for grok-4-fast-reasoning:
         # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
@@ -332,14 +341,14 @@ class TestXAICostCalculator:
             prompt_tokens_details=PromptTokensDetailsWrapper(
                 text_tokens=100,
                 web_search_requests=3,  # 3 sources used
-            )
+            ),
         )
-        
+
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-        
+
         # Expected cost: 3 sources * $0.025 per source = $0.075
         expected_cost = 3 * (25.0 / 1000.0)  # 3 * $0.025
-        
+
         assert math.isclose(web_search_cost, expected_cost, rel_tol=1e-10)
         assert math.isclose(web_search_cost, 0.075, rel_tol=1e-10)
 
@@ -353,12 +362,12 @@ class TestXAICostCalculator:
         )
         # Manually set num_sources_used (as done by transformation layer)
         setattr(usage, "num_sources_used", 5)
-        
+
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-        
+
         # Expected cost: 5 sources * $0.025 per source = $0.125
         expected_cost = 5 * (25.0 / 1000.0)  # 5 * $0.025
-        
+
         assert math.isclose(web_search_cost, expected_cost, rel_tol=1e-10)
         assert math.isclose(web_search_cost, 0.125, rel_tol=1e-10)
 
@@ -371,11 +380,11 @@ class TestXAICostCalculator:
             prompt_tokens_details=PromptTokensDetailsWrapper(
                 text_tokens=100,
                 web_search_requests=0,  # No web search
-            )
+            ),
         )
-        
+
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-        
+
         # Expected cost: 0 sources * $0.025 per source = $0.0
         assert web_search_cost == 0.0
 
@@ -386,8 +395,8 @@ class TestXAICostCalculator:
             completion_tokens=50,
             total_tokens=150,
         )
-        
+
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-        
+
         # Expected cost: No web search data = $0.0
         assert web_search_cost == 0.0

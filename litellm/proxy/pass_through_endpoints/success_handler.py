@@ -246,9 +246,9 @@ class PassThroughEndpointLogging:
 
             standard_logging_response_object = vertex_ai_live_handler_result["result"]
             kwargs = vertex_ai_live_handler_result["kwargs"]
-        return_dict["standard_logging_response_object"] = (
-            standard_logging_response_object
-        )
+        return_dict[
+            "standard_logging_response_object"
+        ] = standard_logging_response_object
 
         return_dict["kwargs"] = kwargs
         return return_dict
@@ -271,9 +271,9 @@ class PassThroughEndpointLogging:
         standard_logging_response_object: Optional[
             PassThroughEndpointLoggingResultValues
         ] = None
-        logging_obj.model_call_details["passthrough_logging_payload"] = (
-            passthrough_logging_payload
-        )
+        logging_obj.model_call_details[
+            "passthrough_logging_payload"
+        ] = passthrough_logging_payload
         if self.is_assemblyai_route(url_route):
             if (
                 AssemblyAIPassthroughLoggingHandler._should_log_request(
@@ -434,8 +434,8 @@ class PassThroughEndpointLogging:
             kwargs["response_cost"] = passthrough_logging_payload.get(
                 "cost_per_request"
             )
-            logging_obj.model_call_details["response_cost"] = (
-                passthrough_logging_payload.get("cost_per_request")
-            )
+            logging_obj.model_call_details[
+                "response_cost"
+            ] = passthrough_logging_payload.get("cost_per_request")
 
         return kwargs

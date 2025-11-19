@@ -175,7 +175,9 @@ class LoggingWorker:
             return
 
         queue_size = self._queue.qsize()
-        verbose_logger.info(f"[LoggingWorker] atexit: Flushing {queue_size} remaining events...")
+        verbose_logger.info(
+            f"[LoggingWorker] atexit: Flushing {queue_size} remaining events..."
+        )
 
         # Create a new event loop since the original is closed
         loop = asyncio.new_event_loop()
@@ -186,7 +188,10 @@ class LoggingWorker:
             processed = 0
             start_time = loop.time()
 
-            while not self._queue.empty() and processed < self.MAX_ITERATIONS_TO_CLEAR_QUEUE:
+            while (
+                not self._queue.empty()
+                and processed < self.MAX_ITERATIONS_TO_CLEAR_QUEUE
+            ):
                 if loop.time() - start_time >= self.MAX_TIME_TO_CLEAR_QUEUE:
                     verbose_logger.warning(
                         f"[LoggingWorker] atexit: Reached time limit ({self.MAX_TIME_TO_CLEAR_QUEUE}s), stopping flush"
@@ -206,9 +211,13 @@ class LoggingWorker:
                     processed += 1
                 except Exception as e:
                     # Silent failure to not break user's program
-                    verbose_logger.debug(f"[LoggingWorker] atexit: Error flushing callback: {e}")
+                    verbose_logger.debug(
+                        f"[LoggingWorker] atexit: Error flushing callback: {e}"
+                    )
 
-            verbose_logger.info(f"[LoggingWorker] atexit: Successfully flushed {processed} events!")
+            verbose_logger.info(
+                f"[LoggingWorker] atexit: Successfully flushed {processed} events!"
+            )
 
         finally:
             loop.close()

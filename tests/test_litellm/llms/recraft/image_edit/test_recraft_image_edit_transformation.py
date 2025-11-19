@@ -22,7 +22,7 @@ class TestRecraftImageEditTransformation:
     """
     Unit tests for Recraft image edit transformation functionality.
     """
-    
+
     def setup_method(self):
         """Set up test fixtures before each test method."""
         self.config = RecraftImageEditConfig()
@@ -32,32 +32,32 @@ class TestRecraftImageEditTransformation:
 
     def test_transform_image_edit_request(self):
         """
-        Test that transform_image_edit_request correctly transforms request parameters 
+        Test that transform_image_edit_request correctly transforms request parameters
         and separates files from data.
         """
         # Mock image data
         image_data = b"fake_image_data"
         image = BytesIO(image_data)
-        
+
         image_edit_optional_params = {
             "n": 2,
             "response_format": "url",
             "strength": 0.5,
-            "style": "photographic"
+            "style": "photographic",
         }
-        
+
         litellm_params = GenericLiteLLMParams()
         headers = {}
-        
+
         data, files = self.config.transform_image_edit_request(
             model=self.model,
             prompt=self.prompt,
             image=image,
             image_edit_optional_request_params=image_edit_optional_params,
             litellm_params=litellm_params,
-            headers=headers
+            headers=headers,
         )
-        
+
         # Check that data contains the expected parameters
         assert data["model"] == self.model
         assert data["prompt"] == self.prompt
@@ -65,14 +65,16 @@ class TestRecraftImageEditTransformation:
         assert data["n"] == 2
         assert data["response_format"] == "url"
         assert data["style"] == "photographic"
-        
+
         # Check that image is not in data (should be in files)
         assert "image" not in data
-        
+
         # Check that files contains the image
         assert len(files) == 1
         assert files[0][0] == "image"  # field name
-        assert files[0][1][0] == "image.png"  # filename (default for non-BufferedReader)
+        assert (
+            files[0][1][0] == "image.png"
+        )  # filename (default for non-BufferedReader)
         assert files[0][1][1] == image  # file object
 
     def test_get_image_files_for_request_single_image(self):
@@ -81,9 +83,9 @@ class TestRecraftImageEditTransformation:
         """
         image_data = b"fake_image_data"
         image = BytesIO(image_data)
-        
+
         files = self.config._get_image_files_for_request(image=image)
-        
+
         assert len(files) == 1
         assert files[0][0] == "image"
         assert files[0][1][0] == "image.png"  # Default filename for non-BufferedReader
@@ -97,10 +99,10 @@ class TestRecraftImageEditTransformation:
         """
         image_data = b"fake_image_data"
         image = BytesIO(image_data)
-        
+
         # Pass as list (OpenAI format)
         files = self.config._get_image_files_for_request(image=[image])
-        
+
         assert len(files) == 1
         assert files[0][0] == "image"
         assert files[0][1][0] == "image.png"  # Default filename for non-BufferedReader
@@ -113,9 +115,9 @@ class TestRecraftImageEditTransformation:
         # Create a mock BufferedReader
         mock_file = MagicMock(spec=BufferedReader)
         mock_file.name = "buffered_image.jpg"
-        
+
         files = self.config._get_image_files_for_request(image=mock_file)
-        
+
         assert len(files) == 1
         assert files[0][0] == "image"
         assert files[0][1][0] == "buffered_image.jpg"
@@ -136,20 +138,18 @@ class TestRecraftImageEditTransformation:
         response_data = {
             "data": [
                 {"url": "https://example.com/edited_image1.jpg", "b64_json": None},
-                {"url": None, "b64_json": "base64encodeddata"}
+                {"url": None, "b64_json": "base64encodeddata"},
             ]
         }
-        
+
         # Create mock response
         mock_response = MagicMock()
         mock_response.json.return_value = response_data
-        
+
         result = self.config.transform_image_edit_response(
-            model=self.model,
-            raw_response=mock_response,
-            logging_obj=self.logging_obj
+            model=self.model, raw_response=mock_response, logging_obj=self.logging_obj
         )
-        
+
         assert isinstance(result, ImageResponse)
         assert len(result.data) == 2
         assert result.data[0].url == "https://example.com/edited_image1.jpg"
@@ -166,12 +166,12 @@ class TestRecraftImageEditTransformation:
         mock_response.json.side_effect = json.JSONDecodeError("Invalid JSON", "", 0)
         mock_response.status_code = 500
         mock_response.headers = {}
-        
+
         with pytest.raises(Exception) as exc_info:
             self.config.transform_image_edit_response(
                 model=self.model,
                 raw_response=mock_response,
-                logging_obj=self.logging_obj
+                logging_obj=self.logging_obj,
             )
-        
-        assert "Error transforming image edit response" in str(exc_info.value) 
+
+        assert "Error transforming image edit response" in str(exc_info.value)
