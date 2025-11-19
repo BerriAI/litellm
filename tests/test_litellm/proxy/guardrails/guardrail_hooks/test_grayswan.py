@@ -121,3 +121,61 @@ async def test_run_guardrail_raises_api_error(grayswan_guardrail: GraySwanGuardr
 
     with pytest.raises(GraySwanGuardrailAPIError):
         await grayswan_guardrail.run_grayswan_guardrail(payload)
+
+
+def test_process_response_passthrough_stores_detection_info() -> None:
+    """Test that passthrough mode stores detection info in metadata without blocking."""
+    guardrail = GraySwanGuardrail(
+        guardrail_name="grayswan-passthrough",
+        api_key="test-key",
+        on_flagged_action="passthrough",
+        violation_threshold=0.2,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+
+    data = {"messages": [{"role": "user", "content": "test"}]}
+    response_json = {
+        "violation": 0.8,
+        "violated_rules": [1, 2],
+        "mutation": True,
+        "ipi": False,
+    }
+
+    # Should not raise an exception
+    guardrail._process_grayswan_response(response_json, data)
+
+    # Verify detection info was stored in metadata
+    assert "metadata" in data
+    assert "guardrail_detections" in data["metadata"]
+    assert len(data["metadata"]["guardrail_detections"]) == 1
+
+    detection = data["metadata"]["guardrail_detections"][0]
+    assert detection["guardrail"] == "grayswan"
+    assert detection["flagged"] is True
+    assert detection["violation_score"] == 0.8
+    assert detection["violated_rules"] == [1, 2]
+    assert detection["mutation"] is True
+    assert detection["ipi"] is False
+
+
+def test_process_response_passthrough_does_not_store_if_under_threshold() -> None:
+    """Test that passthrough mode doesn't store anything if violation is under threshold."""
+    guardrail = GraySwanGuardrail(
+        guardrail_name="grayswan-passthrough",
+        api_key="test-key",
+        on_flagged_action="passthrough",
+        violation_threshold=0.5,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+
+    data = {"messages": [{"role": "user", "content": "test"}]}
+    response_json = {
+        "violation": 0.3,
+        "violated_rules": [],
+    }
+
+    # Should not raise an exception
+    guardrail._process_grayswan_response(response_json, data)
+
+    # Should not have any detection info since it didn't exceed threshold
+    assert "guardrail_detections" not in data.get("metadata", {})
