@@ -6,6 +6,7 @@ from typing import Coroutine, Optional
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
+from litellm.constants import LOGGING_WORKER_CONCURRENCY
 
 
 class LoggingTask(TypedDict):
@@ -31,7 +32,6 @@ class LoggingWorker:
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE = 20.0
     # These aren't 1000 OS threads. They're coroutine "slots" on the single asyncio event loop.
     # Each log coroutine still runs cooperatively and should yield back promptly (awaiting I/O, sleep, etc.).
-    LOGGING_WORKER_CONCURRENCY = 1000
 
     MAX_ITERATIONS_TO_CLEAR_QUEUE = 200
     MAX_TIME_TO_CLEAR_QUEUE = 5.0
