@@ -3,7 +3,7 @@ import ToolModal from "../tool_modal";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { createPromptCall } from "../../networking";
 import { PromptType, PromptEditorViewProps, Tool } from "./types";
-import { extractVariables, convertToDotPrompt } from "./utils";
+import { convertToDotPrompt } from "./utils";
 import PromptEditorHeader from "./PromptEditorHeader";
 import ModelConfigCard from "./ModelConfigCard";
 import ToolsCard from "./ToolsCard";
