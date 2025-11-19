@@ -530,7 +530,6 @@ async def test_dotprompt_auto_detection_with_model_only():
     without needing to specify model="dotprompt/gpt-4".
     """
     from litellm.integrations.dotprompt import DotpromptManager
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     prompt_dir = Path(__file__).parent
     dotprompt_manager = DotpromptManager(prompt_directory=str(prompt_dir))
@@ -541,15 +540,32 @@ async def test_dotprompt_auto_detection_with_model_only():
     
     try:
         # Mock the HTTP handler to avoid actual API calls
-        client = AsyncHTTPHandler()
-        with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        with patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post") as mock_post:
+            mock_response_data = litellm.ModelResponse(
+                choices=[
+                    litellm.Choices(
+                        message=litellm.Message(content="Hello!"),
+                        index=0,
+                        finish_reason="stop",
+                    )
+                ]
+            ).model_dump()
+            
+            # Create a proper mock response
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.text = json.dumps(mock_response_data)
+            mock_response.headers = {"Content-Type": "application/json"}
+            mock_response.json.return_value = mock_response_data
+            
+            mock_post.return_value = mock_response
+            
             # Call with model="gpt-4" (no "dotprompt/" prefix) and prompt_id
             await litellm.acompletion(
                 model="gpt-4",
                 prompt_id="chat_prompt",
                 prompt_variables={"user_message": "Hello world"},
                 messages=[{"role": "user", "content": "This will be ignored"}],
-                client=client,
             )
             
             mock_post.assert_called_once()
