@@ -1,5 +1,7 @@
+# This file may be a good candidate to be the first one to be refactored into a separate process,
+# for the sake of performance and scalability.
+
 import asyncio
-import contextlib
 import contextvars
 from typing import Coroutine, Optional
 
@@ -30,9 +32,6 @@ class LoggingWorker:
 
     LOGGING_WORKER_MAX_QUEUE_SIZE = 50_000
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE = 20.0
-    # These aren't 1000 OS threads. They're coroutine "slots" on the single asyncio event loop.
-    # Each log coroutine still runs cooperatively and should yield back promptly (awaiting I/O, sleep, etc.).
-
     MAX_ITERATIONS_TO_CLEAR_QUEUE = 200
     MAX_TIME_TO_CLEAR_QUEUE = 5.0
 
