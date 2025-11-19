@@ -82,6 +82,48 @@ def is_passthrough_request_streaming(request_body: dict) -> bool:
     return request_body.get("stream", False)
 
 
+def get_model_from_passthrough_request(
+    request: Request, request_body: dict
+) -> Optional[str]:
+    """
+    Extract model name from passthrough request.
+    
+    Checks in priority order:
+    1. Request body "model" field
+    2. Request body "target_model_names" field (takes first if list)
+    3. Request header "X-LiteLLM-Target-Model"
+    
+    Args:
+        request: FastAPI request object
+        request_body: Parsed request body
+        
+    Returns:
+        Model name or None if not found
+    """
+    # 1. Check for model in request body
+    model = request_body.get("model")
+    if model:
+        return model
+    
+    # 2. Check for target_model_names in request body
+    target_model_names = request_body.get("target_model_names")
+    if target_model_names:
+        # target_model_names can be a string or list, take first if list
+        if isinstance(target_model_names, list) and len(target_model_names) > 0:
+            return target_model_names[0]
+        elif isinstance(target_model_names, str):
+            return target_model_names
+    
+    # 3. Check for model in request headers
+    model = request.headers.get("X-LiteLLM-Target-Model") or request.headers.get(
+        "x-litellm-target-model"
+    )
+    if model:
+        return model
+    
+    return None
+
+
 async def llm_passthrough_factory_proxy_route(
     custom_llm_provider: str,
     endpoint: str,
@@ -829,6 +871,94 @@ async def handle_bedrock_count_tokens(
         verbose_proxy_logger.error(f"Error in handle_bedrock_count_tokens: {str(e)}")
         raise HTTPException(
             status_code=500, detail={"error": f"CountTokens processing error: {str(e)}"}
+        )
+
+
+async def handle_openai_passthrough_router_model(
+    model: str,
+    endpoint: str,
+    request: Request,
+    request_body: dict,
+    llm_router: litellm.Router,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj,
+    general_settings: dict,
+    proxy_config,
+    select_data_generator,
+    user_model: Optional[str],
+    user_temperature: Optional[float],
+    user_request_timeout: Optional[float],
+    user_max_tokens: Optional[int],
+    user_api_base: Optional[str],
+    version: Optional[str],
+) -> Union[Response, StreamingResponse]:
+    """
+    Handle OpenAI passthrough for router models (models defined in config.yaml).
+
+    Uses the same common processing path as non-router models to ensure
+    metadata and hooks are properly initialized.
+
+    Args:
+        model: The router model name (e.g., "gpt-4")
+        endpoint: The OpenAI endpoint path (e.g., "/chat/completions")
+        request: The FastAPI request object
+        request_body: The parsed request body
+        llm_router: The LiteLLM router instance
+        user_api_key_dict: The user API key authentication dictionary
+        (additional args for common processing)
+
+    Returns:
+        Response or StreamingResponse depending on endpoint type
+    """
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    # Detect streaming based on request body
+    is_streaming = request_body.get("stream", False)
+
+    verbose_proxy_logger.debug(
+        f"OpenAI router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
+    )
+
+    # Use the common processing path (same as non-router models)
+    # This ensures all metadata, hooks, and logging are properly initialized
+    data: Dict[str, Any] = {}
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+
+    data["model"] = model
+    data["method"] = request.method
+    data["endpoint"] = endpoint
+    data["data"] = request_body
+    data["custom_llm_provider"] = "openai"
+
+    # Use the common passthrough processing to handle metadata and hooks
+    # This also handles all response formatting (streaming/non-streaming) and exceptions
+    try:
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(
+            request=request,
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+        return result
+    except Exception as e:
+        # Use common exception handling
+        raise await base_llm_response_processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
 
@@ -1756,8 +1886,66 @@ async def openai_proxy_route(
     """
     Simple pass-through for OpenAI. Use this if you want to directly send a request to OpenAI.
 
-
+    Supports both direct OpenAI API calls and router models from config.yaml.
+    
+    To use router models for endpoints without a model in the body (e.g., /files/delete),
+    specify the model via:
+    - Request body: `{"target_model_names": "model-name"}` or `{"target_model_names": ["model-name"]}`
+    - Request header: `X-LiteLLM-Target-Model: model-name`
     """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    # Check if this is a router model by reading the request body
+    request_body = await _read_request_body(request=request)
+    
+    # Extract model from request (body, target_model_names, or headers)
+    model = get_model_from_passthrough_request(
+        request=request, request_body=request_body
+    )
+    
+    # Check if this is a router model (from config.yaml)
+    is_router_model = is_passthrough_request_using_router_model(
+        request_body={"model": model}, llm_router=llm_router
+    )
+
+    # If router model, use dedicated router passthrough handler
+    if is_router_model and llm_router and model:
+        return await handle_openai_passthrough_router_model(
+            model=model,
+            endpoint=endpoint,
+            request=request,
+            request_body=request_body,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
+    # Fall back to existing implementation for direct OpenAI API calls
+    verbose_proxy_logger.debug(
+        f"OpenAI passthrough: Using direct OpenAI API for endpoint '{endpoint}'"
+    )
+
     base_target_url = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
     # Add or update query parameters
     openai_api_key = passthrough_endpoint_router.get_credentials(
