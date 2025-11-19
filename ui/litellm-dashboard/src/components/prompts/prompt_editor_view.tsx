@@ -271,7 +271,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   };
 
   return (
-    <div className="flex h-full bg-gray-50">
+    <div className="flex h-full bg-white">
       {/* Main Content */}
       <div className="flex-1 flex flex-col">
         {/* Header */}
@@ -308,12 +308,12 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
         <div className="flex-1 flex overflow-hidden">
           {/* Left Panel - Editor */}
-          <div className="flex-1 overflow-y-auto bg-gray-50">
-            <div className="max-w-3xl mx-auto p-6 space-y-4 pb-20">
+          <div className="w-1/2 overflow-y-auto bg-white border-r border-gray-200">
+            <div className="p-6 space-y-4 pb-20">
               {/* Model Card */}
-              <Card className="p-4">
-                <div className="mb-4">
-                  <Text className="block mb-2 font-medium">Model</Text>
+              <Card className="p-3">
+                <div className="mb-3">
+                  <Text className="block mb-2 text-sm font-medium">Model</Text>
                   <ModelSelector
                     accessToken={accessToken || ""}
                     value={prompt.model}
@@ -329,70 +329,94 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
                 <button
                   onClick={() => setShowConfig(!showConfig)}
-                  className="flex items-center text-sm font-medium text-gray-700 hover:text-gray-900"
+                  className="flex items-center text-xs font-medium text-gray-600 hover:text-gray-900"
                 >
-                  <SettingsIcon size={16} className="mr-2" />
+                  <SettingsIcon size={14} className="mr-1" />
                   <span>Configuration</span>
                 </button>
 
                 {showConfig && (
-                  <div className="mt-4 pt-4 border-t border-gray-200">
-                    <AdditionalModelSettings
-                      temperature={prompt.config.temperature}
-                      maxTokens={prompt.config.max_tokens}
-                      useAdvancedParams={true}
-                      onTemperatureChange={(value) =>
-                        setPrompt({
-                          ...prompt,
-                          config: {
-                            ...prompt.config,
-                            temperature: value,
-                          },
-                        })
-                      }
-                      onMaxTokensChange={(value) =>
-                        setPrompt({
-                          ...prompt,
-                          config: {
-                            ...prompt.config,
-                            max_tokens: value,
-                          },
-                        })
-                      }
-                    />
+                  <div className="mt-3 pt-3 border-t border-gray-200 -mx-3 px-0">
+                    <div className="space-y-3 px-3">
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <Text className="text-xs text-gray-700">Temperature</Text>
+                          <Input
+                            type="number"
+                            size="small"
+                            min={0}
+                            max={2}
+                            step={0.1}
+                            value={prompt.config.temperature}
+                            onChange={(e) =>
+                              setPrompt({
+                                ...prompt,
+                                config: {
+                                  ...prompt.config,
+                                  temperature: parseFloat(e.target.value) || 0,
+                                },
+                              })
+                            }
+                            className="w-16"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <Text className="text-xs text-gray-700">Max Tokens</Text>
+                          <Input
+                            type="number"
+                            size="small"
+                            min={1}
+                            max={32768}
+                            value={prompt.config.max_tokens}
+                            onChange={(e) =>
+                              setPrompt({
+                                ...prompt,
+                                config: {
+                                  ...prompt.config,
+                                  max_tokens: parseInt(e.target.value) || 1000,
+                                },
+                              })
+                            }
+                            className="w-20"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
               </Card>
 
               {/* Tools Card */}
-              <Card className="p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <Text className="font-medium">Tools</Text>
+              <Card className="p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <Text className="text-sm font-medium">Tools</Text>
                   <button
                     onClick={() => openToolModal()}
-                    className="text-sm text-blue-600 hover:text-blue-700 flex items-center"
+                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center"
                   >
-                    <PlusIcon size={16} className="mr-1" />
+                    <PlusIcon size={14} className="mr-1" />
                     Add
                   </button>
                 </div>
                 {prompt.tools.length === 0 ? (
-                  <Text className="text-gray-500 text-sm">No tools added</Text>
+                  <Text className="text-gray-500 text-xs">No tools added</Text>
                 ) : (
                   <div className="space-y-2">
                     {prompt.tools.map((tool, index) => (
                       <div
                         key={index}
-                        className="flex items-center justify-between p-3 bg-gray-50 border border-gray-200 rounded"
+                        className="flex items-center justify-between p-2 bg-gray-50 border border-gray-200 rounded"
                       >
-                        <div className="flex-1">
-                          <div className="font-medium text-sm">{tool.name}</div>
-                          <div className="text-xs text-gray-500">{tool.description}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-xs truncate">{tool.name}</div>
+                          <div className="text-xs text-gray-500 truncate">{tool.description}</div>
                         </div>
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-1 ml-2">
                           <button
                             onClick={() => openToolModal(index)}
-                            className="text-sm text-blue-600 hover:text-blue-700"
+                            className="text-xs text-blue-600 hover:text-blue-700"
                           >
                             Edit
                           </button>
@@ -400,7 +424,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                             onClick={() => removeTool(index)}
                             className="text-gray-400 hover:text-red-500"
                           >
-                            <TrashIcon size={16} />
+                            <TrashIcon size={14} />
                           </button>
                         </div>
                       </div>
@@ -410,9 +434,9 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
               </Card>
 
               {/* Developer Message Card */}
-              <Card className="p-4">
-                <Text className="block mb-2 font-medium">Developer message</Text>
-                <Text className="text-gray-500 text-sm mb-2">Optional system instructions for the model</Text>
+              <Card className="p-3">
+                <Text className="block mb-2 text-sm font-medium">Developer message</Text>
+                <Text className="text-gray-500 text-xs mb-2">Optional system instructions for the model</Text>
                 <VariableTextArea
                   value={prompt.developerMessage}
                   onChange={(value) =>
@@ -427,23 +451,22 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
               </Card>
 
               {/* Prompt Messages Card */}
-              <Card className="p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <Text className="font-medium">Prompt messages</Text>
-                    <Text className="text-gray-500 text-sm mt-1">
-                      Use <code className="bg-gray-100 px-1 rounded text-xs">{'{{variable}}'}</code> syntax for template variables
-                    </Text>
-                  </div>
+              <Card className="p-3">
+                <div className="mb-2">
+                  <Text className="text-sm font-medium">Prompt messages</Text>
+                  <Text className="text-gray-500 text-xs mt-1">
+                    Use <code className="bg-gray-100 px-1 rounded text-xs">{'{{variable}}'}</code> syntax for template variables
+                  </Text>
                 </div>
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {prompt.messages.map((message, index) => (
-                    <div key={index} className="border border-gray-300 rounded-lg overflow-hidden bg-white">
-                      <div className="bg-gray-50 px-3 py-2 border-b border-gray-300 flex items-center justify-between">
+                    <div key={index} className="border border-gray-300 rounded overflow-hidden bg-white">
+                      <div className="bg-gray-50 px-2 py-1.5 border-b border-gray-300 flex items-center justify-between">
                         <Select
                           value={message.role}
                           onChange={(value) => updateMessage(index, "role", value)}
-                          style={{ width: 120 }}
+                          style={{ width: 100 }}
+                          size="small"
                           bordered={false}
                         >
                           <Option value="user">User</Option>
@@ -455,15 +478,15 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                             onClick={() => removeMessage(index)}
                             className="text-gray-400 hover:text-red-500"
                           >
-                            <TrashIcon size={16} />
+                            <TrashIcon size={14} />
                           </button>
                         )}
                       </div>
-                      <div className="p-3">
+                      <div className="p-2">
                         <VariableTextArea
                           value={message.content}
                           onChange={(value) => updateMessage(index, "content", value)}
-                          rows={4}
+                          rows={3}
                           placeholder="Enter prompt content..."
                         />
                       </div>
@@ -472,9 +495,9 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                 </div>
                 <button
                   onClick={addMessage}
-                  className="mt-3 text-sm text-blue-600 hover:text-blue-700 flex items-center"
+                  className="mt-2 text-xs text-blue-600 hover:text-blue-700 flex items-center"
                 >
-                  <PlusIcon size={16} className="mr-1" />
+                  <PlusIcon size={14} className="mr-1" />
                   Add message
                 </button>
               </Card>
@@ -482,7 +505,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           </div>
 
           {/* Right Panel - Preview/Conversation */}
-          <div className="w-1/2 border-l border-gray-200 bg-white flex flex-col">
+          <div className="flex-1 bg-white flex flex-col">
             <div className="flex-1 flex items-center justify-center text-gray-400">
               <div className="text-center">
                 <div className="w-12 h-12 mx-auto mb-3 bg-gray-100 rounded-full flex items-center justify-center">
