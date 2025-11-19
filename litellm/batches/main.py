@@ -18,7 +18,6 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
-from openai.types.batch import Metadata as BatchMetadata
 
 import litellm
 from litellm._logging import verbose_logger
@@ -862,7 +861,6 @@ def cancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
-
         try:
             if model is not None:
                 _, custom_llm_provider, _, _ = get_llm_provider(
