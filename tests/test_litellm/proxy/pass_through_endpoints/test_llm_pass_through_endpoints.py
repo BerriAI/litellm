@@ -1979,3 +1979,101 @@ class TestOpenAIRouterPassthrough:
         
         # Assert - should use target_model_names (higher priority than header)
         assert model2 == "gpt-4-batch"
+
+    @pytest.mark.asyncio
+    async def test_openai_router_passthrough_model_replacement_in_body(self):
+        """
+        Test that when using OpenAI router passthrough, the model group name is
+        transformed to the actual OpenAI model name in the request body.
+        
+        Real-world scenario:
+        - Config has: model_name: "team-1-model" with litellm_params.model: "openai/gpt-4"
+        - User sends: {"model": "team-1-model", ...}
+        - OpenAI receives: {"model": "gpt-4", ...}
+        
+        Flow:
+        1. User sends request with model="team-1-model" (model group name)
+        2. Router identifies it as a router model and selects deployment
+        3. handle_openai_passthrough_router_model sets data["json"] = request_body
+        4. Router passes model="team-1-model" to passthrough
+        5. Passthrough replaces model in json body with deployment model (stripped of prefix)
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            handle_openai_passthrough_router_model,
+        )
+
+        # Arrange - matching the real scenario from proxy_config.yaml
+        model = "team-1-model"  # Model group name from config
+        endpoint = "/v1/chat/completions"
+        request_body = {
+            "model": "team-1-model",  # User sends model group name
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "stream": False
+        }
+        
+        mock_request = self._create_mock_request(request_body)
+        mock_llm_router = MagicMock(spec=litellm.Router)
+        mock_user_api_key_dict = MagicMock()
+        mock_proxy_logging_obj = AsyncMock()  # Make it async
+        mock_general_settings = {}
+        mock_proxy_config = MagicMock()
+        mock_select_data_generator = MagicMock()
+        
+        # Mock the response from OpenAI (with actual model name "gpt-4")
+        mock_response_content = json.dumps({
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": "gpt-4",  # OpenAI returns the actual model name
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello! How can I help you?"},
+                "finish_reason": "stop"
+            }]
+        }).encode("utf-8")
+        
+        # Mock ProxyBaseLLMRequestProcessing.base_passthrough_process_llm_request
+        from fastapi import Response
+        mock_response = Response(
+            content=mock_response_content,
+            status_code=200,
+            headers={"content-type": "application/json"}
+        )
+        
+        with patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_passthrough_process_llm_request",
+            new_callable=AsyncMock,
+            return_value=mock_response
+        ) as mock_process:
+            # Act
+            result = await handle_openai_passthrough_router_model(
+                model=model,  # Pass the model group name
+                endpoint=endpoint,
+                request=mock_request,
+                request_body=request_body,
+                llm_router=mock_llm_router,
+                user_api_key_dict=mock_user_api_key_dict,
+                proxy_logging_obj=mock_proxy_logging_obj,
+                general_settings=mock_general_settings,
+                proxy_config=mock_proxy_config,
+                select_data_generator=mock_select_data_generator,
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                version=None,
+            )
+            
+            # Assert
+            # Verify that base_passthrough_process_llm_request was called
+            mock_process.assert_awaited_once()
+            
+            # Verify that the function was called with the model group name
+            # The router will later replace this with the deployment model
+            call_kwargs = mock_process.call_args.kwargs
+            assert call_kwargs["model"] == "team-1-model"
+            
+            # Verify the result is returned
+            assert result is not None
+            assert result.status_code == 200

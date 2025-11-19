@@ -929,7 +929,8 @@ async def handle_openai_passthrough_router_model(
     data["model"] = model
     data["method"] = request.method
     data["endpoint"] = endpoint
-    data["data"] = request_body
+    # Pass the request body as json instead of data to ensure model replacement works
+    data["json"] = request_body
     data["custom_llm_provider"] = "openai"
 
     # Use the common passthrough processing to handle metadata and hooks
