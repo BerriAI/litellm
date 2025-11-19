@@ -27,6 +27,7 @@ import CacheDashboard from "@/components/cache_dashboard";
 import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
+import AgentsPanel from "@/components/agents";
 import PromptsPanel from "@/components/prompts";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
@@ -105,6 +106,7 @@ function formatUserRole(userRole: string) {
 interface ProxySettings {
   PROXY_BASE_URL: string;
   PROXY_LOGOUT_URL: string;
+  LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
 
 const queryClient = new QueryClient();
@@ -366,6 +368,10 @@ export default function CreateKeyPage() {
                     token={token}
                     accessToken={accessToken}
                     disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+                    proxySettings={{
+                      PROXY_BASE_URL: proxySettings.PROXY_BASE_URL,
+                      LITELLM_UI_API_DOC_BASE_URL: proxySettings.LITELLM_UI_API_DOC_BASE_URL,
+                    }}
                   />
                 ) : page == "users" ? (
                   <ViewUserDashboard
@@ -415,6 +421,8 @@ export default function CreateKeyPage() {
                   <BudgetPanel accessToken={accessToken} />
                 ) : page == "guardrails" ? (
                   <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
+                ) : page == "agents" ? (
+                  <AgentsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "prompts" ? (
                   <PromptsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "transform-request" ? (
@@ -476,6 +484,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     teams={(teams as Team[]) ?? []}
+                    organizations={(organizations as Organization[]) ?? []}
                     premiumUser={premiumUser}
                   />
                 ) : (

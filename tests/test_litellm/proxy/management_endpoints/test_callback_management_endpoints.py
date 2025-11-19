@@ -215,3 +215,44 @@ class TestCallbackManagementEndpoints:
             assert key in response_data
             assert isinstance(response_data[key], list)
 
+    def test_get_callback_configs(self):
+        """Test /callbacks/configs endpoint returns callback configuration JSON"""
+        # Setup test client
+        client = TestClient(app)
+        
+        # Make request to get callback configs endpoint
+        response = client.get(
+            "/callbacks/configs",
+            headers={"Authorization": "Bearer sk-1234"}
+        )
+        
+        # Verify response
+        assert response.status_code == 200
+        
+        response_data = response.json()
+        
+        # Verify response is a list
+        assert isinstance(response_data, list)
+        
+        # Verify it contains callback configurations
+        assert len(response_data) > 0
+        
+        # Verify structure of first callback config
+        first_config = response_data[0]
+        assert "id" in first_config
+        assert "displayName" in first_config
+        assert "logo" in first_config
+        assert "supports_key_team_logging" in first_config
+        assert "dynamic_params" in first_config
+        assert "description" in first_config
+        
+        # Verify dynamic_params structure
+        assert isinstance(first_config["dynamic_params"], dict)
+        
+        # Check if at least one callback has detailed parameter configuration
+        has_detailed_params = any(
+            config.get("dynamic_params") and len(config.get("dynamic_params", {})) > 0
+            for config in response_data
+        )
+        assert has_detailed_params, "Expected at least one callback to have detailed parameter configuration"
+
