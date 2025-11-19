@@ -66,6 +66,16 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
     }
   };
 
+  const moveMessage = (fromIndex: number, toIndex: number) => {
+    const newMessages = [...prompt.messages];
+    const [movedMessage] = newMessages.splice(fromIndex, 1);
+    newMessages.splice(toIndex, 0, movedMessage);
+    setPrompt({
+      ...prompt,
+      messages: newMessages,
+    });
+  };
+
   const addTool = (json: string) => {
     try {
       const parsed = JSON.parse(json);
@@ -225,6 +235,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                 onAddMessage={addMessage}
                 onUpdateMessage={updateMessage}
                 onRemoveMessage={removeMessage}
+                onMoveMessage={moveMessage}
               />
             </div>
           </div>
