@@ -1,5 +1,9 @@
 """
-Translates from OpenAI's `/v1/chat/completions` to BurnCloud's `/v1/chat/completions`
+Support for OpenAI's `/v1/chat/completions` endpoint.
+
+Calls done in OpenAI/openai.py as BurnCloud AI is openai-compatible.
+
+Docs: https://docs.burncloud.com/books/api
 """
 
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
@@ -13,38 +17,27 @@ from litellm.types.llms.openai import AllMessageValues
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
-class BurnCloudChatConfig(OpenAIGPTConfig):
-    @overload
-    def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
-
-    @overload
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-        model: str,
-        is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
-
-    def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
-        if is_async:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=True
-            )
-        else:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=False
+class BurnCloudConfig(OpenAIGPTConfig):
+    def validate_environment(
+            self,
+            headers: dict,
+            model: str,
+            messages: List[AllMessageValues],
+            optional_params: dict,
+            litellm_params: dict,
+            api_key: Optional[str] = None,
+            api_base: Optional[str] = None,
+    ) -> dict:
+        if api_base is None:
+            raise ValueError(
+                "Missing BurnCloud API Base - A call is being made to burncloud but no api_base is set either in the environment variables or via params"
             )
 
-    def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("BURNCLOUD_API_BASE")  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("BURNCLOUD_API_KEY")
-        return api_base, dynamic_api_key
+        if api_key is None:
+            raise ValueError(
+                "Missing BurnCloud API Key - A call is being made to burncloud but no api_key is set either in the environment variables or via params"
+            )
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["Content-Type"] = "application/json"
+        headers["X-BurnCloud-Source"] = "litellm"
+        return headers

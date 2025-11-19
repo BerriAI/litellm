@@ -42,9 +42,6 @@ from litellm.llms.databricks.cost_calculator import (
 from litellm.llms.deepseek.cost_calculator import (
     cost_per_token as deepseek_cost_per_token,
 )
-from litellm.llms.burncloud.cost_calculator import (
-    cost_per_token as burncloud_cost_per_token,
-)
 from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )

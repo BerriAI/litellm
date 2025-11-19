@@ -2400,6 +2400,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         elif value.get("litellm_provider") == "novita":
             if key not in litellm.novita_models:
                 litellm.novita_models.add(key)
+        elif value.get("litellm_provider") == "burncloud":
+            if key not in litellm.burncloud_models:
+                litellm.burncloud_models.add(key)
     return model_cost
 
 
@@ -5775,6 +5778,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("WANDB_API_KEY")
+        elif model in litellm.burncloud_models:
+            if "BURNCLOUD_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("BURNCLOUD_API_KEY")
 
     def filter_missing_keys(keys: List[str], exclude_pattern: str) -> List[str]:
         """Filter out keys that contain the exclude_pattern (case insensitive)."""
@@ -7245,7 +7253,7 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudChatConfig()
         elif litellm.LlmProviders.BURNCLOUD == provider:
-            return litellm.BurnCloudChatConfig()
+            return litellm.BurnCloudConfig()
         return None
 
     @staticmethod

@@ -1680,6 +1680,22 @@
         "batches": false,
         "rerank": false
       }
+    },
+    "burncloud": {
+      "display_name": "BurnCloud AI (`burncloud`)",
+      "url": "https://ai.burncloud.com/pricing",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
     }
   }
 }
