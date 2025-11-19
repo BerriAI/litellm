@@ -162,6 +162,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "web_search_options",
             "service_tier",
             "safety_identifier",
+            "thinking",  # Anthropic thinking param - will be converted to reasoning_effort
         ]  # works across all models
 
         model_specific_params = []
@@ -237,7 +238,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         thinking_block: ChatCompletionThinkingBlock = {
             "type": "thinking",
             "thinking": reasoning_content,
-            "signature": "",  # Empty string instead of None for proper typing
         }
         return [thinking_block]
 
