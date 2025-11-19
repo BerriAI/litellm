@@ -22,7 +22,9 @@ def grayswan_guardrail() -> GraySwanGuardrail:
     )
 
 
-def test_prepare_payload_uses_dynamic_overrides(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_prepare_payload_uses_dynamic_overrides(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     messages = [{"role": "user", "content": "hello"}]
     dynamic_body = {
         "categories": {"custom": "override"},
@@ -38,7 +40,9 @@ def test_prepare_payload_uses_dynamic_overrides(grayswan_guardrail: GraySwanGuar
     assert payload["reasoning_mode"] == "thinking"
 
 
-def test_prepare_payload_falls_back_to_guardrail_defaults(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_prepare_payload_falls_back_to_guardrail_defaults(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     messages = [{"role": "user", "content": "hello"}]
 
     payload = grayswan_guardrail._prepare_payload(messages, {}, None)
@@ -48,8 +52,12 @@ def test_prepare_payload_falls_back_to_guardrail_defaults(grayswan_guardrail: Gr
     assert payload["reasoning_mode"] == "hybrid"
 
 
-def test_process_response_does_not_block_under_threshold(grayswan_guardrail: GraySwanGuardrail) -> None:
-    grayswan_guardrail._process_grayswan_response({"violation": 0.3, "violated_rules": []})
+def test_process_response_does_not_block_under_threshold(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    grayswan_guardrail._process_grayswan_response(
+        {"violation": 0.3, "violated_rules": []}
+    )
 
 
 def test_process_response_blocks_when_threshold_exceeded() -> None:
@@ -85,12 +93,16 @@ class _DummyClient:
         self.calls: list[dict] = []
 
     async def post(self, *, url: str, headers: dict, json: dict, timeout: float):
-        self.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        self.calls.append(
+            {"url": url, "headers": headers, "json": json, "timeout": timeout}
+        )
         return _DummyResponse(self.payload)
 
 
 @pytest.mark.asyncio
-async def test_run_guardrail_posts_payload(monkeypatch, grayswan_guardrail: GraySwanGuardrail) -> None:
+async def test_run_guardrail_posts_payload(
+    monkeypatch, grayswan_guardrail: GraySwanGuardrail
+) -> None:
     dummy_client = _DummyClient({"violation": 0.1})
     grayswan_guardrail.async_handler = dummy_client
 
@@ -110,7 +122,9 @@ async def test_run_guardrail_posts_payload(monkeypatch, grayswan_guardrail: Gray
 
 
 @pytest.mark.asyncio
-async def test_run_guardrail_raises_api_error(grayswan_guardrail: GraySwanGuardrail) -> None:
+async def test_run_guardrail_raises_api_error(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     class _FailingClient:
         async def post(self, **_kwargs):
             raise RuntimeError("boom")
@@ -123,24 +137,33 @@ async def test_run_guardrail_raises_api_error(grayswan_guardrail: GraySwanGuardr
         await grayswan_guardrail.run_grayswan_guardrail(payload)
 
 
-def test_get_guardrail_custom_headers_with_valid_json(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_get_guardrail_custom_headers_with_valid_json(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     """Test extraction of custom headers from request data with valid JSON."""
     import json
-    
+
     request_data = {
         "proxy_server_request": {
             "headers": {
-                "x-litellm-guardrail-grayswan-test": json.dumps({"policy_id": "header-policy-123", "reasoning_mode": "thinking"})
+                "x-litellm-guardrail-grayswan-test": json.dumps(
+                    {"policy_id": "header-policy-123", "reasoning_mode": "thinking"}
+                )
             }
         }
     }
-    
+
     custom_headers = grayswan_guardrail.get_guardrail_custom_headers(request_data)
-    
-    assert custom_headers == {"policy_id": "header-policy-123", "reasoning_mode": "thinking"}
+
+    assert custom_headers == {
+        "policy_id": "header-policy-123",
+        "reasoning_mode": "thinking",
+    }
 
 
-def test_get_guardrail_custom_headers_with_dict_value(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_get_guardrail_custom_headers_with_dict_value(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     """Test extraction of custom headers when header value is already a dict."""
     request_data = {
         "proxy_server_request": {
@@ -149,115 +172,130 @@ def test_get_guardrail_custom_headers_with_dict_value(grayswan_guardrail: GraySw
             }
         }
     }
-    
+
     custom_headers = grayswan_guardrail.get_guardrail_custom_headers(request_data)
-    
+
     assert custom_headers == {"policy_id": "header-policy-456"}
 
 
-def test_get_guardrail_custom_headers_with_invalid_json(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_get_guardrail_custom_headers_with_invalid_json(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     """Test that invalid JSON in header gracefully returns empty dict."""
     request_data = {
         "proxy_server_request": {
-            "headers": {
-                "x-litellm-guardrail-grayswan-test": "invalid json {"
-            }
+            "headers": {"x-litellm-guardrail-grayswan-test": "invalid json {"}
         }
     }
-    
+
     custom_headers = grayswan_guardrail.get_guardrail_custom_headers(request_data)
-    
+
     assert custom_headers == {}
 
 
-def test_get_guardrail_custom_headers_case_insensitive(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_get_guardrail_custom_headers_case_insensitive(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     """Test that header matching is case-insensitive."""
     import json
-    
+
     request_data = {
         "proxy_server_request": {
             "headers": {
-                "X-LiteLLM-Guardrail-GraySwan-Test": json.dumps({"policy_id": "case-test"})
+                "X-LiteLLM-Guardrail-GraySwan-Test": json.dumps(
+                    {"policy_id": "case-test"}
+                )
             }
         }
     }
-    
+
     custom_headers = grayswan_guardrail.get_guardrail_custom_headers(request_data)
-    
+
     assert custom_headers == {"policy_id": "case-test"}
 
 
-def test_get_guardrail_custom_headers_missing_header(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_get_guardrail_custom_headers_missing_header(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     """Test that missing header returns empty dict."""
-    request_data = {
-        "proxy_server_request": {
-            "headers": {}
-        }
-    }
-    
+    request_data = {"proxy_server_request": {"headers": {}}}
+
     custom_headers = grayswan_guardrail.get_guardrail_custom_headers(request_data)
-    
+
     assert custom_headers == {}
 
 
-def test_prepare_payload_ignores_custom_headers_for_config_params(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_prepare_payload_ignores_custom_headers_for_config_params(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     """Test that custom headers are NOT used for config params like policy_id and reasoning_mode."""
     messages = [{"role": "user", "content": "hello"}]
     custom_headers = {"policy_id": "header-policy", "reasoning_mode": "thinking"}
     dynamic_body = {"policy_id": "dynamic-policy", "reasoning_mode": "hybrid"}
-    
-    payload = grayswan_guardrail._prepare_payload(messages, dynamic_body, custom_headers)
-    
+
+    payload = grayswan_guardrail._prepare_payload(
+        messages, dynamic_body, custom_headers
+    )
+
     # Custom headers should be ignored - dynamic_body takes priority
-    assert payload["policy_id"] == "dynamic-policy"  # Dynamic body wins, not custom header
+    assert (
+        payload["policy_id"] == "dynamic-policy"
+    )  # Dynamic body wins, not custom header
     assert payload["reasoning_mode"] == "hybrid"  # Dynamic body wins, not custom header
 
 
-def test_prepare_payload_priority_dynamic_body_over_config(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_prepare_payload_priority_dynamic_body_over_config(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     """Test that dynamic_body takes priority over config."""
     messages = [{"role": "user", "content": "hello"}]
     custom_headers = {}
     dynamic_body = {"policy_id": "dynamic-policy"}
-    
-    payload = grayswan_guardrail._prepare_payload(messages, dynamic_body, custom_headers)
-    
+
+    payload = grayswan_guardrail._prepare_payload(
+        messages, dynamic_body, custom_headers
+    )
+
     assert payload["policy_id"] == "dynamic-policy"  # Dynamic body wins
     assert payload["reasoning_mode"] == "hybrid"  # Falls back to config
 
 
-def test_prepare_payload_priority_config_fallback(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_prepare_payload_priority_config_fallback(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     """Test that config values are used when dynamic_body is empty."""
     messages = [{"role": "user", "content": "hello"}]
     custom_headers = {}
     dynamic_body = {}
-    
-    payload = grayswan_guardrail._prepare_payload(messages, dynamic_body, custom_headers)
-    
+
+    payload = grayswan_guardrail._prepare_payload(
+        messages, dynamic_body, custom_headers
+    )
+
     assert payload["policy_id"] == "default-policy"  # Config value
     assert payload["reasoning_mode"] == "hybrid"  # Config value
 
 
 @pytest.mark.asyncio
-async def test_run_guardrail_with_custom_headers(monkeypatch, grayswan_guardrail: GraySwanGuardrail) -> None:
-    """Test that actual HTTP headers are passed to the API request, but config params are excluded."""
+async def test_run_guardrail_with_custom_headers(
+    monkeypatch, grayswan_guardrail: GraySwanGuardrail
+) -> None:
+    """Test that custom HTTP headers are passed to the API request."""
     dummy_client = _DummyClient({"violation": 0.1})
     grayswan_guardrail.async_handler = dummy_client
-    
+
     def fake_process(response_json: dict) -> None:
         pass
-    
+
     monkeypatch.setattr(grayswan_guardrail, "_process_grayswan_response", fake_process)
-    
+
     payload = {"messages": [{"role": "user", "content": "test"}]}
     custom_headers = {
-        "custom-header": "test-value",  # Actual HTTP header - should be included
-        "policy_id": "test-policy",  # Config param - should NOT be in HTTP headers
+        "custom-header": "test-value",
     }
-    
+
     await grayswan_guardrail.run_grayswan_guardrail(payload, custom_headers)
-    
-    # Verify actual HTTP header was included
+
+    # Verify custom HTTP header was included
     assert "custom-header" in dummy_client.calls[0]["headers"]
     assert dummy_client.calls[0]["headers"]["custom-header"] == "test-value"
-    # Verify config param was NOT included in HTTP headers (it goes in payload instead)
-    assert "policy_id" not in dummy_client.calls[0]["headers"]

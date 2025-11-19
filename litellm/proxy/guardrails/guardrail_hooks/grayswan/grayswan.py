@@ -293,7 +293,7 @@ class GraySwanGuardrail(CustomGuardrail):
             "grayswan-api-key": self.api_key,
         }
 
-        # Merge all custom headers if provided (all custom headers go to guardrail endpoint)
+        # Merge all custom headers if provided
         if custom_headers:
             for key, value in custom_headers.items():
                 if value is not None:
@@ -305,6 +305,7 @@ class GraySwanGuardrail(CustomGuardrail):
         self,
         messages: list[dict],
         dynamic_body: dict,
+        custom_headers: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         payload: Dict[str, Any] = {}
         payload["messages"] = messages
