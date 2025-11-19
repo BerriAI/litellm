@@ -76,10 +76,15 @@ class OpenAIPassthroughConfig(BasePassthroughConfig):
         """
         Validate the environment and add necessary headers for OpenAI.
         
-        For passthrough with router models, the API key is managed by the router,
-        so we just return the headers as-is.
+        Adds the Authorization header with the API key from the router deployment.
         """
-        # The router will handle API key authentication
+        # Get the API key from litellm_params or the provided api_key
+        _api_key = litellm_params.get("api_key") or api_key
+        
+        if _api_key:
+            # Add Authorization header for OpenAI
+            headers["Authorization"] = f"Bearer {_api_key}"
+        
         return headers
 
     @staticmethod
