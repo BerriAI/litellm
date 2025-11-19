@@ -20,6 +20,8 @@ export async function makeOpenAIChatCompletionRequest(
   selectedMCPTools?: string[],
   onImageGenerated?: (imageUrl: string, model?: string) => void,
   onSearchResults?: (searchResults: VectorStoreSearchResponse[]) => void,
+  temperature?: number,
+  max_tokens?: number,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -80,6 +82,8 @@ export async function makeOpenAIChatCompletionRequest(
         ...(vector_store_ids ? { vector_store_ids } : {}),
         ...(guardrails ? { guardrails } : {}),
         ...(tools ? { tools, tool_choice: "auto" } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
+        ...(max_tokens !== undefined ? { max_tokens } : {}),
       },
       { signal },
     );
