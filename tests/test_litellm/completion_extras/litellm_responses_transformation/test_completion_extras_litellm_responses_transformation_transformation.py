@@ -273,3 +273,39 @@ def test_convert_tools_to_responses_format():
     result = handler._convert_tools_to_responses_format(tools)
 
     assert result[0]["name"] == "test"
+
+
+def test_extract_extra_body_params_reasoning_effort_override():
+    """Test that reasoning_effort from extra_body overrides top-level reasoning_effort"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Test case: reasoning_effort in extra_body (with summary) should override top-level string
+    optional_params = {
+        "reasoning_effort": "high",  # Top-level string
+        "extra_body": {
+            "reasoning_effort": {
+                "effort": "high",
+                "summary": {"type": "summary_text"},
+            },  # More complete dict in extra_body
+            "previous_response_id": "resp_123",  # Supported param
+            "custom_param": "will_stay_in_extra_body",  # Unsupported param
+        },
+    }
+
+    result = handler._extract_extra_body_params(optional_params)
+
+    # reasoning_effort from extra_body should override top-level
+    assert result["reasoning_effort"] == {
+        "effort": "high",
+        "summary": {"type": "summary_text"},
+    }
+
+    # previous_response_id should be extracted to top-level
+    assert result["previous_response_id"] == "resp_123"
+
+    # extra_body should no longer be in optional_params (it was popped)
+    assert "extra_body" not in result
