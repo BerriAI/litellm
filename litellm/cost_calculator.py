@@ -402,8 +402,6 @@ def cost_per_token(  # noqa: PLR0915
         )
 
         return dashscope_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "burncloud":
-        return burncloud_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider

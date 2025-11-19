@@ -6,12 +6,8 @@ Calls done in OpenAI/openai.py as BurnCloud AI is openai-compatible.
 Docs: https://docs.burncloud.com/books/api
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from typing import List, Optional
 
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    handle_messages_with_content_list_to_str_conversion,
-)
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
