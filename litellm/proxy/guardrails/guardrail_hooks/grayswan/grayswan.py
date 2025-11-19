@@ -246,13 +246,19 @@ class GraySwanGuardrail(CustomGuardrail):
 
         # If passthrough mode and detection info exists, add it to response
         if self.on_flagged_action == "passthrough" and "metadata" in data:
-            guardrail_detections = data.get("metadata", {}).get("guardrail_detections", [])
+            guardrail_detections = data.get("metadata", {}).get(
+                "guardrail_detections", []
+            )
             if guardrail_detections:
                 # Add guardrail detections to response hidden params for client visibility
-                if hasattr(response, "_hidden_params"):
-                    if not response._hidden_params:
-                        response._hidden_params = {}
-                    response._hidden_params["guardrail_detections"] = guardrail_detections
+                hidden_params = getattr(response, "_hidden_params", None)
+                if hidden_params is not None:
+                    if not hidden_params:
+                        hidden_params = {}
+                        setattr(response, "_hidden_params", hidden_params)
+                    
+                    hidden_params["guardrail_detections"] = guardrail_detections
+                    setattr(response, "_hidden_params", hidden_params)
 
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
@@ -321,7 +327,9 @@ class GraySwanGuardrail(CustomGuardrail):
 
         return payload
 
-    def _process_grayswan_response(self, response_json: Dict[str, Any], data: Optional[dict] = None) -> None:
+    def _process_grayswan_response(
+        self, response_json: Dict[str, Any], data: Optional[dict] = None
+    ) -> None:
         violation_score = float(response_json.get("violation", 0.0) or 0.0)
         violated_rules = response_json.get("violated_rules", [])
         mutation_detected = response_json.get("mutation")
@@ -354,9 +362,13 @@ class GraySwanGuardrail(CustomGuardrail):
                 },
             )
         elif self.on_flagged_action == "monitor":
-            verbose_proxy_logger.info("Gray Swan Guardrail: Monitoring mode - allowing flagged content to proceed")
+            verbose_proxy_logger.info(
+                "Gray Swan Guardrail: Monitoring mode - allowing flagged content to proceed"
+            )
         elif self.on_flagged_action == "passthrough":
-            verbose_proxy_logger.info("Gray Swan Guardrail: Passthrough mode - storing detection info in metadata")
+            verbose_proxy_logger.info(
+                "Gray Swan Guardrail: Passthrough mode - storing detection info in metadata"
+            )
             if data is not None:
                 # Store guardrail detection info in metadata to be included in response
                 if "metadata" not in data:
