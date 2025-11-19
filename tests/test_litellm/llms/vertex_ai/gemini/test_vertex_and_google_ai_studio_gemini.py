@@ -390,6 +390,58 @@ def test_streaming_chunk_includes_reasoning_content():
     )
 
 
+def test_streaming_chunk_with_tool_calls_includes_reasoning_content():
+    """
+    Test for issue #16805: Ensure that when Gemini returns a streaming chunk with
+    tool calls AND thoughtSignature, the reasoning_content is included in the delta.
+
+    Previously, thinking_blocks were only added to non-streaming responses, causing
+    reasoning_content to be missing in streaming mode when tools were enabled.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    litellm_logging = MagicMock()
+
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_current_time",
+                                "args": {"timezone": "America/New_York"},
+                            },
+                            "thoughtSignature": "EsEDCr4DAdHtim...",  # Base64 signature
+                        }
+                    ]
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 68,
+            "candidatesTokenCount": 120,
+            "totalTokenCount": 188,
+        },
+    }
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    # Verify that reasoning_content is present in the streaming delta
+    assert streaming_chunk.choices[0].delta.reasoning_content is not None
+
+    # Verify tool calls are also present
+    assert streaming_chunk.choices[0].delta.tool_calls is not None
+    assert len(streaming_chunk.choices[0].delta.tool_calls) == 1
+    assert streaming_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_time"
+
+
 def test_check_finish_reason():
     finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
     for k, v in finish_reason_mappings.items():
