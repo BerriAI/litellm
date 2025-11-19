@@ -7,7 +7,9 @@ More information on our website: https://endpoints.ai.cloud.ovh.net
 from typing import Optional, Union, List
 
 import httpx
-from litellm import ModelResponseStream, OpenAIGPTConfig, get_model_info, verbose_logger
+from litellm.utils import ModelResponseStream, get_model_info
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm._logging import verbose_logger
 from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

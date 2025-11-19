@@ -1042,57 +1042,10 @@ from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
-from .utils import (
-    client,
-    exception_type,
-    get_optional_params,
-    get_response_string,
-    token_counter,
-    create_pretrained_tokenizer,
-    create_tokenizer,
-    supports_function_calling,
-    supports_web_search,
-    supports_url_context,
-    supports_response_schema,
-    supports_parallel_function_calling,
-    supports_vision,
-    supports_audio_input,
-    supports_audio_output,
-    supports_system_messages,
-    supports_reasoning,
-    get_litellm_params,
-    acreate,
-    get_max_tokens,
-    get_model_info,
-    register_prompt_template,
-    validate_environment,
-    check_valid_key,
-    register_model,
-    encode,
-    decode,
-    _calculate_retry_after,
-    _should_retry,
-    get_supported_openai_params,
-    get_api_base,
-    get_first_chars_messages,
-    ModelResponse,
-    ModelResponseStream,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-    get_provider_fields,
-    ModelResponseListIterator,
-    get_valid_models,
-)
-
-ALL_LITELLM_RESPONSE_TYPES = [
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-]
+# client must be imported immediately as it's used as a decorator at function definition time
+from .utils import client
+# Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
+# (which imports tiktoken) at import time
 
 from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
@@ -1531,41 +1484,52 @@ def _lazy_import_cost_calculator(name: str) -> Any:
 # This significantly reduces memory usage when importing litellm
 def _lazy_import_litellm_logging(name: str) -> Any:
     """Lazy import for litellm_logging module."""
-    try:
-        from litellm.litellm_core_utils.litellm_logging import (
-            Logging as _Logging,
-            modify_integration as _modify_integration,
-        )
-        
-        # Map names to imported objects
-        _logging_objects = {
-            "Logging": _Logging,
-            "modify_integration": _modify_integration,
-        }
-        
-        # Cache the imported object in the module namespace
-        obj = _logging_objects[name]
-        globals()[name] = obj
-        
-        return obj
-    except Exception as e:
-        # If lazy import fails, raise a more informative error
-        raise AttributeError(
-            f"module {__name__!r} has no attribute {name!r}. "
-            f"Lazy import failed: {e}"
-        ) from e
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as _Logging,
+        modify_integration as _modify_integration,
+    )
+    
+    # Map names to imported objects
+    _logging_objects = {
+        "Logging": _Logging,
+        "modify_integration": _modify_integration,
+    }
+    
+    # Cache the imported object in the module namespace
+    obj = _logging_objects[name]
+    globals()[name] = obj
+    
+    return obj
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import for cost_calculator and litellm_logging functions.
-    
-    This allows these heavy modules to be loaded only when accessed,
-    reducing initial import time and memory usage.
-    """
+    """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in ("completion_cost", "response_cost_calculator", "cost_per_token"):
         return _lazy_import_cost_calculator(name)
     
     if name in ("Logging", "modify_integration"):
         return _lazy_import_litellm_logging(name)
     
+    # Lazy load utils functions
+    _utils_names = (
+        "exception_type", "get_optional_params", "get_response_string", "token_counter",
+        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+        "supports_web_search", "supports_url_context", "supports_response_schema",
+        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+        "supports_audio_output", "supports_system_messages", "supports_reasoning",
+        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+        "register_prompt_template", "validate_environment", "check_valid_key",
+        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+        "ModelResponseListIterator", "get_valid_models",
+    )
+    if name in _utils_names:
+        from ._lazy_imports import _lazy_import_utils
+        return _lazy_import_utils(name)
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time
