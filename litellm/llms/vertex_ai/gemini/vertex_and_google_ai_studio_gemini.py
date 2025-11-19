@@ -1852,7 +1852,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _transform_messages(
         self, messages: List[AllMessageValues], model: Optional[str] = None
     ) -> List[ContentType]:
-        return _gemini_convert_messages_with_history(messages=messages)
+        return _gemini_convert_messages_with_history(messages=messages, model=model)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
