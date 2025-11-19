@@ -176,6 +176,9 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-5-mini-2025-08-07 | `response = completion(model="gpt-5-mini-2025-08-07", messages=messages)` |
 | gpt-5-nano-2025-08-07 | `response = completion(model="gpt-5-nano-2025-08-07", messages=messages)` |
 | gpt-5-pro | `response = completion(model="gpt-5-pro", messages=messages)` |
+| gpt-5.1 | `response = completion(model="gpt-5.1", messages=messages)` |
+| gpt-5.1-codex | `response = completion(model="gpt-5.1-codex", messages=messages)` |
+| gpt-5.1-codex-mini | `response = completion(model="gpt-5.1-codex-mini", messages=messages)` |
 | gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
 | gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
 | gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
@@ -412,7 +415,7 @@ Expected Response:
 
 ### Advanced: Using `reasoning_effort` with `summary` field
 
-By default, `reasoning_effort` accepts a string value (`"low"`, `"medium"`, `"high"`, `"minimal"`) and only sets the effort level without including a reasoning summary.
+By default, `reasoning_effort` accepts a string value (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`) and only sets the effort level without including a reasoning summary.
 
 To opt-in to the `summary` feature, you can pass `reasoning_effort` as a dictionary. **Note:** The `summary` field requires your OpenAI organization to have verification status. Using `summary` without verification will result in a 400 error from OpenAI.
 
@@ -472,14 +475,70 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 | Model | Default (when not set) | Supported Values |
 |-------|----------------------|------------------|
+| `gpt-5.1` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5` | `medium` | `minimal`, `low`, `medium`, `high` |
-| `gpt-5-mini` | `medium` | `minimal`, `low`, `medium`, `high` |
+| `gpt-5-mini` | `medium` | `none`, `minimal`, `low`, `medium`, `high` |
+| `gpt-5-nano` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
+| `gpt-5.1-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
+| `gpt-5.1-codex-mini` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5-pro` | `high` | `high` only |
 
-**Note:** `gpt-5-pro` only accepts `reasoning_effort="high"`. Other values will return an error. When `reasoning_effort` is not set (None), OpenAI defaults to the value shown in the "Default" column.
+**Note:**
+- GPT-5.1 introduced a new `reasoning_effort="none"` setting for faster, lower-latency responses. This replaces the `"minimal"` setting from GPT-5.
+- `gpt-5-pro` only accepts `reasoning_effort="high"`. Other values will return an error.
+- When `reasoning_effort` is not set (None), OpenAI defaults to the value shown in the "Default" column.
 
 See [OpenAI Reasoning documentation](https://platform.openai.com/docs/guides/reasoning) for more details on organization verification requirements.
+
+### Verbosity Control for GPT-5 Models
+
+The `verbosity` parameter controls the length and detail of responses from GPT-5 family models. It accepts three values: `"low"`, `"medium"`, or `"high"`.
+
+**Supported models:** `gpt-5`, `gpt-5.1`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`
+
+**Note:** GPT-5-Codex models (`gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-mini`) do **not** support the `verbosity` parameter.
+
+**Use cases:**
+- **`"low"`**: Best for concise answers or simple code generation (e.g., SQL queries)
+- **`"medium"`**: Default - balanced output length
+- **`"high"`**: Use when you need thorough explanations or extensive code refactoring
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+```python
+import litellm
+
+# Low verbosity - concise responses
+response = litellm.completion(
+    model="gpt-5.1",
+    messages=[{"role": "user", "content": "Write a function to reverse a string"}],
+    verbosity="low"
+)
+
+# High verbosity - detailed responses
+response = litellm.completion(
+    model="gpt-5.1",
+    messages=[{"role": "user", "content": "Explain how neural networks work"}],
+    verbosity="high"
+)
+```
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gpt-5.1",
+    "messages": [{"role": "user", "content": "Write a function to reverse a string"}],
+    "verbosity": "low"
+}'
+```
+</TabItem>
+</Tabs>
+
 
 ## OpenAI Chat Completion to Responses API Bridge
 

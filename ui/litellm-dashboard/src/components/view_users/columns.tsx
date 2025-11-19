@@ -17,7 +17,7 @@ interface SelectionOptions {
 export const columns = (
   possibleUIRoles: Record<string, Record<string, string>>,
   handleEdit: (user: UserInfo) => void,
-  handleDelete: (userId: string) => void,
+  handleDelete: (user: UserInfo) => void,
   handleResetPassword: (userId: string) => void,
   handleUserClick: (userId: string, openInEditMode?: boolean) => void,
   selectionOptions?: SelectionOptions,
@@ -109,17 +109,32 @@ export const columns = (
     },
     {
       id: "actions",
-      header: "",
+      header: "Actions",
       cell: ({ row }) => (
         <div className="flex gap-2">
-          <Tooltip title="Edit user details" zIndex={9999}>
-            <Icon icon={PencilAltIcon} size="sm" onClick={() => handleUserClick(row.original.user_id, true)} />
+          <Tooltip title="Edit user details">
+            <Icon
+              icon={PencilAltIcon}
+              size="sm"
+              onClick={() => handleUserClick(row.original.user_id, true)}
+              className="cursor-pointer hover:text-blue-600"
+            />
           </Tooltip>
-          <Tooltip title="Delete user" zIndex={9999}>
-            <Icon icon={TrashIcon} size="sm" onClick={() => handleDelete(row.original.user_id)} />
+          <Tooltip title="Delete user">
+            <Icon
+              icon={TrashIcon}
+              size="sm"
+              onClick={() => handleDelete(row.original)}
+              className="cursor-pointer hover:text-red-600"
+            />
           </Tooltip>
-          <Tooltip title="Reset Password" zIndex={9999}>
-            <Icon icon={RefreshIcon} size="sm" onClick={() => handleResetPassword(row.original.user_id)} />
+          <Tooltip title="Reset Password">
+            <Icon
+              icon={RefreshIcon}
+              size="sm"
+              onClick={() => handleResetPassword(row.original.user_id)}
+              className="cursor-pointer hover:text-green-600"
+            />
           </Tooltip>
         </div>
       ),

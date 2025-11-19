@@ -15,15 +15,19 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.proxy._types import SpendLogsPayload
+import litellm.proxy.proxy_server as ps
+from litellm.proxy._types import (
+    LitellmUserRoles,
+    Member,
+    SpendLogsPayload,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.proxy_server import app, prisma_client
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.router import Router
 from litellm.types.utils import BudgetConfig
-from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, Member
-from litellm.proxy.spend_tracking import spend_management_endpoints
-import litellm.proxy.proxy_server as ps
+
 
 @pytest.mark.asyncio
 async def test_is_admin_view_safe_true(monkeypatch):
@@ -386,36 +390,50 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
-
+ 
     # Apply the monkeypatch
     mock_prisma_client = MockPrismaClient()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Set up test dates
-    start_date = (
-        datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
-    ).strftime("%Y-%m-%d %H:%M:%S")
-    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-    # Make the request with team_id filter
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "team_id": "team1",
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    
+    # Mock _is_admin_view_safe to return True to bypass permission checks
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True
     )
 
-    # Assert response
-    assert response.status_code == 200
-    data = response.json()
+    # Override auth dependency to return PROXY_ADMIN
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
 
-    # Verify the filtered data
-    assert data["total"] == 1
-    assert len(data["data"]) == 1
-    assert data["data"][0]["team_id"] == "team1"
+    try:
+        # Set up test dates
+        start_date = (
+            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        # Make the request with team_id filter
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "team_id": "team1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        # Assert response
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify the filtered data
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["team_id"] == "team1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -626,6 +644,59 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
     assert data["total"] == 25
     assert len(data["data"]) == 10
     assert data["page"] == 2
+
+
+@pytest.mark.asyncio
+async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "session_id": "session-123",
+            "startTime": "2024-01-01T00:00:00Z",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "session_id": "session-123",
+            "startTime": "2024-01-02T00:00:00Z",
+        },
+    ]
+
+    class MockDB:
+        async def count(self, *args, **kwargs):
+            assert kwargs.get("where") == {"session_id": "session-123"}
+            return len(mock_spend_logs)
+
+        async def find_many(self, *args, **kwargs):
+            assert kwargs.get("where") == {"session_id": "session-123"}
+            assert kwargs.get("order") == {"startTime": "asc"}
+            assert kwargs.get("skip") == 1  # page=2, page_size=1
+            assert kwargs.get("take") == 1
+            return [mock_spend_logs[1]]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    response = client.get(
+        "/spend/logs/session/ui",
+        params={"session_id": "session-123", "page": 2, "page_size": 1},
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert data["page"] == 2
+    assert data["page_size"] == 1
+    assert data["total_pages"] == 2
+    assert len(data["data"]) == 1
+    assert data["data"][0]["request_id"] == "req2"
 
 
 @pytest.mark.asyncio
