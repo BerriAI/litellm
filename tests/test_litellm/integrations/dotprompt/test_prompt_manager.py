@@ -581,3 +581,86 @@ async def test_dotprompt_auto_detection_with_model_only():
     finally:
         # Restore original callbacks
         litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_dotprompt_with_prompt_version():
+    """
+    Test that dotprompt can load and use specific prompt versions.
+    Versions are stored as separate files with .v{version}.prompt naming convention.
+    """
+    from litellm.integrations.dotprompt import DotpromptManager
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    prompt_dir = Path(__file__).parent
+    dotprompt_manager = DotpromptManager(prompt_directory=str(prompt_dir))
+    
+    # Register the dotprompt manager in callbacks
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [dotprompt_manager]
+    
+    try:
+        # Mock the HTTP handler to avoid actual API calls
+        client = AsyncHTTPHandler()
+        
+        # Test version 1
+        with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+            await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                prompt_id="chat_prompt",
+                prompt_version=1,
+                prompt_variables={"user_message": "Test v1"},
+                messages=[],
+                client=client,
+            )
+            
+            mock_post.assert_called_once()
+            data_str = mock_post.call_args.kwargs.get("data", "{}")
+            request_body = json.loads(data_str)
+            
+            print(f"Version 1 request body: {json.dumps(request_body, indent=2)}")
+            
+            # Verify version 1 prompt was used
+            # chat_prompt.v1.prompt has: model: gpt-3.5-turbo, temperature: 0.5, max_tokens: 100
+            assert request_body["model"] == "gpt-3.5-turbo"
+            
+            # Verify the message contains "Version 1:" prefix from v1 template
+            messages = request_body["messages"]
+            assert len(messages) >= 1
+            first_message_content = messages[0]["content"]
+            print(f"Version 1 message: {first_message_content}")
+            assert "Version 1:" in first_message_content
+            assert "Test v1" in first_message_content
+        
+        # Test version 2
+        with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+            await litellm.acompletion(
+                model="gpt-4",
+                prompt_id="chat_prompt",
+                prompt_version=2,
+                prompt_variables={"user_message": "Test v2"},
+                messages=[],
+                client=client,
+            )
+            
+            mock_post.assert_called_once()
+            data_str = mock_post.call_args.kwargs.get("data", "{}")
+            request_body = json.loads(data_str)
+            
+            print(f"Version 2 request body: {json.dumps(request_body, indent=2)}")
+            
+            # Verify version 2 prompt was used
+            # chat_prompt.v2.prompt has: model: gpt-4, temperature: 0.9, max_tokens: 200
+            assert request_body["model"] == "gpt-4"
+            
+            # Verify the message contains "Version 2:" prefix from v2 template
+            messages = request_body["messages"]
+            assert len(messages) >= 1
+            first_message_content = messages[0]["content"]
+            print(f"Version 2 message: {first_message_content}")
+            assert "Version 2:" in first_message_content
+            assert "Test v2" in first_message_content
+    
+    finally:
+        # Restore original callbacks
+        litellm.callbacks = original_callbacks
