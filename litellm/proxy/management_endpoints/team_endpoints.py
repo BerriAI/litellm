@@ -688,8 +688,7 @@ async def new_team(  # noqa: PLR0915
                     },
                 )
 
-
-            if (data.max_budget is not None and user_api_key_dict.user_id is not None):
+            if data.max_budget is not None and user_api_key_dict.user_id is not None:
                 # Fetch user object to get max_budget
                 user_obj = await get_user_object(
                     user_id=user_api_key_dict.user_id,
@@ -699,7 +698,7 @@ async def new_team(  # noqa: PLR0915
                 )
 
                 if (
-                    user_obj is not None 
+                    user_obj is not None
                     and user_obj.max_budget is not None
                     and data.max_budget > user_obj.max_budget
                 ):
@@ -1278,12 +1277,12 @@ async def update_team(
             updated_kv["model_id"] = _model_id
 
     updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-    team_row: Optional[LiteLLM_TeamTable] = (
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
-        )
+    team_row: Optional[
+        LiteLLM_TeamTable
+    ] = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data=updated_kv,
+        include={"litellm_model_table": True},  # type: ignore
     )
 
     if team_row is None or team_row.team_id is None:
@@ -1698,14 +1697,16 @@ async def team_member_add(
         complete_team_data=complete_team_data,
     )
 
-    updated_team, updated_users, updated_team_memberships = (
-        await _add_team_members_to_team(
-            data=data,
-            complete_team_data=complete_team_data,
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-        )
+    (
+        updated_team,
+        updated_users,
+        updated_team_memberships,
+    ) = await _add_team_members_to_team(
+        data=data,
+        complete_team_data=complete_team_data,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
     # Check if updated_team is None
@@ -2240,10 +2241,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row_base: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
             if team_row_base is None:
                 raise Exception
@@ -2420,11 +2421,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id},
-                    include={"object_permission": True},
-                )
+            team_info: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id},
+                include={"object_permission": True},
             )
             if team_info is None:
                 raise Exception
@@ -3311,15 +3312,21 @@ async def update_team_member_permissions(
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
-    existing_team_row = await get_team_object(
-        team_id=data.team_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=None,
-        proxy_logging_obj=proxy_logging_obj,
-        check_cache_only=False,
-        check_db_only=True,
-    )
+    try:
+        existing_team_row = await get_team_object(
+            team_id=data.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            check_cache_only=False,
+            check_db_only=True,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found for team_id={data.team_id}"},
+        )
     if existing_team_row is None:
         raise HTTPException(
             status_code=404,
