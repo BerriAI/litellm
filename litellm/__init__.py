@@ -1034,7 +1034,6 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 openai_video_generation_models = ["sora-2"]
 
 from .timeout import timeout
-from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
@@ -1497,9 +1496,34 @@ def _lazy_import_cost_calculator(name: str) -> Any:
     return func
 
 
+# Lazy import for litellm_logging to avoid loading the module at import time
+# This significantly reduces memory usage when importing litellm
+def _lazy_import_litellm_logging(name: str) -> Any:
+    """Lazy import for litellm_logging module."""
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as _Logging,
+        modify_integration as _modify_integration,
+    )
+    
+    # Map names to imported objects
+    _logging_objects = {
+        "Logging": _Logging,
+        "modify_integration": _modify_integration,
+    }
+    
+    # Cache the imported object in the module namespace
+    obj = _logging_objects[name]
+    globals()[name] = obj
+    
+    return obj
+
+
 def __getattr__(name: str) -> Any:
-    """Lazy import for cost_calculator functions."""
+    """Lazy import for cost_calculator and litellm_logging functions."""
     if name in ("completion_cost", "response_cost_calculator", "cost_per_token"):
         return _lazy_import_cost_calculator(name)
+    
+    if name in ("Logging", "modify_integration"):
+        return _lazy_import_litellm_logging(name)
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
