@@ -187,6 +187,21 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setUserSpendData(response["user_info"])
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
 
+            // Sync user properties from API response (database source of truth)
+            // This ensures user_role and user_email stay fresh even if JWT is cached
+            if (response["user_info"]?.user_role) {
+              const freshRole = formatUserRole(response["user_info"].user_role)
+              if (freshRole !== userRole) {
+                console.log(`Updating user role from ${userRole} to ${freshRole}`)
+                setUserRole(freshRole)
+              }
+            }
+
+            if (response["user_info"]?.user_email && response["user_info"].user_email !== userEmail) {
+              console.log(`Updating user email from ${userEmail} to ${response["user_info"].user_email}`)
+              setUserEmail(response["user_info"].user_email)
+            }
+
             // set keys for admin and users
             if (!response?.teams[0].keys) {
               setKeys(response["keys"])

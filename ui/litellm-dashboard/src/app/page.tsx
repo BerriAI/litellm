@@ -26,7 +26,7 @@ import ChatUI from "@/components/chat_ui"
 import Sidebar from "@/components/leftnav"
 import Usage from "@/components/usage"
 import CacheDashboard from "@/components/cache_dashboard"
-import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking"
+import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName, userInfoCall } from "@/components/networking"
 import { Organization } from "@/components/networking"
 import GuardrailsPanel from "@/components/guardrails"
 import PromptsPanel from "@/components/prompts"
@@ -217,6 +217,39 @@ export default function CreateKeyPage() {
       fetchOrganizations(accessToken, setOrganizations)
     }
   }, [accessToken, userID, userRole])
+
+  // Refresh user data when tab becomes visible to sync role changes
+  // This prevents stale permissions when admin changes user's role while tab is inactive
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      // Only refresh when tab becomes visible and user is authenticated
+      if (!document.hidden && accessToken && userID && userRole) {
+        try {
+          const response = await userInfoCall(accessToken, userID, userRole, false, null, null)
+
+          // Sync user_role from database if it has changed
+          if (response["user_info"]?.user_role) {
+            const freshRole = formatUserRole(response["user_info"].user_role)
+            if (freshRole !== userRole) {
+              console.log(`[Visibility] Updating user role from ${userRole} to ${freshRole}`)
+              setUserRole(freshRole)
+            }
+          }
+
+          // Sync user_email from database if it has changed
+          if (response["user_info"]?.user_email && response["user_info"].user_email !== userEmail) {
+            console.log(`[Visibility] Updating user email from ${userEmail} to ${response["user_info"].user_email}`)
+            setUserEmail(response["user_info"].user_email)
+          }
+        } catch (error) {
+          console.error("[Visibility] Error refreshing user data:", error)
+        }
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange)
+  }, [accessToken, userID, userRole, userEmail])
 
   if (authLoading || redirectToLogin) {
     return <LoadingScreen />
