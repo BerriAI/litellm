@@ -7,9 +7,9 @@ import { Tag, Tooltip, Modal, Select, Tabs } from "antd";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
 import { Copy, Info } from "lucide-react";
 import { Table as TableInstance } from "@tanstack/react-table";
-import { generateCodeSnippet } from "./chat_ui/CodeSnippets";
-import { getEndpointType } from "./chat_ui/mode_endpoint_mapping";
-import { MessageType } from "./chat_ui/types";
+import { generateCodeSnippet } from "./playground/chat_ui/CodeSnippets";
+import { getEndpointType } from "./playground/chat_ui/mode_endpoint_mapping";
+import { MessageType } from "./playground/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import Navbar from "./navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -770,12 +770,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
 
           {/* Tabs for Models and Agents */}
           <Card className="p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
-            <Tabs 
-              activeKey={activeTab} 
-              onChange={setActiveTab}
-              size="large"
-              className="public-hub-tabs"
-            >
+            <Tabs activeKey={activeTab} onChange={setActiveTab} size="large" className="public-hub-tabs">
               {/* Models Tab */}
               <TabPane tab="Model Hub" key="models">
                 <div className="flex justify-between items-center mb-8">
@@ -909,10 +904,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
                     <div>
                       <div className="flex items-center space-x-2 mb-3">
                         <Text className="text-sm font-medium text-gray-700">Search Agents:</Text>
-                        <Tooltip
-                          title="Search agents by name or description"
-                          placement="top"
-                        >
+                        <Tooltip title="Search agents by name or description" placement="top">
                           <Info className="w-4 h-4 text-gray-400 cursor-help" />
                         </Tooltip>
                       </div>
@@ -1340,13 +1332,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
               {/* A2A Usage Example */}
               <div>
                 <Text className="text-lg font-semibold mb-4">Usage Example (A2A Protocol)</Text>
-                
+
                 {/* Step 1: Retrieve Agent Card */}
                 <div className="mb-4">
                   <Text className="text-sm font-medium mb-2 text-gray-700">Step 1: Retrieve Agent Card</Text>
                   <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
                     <pre className="text-xs">
-{`base_url = '${selectedAgent.url}'
+                      {`base_url = '${selectedAgent.url}'
 
 resolver = A2ACardResolver(
     httpx_client=httpx_client,
@@ -1441,7 +1433,7 @@ if _public_card.supports_authenticated_extended_card:
                   <Text className="text-sm font-medium mb-2 text-gray-700">Step 2: Call the Agent</Text>
                   <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
                     <pre className="text-xs">
-{`client = A2AClient(
+                      {`client = A2AClient(
     httpx_client=httpx_client, agent_card=final_agent_card_to_use
 )
 
