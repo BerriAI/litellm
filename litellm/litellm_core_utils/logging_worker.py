@@ -4,7 +4,7 @@
 import asyncio
 import contextvars
 from typing import Coroutine, Optional
-
+import atexit
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
