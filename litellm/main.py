@@ -47,7 +47,6 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-import tiktoken
 from pydantic import BaseModel
 from typing_extensions import overload
 
@@ -59,6 +58,7 @@ from litellm.utils import exception_type, get_litellm_params, get_optional_param
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.cached_imports import get_tiktoken_module
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -232,7 +232,7 @@ from .types.utils import (
     all_litellm_params,
 )
 
-encoding = tiktoken.get_encoding("cl100k_base")
+encoding = None
 from litellm.types.utils import ModelResponseStream
 from litellm.utils import (
     Choices,
@@ -5095,6 +5095,7 @@ def text_completion(  # noqa: PLR0915
         # processing prompt - users can pass raw tokens to OpenAI Completion()
         if isinstance(prompt, list):
             import concurrent.futures
+            tiktoken = get_tiktoken_module()
 
             tokenizer = tiktoken.encoding_for_model("text-davinci-003")
             ## if it's a 2d list - each element in the list is a text_completion() request
