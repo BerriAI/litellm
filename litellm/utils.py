@@ -6680,7 +6680,13 @@ def _get_base_model_from_metadata(model_call_details=None):
             return _base_model
         metadata = litellm_params.get("metadata", {})
 
-        return _get_base_model_from_litellm_call_metadata(metadata=metadata)
+        base_model_from_metadata = _get_base_model_from_litellm_call_metadata(metadata=metadata)
+        if base_model_from_metadata is not None:
+            return base_model_from_metadata
+
+        # Also check litellm_metadata (used by Responses API and other generic API calls)
+        litellm_metadata = litellm_params.get("litellm_metadata", {})
+        return _get_base_model_from_litellm_call_metadata(metadata=litellm_metadata)
     return None
 
 

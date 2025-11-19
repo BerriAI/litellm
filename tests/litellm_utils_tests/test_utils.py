@@ -2421,4 +2421,80 @@ def test_completion_with_no_model():
     # test on empty
     with pytest.raises(TypeError):
         response = litellm.completion(messages=[{"role": "user", "content": "Hello, how are you?"}])
-        
+
+
+def test_get_base_model_from_metadata():
+    """
+    Test _get_base_model_from_metadata function with both metadata and litellm_metadata.
+    This ensures cost tracking works for both Chat Completions API and Responses API.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/16772
+    """
+    from litellm.utils import _get_base_model_from_metadata
+
+    # Test 1: base_model in metadata (Chat Completions API pattern)
+    model_call_details_with_metadata = {
+        "litellm_params": {
+            "metadata": {
+                "model_info": {
+                    "base_model": "azure/gpt-4"
+                }
+            }
+        }
+    }
+    result = _get_base_model_from_metadata(model_call_details_with_metadata)
+    assert result == "azure/gpt-4", f"Expected 'azure/gpt-4', got {result}"
+
+    # Test 2: base_model in litellm_metadata (Responses API and generic API calls pattern)
+    model_call_details_with_litellm_metadata = {
+        "litellm_params": {
+            "litellm_metadata": {
+                "model_info": {
+                    "base_model": "azure/gpt-5-mini"
+                }
+            }
+        }
+    }
+    result = _get_base_model_from_metadata(model_call_details_with_litellm_metadata)
+    assert result == "azure/gpt-5-mini", f"Expected 'azure/gpt-5-mini', got {result}"
+
+    # Test 3: base_model in litellm_params (direct base_model)
+    model_call_details_with_direct_base_model = {
+        "litellm_params": {
+            "base_model": "azure/gpt-3.5-turbo"
+        }
+    }
+    result = _get_base_model_from_metadata(model_call_details_with_direct_base_model)
+    assert result == "azure/gpt-3.5-turbo", f"Expected 'azure/gpt-3.5-turbo', got {result}"
+
+    # Test 4: metadata takes precedence over litellm_metadata
+    model_call_details_with_both = {
+        "litellm_params": {
+            "metadata": {
+                "model_info": {
+                    "base_model": "azure/gpt-4-from-metadata"
+                }
+            },
+            "litellm_metadata": {
+                "model_info": {
+                    "base_model": "azure/gpt-4-from-litellm-metadata"
+                }
+            }
+        }
+    }
+    result = _get_base_model_from_metadata(model_call_details_with_both)
+    assert result == "azure/gpt-4-from-metadata", f"Expected metadata to take precedence, got {result}"
+
+    # Test 5: No base_model present
+    model_call_details_without_base_model = {
+        "litellm_params": {
+            "metadata": {}
+        }
+    }
+    result = _get_base_model_from_metadata(model_call_details_without_base_model)
+    assert result is None, f"Expected None when no base_model present, got {result}"
+
+    # Test 6: None input
+    result = _get_base_model_from_metadata(None)
+    assert result is None, f"Expected None for None input, got {result}"
+
