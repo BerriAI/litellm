@@ -631,3 +631,269 @@ def test_bad_input_token_counter(model, messages):
         messages=messages,
         default_token_count=1000,
     )
+
+
+def test_token_counter_with_anthropic_tool_use():
+    """
+    Test that _count_anthropic_content() correctly handles tool_use blocks.
+    
+    Validates that:
+    - 'name' field is counted (string)
+    - 'input' field is counted (dict serialized to string)
+    - Metadata fields ('type', 'id') are skipped
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather in San Francisco?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll check the weather for you."
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234567890",  # Should be skipped
+                    "name": "get_weather",  # Should be counted
+                    "input": {  # Should be counted (serialized)
+                        "location": "San Francisco, CA",
+                        "unit": "fahrenheit"
+                    }
+                }
+            ]
+        }
+    ]
+    
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    # Should count: user message + "I'll check" text + "get_weather" name + input dict
+    assert tokens > 15, f"Expected reasonable token count for message with tool_use, got {tokens}"
+
+
+def test_token_counter_with_anthropic_tool_result():
+    """
+    Test that _count_anthropic_content() correctly handles tool_result blocks.
+    
+    Validates that:
+    - 'content' field (when string) is counted
+    - Metadata fields ('type', 'tool_use_id') are skipped
+    - Full conversation with tool_use → tool_result flow works
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather in San Francisco?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234567890",
+                    "name": "get_weather",
+                    "input": {
+                        "location": "San Francisco, CA"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234567890",  # Should be skipped
+                    "content": "The weather in San Francisco is 65°F and sunny."  # Should be counted
+                }
+            ]
+        }
+    ]
+    
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    assert tokens > 25, f"Expected reasonable token count for conversation with tool_result, got {tokens}"
+
+
+def test_token_counter_with_nested_tool_result():
+    """
+    Test that _count_anthropic_content() recursively handles nested content lists.
+    
+    Validates that:
+    - tool_result with 'content' as a list (not string) is handled
+    - Nested content blocks are recursively counted via _count_content_list()
+    - TypedDict inference correctly identifies list fields
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234567890",
+                    "content": [  # Nested list - should recursively count
+                        {
+                            "type": "text",
+                            "text": "The weather in San Francisco is 65°F and sunny."
+                        },
+                        {
+                            "type": "text",
+                            "text": "UV index is moderate."
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+    
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    # Should count both nested text blocks
+    assert tokens > 15, f"Expected reasonable token count for nested tool_result, got {tokens}"
+
+
+def test_token_counter_tool_use_and_result_combined():
+    """
+    Test dynamic field inference with multiple tool_use and tool_result blocks.
+    
+    Validates that:
+    - Multiple tool_use blocks in same message are handled
+    - Multiple tool_result blocks in same message are handled
+    - skip_fields correctly filters metadata across all blocks
+    - Full realistic conversation flow works end-to-end
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather in San Francisco and New York?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll check the weather in both cities for you."
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01A",
+                    "name": "get_weather",
+                    "input": {"location": "San Francisco, CA"}
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01B",
+                    "name": "get_weather",
+                    "input": {"location": "New York, NY"}
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": "San Francisco: 65°F, sunny"
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01B",
+                    "content": "New York: 45°F, cloudy"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": "The weather in San Francisco is 65°F and sunny, while New York is cooler at 45°F and cloudy."
+        }
+    ]
+    
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    # Should count all text, tool names, inputs, and results
+    assert tokens > 60, f"Expected substantial token count for full tool conversation, got {tokens}"
+
+
+def test_token_counter_with_image_url():
+    """
+    Test that _count_image_tokens() correctly handles image_url content blocks.
+    
+    Validates that:
+    - image_url as dict with 'url' and 'detail' is handled
+    - image_url as string is handled
+    - 'detail' field validation works ('low', 'high', 'auto')
+    - calculate_img_tokens is called with correct parameters
+    """
+    # Test with dict format (detail: low)
+    messages_dict = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What's in this image?"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/image.jpg",
+                        "detail": "low"  # Should use low token count (85 base tokens)
+                    }
+                }
+            ]
+        }
+    ]
+    
+    tokens_dict = token_counter(
+        model="gpt-3.5-turbo",
+        messages=messages_dict,
+        use_default_image_token_count=True  # Avoid actual HTTP request
+    )
+    assert tokens_dict > 0, f"Expected positive token count, got {tokens_dict}"
+    assert tokens_dict > 85, f"Expected at least base image tokens, got {tokens_dict}"
+    
+    # Test with string format (defaults to auto/low)
+    messages_str = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": "https://example.com/image.jpg"  # String format
+                }
+            ]
+        }
+    ]
+    
+    tokens_str = token_counter(
+        model="gpt-3.5-turbo",
+        messages=messages_str,
+        use_default_image_token_count=True
+    )
+    assert tokens_str > 0, f"Expected positive token count for string image_url, got {tokens_str}"
+    
+    # Test invalid detail value raises error
+    messages_invalid = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/image.jpg",
+                        "detail": "invalid"  # Should raise ValueError
+                    }
+                }
+            ]
+        }
+    ]
+    
+    try:
+        token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
+        assert False, "Expected ValueError for invalid detail value"
+    except ValueError as e:
+        assert "Invalid detail value" in str(e), f"Expected detail validation error, got: {e}"
+

@@ -4,7 +4,7 @@
 
 import asyncio
 import os
-from typing import List, Literal, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 from fastapi import HTTPException
 
@@ -15,6 +15,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.router import ModelGroupInfo
+from litellm.types.utils import CallTypesLiteral
 from litellm.utils import get_utc_datetime
 
 from .rate_limiter_utils import convert_priority_to_percent
@@ -102,10 +103,10 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         """
         try:
             # Get model info first for conversion
-            model_group_info: Optional[
-                ModelGroupInfo
-            ] = self.llm_router.get_model_group_info(model_group=model)
-            
+            model_group_info: Optional[ModelGroupInfo] = (
+                self.llm_router.get_model_group_info(model_group=model)
+            )
+
             weight: float = 1
             if (
                 litellm.priority_reservation is None
@@ -193,18 +194,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[
         Union[Exception, str, dict]
     ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
@@ -287,16 +277,16 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 ) = await self.check_available_usage(
                     model=model_info["model_name"], priority=key_priority
                 )
-                response._hidden_params[
-                    "additional_headers"
-                ] = {  # Add additional response headers - easier debugging
-                    "x-litellm-model_group": model_info["model_name"],
-                    "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
-                    "x-ratelimit-remaining-litellm-project-requests": available_rpm,
-                    "x-ratelimit-remaining-model-tokens": model_tpm,
-                    "x-ratelimit-remaining-model-requests": model_rpm,
-                    "x-ratelimit-current-active-projects": active_projects,
-                }
+                response._hidden_params["additional_headers"] = (
+                    {  # Add additional response headers - easier debugging
+                        "x-litellm-model_group": model_info["model_name"],
+                        "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
+                        "x-ratelimit-remaining-litellm-project-requests": available_rpm,
+                        "x-ratelimit-remaining-model-tokens": model_tpm,
+                        "x-ratelimit-remaining-model-requests": model_rpm,
+                        "x-ratelimit-current-active-projects": active_projects,
+                    }
+                )
 
                 return response
             return await super().async_post_call_success_hook(

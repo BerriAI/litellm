@@ -1,39 +1,20 @@
-import React, { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Modal, Select, Tooltip } from "antd";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, Button } from "@tremor/react";
-import { Grid, Col, Title, Text } from "@tremor/react";
-import { DataTable } from "../view_logs/table";
-import { mcpServerColumns } from "./mcp_server_columns";
-import { deleteMCPServer, fetchMCPServers } from "../networking";
-import { MCPServer, MCPServerProps, Team } from "./types";
 import { isAdminRole } from "@/utils/roles";
-import { MCPServerView } from "./mcp_server_view";
+import { QuestionCircleOutlined } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
+import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
+import { Descriptions, Modal, Select, Tooltip, Typography } from "antd";
+import React, { useEffect, useState } from "react";
+import NotificationsManager from "../molecules/notifications_manager";
+import { deleteMCPServer, fetchMCPServers } from "../networking";
+import { DataTable } from "../view_logs/table";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
-import { QuestionCircleOutlined } from "@ant-design/icons";
-import NotificationsManager from "../molecules/notifications_manager";
+import { mcpServerColumns } from "./mcp_server_columns";
+import { MCPServerView } from "./mcp_server_view";
+import { MCPServer, MCPServerProps, Team } from "./types";
 
+const { Text: AntdText, Title: AntdTitle } = Typography;
 const { Option } = Select;
-
-const DeleteModal: React.FC<{
-  isModalOpen: boolean;
-  title: string;
-  confirmDelete: () => void;
-  cancelDelete: () => void;
-}> = ({ isModalOpen, title, confirmDelete, cancelDelete }) => {
-  if (!isModalOpen) return null;
-  return (
-    <Modal open={isModalOpen} onOk={confirmDelete} okType="danger" onCancel={cancelDelete}>
-      <Grid numItems={1} className="gap-2 w-full">
-        <Title>{title}</Title>
-        <Col numColSpan={1}>
-          <p>Are you sure you want to delete this MCP Server?</p>
-        </Col>
-      </Grid>
-    </Modal>
-  );
-};
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
   const {
@@ -70,7 +51,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
-
+  const [isDeletingServer, setIsDeletingServer] = useState(false);
   const isInternalUser = userRole === "Internal User";
 
   // Get unique teams from all servers
@@ -165,20 +146,28 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       return;
     }
     try {
+      setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
       NotificationsManager.success("Deleted MCP Server successfully");
       refetch();
     } catch (error) {
       console.error("Error deleting the mcp server:", error);
+    } finally {
+      setIsDeletingServer(false);
+      setIsDeleteModalOpen(false);
+      setServerToDelete(null);
     }
-    setIsDeleteModalOpen(false);
-    setServerToDelete(null);
   };
 
   const cancelDelete = () => {
     setIsDeleteModalOpen(false);
     setServerToDelete(null);
   };
+
+  // Find the server to delete from the servers list
+  const serverToDelete = serverIdToDelete
+    ? (mcpServers || []).find((server) => server.server_id === serverIdToDelete)
+    : null;
 
   const handleCreateSuccess = (newMcpServer: MCPServer) => {
     setFilteredServers((prev) => [...prev, newMcpServer]);
@@ -289,12 +278,51 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
 
   return (
     <div className="w-full h-full p-6">
-      <DeleteModal
-        isModalOpen={isDeleteModalOpen}
-        title="Delete MCP Server"
-        confirmDelete={confirmDelete}
-        cancelDelete={cancelDelete}
-      />
+      <Modal
+        open={isDeleteModalOpen}
+        title="Delete MCP Server?"
+        onOk={confirmDelete}
+        okText={isDeletingServer ? "Deleting..." : "Delete"}
+        onCancel={cancelDelete}
+        cancelText="Cancel"
+        cancelButtonProps={{ disabled: isDeletingServer }}
+        okButtonProps={{ danger: true }}
+        confirmLoading={isDeletingServer}
+      >
+        <div className="space-y-4">
+          <AntdText>Are you sure you want to delete this MCP Server? This action cannot be undone.</AntdText>
+
+          {serverToDelete && (
+            <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
+              <AntdTitle level={5} className="mb-3 text-gray-900">
+                Server Information
+              </AntdTitle>
+              <Descriptions column={1} size="small">
+                {serverToDelete.server_name && (
+                  <Descriptions.Item label={<span className="font-semibold text-gray-700">Server Name</span>}>
+                    <AntdText className="text-sm">{serverToDelete.server_name}</AntdText>
+                  </Descriptions.Item>
+                )}
+                {serverToDelete.alias && (
+                  <Descriptions.Item label={<span className="font-semibold text-gray-700">Alias</span>}>
+                    <AntdText className="text-sm">{serverToDelete.alias}</AntdText>
+                  </Descriptions.Item>
+                )}
+                <Descriptions.Item label={<span className="font-semibold text-gray-700">Server ID</span>}>
+                  <AntdText code className="text-sm">
+                    {serverToDelete.server_id}
+                  </AntdText>
+                </Descriptions.Item>
+                <Descriptions.Item label={<span className="font-semibold text-gray-700">URL</span>}>
+                  <AntdText code className="text-sm">
+                    {serverToDelete.url}
+                  </AntdText>
+                </Descriptions.Item>
+              </Descriptions>
+            </div>
+          )}
+        </div>
+      </Modal>
       <CreateMCPServer
         userRole={userRole}
         accessToken={accessToken}

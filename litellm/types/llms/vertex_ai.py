@@ -29,9 +29,10 @@ class FileDataType(TypedDict):
     file_uri: str  # the cloud storage uri of storing this file
 
 
-class BlobType(TypedDict):
+class BlobType(TypedDict, total=False):
     mime_type: Required[str]
     data: Required[str]
+    media_resolution: Literal["low", "medium", "high"]
 
 
 class PartType(TypedDict, total=False):
@@ -59,9 +60,10 @@ class HttpxCodeExecutionResult(TypedDict):
     output: str
 
 
-class HttpxBlobType(TypedDict):
+class HttpxBlobType(TypedDict, total=False):
     mimeType: str
     data: str
+    mediaResolution: Literal["low", "medium", "high"]
 
 
 class HttpxPartType(TypedDict, total=False):
@@ -174,6 +176,7 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
+    thinkingLevel: Literal["low", "medium", "high"]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
@@ -636,6 +639,52 @@ class VertexBatchPredictionResponse(TypedDict, total=False):
     createTime: str
     updateTime: str
     modelVersionId: str
+
+
+class VertexVideoImage(TypedDict, total=False):
+    """Image input for video generation"""
+
+    bytesBase64Encoded: str
+    mimeType: str
+
+
+class VertexVideoGenerationInstance(TypedDict, total=False):
+    """Instance object for Vertex AI video generation request"""
+
+    prompt: Required[str]
+    image: VertexVideoImage
+
+
+class VertexVideoGenerationParameters(TypedDict, total=False):
+    """Parameters for Vertex AI video generation"""
+
+    aspectRatio: Literal["9:16", "16:9"]
+    durationSeconds: int
+
+
+class VertexVideoGenerationRequest(TypedDict):
+    """Complete request body for Vertex AI video generation"""
+
+    instances: Required[List[VertexVideoGenerationInstance]]
+    parameters: VertexVideoGenerationParameters
+
+
+class VertexVideoOutput(TypedDict, total=False):
+    """Video output in response"""
+
+    bytesBase64Encoded: str
+    mimeType: str
+    gcsUri: str
+
+
+class VertexVideoGenerationResponse(TypedDict, total=False):
+    """Response body for Vertex AI video generation"""
+
+    name: str
+    done: bool
+    response: Dict[str, Any]
+    metadata: Dict[str, Any]
+    error: Dict[str, Any]
 
 
 VERTEX_CREDENTIALS_TYPES = Union[str, Dict[str, str]]

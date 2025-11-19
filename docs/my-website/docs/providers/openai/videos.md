@@ -36,7 +36,6 @@ print(f"Status: {response.status}")
 # Download video content when ready
 video_bytes = video_content(
     video_id=response.id,
-    model="sora-2"
 )
 
 # Save to file
@@ -171,8 +170,7 @@ curl http://localhost:4000/v1/videos \
 ```python
 # Download video content
 video_bytes = video_content(
-    video_id="video_1234567890",
-    custom_llm_provider="openai"  # Or use model="sora-2"
+    video_id="video_1234567890"
 )
 
 # Save to file
@@ -203,8 +201,7 @@ def generate_and_download_video(prompt):
     
     # Step 3: Download video
     video_bytes = litellm.video_content(
-        video_id=video_id,
-        custom_llm_provider="openai"  
+        video_id=video_id
     )
     
     # Step 4: Save to file
@@ -241,8 +238,7 @@ from litellm.exceptions import BadRequestError, AuthenticationError
 
 try:
     response = video_generation(
-        prompt="A cat playing with a ball of yarn",
-        model="sora-2"
+        prompt="A cat playing with a ball of yarn"
     )
 except AuthenticationError as e:
     print(f"Authentication failed: {e}")

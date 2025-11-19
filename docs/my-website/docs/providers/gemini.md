@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `gemini/` |
 | Provider Doc | [Google AI Studio ↗](https://aistudio.google.com/) |
 | API Endpoint for Provider | https://generativelanguage.googleapis.com |
-| Supported OpenAI Endpoints | `/chat/completions`, [`/embeddings`](../embedding/supported_embedding#gemini-ai-embedding-models), `/completions` |
+| Supported OpenAI Endpoints | `/chat/completions`, [`/embeddings`](../embedding/supported_embedding#gemini-ai-embedding-models), `/completions`, [`/videos`](./gemini/videos.md), [`/images/edits`](../image_edits.md) |
 | Pass-through Endpoint | [Supported](../pass_through/google_ai_studio.md) |
 
 <br />
@@ -64,16 +64,36 @@ response = completion(
 
 LiteLLM translates OpenAI's `reasoning_effort` to Gemini's `thinking` parameter. [Code](https://github.com/BerriAI/litellm/blob/620664921902d7a9bfb29897a7b27c1a7ef4ddfb/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py#L362)
 
-Added an additional non-OpenAI standard "disable" value for non-reasoning Gemini requests.
+**Cost Optimization:** Use `reasoning_effort="none"` (OpenAI standard) for significant cost savings - up to 96% cheaper. [Google's docs](https://ai.google.dev/gemini-api/docs/openai)
 
-**Mapping**
+:::info
+Note: Reasoning cannot be turned off on Gemini 2.5 Pro models.
+:::
 
-| reasoning_effort | thinking |
-| ---------------- | -------- |
-| "disable"        | "budget_tokens": 0    |
-| "low"            | "budget_tokens": 1024 |
-| "medium"         | "budget_tokens": 2048 |
-| "high"           | "budget_tokens": 4096 |
+:::tip Gemini 3 Models
+For **Gemini 3+ models** (e.g., `gemini-3-pro-preview`), LiteLLM automatically maps `reasoning_effort` to the new `thinking_level` parameter instead of `thinking_budget`. The `thinking_level` parameter uses `"low"` or `"high"` values for better control over reasoning depth.
+:::
+
+**Mapping for Gemini 2.5 and earlier models**
+
+| reasoning_effort | thinking | Notes |
+| ---------------- | -------- | ----- |
+| "none"           | "budget_tokens": 0, "includeThoughts": false | 💰 **Recommended for cost optimization** - OpenAI-compatible, always 0 |
+| "disable"        | "budget_tokens": DEFAULT (0), "includeThoughts": false | LiteLLM-specific, configurable via env var |
+| "low"            | "budget_tokens": 1024 | |
+| "medium"         | "budget_tokens": 2048 | |
+| "high"           | "budget_tokens": 4096 | |
+
+**Mapping for Gemini 3+ models**
+
+| reasoning_effort | thinking_level | Notes |
+| ---------------- | -------------- | ----- |
+| "minimal"        | "low" | Minimizes latency and cost |
+| "low"            | "low" | Best for simple instruction following or chat |
+| "medium"         | "high" | Maps to high (medium not yet available) |
+| "high"           | "high" | Maximizes reasoning depth |
+| "disable"        | "low" | Cannot fully disable thinking in Gemini 3 |
+| "none"           | "low" | Cannot fully disable thinking in Gemini 3 |
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -81,6 +101,14 @@ Added an additional non-OpenAI standard "disable" value for non-reasoning Gemini
 ```python
 from litellm import completion
 
+# Cost-optimized: Use reasoning_effort="none" for best pricing
+resp = completion(
+    model="gemini/gemini-2.0-flash-thinking-exp-01-21",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="none",  # Up to 96% cheaper!
+)
+
+# Or use other levels: "low", "medium", "high"
 resp = completion(
     model="gemini/gemini-2.5-flash-preview-04-17",
     messages=[{"role": "user", "content": "What is the capital of France?"}],
@@ -124,6 +152,59 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+### Gemini 3+ Models - `thinking_level` Parameter
+
+For Gemini 3+ models (e.g., `gemini-3-pro-preview`), you can use the new `thinking_level` parameter directly:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+# Use thinking_level for Gemini 3 models
+resp = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[{"role": "user", "content": "Solve this complex math problem step by step."}],
+    reasoning_effort="high",  # Options: "low" or "high"
+)
+
+# Low thinking level for faster, simpler tasks
+resp = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[{"role": "user", "content": "What is the weather today?"}],
+    reasoning_effort="low",  # Minimizes latency and cost
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-3-pro-preview",
+    "messages": [{"role": "user", "content": "Solve this complex problem."}],
+    "reasoning_effort": "high"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+:::warning
+**Temperature Recommendation for Gemini 3 Models**
+
+For Gemini 3 models, LiteLLM defaults `temperature` to `1.0` and strongly recommends keeping it at this default. Setting `temperature < 1.0` can cause:
+- Infinite loops
+- Degraded reasoning performance
+- Failure on complex tasks
+
+LiteLLM will automatically set `temperature=1.0` if not specified for Gemini 3+ models.
+:::
 
 **Expected Response**
 
@@ -938,6 +1019,295 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 
 
+## Thought Signatures
+
+Thought signatures are encrypted representations of the model's internal reasoning process for a given turn in a conversation. By passing thought signatures back to the model in subsequent requests, you provide it with the context of its previous thoughts, allowing it to build upon its reasoning and maintain a coherent line of inquiry.
+
+Thought signatures are particularly important for multi-turn function calling scenarios where the model needs to maintain context across multiple tool invocations.
+
+### How Thought Signatures Work
+
+- **Function calls with signatures**: When Gemini returns a function call, it includes a `thought_signature` in the response
+- **Preservation**: LiteLLM automatically extracts and stores thought signatures in `provider_specific_fields` of tool calls
+- **Return in conversation history**: When you include the assistant's message with tool calls in subsequent requests, LiteLLM automatically preserves and returns the thought signatures to Gemini
+- **Parallel function calls**: Only the first function call in a parallel set has a thought signature
+- **Sequential function calls**: Each function call in a multi-step sequence has its own signature
+
+### Enabling Thought Signatures
+
+To enable thought signatures, you need to enable thinking/reasoning:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="gemini/gemini-2.5-flash",
+    messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+    tools=[...],
+    reasoning_effort="low",  # Enable thinking to get thought signatures
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gemini-2.5-flash",
+    "messages": [{"role": "user", "content": "What'\''s the weather in Tokyo?"}],
+    "tools": [...],
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Multi-Turn Function Calling with Thought Signatures
+
+When building conversation history for multi-turn function calling, you must include the thought signatures from previous responses. LiteLLM handles this automatically when you append the full assistant message to your conversation history.
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Client">
+
+```python
+from openai import OpenAI
+import json
+
+client = OpenAI(api_key="sk-1234", base_url="http://localhost:4000")
+
+def get_current_temperature(location: str) -> dict:
+    """Gets the current weather temperature for a given location."""
+    return {"temperature": 30, "unit": "celsius"}
+
+def set_thermostat_temperature(temperature: int) -> dict:
+    """Sets the thermostat to a desired temperature."""
+    return {"status": "success"}
+
+get_weather_declaration = {
+    "name": "get_current_temperature",
+    "description": "Gets the current weather temperature for a given location.",
+    "parameters": {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+        "required": ["location"],
+    },
+}
+
+set_thermostat_declaration = {
+    "name": "set_thermostat_temperature",
+    "description": "Sets the thermostat to a desired temperature.",
+    "parameters": {
+        "type": "object",
+        "properties": {"temperature": {"type": "integer"}},
+        "required": ["temperature"],
+    },
+}
+
+# Initial request
+messages = [
+    {"role": "user", "content": "If it's too hot or too cold in London, set the thermostat to a comfortable level."}
+]
+
+response = client.chat.completions.create(
+    model="gemini-2.5-flash",
+    messages=messages,
+    tools=[get_weather_declaration, set_thermostat_declaration],
+    reasoning_effort="low"
+)
+
+# Append the assistant's message (includes thought signatures automatically)
+messages.append(response.choices[0].message)
+
+# Execute tool calls and append results
+for tool_call in response.choices[0].message.tool_calls:
+    if tool_call.function.name == "get_current_temperature":
+        result = get_current_temperature(**json.loads(tool_call.function.arguments))
+        messages.append({
+            "role": "tool",
+            "content": json.dumps(result),
+            "tool_call_id": tool_call.id
+        })
+
+# Second request - thought signatures are automatically preserved
+response2 = client.chat.completions.create(
+    model="gemini-2.5-flash",
+    messages=messages,
+    tools=[get_weather_declaration, set_thermostat_declaration],
+    reasoning_effort="low"
+)
+
+print(response2.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="curl" label="cURL">
+
+```bash
+# Step 1: Initial request
+curl --location 'http://localhost:4000/v1/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header 'Authorization: Bearer sk-1234' \
+  --data '{
+    "model": "gemini-2.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": "If it'\''s too hot or too cold in London, set the thermostat to a comfortable level."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_current_temperature",
+          "description": "Gets the current weather temperature for a given location.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": {"type": "string"}
+            },
+            "required": ["location"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "set_thermostat_temperature",
+          "description": "Sets the thermostat to a desired temperature.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "temperature": {"type": "integer"}
+            },
+            "required": ["temperature"]
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto",
+    "reasoning_effort": "low"
+  }'
+```
+
+The response will include tool calls with thought signatures in `provider_specific_fields`:
+
+```json
+{
+  "choices": [{
+    "message": {
+      "role": "assistant",
+      "tool_calls": [{
+        "id": "call_abc123",
+        "type": "function",
+        "function": {
+          "name": "get_current_temperature",
+          "arguments": "{\"location\": \"London\"}"
+        },
+        "index": 0,
+        "provider_specific_fields": {
+          "thought_signature": "CpcHAdHtim9+q4rstcbvQC0ic4x1/vqQlCJWgE+UZ6dTLYGHMMBkF/AxqL5UmP6SY46uYC8t4BTFiXG5zkw6EMJ...=="
+        }
+      }]
+    }
+  }]
+}
+```
+
+```bash
+# Step 2: Follow-up request with tool response
+# Include the assistant message from Step 1 (with thought signatures in provider_specific_fields)
+curl --location 'http://localhost:4000/v1/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header 'Authorization: Bearer sk-1234' \
+  --data '{
+    "model": "gemini-2.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": "If it'\''s too hot or too cold in London, set the thermostat to a comfortable level."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_c130b9f8c2c042e9b65e39a88245",
+            "type": "function",
+            "function": {
+              "name": "get_current_temperature",
+              "arguments": "{\"location\": \"London\"}"
+            },
+            "index": 0,
+            "provider_specific_fields": {
+              "thought_signature": "CpcHAdHtim9+q4rstcbvQC0ic4x1/vqQlCJWgE+UZ6dTLYGHMMBkF/AxqL5UmP6SY46uYC8t4BTFiXG5zkw6EMJ...=="
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "{\"temperature\": 30, \"unit\": \"celsius\"}",
+        "tool_call_id": "call_c130b9f8c2c042e9b65e39a88245"
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_current_temperature",
+          "description": "Gets the current weather temperature for a given location.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "location": {"type": "string"}
+            },
+            "required": ["location"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "set_thermostat_temperature",
+          "description": "Sets the thermostat to a desired temperature.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "temperature": {"type": "integer"}
+            },
+            "required": ["temperature"]
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto",
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Important Notes
+
+1. **Automatic Handling**: LiteLLM automatically extracts thought signatures from Gemini responses and preserves them when you include assistant messages in conversation history. You don't need to manually extract or manage them.
+
+2. **Parallel Function Calls**: When the model makes parallel function calls, only the first function call will have a thought signature. Subsequent parallel calls won't have signatures.
+
+3. **Sequential Function Calls**: In multi-step function calling scenarios, each step's first function call will have its own thought signature that must be preserved.
+
+4. **Required for Context**: Thought signatures are essential for maintaining reasoning context across multi-turn conversations with function calling. Without them, the model may lose context of its previous reasoning.
+
+5. **Format**: Thought signatures are stored in `provider_specific_fields.thought_signature` of tool calls in the response, and are automatically included when you append the assistant message to your conversation history.
+
 ## JSON Mode
 
 <Tabs>
@@ -1008,6 +1378,56 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 LiteLLM Supports the following image types passed in `url`
 - Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
 - Image in local storage - ./localimage.jpeg
+
+## Image Resolution Control (Gemini 3+)
+
+For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images in your request.
+
+**Supported `detail` values:**
+- `"low"` - Maps to `media_resolution: "low"` (280 tokens for images, 70 tokens per frame for videos)
+- `"high"` - Maps to `media_resolution: "high"` (1120 tokens for images)
+- `"auto"` or `None` - Model decides optimal resolution (no `media_resolution` set)
+
+**Usage Example:**
+
+```python
+from litellm import completion
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/chart.png",
+                    "detail": "high"  # High resolution for detailed chart analysis
+                }
+            },
+            {
+                "type": "text",
+                "text": "Analyze this chart"
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/icon.png",
+                    "detail": "low"  # Low resolution for simple icon
+                }
+            }
+        ]
+    }
+]
+
+response = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=messages,
+)
+```
+
+:::info
+**Per-Part Resolution:** Each image in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature is only available for Gemini 3+ models.
+:::
 
 ## Sample Usage
 ```python

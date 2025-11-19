@@ -14,6 +14,7 @@ const { Title, Text } = Typography;
 
 interface PrebuiltPattern {
   name: string;
+  display_name: string;
   category: string;
   description: string;
 }
@@ -22,6 +23,7 @@ interface Pattern {
   id: string;
   type: "prebuilt" | "custom";
   name: string;
+  display_name?: string;
   pattern?: string;
   action: "BLOCK" | "MASK";
 }
@@ -84,10 +86,13 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
       return;
     }
 
+    const selectedPattern = prebuiltPatterns.find((p) => p.name === selectedPatternName);
+
     onPatternAdd({
       id: `pattern-${Date.now()}`,
       type: "prebuilt",
       name: selectedPatternName,
+      display_name: selectedPattern?.display_name,
       action: patternAction,
     });
 
@@ -189,10 +194,10 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
         >
           <div style={{ marginBottom: 16 }}>
             <Space>
-              <Button onClick={() => setPatternModalVisible(true)} icon={PlusOutlined}>
+              <Button type="button" onClick={() => setPatternModalVisible(true)} icon={PlusOutlined}>
                 Add prebuilt pattern
               </Button>
-              <Button onClick={() => setCustomPatternModalVisible(true)} variant="secondary" icon={PlusOutlined}>
+              <Button type="button" onClick={() => setCustomPatternModalVisible(true)} variant="secondary" icon={PlusOutlined}>
                 Add custom regex
               </Button>
             </Space>
@@ -221,11 +226,11 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
         >
           <div style={{ marginBottom: 16 }}>
             <Space>
-              <Button onClick={() => setKeywordModalVisible(true)} icon={PlusOutlined}>
+              <Button type="button" onClick={() => setKeywordModalVisible(true)} icon={PlusOutlined}>
                 Add keyword
               </Button>
               <Upload beforeUpload={handleFileUpload} accept=".yaml,.yml" showUploadList={false}>
-                <Button variant="secondary" icon={UploadOutlined} loading={uploadValidating}>
+                <Button type="button" variant="secondary" icon={UploadOutlined} loading={uploadValidating}>
                   Upload YAML file
                 </Button>
               </Upload>

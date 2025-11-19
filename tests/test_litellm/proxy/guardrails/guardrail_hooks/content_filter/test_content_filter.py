@@ -467,3 +467,54 @@ class TestContentFilterGuardrail:
         assert exc_info.value.status_code == 400
         assert "us_ssn" in str(exc_info.value.detail)
 
+    def test_init_with_plain_dicts(self):
+        """
+        Test initialization with plain dicts (DB format).
+        This ensures the guardrail can handle data loaded from the database
+        without requiring Pydantic model conversion.
+        """
+        patterns = [
+            {
+                "pattern_type": "prebuilt",
+                "pattern_name": "us_ssn",
+                "action": "BLOCK",
+                "name": "us_ssn",
+                "pattern": None,
+            },
+            {
+                "pattern_type": "prebuilt",
+                "pattern_name": "email",
+                "action": "MASK",
+                "name": "email",
+                "pattern": None,
+            }
+        ]
+        
+        blocked_words = [
+            {
+                "keyword": "langchain",
+                "action": "BLOCK",
+                "description": None,
+            },
+            {
+                "keyword": "openai",
+                "action": "MASK",
+                "description": "Competitor name",
+            }
+        ]
+        
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-db-format",
+            patterns=patterns,
+            blocked_words=blocked_words,
+        )
+        
+        assert guardrail.guardrail_name == "test-db-format"
+        assert len(guardrail.compiled_patterns) == 2
+        assert len(guardrail.blocked_words) == 2
+        
+        # Verify blocked_words are stored as dict
+        assert "langchain" in guardrail.blocked_words
+        assert guardrail.blocked_words["langchain"] == ("BLOCK", None)
+        assert "openai" in guardrail.blocked_words
+        assert guardrail.blocked_words["openai"] == ("MASK", "Competitor name")

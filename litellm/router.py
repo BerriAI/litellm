@@ -153,7 +153,11 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
+from litellm.types.utils import (
+    ModelResponseStream,
+    StandardLoggingPayload,
+    Usage,
+)
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -846,6 +850,75 @@ class Router:
         )
         self.vector_store_create = self.factory_function(
             create, call_type="vector_store_create"
+        )
+
+        from litellm.vector_store_files.main import (
+            acreate as avector_store_file_create_fn,
+        )
+        from litellm.vector_store_files.main import (
+            adelete as avector_store_file_delete_fn,
+        )
+        from litellm.vector_store_files.main import alist as avector_store_file_list_fn
+        from litellm.vector_store_files.main import (
+            aretrieve as avector_store_file_retrieve_fn,
+        )
+        from litellm.vector_store_files.main import (
+            aretrieve_content as avector_store_file_content_fn,
+        )
+        from litellm.vector_store_files.main import (
+            aupdate as avector_store_file_update_fn,
+        )
+        from litellm.vector_store_files.main import (
+            create as vector_store_file_create_fn,
+        )
+        from litellm.vector_store_files.main import (
+            delete as vector_store_file_delete_fn,
+        )
+        from litellm.vector_store_files.main import list as vector_store_file_list_fn
+        from litellm.vector_store_files.main import (
+            retrieve as vector_store_file_retrieve_fn,
+        )
+        from litellm.vector_store_files.main import (
+            retrieve_content as vector_store_file_content_fn,
+        )
+        from litellm.vector_store_files.main import (
+            update as vector_store_file_update_fn,
+        )
+        self.avector_store_file_create = self.factory_function(
+            avector_store_file_create_fn, call_type="avector_store_file_create"
+        )
+        self.vector_store_file_create = self.factory_function(
+            vector_store_file_create_fn, call_type="vector_store_file_create"
+        )
+        self.avector_store_file_list = self.factory_function(
+            avector_store_file_list_fn, call_type="avector_store_file_list"
+        )
+        self.vector_store_file_list = self.factory_function(
+            vector_store_file_list_fn, call_type="vector_store_file_list"
+        )
+        self.avector_store_file_retrieve = self.factory_function(
+            avector_store_file_retrieve_fn, call_type="avector_store_file_retrieve"
+        )
+        self.vector_store_file_retrieve = self.factory_function(
+            vector_store_file_retrieve_fn, call_type="vector_store_file_retrieve"
+        )
+        self.avector_store_file_content = self.factory_function(
+            avector_store_file_content_fn, call_type="avector_store_file_content"
+        )
+        self.vector_store_file_content = self.factory_function(
+            vector_store_file_content_fn, call_type="vector_store_file_content"
+        )
+        self.avector_store_file_update = self.factory_function(
+            avector_store_file_update_fn, call_type="avector_store_file_update"
+        )
+        self.vector_store_file_update = self.factory_function(
+            vector_store_file_update_fn, call_type="vector_store_file_update"
+        )
+        self.avector_store_file_delete = self.factory_function(
+            avector_store_file_delete_fn, call_type="avector_store_file_delete"
+        )
+        self.vector_store_file_delete = self.factory_function(
+            vector_store_file_delete_fn, call_type="vector_store_file_delete"
         )
 
         from litellm.google_genai import (
@@ -3688,8 +3761,20 @@ class Router:
             "generate_content_stream",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_file_create",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_update",
+            "avector_store_file_delete",
             "vector_store_search",
             "vector_store_create",
+            "vector_store_file_create",
+            "vector_store_file_list",
+            "vector_store_file_retrieve",
+            "vector_store_file_content",
+            "vector_store_file_update",
+            "vector_store_file_delete",
             "aocr",
             "ocr",
             "asearch",
@@ -3741,7 +3826,6 @@ class Router:
             "retrieve_container",
             "delete_container",
         ):
-
             def sync_wrapper(
                 custom_llm_provider: Optional[str] = None,
                 client: Optional[Any] = None,
@@ -3752,6 +3836,28 @@ class Router:
                 )
 
             return sync_wrapper
+
+        if call_type in (
+            "vector_store_file_create",
+            "vector_store_file_list",
+            "vector_store_file_retrieve",
+            "vector_store_file_content",
+            "vector_store_file_update",
+            "vector_store_file_delete",
+        ):
+
+            def vector_store_file_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                return original_function(
+                    custom_llm_provider=custom_llm_provider,
+                    client=client,
+                    **kwargs,
+                )
+
+            return vector_store_file_sync_wrapper
 
         # Handle asynchronous call types
         async def async_wrapper(
@@ -3773,6 +3879,19 @@ class Router:
             elif call_type in ("asearch", "search"):
                 return await self._asearch_with_fallbacks(
                     original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type in (
+                "avector_store_file_create",
+                "avector_store_file_list",
+                "avector_store_file_retrieve",
+                "avector_store_file_content",
+                "avector_store_file_update",
+                "avector_store_file_delete",
+            ):
+                return await self._init_vector_store_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
                     **kwargs,
                 )
             elif call_type in (
@@ -4476,6 +4595,19 @@ class Router:
                 fallback_model_group = item[model_group]
                 break
         return fallback_model_group
+
+    def _get_first_default_fallback(self) -> Optional[str]:
+        """
+        Returns the first model from the default_fallbacks list, if it exists.
+        """
+        if self.fallbacks is None:
+            return None
+        for fallback in self.fallbacks:
+            if isinstance(fallback, dict) and "*" in fallback:
+                default_list = fallback["*"]
+                if isinstance(default_list, list) and len(default_list) > 0:
+                    return default_list[0]
+        return None
 
     def _time_to_sleep_before_retry(
         self,
@@ -7164,20 +7296,33 @@ class Router:
         )
 
         if len(healthy_deployments) == 0:
-            if self.get_model_list(model_name=model) is None:
-                message = f"You passed in model={model}. There is no 'model_name' with this string".format(
-                    model
-                )
-            else:
-                message = f"You passed in model={model}. There are no healthy deployments for this model".format(
-                    model
-                )
+            # Check for default fallbacks if no deployments are found for the requested model
+            if self._has_default_fallbacks():
+                fallback_model = self._get_first_default_fallback()
+                if fallback_model:
+                    verbose_router_logger.info(
+                        f"Model '{model}' not found. Attempting to use default fallback model '{fallback_model}'."
+                    )
+                    # Re-assign model to the fallback and try to get deployments again
+                    model = fallback_model
+                    healthy_deployments = self._get_all_deployments(model_name=model)
 
-            raise litellm.BadRequestError(
-                message=message,
-                model=model,
-                llm_provider="",
-            )
+            # If still no deployments after checking for fallbacks, raise an error
+            if len(healthy_deployments) == 0:
+                if self.get_model_list(model_name=model) is None:
+                    message = f"You passed in model={model}. There is no 'model_name' with this string".format(
+                        model
+                    )
+                else:
+                    message = f"You passed in model={model}. There are no healthy deployments for this model".format(
+                        model
+                    )
+
+                raise litellm.BadRequestError(
+                    message=message,
+                    model=model,
+                    llm_provider="",
+                )
 
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[

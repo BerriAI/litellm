@@ -26,6 +26,7 @@ import polars as pl
 
 class LiteLLMDatabase:
     """Handle LiteLLM PostgreSQL database connections and queries."""
+
     def _ensure_prisma_client(self):
         from litellm.proxy.proxy_server import prisma_client
 
@@ -37,25 +38,25 @@ class LiteLLMDatabase:
         return prisma_client
 
     async def get_usage_data(
-        self, 
+        self,
         limit: Optional[int] = None,
         start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None
+        end_time_utc: Optional[datetime] = None,
     ) -> pl.DataFrame:
         """Retrieve usage data from LiteLLM daily user spend table."""
         client = self._ensure_prisma_client()
-        
+
         # Build WHERE clause for time filtering
         where_conditions = []
         if start_time_utc:
-            where_conditions.append(f"dus.created_at >= '{start_time_utc.isoformat()}'")
+            where_conditions.append(f"dus.updated_at >= '{start_time_utc.isoformat()}'")
         if end_time_utc:
-            where_conditions.append(f"dus.created_at <= '{end_time_utc.isoformat()}'")
-        
+            where_conditions.append(f"dus.updated_at <= '{end_time_utc.isoformat()}'")
+
         where_clause = ""
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
-        
+
         # Query to get user spend data with team information
         query = f"""
         SELECT
@@ -100,10 +101,10 @@ class LiteLLMDatabase:
     async def get_table_info(self) -> Dict[str, Any]:
         """Get information about the daily user spend table."""
         client = self._ensure_prisma_client()
-        
+
         try:
             # Get row count from user spend table
-            user_count = await self._get_table_row_count('LiteLLM_DailyUserSpend')
+            user_count = await self._get_table_row_count("LiteLLM_DailyUserSpend")
 
             # Get column structure from user spend table
             query = """
@@ -115,9 +116,9 @@ class LiteLLMDatabase:
             columns_response = await client.db.query_raw(query)
 
             return {
-                'columns': columns_response,
-                'row_count': user_count,
-                'table_name': 'LiteLLM_DailyUserSpend'
+                "columns": columns_response,
+                "row_count": user_count,
+                "table_name": "LiteLLM_DailyUserSpend",
             }
         except Exception as e:
             raise Exception(f"Error getting table info: {str(e)}")
@@ -125,13 +126,13 @@ class LiteLLMDatabase:
     async def _get_table_row_count(self, table_name: str) -> int:
         """Get row count from specified table."""
         client = self._ensure_prisma_client()
-        
+
         try:
             query = f'SELECT COUNT(*) as count FROM "{table_name}"'
             response = await client.db.query_raw(query)
-            
+
             if response and len(response) > 0:
-                return response[0].get('count', 0)
+                return response[0].get("count", 0)
             return 0
         except Exception:
             return 0
@@ -139,7 +140,7 @@ class LiteLLMDatabase:
     async def discover_all_tables(self) -> Dict[str, Any]:
         """Discover all tables in the LiteLLM database and their schemas."""
         client = self._ensure_prisma_client()
-        
+
         try:
             # Get all LiteLLM tables
             litellm_tables_query = """
@@ -150,7 +151,7 @@ class LiteLLMDatabase:
             ORDER BY table_name;
             """
             tables_response = await client.db.query_raw(litellm_tables_query)
-            table_names = [row['table_name'] for row in tables_response]
+            table_names = [row["table_name"] for row in tables_response]
 
             # Get detailed schema for each table
             tables_info = {}
@@ -181,7 +182,9 @@ class LiteLLMDatabase:
                 WHERE i.indrelid = $1::regclass AND i.indisprimary;
                 """
                 pk_response = await client.db.query_raw(pk_query, f'"{table_name}"')
-                primary_keys = [row['attname'] for row in pk_response] if pk_response else []
+                primary_keys = (
+                    [row["attname"] for row in pk_response] if pk_response else []
+                )
 
                 # Get foreign key information
                 fk_query = """
@@ -226,18 +229,17 @@ class LiteLLMDatabase:
                     row_count = 0
 
                 tables_info[table_name] = {
-                    'columns': columns_response,
-                    'primary_keys': primary_keys,
-                    'foreign_keys': foreign_keys,
-                    'indexes': indexes,
-                    'row_count': row_count
+                    "columns": columns_response,
+                    "primary_keys": primary_keys,
+                    "foreign_keys": foreign_keys,
+                    "indexes": indexes,
+                    "row_count": row_count,
                 }
 
             return {
-                'tables': tables_info,
-                'table_count': len(table_names),
-                'table_names': table_names
+                "tables": tables_info,
+                "table_count": len(table_names),
+                "table_names": table_names,
             }
         except Exception as e:
             raise Exception(f"Error discovering tables: {str(e)}")
-
