@@ -25,8 +25,10 @@ from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
 # HTTP handlers are lazy-loaded to reduce import-time memory cost
 # from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
+# Caching classes are lazy-loaded to reduce import-time memory cost
+# from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 from litellm.caching.llm_caching_handler import LLMClientCache
+
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm.types.utils import (
     ImageObject,
@@ -326,7 +328,7 @@ caching: bool = (
 caching_with_models: bool = (
     False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
-cache: Optional[Cache] = (
+cache: Optional["Cache"] = (  # type: ignore[name-defined]
     None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 )
 default_in_memory_ttl: Optional[float] = None
@@ -1645,6 +1647,27 @@ def __getattr__(name: str) -> Any:
         from litellm.llms.custom_httpx.http_handler import HTTPHandler as _HTTPHandler
         globals()["HTTPHandler"] = _HTTPHandler
         return _HTTPHandler
+    
+    # Lazy-load caching classes to reduce import-time memory cost
+    if name == "Cache":
+        from litellm.caching.caching import Cache as _Cache
+        globals()["Cache"] = _Cache
+        return _Cache
+    
+    if name == "DualCache":
+        from litellm.caching.caching import DualCache as _DualCache
+        globals()["DualCache"] = _DualCache
+        return _DualCache
+    
+    if name == "RedisCache":
+        from litellm.caching.caching import RedisCache as _RedisCache
+        globals()["RedisCache"] = _RedisCache
+        return _RedisCache
+    
+    if name == "InMemoryCache":
+        from litellm.caching.caching import InMemoryCache as _InMemoryCache
+        globals()["InMemoryCache"] = _InMemoryCache
+        return _InMemoryCache
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
