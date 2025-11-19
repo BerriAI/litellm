@@ -17,6 +17,10 @@ model_list:
   - model_name: runwayml/*
     litellm_params:
       model: runwayml/*
+  - model_name: team-1-model
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
 
     
 
@@ -33,12 +37,8 @@ search_tools:
   
 
 litellm_settings:
-  max_end_user_budget_id: "2f6634cd-c631-4d3b-96c7-ad510ea06eaf"
-  # Comprehensive logging settings
-  store_audit_logs: true
-  verbose: true
-  log_level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
-  callbacks: ["s3_v2", "smtp_email"]
+  callbacks: ["prometheus"]
+  enable_end_user_cost_tracking_prometheus_only: true # track end_user on prometheus
   s3_callback_params:
     s3_endpoint_url: "https://localhost:443"  # Replace with your Minio server URL and port
     s3_aws_access_key_id: "minioadmin"
