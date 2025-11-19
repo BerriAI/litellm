@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
-import { Button as TremorButton } from "@tremor/react";
-import { Input, Select } from "antd";
+import React, { useState, useEffect, useRef } from "react";
+import { Button as TremorButton, Card, Text, Title } from "@tremor/react";
+import { Input, Select, Spin } from "antd";
 import {
   PlusIcon,
   MoreHorizontalIcon,
@@ -10,11 +10,21 @@ import {
   SettingsIcon,
   TrashIcon,
   ArrowLeftIcon,
+  SendIcon,
 } from "lucide-react";
+import { RobotOutlined, UserOutlined, LoadingOutlined, ClearOutlined } from "@ant-design/icons";
+import ReactMarkdown from "react-markdown";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ToolModal from "./tool_modal";
+import VariableTextArea from "./variable_textarea";
 import ModelSelector from "../common_components/ModelSelector";
 import NotificationsManager from "../molecules/notifications_manager";
 import { createPromptCall } from "../networking";
+import ResponseMetrics from "../chat_ui/ResponseMetrics";
+import ReasoningContent from "../chat_ui/ReasoningContent";
+import { MessageType } from "../chat_ui/types";
+import { makeOpenAIChatCompletionRequest } from "../chat_ui/llm_calls/chat_completion";
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -22,10 +32,6 @@ const { Option } = Select;
 interface Message {
   role: string;
   content: string;
-}
-
-interface Variable {
-  name: string;
 }
 
 interface Tool {
@@ -42,7 +48,6 @@ interface PromptType {
     max_tokens?: number;
     top_p?: number;
   };
-  variables: Variable[];
   tools: Tool[];
   developerMessage: string;
   messages: Message[];
@@ -62,16 +67,37 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
       temperature: 1,
       max_tokens: 1000,
     },
-    variables: [],
     tools: [],
     developerMessage: "",
     messages: [
       {
         role: "user",
-        content: "Enter task specifics. Use {{template variables}} for dynamic inputs",
+        content: "Enter task specifics. Use {{template_variables}} for dynamic inputs",
       },
     ],
   });
+
+  // Extract variables from all messages
+  const extractVariables = (): string[] => {
+    const variableSet = new Set<string>();
+    const variableRegex = /\{\{(\w+)\}\}/g;
+
+    prompt.messages.forEach((message) => {
+      let match;
+      while ((match = variableRegex.exec(message.content)) !== null) {
+        variableSet.add(match[1]);
+      }
+    });
+
+    if (prompt.developerMessage) {
+      let match;
+      while ((match = variableRegex.exec(prompt.developerMessage)) !== null) {
+        variableSet.add(match[1]);
+      }
+    }
+
+    return Array.from(variableSet);
+  };
 
   const [showConfig, setShowConfig] = useState(false);
   const [showToolModal, setShowToolModal] = useState(false);
@@ -109,28 +135,6 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
     }
   };
 
-  const addVariable = () => {
-    setPrompt({
-      ...prompt,
-      variables: [...prompt.variables, { name: "" }],
-    });
-  };
-
-  const updateVariable = (index: number, value: string) => {
-    const newVariables = [...prompt.variables];
-    newVariables[index].name = value;
-    setPrompt({
-      ...prompt,
-      variables: newVariables,
-    });
-  };
-
-  const removeVariable = (index: number) => {
-    setPrompt({
-      ...prompt,
-      variables: prompt.variables.filter((_, i) => i !== index),
-    });
-  };
 
   const addTool = (json: string) => {
     try {
@@ -191,6 +195,9 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
     setIsSaving(true);
     try {
+      // Extract variables from messages
+      const variables = extractVariables();
+
       // Convert the prompt to dotprompt format
       const dotPromptContent = convertToDotPrompt(prompt);
 
@@ -203,10 +210,8 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           prompt_data: {
             model: prompt.model,
             input: {
-              schema: prompt.variables.reduce((acc, v) => {
-                if (v.name) {
-                  acc[v.name] = "string";
-                }
+              schema: variables.reduce((acc, v) => {
+                acc[v] = "string";
                 return acc;
               }, {} as Record<string, string>),
             },
@@ -236,12 +241,11 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   };
 
   const convertToDotPrompt = (prompt: PromptType): string => {
+    const variables = extractVariables();
     let result = `---\nmodel: ${prompt.model}\n\ninput:\n  schema:\n`;
 
-    prompt.variables.forEach((variable) => {
-      if (variable.name) {
-        result += `    ${variable.name}: string\n`;
-      }
+    variables.forEach((variable) => {
+      result += `    ${variable}: string\n`;
     });
 
     result += `\noutput:\n  format: text\n---\n\n`;
@@ -291,33 +295,37 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
         <div className="flex-1 flex overflow-hidden">
           {/* Left Panel - Editor */}
-          <div className="flex-1 overflow-y-auto">
-            <div className="max-w-3xl mx-auto p-6 space-y-6">
-              {/* Model Selector */}
-              <div>
-                <ModelSelector
-                  accessToken={accessToken || ""}
-                  value={prompt.model}
-                  onChange={(model) =>
-                    setPrompt({
-                      ...prompt,
-                      model,
-                    })
-                  }
-                  showLabel={true}
-                  labelText="Model"
-                />
+          <div className="flex-1 overflow-y-auto bg-gray-50">
+            <div className="max-w-3xl mx-auto p-6 space-y-4">
+              {/* Model Card */}
+              <Card>
+                <div className="mb-4">
+                  <Text className="block mb-2 font-medium">Model</Text>
+                  <ModelSelector
+                    accessToken={accessToken || ""}
+                    value={prompt.model}
+                    onChange={(model) =>
+                      setPrompt({
+                        ...prompt,
+                        model,
+                      })
+                    }
+                    showLabel={false}
+                  />
+                </div>
+
                 <button
                   onClick={() => setShowConfig(!showConfig)}
-                  className="mt-3 flex items-center text-sm font-medium text-gray-700 hover:text-gray-900"
+                  className="flex items-center text-sm font-medium text-gray-700 hover:text-gray-900"
                 >
-                  <SettingsIcon size={16} className="mr-1" />
+                  <SettingsIcon size={16} className="mr-2" />
                   <span>Configuration</span>
                 </button>
+
                 {showConfig && (
-                  <div className="mt-3 p-3 bg-gray-50 rounded text-xs space-y-2">
+                  <div className="mt-4 pt-4 border-t border-gray-200 space-y-3">
                     <div>
-                      <label className="text-gray-600 block mb-1">Temperature</label>
+                      <Text className="block mb-1">Temperature</Text>
                       <Input
                         type="number"
                         value={prompt.config.temperature}
@@ -336,7 +344,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                       />
                     </div>
                     <div>
-                      <label className="text-gray-600 block mb-1">Max Tokens</label>
+                      <Text className="block mb-1">Max Tokens</Text>
                       <Input
                         type="number"
                         value={prompt.config.max_tokens}
@@ -353,54 +361,23 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                     </div>
                   </div>
                 )}
-              </div>
+              </Card>
 
-              {/* Variables */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-medium text-gray-700">Variables</label>
-                  <button
-                    onClick={addVariable}
-                    className="text-sm text-gray-600 hover:text-gray-900 flex items-center"
-                  >
-                    <PlusIcon size={16} className="mr-1" />
-                    Add
-                  </button>
-                </div>
-                {prompt.variables.length > 0 && (
-                  <div className="space-y-2">
-                    {prompt.variables.map((variable, index) => (
-                      <div key={index} className="flex items-center space-x-2">
-                        <Input
-                          value={variable.name}
-                          onChange={(e) => updateVariable(index, e.target.value)}
-                          placeholder="e.g. city"
-                        />
-                        <button
-                          onClick={() => removeVariable(index)}
-                          className="p-2 text-gray-400 hover:text-red-500"
-                        >
-                          <TrashIcon size={18} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Tools */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-medium text-gray-700">Tools</label>
+              {/* Tools Card */}
+              <Card>
+                <div className="flex items-center justify-between mb-3">
+                  <Text className="font-medium">Tools</Text>
                   <button
                     onClick={() => openToolModal()}
-                    className="text-sm text-gray-600 hover:text-gray-900 flex items-center"
+                    className="text-sm text-blue-600 hover:text-blue-700 flex items-center"
                   >
                     <PlusIcon size={16} className="mr-1" />
                     Add
                   </button>
                 </div>
-                {prompt.tools.length > 0 && (
+                {prompt.tools.length === 0 ? (
+                  <Text className="text-gray-500 text-sm">No tools added</Text>
+                ) : (
                   <div className="space-y-2">
                     {prompt.tools.map((tool, index) => (
                       <div
@@ -429,32 +406,38 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                     ))}
                   </div>
                 )}
-              </div>
+              </Card>
 
-              {/* Developer Message */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-medium text-gray-700">Developer message</label>
-                </div>
-                <TextArea
+              {/* Developer Message Card */}
+              <Card>
+                <Text className="block mb-2 font-medium">Developer message</Text>
+                <Text className="text-gray-500 text-sm mb-2">Optional system instructions for the model</Text>
+                <VariableTextArea
                   value={prompt.developerMessage}
-                  onChange={(e) =>
+                  onChange={(value) =>
                     setPrompt({
                       ...prompt,
-                      developerMessage: e.target.value,
+                      developerMessage: value,
                     })
                   }
                   rows={3}
-                  placeholder="Optional system message"
+                  placeholder="e.g., You are a helpful assistant..."
                 />
-              </div>
+              </Card>
 
-              {/* Prompt Messages */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Prompt messages</label>
+              {/* Prompt Messages Card */}
+              <Card>
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <Text className="font-medium">Prompt messages</Text>
+                    <Text className="text-gray-500 text-sm mt-1">
+                      Use <code className="bg-gray-100 px-1 rounded text-xs">{'{{variable}}'}</code> syntax for template variables
+                    </Text>
+                  </div>
+                </div>
                 <div className="space-y-3">
                   {prompt.messages.map((message, index) => (
-                    <div key={index} className="border border-gray-300 rounded-lg overflow-hidden">
+                    <div key={index} className="border border-gray-300 rounded-lg overflow-hidden bg-white">
                       <div className="bg-gray-50 px-3 py-2 border-b border-gray-300 flex items-center justify-between">
                         <Select
                           value={message.role}
@@ -475,25 +458,25 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                           </button>
                         )}
                       </div>
-                      <TextArea
-                        value={message.content}
-                        onChange={(e) => updateMessage(index, "content", e.target.value)}
-                        rows={3}
-                        placeholder="Enter task specifics. Use {{template variables}} for dynamic inputs"
-                        bordered={false}
-                        className="w-full"
-                      />
+                      <div className="p-3">
+                        <VariableTextArea
+                          value={message.content}
+                          onChange={(value) => updateMessage(index, "content", value)}
+                          rows={4}
+                          placeholder="Enter prompt content..."
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>
                 <button
                   onClick={addMessage}
-                  className="mt-3 text-sm text-gray-600 hover:text-gray-900 flex items-center"
+                  className="mt-3 text-sm text-blue-600 hover:text-blue-700 flex items-center"
                 >
                   <PlusIcon size={16} className="mr-1" />
                   Add message
                 </button>
-              </div>
+              </Card>
             </div>
           </div>
 

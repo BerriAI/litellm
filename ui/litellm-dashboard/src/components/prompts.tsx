@@ -122,9 +122,9 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         <>
           <div className="flex justify-between items-center mb-4">
             <div className="flex gap-2">
-              <Button onClick={handleAddPrompt} disabled={!accessToken}>
-                + Add New Prompt
-              </Button>
+            <Button onClick={handleAddPrompt} disabled={!accessToken}>
+              + Add New Prompt
+            </Button>
               <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
                 Upload .prompt File
               </Button>
