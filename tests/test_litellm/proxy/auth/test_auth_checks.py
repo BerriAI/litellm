@@ -705,3 +705,30 @@ async def test_get_tag_objects_batch():
     assert "tag:uncached-1" in cached_keys
     assert "tag:uncached-2" in cached_keys
     assert "tag:uncached-3" in cached_keys
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_raises_404_when_not_found():
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from fastapi import HTTPException
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_team_object(
+            team_id="nonexistent-team",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            check_cache_only=False,
+            check_db_only=True,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "Team doesn't exist in db" in str(exc_info.value.detail)

@@ -3247,11 +3247,6 @@ async def team_member_permissions(
         check_cache_only=False,
         check_db_only=True,
     )
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found for team_id={team_id}"},
-        )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
@@ -3320,11 +3315,6 @@ async def update_team_member_permissions(
         check_cache_only=False,
         check_db_only=True,
     )
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found for team_id={data.team_id}"},
-        )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
