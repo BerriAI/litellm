@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Button as TremorButton, Card, Text, Title } from "@tremor/react";
-import { Input, Select, Spin } from "antd";
+import { Input, Select, Spin, Modal } from "antd";
 import {
   PlusIcon,
   MoreHorizontalIcon,
@@ -19,6 +19,7 @@ import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ToolModal from "./tool_modal";
 import VariableTextArea from "./variable_textarea";
 import ModelSelector from "../common_components/ModelSelector";
+import AdditionalModelSettings from "../chat_ui/AdditionalModelSettings";
 import NotificationsManager from "../molecules/notifications_manager";
 import { createPromptCall } from "../networking";
 import ResponseMetrics from "../chat_ui/ResponseMetrics";
@@ -101,6 +102,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
   const [showConfig, setShowConfig] = useState(false);
   const [showToolModal, setShowToolModal] = useState(false);
+  const [showNameModal, setShowNameModal] = useState(false);
   const [editingToolIndex, setEditingToolIndex] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -182,13 +184,23 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
     setShowToolModal(true);
   };
 
+  const handleSaveClick = () => {
+    // If name is default or empty, show the name modal
+    if (!prompt.name || prompt.name.trim() === "" || prompt.name === "New prompt") {
+      setShowNameModal(true);
+    } else {
+      // Otherwise proceed to save directly
+      handleSave();
+    }
+  };
+
   const handleSave = async () => {
     if (!accessToken) {
       NotificationsManager.fromBackend("Access token is required");
       return;
     }
 
-    if (!prompt.name || prompt.name.trim() === "" || prompt.name === "New prompt") {
+    if (!prompt.name || prompt.name.trim() === "") {
       NotificationsManager.fromBackend("Please enter a valid prompt name");
       return;
     }
@@ -237,6 +249,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
       NotificationsManager.fromBackend("Failed to save prompt");
     } finally {
       setIsSaving(false);
+      setShowNameModal(false);
     }
   };
 
@@ -284,7 +297,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           <div className="flex items-center space-x-2">
             <TremorButton
               icon={SaveIcon}
-              onClick={handleSave}
+              onClick={handleSaveClick}
               loading={isSaving}
               disabled={isSaving}
             >
@@ -296,9 +309,9 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         <div className="flex-1 flex overflow-hidden">
           {/* Left Panel - Editor */}
           <div className="flex-1 overflow-y-auto bg-gray-50">
-            <div className="max-w-3xl mx-auto p-6 space-y-4">
+            <div className="max-w-3xl mx-auto p-6 space-y-4 pb-20">
               {/* Model Card */}
-              <Card>
+              <Card className="p-4">
                 <div className="mb-4">
                   <Text className="block mb-2 font-medium">Model</Text>
                   <ModelSelector
@@ -323,48 +336,36 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                 </button>
 
                 {showConfig && (
-                  <div className="mt-4 pt-4 border-t border-gray-200 space-y-3">
-                    <div>
-                      <Text className="block mb-1">Temperature</Text>
-                      <Input
-                        type="number"
-                        value={prompt.config.temperature}
-                        onChange={(e) =>
-                          setPrompt({
-                            ...prompt,
-                            config: {
-                              ...prompt.config,
-                              temperature: parseFloat(e.target.value),
-                            },
-                          })
-                        }
-                        step="0.1"
-                        min="0"
-                        max="2"
-                      />
-                    </div>
-                    <div>
-                      <Text className="block mb-1">Max Tokens</Text>
-                      <Input
-                        type="number"
-                        value={prompt.config.max_tokens}
-                        onChange={(e) =>
-                          setPrompt({
-                            ...prompt,
-                            config: {
-                              ...prompt.config,
-                              max_tokens: parseInt(e.target.value),
-                            },
-                          })
-                        }
-                      />
-                    </div>
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <AdditionalModelSettings
+                      temperature={prompt.config.temperature}
+                      maxTokens={prompt.config.max_tokens}
+                      useAdvancedParams={true}
+                      onTemperatureChange={(value) =>
+                        setPrompt({
+                          ...prompt,
+                          config: {
+                            ...prompt.config,
+                            temperature: value,
+                          },
+                        })
+                      }
+                      onMaxTokensChange={(value) =>
+                        setPrompt({
+                          ...prompt,
+                          config: {
+                            ...prompt.config,
+                            max_tokens: value,
+                          },
+                        })
+                      }
+                    />
                   </div>
                 )}
               </Card>
 
               {/* Tools Card */}
-              <Card>
+              <Card className="p-4">
                 <div className="flex items-center justify-between mb-3">
                   <Text className="font-medium">Tools</Text>
                   <button
@@ -409,7 +410,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
               </Card>
 
               {/* Developer Message Card */}
-              <Card>
+              <Card className="p-4">
                 <Text className="block mb-2 font-medium">Developer message</Text>
                 <Text className="text-gray-500 text-sm mb-2">Optional system instructions for the model</Text>
                 <VariableTextArea
@@ -426,7 +427,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
               </Card>
 
               {/* Prompt Messages Card */}
-              <Card>
+              <Card className="p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div>
                     <Text className="font-medium">Prompt messages</Text>
@@ -494,6 +495,37 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           </div>
         </div>
       </div>
+
+      {/* Name Modal */}
+      <Modal
+        title="Publish Prompt"
+        open={showNameModal}
+        onCancel={() => setShowNameModal(false)}
+        footer={[
+          <div key="footer" className="flex justify-end gap-2">
+            <TremorButton variant="secondary" onClick={() => setShowNameModal(false)}>
+              Cancel
+            </TremorButton>
+            <TremorButton onClick={handleSave} loading={isSaving}>
+              Publish
+            </TremorButton>
+          </div>
+        ]}
+      >
+        <div className="py-4">
+          <Text className="mb-2">Name</Text>
+          <Input
+            value={prompt.name}
+            onChange={(e) => setPrompt({ ...prompt, name: e.target.value })}
+            placeholder="Enter prompt name"
+            onPressEnter={handleSave}
+            autoFocus
+          />
+          <Text className="text-gray-500 text-xs mt-2">
+            Published prompts can be used in API calls and are versioned for easy tracking.
+          </Text>
+        </div>
+      </Modal>
 
       {/* Tool Modal */}
       {showToolModal && (
