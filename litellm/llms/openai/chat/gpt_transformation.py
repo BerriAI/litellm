@@ -510,6 +510,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             optional_params["tools"] = tools
 
         optional_params.pop("max_retries", None)
+        # Remove internal tracking params - these are for response transformation only
+        optional_params.pop("_original_thinking_param", None)
 
         return {
             "model": model,
@@ -537,6 +539,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools
+        
+        # Remove internal tracking params - these are for response transformation only  
+        optional_params.pop("_original_thinking_param", None)
+        optional_params.pop("max_retries", None)
+        
         if self.__class__._is_base_class:
             return {
                 "model": model,
