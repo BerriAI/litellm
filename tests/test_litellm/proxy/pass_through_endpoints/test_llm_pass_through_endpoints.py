@@ -1746,3 +1746,236 @@ class TestMilvusProxyRoute:
             # Verify that the target URL has correct path
             create_route_args = mock_create_route.call_args[1]
             assert "/vectors/search" in create_route_args["target"]
+
+
+class TestOpenAIRouterPassthrough:
+    """
+    Test that OpenAI passthrough can use router models from config.yaml.
+    
+    This ensures that when a model is defined in the router configuration,
+    passthrough requests can leverage router features like load balancing,
+    fallbacks, and cost tracking.
+    """
+
+    def _create_mock_router(self, model_names: list):
+        """Create a mock router with specified model names"""
+        mock_router = MagicMock(spec=litellm.Router)
+        mock_router.get_model_names.return_value = model_names
+        return mock_router
+
+    def _create_mock_request(self, request_body: dict):
+        """Create a mock FastAPI request"""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        
+        # Create a proper URL mock with path attribute
+        mock_url = MagicMock()
+        mock_url.path = "/openai/v1/chat/completions"
+        mock_url.__str__ = MagicMock(return_value="http://localhost:4000/openai/v1/chat/completions")
+        mock_request.url = mock_url
+        
+        # Mock the body() method to return JSON-encoded request body
+        async def mock_body():
+            return json.dumps(request_body).encode("utf-8")
+        
+        mock_request.body = mock_body
+        
+        return mock_request
+
+    def test_is_passthrough_request_using_router_model_true(self):
+        """
+        Test that is_passthrough_request_using_router_model returns True 
+        when the model is in the router.
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            is_passthrough_request_using_router_model,
+        )
+
+        # Arrange
+        mock_router = self._create_mock_router(["gpt-4", "gpt-3.5-turbo"])
+        request_body = {"model": "gpt-4"}
+        
+        # Act
+        result = is_passthrough_request_using_router_model(
+            request_body=request_body, llm_router=mock_router
+        )
+        
+        # Assert
+        assert result is True
+
+    def test_is_passthrough_request_using_router_model_false(self):
+        """
+        Test that is_passthrough_request_using_router_model returns False 
+        when the model is not in the router.
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            is_passthrough_request_using_router_model,
+        )
+
+        # Arrange
+        mock_router = self._create_mock_router(["gpt-4"])
+        request_body = {"model": "claude-3"}
+        
+        # Act
+        result = is_passthrough_request_using_router_model(
+            request_body=request_body, llm_router=mock_router
+        )
+        
+        # Assert
+        assert result is False
+
+    def test_is_passthrough_request_using_router_model_no_router(self):
+        """
+        Test that is_passthrough_request_using_router_model returns False 
+        when no router is provided.
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            is_passthrough_request_using_router_model,
+        )
+
+        # Arrange
+        request_body = {"model": "gpt-4"}
+        
+        # Act
+        result = is_passthrough_request_using_router_model(
+            request_body=request_body, llm_router=None
+        )
+        
+        # Assert
+        assert result is False
+
+    def test_get_model_from_passthrough_request_from_body(self):
+        """
+        Test that model can be extracted from request body "model" field.
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            get_model_from_passthrough_request,
+        )
+
+        # Arrange
+        request_body = {"model": "gpt-4"}
+        mock_request = self._create_mock_request(request_body)
+        
+        # Act
+        model = get_model_from_passthrough_request(
+            request=mock_request, request_body=request_body
+        )
+        
+        # Assert
+        assert model == "gpt-4"
+
+    def test_get_model_from_passthrough_request_from_target_model_names_string(self):
+        """
+        Test that model can be extracted from target_model_names as string.
+        
+        This is used for endpoints like /files/delete that don't have a model field.
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            get_model_from_passthrough_request,
+        )
+
+        # Arrange
+        request_body = {"target_model_names": "gpt-4-batch"}
+        mock_request = self._create_mock_request(request_body)
+        
+        # Act
+        model = get_model_from_passthrough_request(
+            request=mock_request, request_body=request_body
+        )
+        
+        # Assert
+        assert model == "gpt-4-batch"
+
+    def test_get_model_from_passthrough_request_from_target_model_names_list(self):
+        """
+        Test that model can be extracted from target_model_names as list.
+        
+        Takes the first model from the list.
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            get_model_from_passthrough_request,
+        )
+
+        # Arrange
+        request_body = {"target_model_names": ["gpt-4-batch", "gpt-4"]}
+        mock_request = self._create_mock_request(request_body)
+        
+        # Act
+        model = get_model_from_passthrough_request(
+            request=mock_request, request_body=request_body
+        )
+        
+        # Assert
+        assert model == "gpt-4-batch"
+
+    def test_get_model_from_passthrough_request_from_header(self):
+        """
+        Test that model can be extracted from X-LiteLLM-Target-Model header.
+        
+        This allows specifying the router model via headers for any endpoint.
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            get_model_from_passthrough_request,
+        )
+
+        # Arrange
+        request_body = {}
+        mock_request = self._create_mock_request(request_body)
+        # Add header to the mock
+        mock_request.headers = {
+            "content-type": "application/json",
+            "X-LiteLLM-Target-Model": "gpt-4"
+        }
+        
+        # Act
+        model = get_model_from_passthrough_request(
+            request=mock_request, request_body=request_body
+        )
+        
+        # Assert
+        assert model == "gpt-4"
+
+    def test_get_model_from_passthrough_request_priority_order(self):
+        """
+        Test that model extraction follows the correct priority order.
+        
+        Priority: model > target_model_names > header
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            get_model_from_passthrough_request,
+        )
+
+        # Arrange - all three sources present
+        request_body = {
+            "model": "gpt-4",
+            "target_model_names": "gpt-4-batch"
+        }
+        mock_request = self._create_mock_request(request_body)
+        mock_request.headers = {
+            "content-type": "application/json",
+            "X-LiteLLM-Target-Model": "gpt-3.5"
+        }
+        
+        # Act
+        model = get_model_from_passthrough_request(
+            request=mock_request, request_body=request_body
+        )
+        
+        # Assert - should use "model" field (highest priority)
+        assert model == "gpt-4"
+        
+        # Test with only target_model_names and header
+        request_body2 = {"target_model_names": "gpt-4-batch"}
+        mock_request2 = self._create_mock_request(request_body2)
+        mock_request2.headers = {
+            "content-type": "application/json",
+            "X-LiteLLM-Target-Model": "gpt-3.5"
+        }
+        
+        model2 = get_model_from_passthrough_request(
+            request=mock_request2, request_body=request_body2
+        )
+        
+        # Assert - should use target_model_names (higher priority than header)
+        assert model2 == "gpt-4-batch"

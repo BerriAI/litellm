@@ -6,7 +6,7 @@ Pass-through endpoints for `/openai`
 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
-| Cost Tracking | ✅ | When using router models |
+| Cost Tracking | ❌ | Not supported |
 | Logging | ✅ | Works across all integrations |
 | Streaming | ✅ | Fully supported |
 | Load Balancing | ✅ | When using router models |
