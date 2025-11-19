@@ -529,7 +529,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         for file_id in file_ids:
             ## CHECK IF FILE ID IS MANAGED BY LITELM
             is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
-
             if is_base64_unified_file_id:
                 litellm_managed_file_ids.append(file_id)
 
@@ -540,6 +539,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 unified_file_object = await self.get_unified_file_id(
                     file_id, litellm_parent_otel_span
                 )
+
                 if unified_file_object:
                     file_id_mapping[file_id] = unified_file_object.model_mappings
 
@@ -815,18 +815,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Router,
         **data: Dict,
     ) -> OpenAIFileObject:
-        file_id = convert_b64_uid_to_unified_uid(file_id)
+
+        # file_id = convert_b64_uid_to_unified_uid(file_id)
         model_file_id_mapping = await self.get_model_file_id_mapping(
             [file_id], litellm_parent_otel_span
         )
+
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
-            for model_id, file_id in specific_model_file_id_mapping.items():
-                await llm_router.afile_delete(model=model_id, file_id=file_id, **data)  # type: ignore
+            for model_id, model_file_id in specific_model_file_id_mapping.items():
+                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span
         )
+
         if stored_file_object:
             return stored_file_object
         else:
@@ -847,6 +850,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_file_id_mapping
             or await self.get_model_file_id_mapping([file_id], litellm_parent_otel_span)
         )
+
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
 
         if specific_model_file_id_mapping:

@@ -521,3 +521,79 @@ def test_prompt_main():
     """
     # TODO: Implement once PromptManager is integrated with litellm completion
     pass
+
+
+@pytest.mark.asyncio
+async def test_dotprompt_auto_detection_with_model_only():
+    """
+    Test that dotprompt prompts can be auto-detected when passing model="gpt-4" and prompt_id,
+    without needing to specify model="dotprompt/gpt-4".
+    """
+    from litellm.integrations.dotprompt import DotpromptManager
+
+    prompt_dir = Path(__file__).parent
+    dotprompt_manager = DotpromptManager(prompt_directory=str(prompt_dir))
+    
+    # Register the dotprompt manager in callbacks
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [dotprompt_manager]
+    
+    try:
+        # Mock the HTTP handler to avoid actual API calls
+        with patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post") as mock_post:
+            mock_response_data = litellm.ModelResponse(
+                choices=[
+                    litellm.Choices(
+                        message=litellm.Message(content="Hello!"),
+                        index=0,
+                        finish_reason="stop",
+                    )
+                ]
+            ).model_dump()
+            
+            # Create a proper mock response
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.text = json.dumps(mock_response_data)
+            mock_response.headers = {"Content-Type": "application/json"}
+            mock_response.json.return_value = mock_response_data
+            
+            mock_post.return_value = mock_response
+            
+            # Call with model="gpt-4" (no "dotprompt/" prefix) and prompt_id
+            await litellm.acompletion(
+                model="gpt-4",
+                prompt_id="chat_prompt",
+                prompt_variables={"user_message": "Hello world"},
+                messages=[{"role": "user", "content": "This will be ignored"}],
+            )
+            
+            mock_post.assert_called_once()
+            
+            # Get request body from the call (it's passed as 'data' parameter as JSON string)
+            data_str = mock_post.call_args.kwargs.get("data", "{}")
+            request_body = json.loads(data_str)
+            
+            print(f"Request body: {json.dumps(request_body, indent=2)}")
+            
+            # Verify the prompt was auto-detected and used
+            # The chat_prompt.prompt has metadata: model: gpt-4, temperature: 0.7, max_tokens: 150
+            assert request_body["model"] == "gpt-4"
+            
+            # Note: OpenAI API might strip out temperature/max_tokens if they're not in the request
+            # The key test is that the messages were transformed
+            
+            # Verify the messages were transformed using the prompt template
+            # chat_prompt template: "User: {{user_message}}"
+            messages = request_body["messages"]
+            assert len(messages) >= 1
+            
+            # The first message should be from the prompt template with the variable substituted
+            # Template is: "User: {{user_message}}" with user_message="Hello world"
+            first_message_content = messages[0]["content"]
+            print(f"First message content: {first_message_content}")
+            assert "Hello world" in first_message_content
+    
+    finally:
+        # Restore original callbacks
+        litellm.callbacks = original_callbacks
