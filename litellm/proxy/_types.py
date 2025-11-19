@@ -1099,6 +1099,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     env: Dict[str, str] = Field(default_factory=dict)
 
 
+class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
+    mcp_server_ids: List[str]
+
+
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     team_id: str
     max_budget_in_team: Optional[float] = None
