@@ -80,7 +80,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> litellm.ModelResponse:
+    ) -> ModelResponse:
         return AmazonConverseConfig.transform_response(
             self,
             model,

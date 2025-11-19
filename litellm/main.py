@@ -52,12 +52,10 @@ from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
-from litellm import (  # type: ignore
-    client,
-    exception_type,
-    get_litellm_params,
-    get_optional_params,
-)
+# client must be imported from litellm as it's a decorator used at function definition time
+from litellm import client
+# Other utils are imported directly to avoid circular imports
+from litellm.utils import exception_type, get_litellm_params, get_optional_params
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging

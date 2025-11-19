@@ -1037,57 +1037,10 @@ from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
-from .utils import (
-    client,
-    exception_type,
-    get_optional_params,
-    get_response_string,
-    token_counter,
-    create_pretrained_tokenizer,
-    create_tokenizer,
-    supports_function_calling,
-    supports_web_search,
-    supports_url_context,
-    supports_response_schema,
-    supports_parallel_function_calling,
-    supports_vision,
-    supports_audio_input,
-    supports_audio_output,
-    supports_system_messages,
-    supports_reasoning,
-    get_litellm_params,
-    acreate,
-    get_max_tokens,
-    get_model_info,
-    register_prompt_template,
-    validate_environment,
-    check_valid_key,
-    register_model,
-    encode,
-    decode,
-    _calculate_retry_after,
-    _should_retry,
-    get_supported_openai_params,
-    get_api_base,
-    get_first_chars_messages,
-    ModelResponse,
-    ModelResponseStream,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-    get_provider_fields,
-    ModelResponseListIterator,
-    get_valid_models,
-)
-
-ALL_LITELLM_RESPONSE_TYPES = [
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-]
+# client must be imported immediately as it's used as a decorator at function definition time
+from .utils import client
+# Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
+# (which imports tiktoken) at import time
 
 from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
@@ -1518,12 +1471,150 @@ def _lazy_import_litellm_logging(name: str) -> Any:
     return obj
 
 
+# Lazy import for utils functions to avoid loading utils.py (which imports tiktoken) at import time
+# This significantly reduces memory usage when importing litellm
+def _lazy_import_utils(name: str) -> Any:
+    """Lazy import for utils module."""
+    from .utils import (
+        exception_type as _exception_type,
+        get_optional_params as _get_optional_params,
+        get_response_string as _get_response_string,
+        token_counter as _token_counter,
+        create_pretrained_tokenizer as _create_pretrained_tokenizer,
+        create_tokenizer as _create_tokenizer,
+        supports_function_calling as _supports_function_calling,
+        supports_web_search as _supports_web_search,
+        supports_url_context as _supports_url_context,
+        supports_response_schema as _supports_response_schema,
+        supports_parallel_function_calling as _supports_parallel_function_calling,
+        supports_vision as _supports_vision,
+        supports_audio_input as _supports_audio_input,
+        supports_audio_output as _supports_audio_output,
+        supports_system_messages as _supports_system_messages,
+        supports_reasoning as _supports_reasoning,
+        get_litellm_params as _get_litellm_params,
+        acreate as _acreate,
+        get_max_tokens as _get_max_tokens,
+        get_model_info as _get_model_info,
+        register_prompt_template as _register_prompt_template,
+        validate_environment as _validate_environment,
+        check_valid_key as _check_valid_key,
+        register_model as _register_model,
+        encode as _encode,
+        decode as _decode,
+        _calculate_retry_after as __calculate_retry_after,
+        _should_retry as __should_retry,
+        get_supported_openai_params as _get_supported_openai_params,
+        get_api_base as _get_api_base,
+        get_first_chars_messages as _get_first_chars_messages,
+        ModelResponse as _ModelResponse,
+        ModelResponseStream as _ModelResponseStream,
+        EmbeddingResponse as _EmbeddingResponse,
+        ImageResponse as _ImageResponse,
+        TranscriptionResponse as _TranscriptionResponse,
+        TextCompletionResponse as _TextCompletionResponse,
+        get_provider_fields as _get_provider_fields,
+        ModelResponseListIterator as _ModelResponseListIterator,
+        get_valid_models as _get_valid_models,
+    )
+    
+    # Map names to imported objects
+    _utils_objects = {
+        "exception_type": _exception_type,
+        "get_optional_params": _get_optional_params,
+        "get_response_string": _get_response_string,
+        "token_counter": _token_counter,
+        "create_pretrained_tokenizer": _create_pretrained_tokenizer,
+        "create_tokenizer": _create_tokenizer,
+        "supports_function_calling": _supports_function_calling,
+        "supports_web_search": _supports_web_search,
+        "supports_url_context": _supports_url_context,
+        "supports_response_schema": _supports_response_schema,
+        "supports_parallel_function_calling": _supports_parallel_function_calling,
+        "supports_vision": _supports_vision,
+        "supports_audio_input": _supports_audio_input,
+        "supports_audio_output": _supports_audio_output,
+        "supports_system_messages": _supports_system_messages,
+        "supports_reasoning": _supports_reasoning,
+        "get_litellm_params": _get_litellm_params,
+        "acreate": _acreate,
+        "get_max_tokens": _get_max_tokens,
+        "get_model_info": _get_model_info,
+        "register_prompt_template": _register_prompt_template,
+        "validate_environment": _validate_environment,
+        "check_valid_key": _check_valid_key,
+        "register_model": _register_model,
+        "encode": _encode,
+        "decode": _decode,
+        "_calculate_retry_after": __calculate_retry_after,
+        "_should_retry": __should_retry,
+        "get_supported_openai_params": _get_supported_openai_params,
+        "get_api_base": _get_api_base,
+        "get_first_chars_messages": _get_first_chars_messages,
+        "ModelResponse": _ModelResponse,
+        "ModelResponseStream": _ModelResponseStream,
+        "EmbeddingResponse": _EmbeddingResponse,
+        "ImageResponse": _ImageResponse,
+        "TranscriptionResponse": _TranscriptionResponse,
+        "TextCompletionResponse": _TextCompletionResponse,
+        "get_provider_fields": _get_provider_fields,
+        "ModelResponseListIterator": _ModelResponseListIterator,
+        "get_valid_models": _get_valid_models,
+    }
+    
+    # Cache the imported object in the module namespace
+    obj = _utils_objects[name]
+    globals()[name] = obj
+    
+    return obj
+
+
 def __getattr__(name: str) -> Any:
-    """Lazy import for cost_calculator and litellm_logging functions."""
+    """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in ("completion_cost", "response_cost_calculator", "cost_per_token"):
         return _lazy_import_cost_calculator(name)
     
     if name in ("Logging", "modify_integration"):
         return _lazy_import_litellm_logging(name)
     
+    # Lazy load utils functions
+    _utils_names = (
+        "exception_type", "get_optional_params", "get_response_string", "token_counter",
+        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+        "supports_web_search", "supports_url_context", "supports_response_schema",
+        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+        "supports_audio_output", "supports_system_messages", "supports_reasoning",
+        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+        "register_prompt_template", "validate_environment", "check_valid_key",
+        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+        "ModelResponseListIterator", "get_valid_models",
+    )
+    if name in _utils_names:
+        return _lazy_import_utils(name)
+    
+    # Lazy-load ALL_LITELLM_RESPONSE_TYPES
+    if name == "ALL_LITELLM_RESPONSE_TYPES":
+        from .utils import (
+            ModelResponse,
+            EmbeddingResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            TextCompletionResponse,
+        )
+        _all_response_types = [
+            ModelResponse,
+            EmbeddingResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            TextCompletionResponse,
+        ]
+        globals()["ALL_LITELLM_RESPONSE_TYPES"] = _all_response_types
+        return _all_response_types
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time
