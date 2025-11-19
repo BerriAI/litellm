@@ -44,13 +44,13 @@ import aiohttp
 import dotenv
 import httpx
 import openai
-import tiktoken
+# tiktoken is imported lazily when needed to avoid loading it at import time
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel
-from tiktoken import Encoding
+# Encoding is imported lazily when needed to avoid loading tiktoken at import time
 from tokenizers import Tokenizer
 
 import litellm
@@ -96,7 +96,7 @@ from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.default_encoding import encoding
+# default_encoding is imported lazily when needed to avoid loading tiktoken at import time
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
@@ -140,7 +140,8 @@ from litellm.litellm_core_utils.redact_messages import (
 )
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
+# get_modified_max_tokens is imported lazily when needed to avoid loading token_counter
+# (which imports default_encoding and tiktoken) at import time
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
@@ -1235,6 +1236,9 @@ def client(original_function):  # noqa: PLR0915
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
                     user_max_tokens = kwargs.get("max_tokens")
+                    # Import get_modified_max_tokens lazily to avoid loading token_counter
+                    # (which imports default_encoding and tiktoken) at import time
+                    from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
                     modified_max_tokens = get_modified_max_tokens(
                         model=model,
                         base_model=base_model,
@@ -1472,6 +1476,9 @@ def client(original_function):  # noqa: PLR0915
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
                     user_max_tokens = kwargs.get("max_tokens")
+                    # Import get_modified_max_tokens lazily to avoid loading token_counter
+                    # (which imports default_encoding and tiktoken) at import time
+                    from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
                     modified_max_tokens = get_modified_max_tokens(
                         model=model,
                         base_model=base_model,
@@ -1743,6 +1750,8 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
 
 
 def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
+    # Import encoding lazily to avoid loading tiktoken at import time
+    from litellm.litellm_core_utils.default_encoding import encoding
     return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
@@ -1782,6 +1791,8 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc: The encoded text.
     """
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
+    # Import Encoding lazily to avoid loading tiktoken at import time
+    from tiktoken import Encoding
     if isinstance(tokenizer_json["tokenizer"], Encoding):
         enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
     else:
@@ -5797,6 +5808,8 @@ def prompt_token_calculator(model, messages):
         anthropic_obj = Anthropic()
         num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
+        # Import encoding lazily to avoid loading tiktoken at import time
+        from litellm.litellm_core_utils.default_encoding import encoding
         num_tokens = len(encoding.encode(text))
     return num_tokens
 

@@ -1036,7 +1036,8 @@ openai_video_generation_models = ["sora-2"]
 from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
-from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
+# Note: get_modified_max_tokens is not exported from __init__.py and is only used
+# internally in utils.py, so we don't need to import it here
 # client must be imported immediately as it's used as a decorator at function definition time
 from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
@@ -1613,6 +1614,12 @@ def __getattr__(name: str) -> Any:
         ]
         globals()["ALL_LITELLM_RESPONSE_TYPES"] = _all_response_types
         return _all_response_types
+    
+    # Lazy-load encoding to avoid loading tiktoken at import time
+    if name == "encoding":
+        from litellm.litellm_core_utils.default_encoding import encoding as _encoding
+        globals()["encoding"] = _encoding
+        return _encoding
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
