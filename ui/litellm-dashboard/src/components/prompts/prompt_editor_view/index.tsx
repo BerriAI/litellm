@@ -186,7 +186,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
         <div className="flex-1 flex overflow-hidden">
           <div className="w-1/2 overflow-y-auto bg-white border-r border-gray-200">
-            <div className="border-b border-gray-200 bg-gray-50 p-4 flex items-center gap-3">
+            <div className="border-b border-gray-200 bg-white px-6 py-4 flex items-center gap-3">
               <ModelConfigCard
                 model={prompt.model}
                 temperature={prompt.config.temperature}

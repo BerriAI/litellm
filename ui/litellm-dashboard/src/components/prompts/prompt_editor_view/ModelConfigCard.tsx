@@ -27,7 +27,7 @@ const ModelConfigCard: React.FC<ModelConfigCardProps> = ({
 
   return (
     <div className="flex items-center gap-3">
-      <div className="min-w-[300px]">
+      <div className="w-[300px]">
         <ModelSelector
           accessToken={accessToken || ""}
           value={model}
