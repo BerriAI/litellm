@@ -799,7 +799,7 @@ class NomaGuardrail(CustomGuardrail):
                     or request_data.get("metadata", {})
                     .get("headers", {})
                     .get("x-noma-application-id")
-                    or (user_auth.key_alias if user_auth.key_alias else (user_auth.key_name if user_auth.key_name else self.application_id)),
+                    or (user_auth.key_alias if user_auth.key_alias else self.application_id),
                     "ipAddress": request_data.get("metadata", {}).get(
                         "requester_ip_address", None
                     ),
