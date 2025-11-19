@@ -45,8 +45,8 @@ RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 # Build the package
 RUN rm -rf dist/* && python -m build
 
-# Install the built package
-RUN pip install dist/*.whl
+# Install the built package with proxy extras (includes boto3 1.40.73)
+RUN pip install $(ls dist/*.whl)[proxy]
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
@@ -74,6 +74,7 @@ COPY --from=builder /wheels/ /wheels/
 COPY --from=builder /app/dist/*.whl .
 
 # Install all dependencies in one step with no-cache for smaller image
+# Note: *.whl already has proxy extras installed from builder stage
 RUN pip install --no-cache-dir *.whl /wheels/* --no-index --find-links=/wheels/ && \
     rm -f *.whl && \
     rm -rf /wheels

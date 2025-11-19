@@ -10,7 +10,7 @@ uvicorn==0.29.0 # server dep
 gunicorn==23.0.0 # server dep
 fastuuid==0.13.5 # for uuid4
 uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
-boto3==1.36.0 # aws bedrock/sagemaker calls
+boto3==1.40.53 # aws bedrock/sagemaker calls (has bedrock-agentcore-control, compatible with aioboto3)
 redis==5.2.1 # redis caching
 prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
@@ -53,7 +53,7 @@ click==8.1.7 # for proxy cli
 rich==13.7.1 # for litellm proxy cli
 jinja2==3.1.6 # for prompt templates
 aiohttp==3.12.14 # for network calls
-aioboto3==13.4.0 # for async sagemaker calls
+aioboto3==15.5.0 # for async sagemaker calls (updated to match boto3 1.40.73)
 tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
 pydantic==2.10.2 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema

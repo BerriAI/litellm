@@ -116,8 +116,13 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         fake_stream: Optional[bool] = None,
     ) -> Tuple[dict, Optional[bytes]]:
         # Check if api_key (bearer token) is provided for Cognito authentication
-        jwt_token = optional_params.get("api_key")
+        # Priority: api_key parameter first, then optional_params
+        print(f"[DEBUG sign_request] api_key parameter: {api_key[:50] if api_key else 'NONE'}...")
+        print(f"[DEBUG sign_request] optional_params.get('api_key'): {optional_params.get('api_key', 'NONE')[:50] if optional_params.get('api_key') else 'NONE'}...")
+
+        jwt_token = api_key or optional_params.get("api_key")
         if jwt_token:
+            print(f"[DEBUG sign_request] ✅ USING JWT BEARER TOKEN (NOT AWS SigV4)")
             verbose_logger.debug(
                 f"AgentCore: Using Bearer token authentication (Cognito/JWT) - token: {jwt_token[:50]}..."
             )
@@ -127,6 +132,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return headers, json.dumps(request_data).encode()
 
         # Otherwise, use AWS SigV4 authentication
+        print("[DEBUG sign_request] ❌ NO JWT TOKEN - Falling back to AWS SigV4")
         verbose_logger.debug("AgentCore: Using AWS SigV4 authentication (IAM)")
         return self._sign_request(
             service_name="bedrock-agentcore",
