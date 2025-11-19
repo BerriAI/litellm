@@ -380,3 +380,54 @@ If you need to inspect the JWT fields received from your SSO provider by LiteLLM
 
 Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
 
+
+## Advanced
+
+### Manage User Roles via Azure App Roles
+
+Centralize role management by defining user permissions in Azure Entra ID. LiteLLM will automatically assign roles based on your Azure configuration when users sign in—no need to manually manage roles in LiteLLM.
+
+#### Step 1: Create App Roles on Azure App Registration
+
+1. Navigate to your App Registration on https://portal.azure.com/
+2. Go to **App roles** > **Create app role**
+3. Configure the app role using one of the [supported LiteLLM roles](./access_control.md#global-proxy-roles):
+   - **Display name**: Admin Viewer (or your preferred display name)
+   - **Value**: `proxy_admin_viewer` (must match one of the LiteLLM role values exactly)
+4. Click **Apply** to save the role
+5. Repeat for each LiteLLM role you want to use
+
+
+**Supported LiteLLM role values** (see [full role documentation](./access_control.md#global-proxy-roles)):
+- `proxy_admin` - Full admin access
+- `proxy_admin_viewer` - Read-only admin access
+- `internal_user` - Can create/view/delete own keys
+- `internal_user_viewer` - Can view own keys (read-only)
+
+<Image img={require('../../img/app_roles.png')} style={{ width: '900px', height: 'auto' }} />
+
+---
+
+#### Step 2: Assign Users to App Roles
+
+1. Navigate to **Enterprise Applications** on https://portal.azure.com/
+2. Select your LiteLLM application
+3. Go to **Users and groups** > **Add user/group**
+4. Select the user
+5. Under **Select a role**, choose the app role you created (e.g., `proxy_admin_viewer`)
+6. Click **Assign** to save
+
+<Image img={require('../../img/app_role2.png')} style={{ width: '900px', height: 'auto' }} />
+
+---
+
+#### Step 3: Sign in and verify
+
+1. Sign in to the LiteLLM UI via SSO
+2. LiteLLM will automatically extract the app role from the JWT token
+3. The user will be assigned the corresponding role (you can verify this in the UI by checking the user profile dropdown)
+
+<Image img={require('../../img/app_role3.png')} style={{ width: '900px', height: 'auto' }} />
+
+**Note:** The role from Entra ID will take precedence over any existing role in the LiteLLM database. This ensures your SSO provider is the authoritative source for user roles.
+
