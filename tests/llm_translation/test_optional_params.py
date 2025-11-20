@@ -1544,6 +1544,22 @@ def test_optional_params_with_additional_drop_params():
     assert "red" not in optional_params["extra_body"]
 
 
+def test_optional_params_with_global_additional_drop_params():
+    previous_value = getattr(litellm, "additional_drop_params", None)
+    try:
+        litellm.additional_drop_params = ["user"]
+        optional_params = get_optional_params(
+            model="gpt-4o",
+            custom_llm_provider="openai",
+            drop_params=True,
+            user="user-should-be-dropped",
+        )
+        assert "user" not in optional_params
+        assert "user" not in optional_params.get("extra_body", {})
+    finally:
+        litellm.additional_drop_params = previous_value
+
+
 def test_azure_ai_cohere_embed_input_type_param():
     optional_params = get_optional_params_embeddings(
         model="embed-v-4-0",

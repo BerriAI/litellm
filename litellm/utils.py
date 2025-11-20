@@ -2405,6 +2405,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
 
 
 def _should_drop_param(k, additional_drop_params) -> bool:
+    additional_drop_params = _resolve_additional_drop_params(
+        additional_drop_params=additional_drop_params
+    )
     if (
         additional_drop_params is not None
         and isinstance(additional_drop_params, list)
@@ -2413,6 +2416,14 @@ def _should_drop_param(k, additional_drop_params) -> bool:
         return True  # allow user to drop specific params for a model - e.g. vllm - logit bias
 
     return False
+
+
+def _resolve_additional_drop_params(
+    additional_drop_params: Optional[list],
+) -> Optional[list]:
+    if additional_drop_params is not None:
+        return additional_drop_params
+    return getattr(litellm, "additional_drop_params", None)
 
 
 def _get_non_default_params(
@@ -2513,12 +2524,15 @@ def get_optional_params_transcription(
             drop_params=drop_params if drop_params is not None else False,
         )
 
+    additional_drop_params = _resolve_additional_drop_params(
+        kwargs.get("additional_drop_params", None)
+    )
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
         openai_params=OPENAI_TRANSCRIPTION_PARAMS,
-        additional_drop_params=kwargs.get("additional_drop_params", None),
+        additional_drop_params=additional_drop_params,
     )
 
     return optional_params
@@ -2564,6 +2578,9 @@ def get_optional_params_image_gen(
     provider_config = passed_params.pop("provider_config", None)
     drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
+    additional_drop_params = _resolve_additional_drop_params(
+        additional_drop_params=additional_drop_params
+    )
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         if k.startswith("aws_") and (
@@ -2701,6 +2718,9 @@ def get_optional_params_embeddings(  # noqa: PLR0915
 
     drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
+    additional_drop_params = _resolve_additional_drop_params(
+        additional_drop_params=additional_drop_params
+    )
 
     def _check_valid_arg(supported_params: Optional[list]):
         if supported_params is None:
@@ -2969,7 +2989,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
         openai_params=list(DEFAULT_EMBEDDING_PARAM_VALUES.keys()),
-        additional_drop_params=kwargs.get("additional_drop_params", None),
+        additional_drop_params=additional_drop_params,
     )
 
     if "extra_body" in final_params and len(final_params["extra_body"]) == 0:
@@ -3183,6 +3203,9 @@ def pre_process_non_default_params(
     Pre-process non-default params to a standardized format
     """
     # retrieve all parameters passed to the function
+    additional_drop_params = _resolve_additional_drop_params(
+        additional_drop_params=additional_drop_params
+    )
 
     non_default_params = PreProcessNonDefaultParams.base_pre_process_non_default_params(
         passed_params=passed_params,
@@ -3396,6 +3419,9 @@ def get_optional_params(  # noqa: PLR0915
     **kwargs,
 ):
     passed_params = locals().copy()
+    additional_drop_params = _resolve_additional_drop_params(
+        additional_drop_params=additional_drop_params
+    )
     special_params = passed_params.pop("kwargs")
     non_default_params = pre_process_non_default_params(
         passed_params=passed_params,
@@ -4138,6 +4164,10 @@ def add_provider_specific_params_to_optional_params(
     """
     Add provider specific params to optional_params
     """
+
+    additional_drop_params = _resolve_additional_drop_params(
+        additional_drop_params=additional_drop_params
+    )
 
     if (
         custom_llm_provider
