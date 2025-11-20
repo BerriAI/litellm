@@ -511,6 +511,56 @@ def test_router_get_available_deployments():
         router.get_available_deployment(model="azure-model")["model_info"]["id"] == "2"
     )
 
+def test_zero_rpm_limits_are_respected():
+    """
+    Deployments with rpm=0 should be skipped (treated as unavailable).
+    """
+    test_cache = DualCache()
+    model_group = "gpt-3.5-turbo"
+    model_list = [
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
+            "model_info": {"id": "stopped", "rpm": 0},
+        },
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
+            "model_info": {"id": "active", "rpm": 5},
+        },
+    ]
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache
+    )
+
+    # Log activity on both deployments so they have entries
+    for deployment_id, sleep_time in [("stopped", 0.01), ("active", 0.02)]:
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "model_group": model_group,
+                    "deployment": "azure/gpt-4.1-mini",
+                },
+                "model_info": {"id": deployment_id},
+            }
+        }
+        start_time = time.time()
+        response_obj = {"usage": {"total_tokens": 20}}
+        time.sleep(sleep_time)
+        end_time = time.time()
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    selected = lowest_latency_logger.get_available_deployments(
+        model_group=model_group, healthy_deployments=model_list
+    )
+    assert selected is not None
+    assert selected["model_info"]["id"] == "active"
+
 
 # test_router_get_available_deployments()
 
