@@ -64,9 +64,10 @@ interface AgentCard {
 
 interface PublicModelHubProps {
   accessToken?: string | null;
+  isEmbedded?: boolean; // When true, hides navbar and adjusts layout for embedding in dashboard
 }
 
-const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
+const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
   const [agentHubData, setAgentHubData] = useState<AgentCard[] | null>(null);
   const [pageTitle, setPageTitle] = useState<string>("LiteLLM Gateway");
@@ -713,35 +714,48 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      <div className="min-h-screen bg-white">
-        {/* Navigation */}
-        <Navbar
-          userID={null}
-          userEmail={null}
-          userRole={null}
-          premiumUser={false}
-          setProxySettings={setProxySettings}
-          proxySettings={proxySettings}
-          accessToken={accessToken || null}
-          isPublicPage={true}
-        />
+      <div className={isEmbedded ? "w-full" : "min-h-screen bg-white"}>
+        {/* Navigation - only show when not embedded */}
+        {!isEmbedded && (
+          <Navbar
+            userID={null}
+            userEmail={null}
+            userRole={null}
+            premiumUser={false}
+            setProxySettings={setProxySettings}
+            proxySettings={proxySettings}
+            accessToken={accessToken || null}
+            isPublicPage={true}
+          />
+        )}
 
-        <div className="w-full px-8 py-12">
-          {/* About Section */}
-          <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
-            <Title className="text-2xl font-semibold mb-6 text-gray-900">About</Title>
-            <p className="text-gray-700 mb-6 text-base leading-relaxed">
-              {customDocsDescription ? customDocsDescription : "Proxy Server to call 100+ LLMs in the OpenAI format."}
-            </p>
-            <div className="flex items-center space-x-3 text-sm text-gray-600">
-              <span className="flex items-center">
-                <span className="w-4 h-4 mr-2">🔧</span>
-                Built with litellm: v{litellmVersion}
-              </span>
+        <div className={isEmbedded ? "w-full p-6" : "w-full px-8 py-12"}>
+          {/* Embedded Explainer - only shown when embedded in dashboard */}
+          {isEmbedded && (
+            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-sm text-gray-700">
+                These are models, agents, and MCP servers your proxy admin has indicated are available in your company.
+              </p>
             </div>
-          </Card>
+          )}
 
-          {/* Useful Links */}
+          {/* About Section - only shown when not embedded */}
+          {!isEmbedded && (
+            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
+              <Title className="text-2xl font-semibold mb-6 text-gray-900">About</Title>
+              <p className="text-gray-700 mb-6 text-base leading-relaxed">
+                {customDocsDescription ? customDocsDescription : "Proxy Server to call 100+ LLMs in the OpenAI format."}
+              </p>
+              <div className="flex items-center space-x-3 text-sm text-gray-600">
+                <span className="flex items-center">
+                  <span className="w-4 h-4 mr-2">🔧</span>
+                  Built with litellm: v{litellmVersion}
+                </span>
+              </div>
+            </Card>
+          )}
+
+          {/* Useful Links - only shown when not embedded */}
           {usefulLinks && Object.keys(usefulLinks).length > 0 && (
             <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">Useful Links</Title>
@@ -760,13 +774,15 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
             </Card>
           )}
 
-          {/* Health and Endpoint Status */}
-          <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
-            <Title className="text-2xl font-semibold mb-6 text-gray-900">Health and Endpoint Status</Title>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Text className="text-green-600 font-medium text-sm">Service status: {serviceStatus}</Text>
-            </div>
-          </Card>
+          {/* Health and Endpoint Status - only shown when not embedded */}
+          {!isEmbedded && (
+            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
+              <Title className="text-2xl font-semibold mb-6 text-gray-900">Health and Endpoint Status</Title>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Text className="text-green-600 font-medium text-sm">Service status: {serviceStatus}</Text>
+              </div>
+            </Card>
+          )}
 
           {/* Tabs for Models and Agents */}
           <Card className="p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
