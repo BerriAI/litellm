@@ -1128,6 +1128,7 @@ class BaseLLMHTTPHandler:
         atranscription: bool = False,
         headers: Optional[Dict[str, Any]] = None,
         provider_config: Optional[BaseAudioTranscriptionConfig] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
         if provider_config is None:
             raise ValueError(
@@ -1150,6 +1151,7 @@ class BaseLLMHTTPHandler:
                 client=client,
                 headers=headers,
                 provider_config=provider_config,
+                shared_session=shared_session,
             )
 
         # Prepare the request
@@ -1214,6 +1216,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         headers: Optional[Dict[str, Any]] = None,
         provider_config: Optional[BaseAudioTranscriptionConfig] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> TranscriptionResponse:
         if provider_config is None:
             raise ValueError(
@@ -1242,6 +1245,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                shared_session=shared_session,
             )
         else:
             async_httpx_client = client
