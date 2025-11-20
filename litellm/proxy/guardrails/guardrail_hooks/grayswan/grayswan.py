@@ -256,7 +256,7 @@ class GraySwanGuardrail(CustomGuardrail):
                     if not hidden_params:
                         hidden_params = {}
                         setattr(response, "_hidden_params", hidden_params)
-                    
+
                     hidden_params["guardrail_detections"] = guardrail_detections
                     setattr(response, "_hidden_params", hidden_params)
 
