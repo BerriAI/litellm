@@ -195,6 +195,7 @@ def check_if_part_exists_in_parts(
 
 def _gemini_convert_messages_with_history(  # noqa: PLR0915
     messages: List[AllMessageValues],
+    model: Optional[str] = None,
 ) -> List[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -379,7 +380,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     or assistant_msg.get("function_call") is not None
                 ):  # support assistant tool invoke conversion
                     gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
-                        assistant_msg
+                        assistant_msg, model=model
                     )
                     ## check if gemini_tool_call already exists in assistant_content
                     for gemini_tool_call_part in gemini_tool_call_parts:

@@ -214,7 +214,7 @@ class MCPClient:
             raise
         except Exception as e:
             error_type = type(e).__name__
-            verbose_logger.error(
+            verbose_logger.exception(
                 f"MCP client list_tools failed - "
                 f"Error Type: {error_type}, "
                 f"Error: {str(e)}, "
