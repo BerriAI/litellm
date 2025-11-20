@@ -9,8 +9,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Add parent directory to path for imports
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
 from tests.llm_translation.base_embedding_unit_tests import BaseLLMEmbeddingTest
 import litellm
 from litellm.types.utils import EmbeddingResponse

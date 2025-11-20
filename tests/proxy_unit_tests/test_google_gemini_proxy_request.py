@@ -18,8 +18,6 @@ import httpx
 import pytest
 
 # Add the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../.."))
-
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.google_endpoints.endpoints import google_generate_content

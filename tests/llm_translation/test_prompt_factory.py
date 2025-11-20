@@ -5,8 +5,6 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 from typing import Union, List
 
 # from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory

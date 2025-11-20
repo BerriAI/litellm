@@ -4,8 +4,7 @@
 # from datetime import datetime
 # import pytest
 
-# sys.path.insert(0, os.path.abspath("../.."))
-# import openai, litellm, uuid
+# # import openai, litellm, uuid
 # from openai import AsyncAzureOpenAI
 
 # client = AsyncAzureOpenAI(

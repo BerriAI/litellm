@@ -7,9 +7,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import litellm
 
-sys.path.insert(0, os.path.abspath("../.."))
-
-
 @pytest.fixture()
 @pytest.mark.skip(reason="Traceloop use `otel` integration instead")
 def exporter():

@@ -4,8 +4,6 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
-
 from litellm.caching.gcs_cache import GCSCache
 
 

@@ -4,8 +4,6 @@ import sys
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
-
 import pytest
 
 import litellm

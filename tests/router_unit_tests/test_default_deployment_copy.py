@@ -7,8 +7,6 @@ doesn't corrupt the original default_deployment instance.
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 from litellm import Router
 
 

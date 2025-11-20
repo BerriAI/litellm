@@ -14,8 +14,6 @@ import sys
 import os
 
 # Add project root to path
-sys.path.insert(0, os.path.abspath("../.."))
-
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from prisma.errors import PrismaError, ClientNotConnectedError
 import httpx

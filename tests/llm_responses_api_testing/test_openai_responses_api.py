@@ -10,7 +10,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 import time
 import json
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 import json

@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import AsyncMock, MagicMock, patch
 from litellm._uuid import uuid
 

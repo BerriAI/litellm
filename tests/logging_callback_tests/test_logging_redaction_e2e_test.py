@@ -4,8 +4,6 @@ import sys
 
 from typing import Optional
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 import asyncio
 import gzip
 import json

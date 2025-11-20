@@ -7,8 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
-
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )

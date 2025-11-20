@@ -8,8 +8,6 @@ import json
 import litellm
 
 # Adds the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
 from litellm import ModelResponse
 from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIRequestWrapper, version
 

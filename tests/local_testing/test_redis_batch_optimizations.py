@@ -16,8 +16,6 @@ import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(0, os.path.abspath("../.."))
-
 import uuid
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache

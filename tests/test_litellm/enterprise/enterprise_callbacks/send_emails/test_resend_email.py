@@ -5,8 +5,6 @@ import unittest.mock as mock
 import pytest
 from httpx import Response
 
-sys.path.insert(0, os.path.abspath("../../.."))
-
 from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
     ResendEmailLogger,
 )

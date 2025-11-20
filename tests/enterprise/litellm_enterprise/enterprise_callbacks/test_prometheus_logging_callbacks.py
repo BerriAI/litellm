@@ -2,8 +2,6 @@ import io
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone

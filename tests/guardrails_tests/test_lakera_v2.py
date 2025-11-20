@@ -5,7 +5,6 @@ import pytest
 import time
 from litellm import mock_completion
 from unittest.mock import MagicMock, AsyncMock, patch
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import LakeraAIGuardrail
 from litellm.types.guardrails import PiiEntityType, PiiAction

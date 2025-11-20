@@ -2,7 +2,6 @@ import sys
 import os
 import io, asyncio
 import pytest
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy._types import UserAPIKeyAuth

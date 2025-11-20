@@ -8,8 +8,6 @@ from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
-
 import litellm
 from litellm import completion
 from litellm.caching import InMemoryCache

@@ -4,8 +4,6 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
 from unittest.mock import MagicMock, patch
 
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices

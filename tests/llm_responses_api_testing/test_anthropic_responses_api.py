@@ -9,7 +9,6 @@ from litellm.responses.litellm_completion_transformation.transformation import L
 from litellm.types.utils import ModelResponse
 
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 import json

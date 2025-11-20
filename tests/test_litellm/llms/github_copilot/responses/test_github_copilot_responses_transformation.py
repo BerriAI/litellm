@@ -10,8 +10,6 @@ import sys
 import os
 from unittest.mock import patch, MagicMock
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
 import pytest
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager

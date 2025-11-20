@@ -21,8 +21,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig

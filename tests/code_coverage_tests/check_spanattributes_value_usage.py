@@ -30,7 +30,6 @@ from typing import List, Tuple
 import sys
 
 # Add parent directory to path so we can import litellm
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 
 

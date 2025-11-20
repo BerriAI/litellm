@@ -4,8 +4,6 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
 )

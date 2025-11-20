@@ -11,8 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 import litellm
 from litellm.proxy.proxy_server import ProxyConfig
 from litellm.proxy.utils import PrismaClient, ProxyLogging

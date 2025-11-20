@@ -4,8 +4,6 @@ import sys
 from typing import Optional
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
-
 import asyncio
 
 import pytest

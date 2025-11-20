@@ -1,7 +1,6 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 import requests
 from bs4 import BeautifulSoup

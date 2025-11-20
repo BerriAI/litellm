@@ -4,8 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 from litellm.integrations.langsmith import LangsmithLogger
 
 

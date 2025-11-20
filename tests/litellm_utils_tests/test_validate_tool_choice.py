@@ -2,8 +2,6 @@ import pytest
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 from litellm.utils import validate_chat_completion_tool_choice
 
 

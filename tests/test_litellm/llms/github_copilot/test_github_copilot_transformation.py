@@ -8,8 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 import httpx
 import pytest
 from respx import MockRouter

@@ -14,8 +14,6 @@ from typing import Optional, Dict, Any
 from unittest.mock import MagicMock, AsyncMock, patch
 
 # Add the project root to the path
-sys.path.insert(0, os.path.abspath("../.."))
-
 import litellm
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail

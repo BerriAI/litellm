@@ -2,8 +2,6 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath("../../../.."))
-
 from litellm.utils import _get_model_info_helper
 from litellm.cost_calculator import completion_cost
 from litellm.types.utils import ModelResponse, Usage, Choices, Message

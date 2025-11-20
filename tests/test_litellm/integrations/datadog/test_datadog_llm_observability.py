@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger

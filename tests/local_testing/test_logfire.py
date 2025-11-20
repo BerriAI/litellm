@@ -12,8 +12,6 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 
 verbose_logger.setLevel(logging.DEBUG)
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 # Testing scenarios for logfire logging:
 # 1. Test logfire logging for completion
 # 2. Test logfire logging for acompletion

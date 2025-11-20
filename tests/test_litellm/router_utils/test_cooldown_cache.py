@@ -9,8 +9,6 @@ from unittest.mock import MagicMock
 import pytest
 
 # Add the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../../.."))
-
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker

@@ -6,8 +6,6 @@ Load test on vertex AI embeddings to ensure vertex median response time is less 
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 import asyncio
 import litellm
 import pytest

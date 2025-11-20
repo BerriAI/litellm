@@ -12,8 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 import litellm
 from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable
 from litellm.proxy.auth.auth_checks import get_end_user_object

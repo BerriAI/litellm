@@ -14,8 +14,6 @@ from unittest.mock import Mock, patch
 import pytest
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath("../../../.."))
-
 import litellm
 from litellm import ModelResponse
 from litellm.cost_calculator import completion_cost, cost_per_token

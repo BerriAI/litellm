@@ -8,8 +8,6 @@ import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
-sys.path.insert(0, os.path.abspath("../../../../../.."))
-
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,

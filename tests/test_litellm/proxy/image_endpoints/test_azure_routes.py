@@ -7,7 +7,6 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
 import litellm
 from litellm.proxy.proxy_server import app, initialize
 

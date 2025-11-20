@@ -4,8 +4,6 @@ from copy import deepcopy
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
-
 import litellm.proxy.public_endpoints.provider_create_metadata as pcm  # noqa: E402
 from litellm.proxy.public_endpoints.provider_create_metadata import (  # noqa: E402
     _normalize_field,

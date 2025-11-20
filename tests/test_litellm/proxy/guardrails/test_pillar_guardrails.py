@@ -12,8 +12,6 @@ from typing import Dict
 from unittest.mock import Mock, patch
 
 # Add parent directory to path for imports
-sys.path.insert(0, os.path.abspath("../../.."))
-
 # Third-party imports
 import pytest
 from fastapi.exceptions import HTTPException

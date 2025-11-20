@@ -6,10 +6,6 @@ import sys
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)
-
 import litellm
 
 

@@ -3,8 +3,6 @@ import sys
 import pytest
 from typing import List, Any, cast
 
-sys.path.insert(0, os.path.abspath("../../.."))
-
 # Import required modules
 import litellm
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler

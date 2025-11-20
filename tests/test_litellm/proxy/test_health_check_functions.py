@@ -4,8 +4,6 @@ from unittest.mock import AsyncMock, MagicMock
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath("../../.."))
-
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.health_endpoints._health_endpoints import _save_health_check_to_db
 

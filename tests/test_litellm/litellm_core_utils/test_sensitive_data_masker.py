@@ -8,8 +8,6 @@ import sys
 import pytest
 
 # Add the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../../.."))
-
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 

@@ -5,8 +5,6 @@ from typing import Optional
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
-
 import pytest
 
 from litellm.secret_managers.get_azure_ad_token_provider import (

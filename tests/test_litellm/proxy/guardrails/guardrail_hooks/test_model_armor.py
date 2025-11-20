@@ -7,8 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
 from fastapi import HTTPException
 
 import litellm

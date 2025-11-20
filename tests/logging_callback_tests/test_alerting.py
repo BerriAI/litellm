@@ -18,7 +18,6 @@ from litellm.types.integrations.slack_alerting import AlertType
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
 import asyncio
 import os
 import unittest.mock

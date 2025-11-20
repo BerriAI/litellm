@@ -8,8 +8,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
-
 from litellm.proxy._types import (
     GenerateKeyResponse,
     LiteLLM_VerificationToken,

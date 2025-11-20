@@ -8,8 +8,6 @@ import traceback
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 import litellm
 from litellm import completion, embedding
 from litellm.integrations.custom_logger import CustomLogger

@@ -7,10 +7,6 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../")
-)
-
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
     PATTERN_CATEGORIES,
     PATTERN_DESCRIPTIONS,

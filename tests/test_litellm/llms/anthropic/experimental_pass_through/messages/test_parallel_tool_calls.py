@@ -3,8 +3,6 @@ import sys
 from typing import List
 
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
 )

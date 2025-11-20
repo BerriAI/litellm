@@ -9,8 +9,6 @@ from unittest.mock import patch
 from litellm.caching.dual_cache import DualCache
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
-
 from fastapi import HTTPException
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._types import UserAPIKeyAuth

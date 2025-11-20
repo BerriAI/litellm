@@ -15,7 +15,6 @@ from pydantic import BaseModel
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 
-sys.path.insert(0, os.path.abspath("../.."))
 from typing import Any, List, Literal, Optional, Tuple, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 

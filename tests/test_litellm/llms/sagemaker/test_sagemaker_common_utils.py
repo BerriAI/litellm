@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 

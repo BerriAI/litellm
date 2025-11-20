@@ -5,8 +5,6 @@ import sys
 import os
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 from litellm.proxy.guardrails.guardrail_hooks.dynamoai import DynamoAIGuardrails
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching.caching import DualCache

@@ -4,10 +4,6 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)
-
 from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy.management_helpers.object_permission_utils import (

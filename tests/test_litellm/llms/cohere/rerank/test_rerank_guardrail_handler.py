@@ -8,8 +8,6 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.cohere.rerank.guardrail_translation.handler import CohereRerankHandler

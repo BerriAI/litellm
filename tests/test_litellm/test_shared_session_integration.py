@@ -8,8 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Add the litellm directory to the path
-sys.path.insert(0, os.path.abspath("../../.."))
-
 import litellm
 
 

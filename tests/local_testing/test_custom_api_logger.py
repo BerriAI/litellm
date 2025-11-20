@@ -4,7 +4,6 @@ import io, asyncio
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
 print("Modified sys.path:", sys.path)
 
 

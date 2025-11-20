@@ -8,8 +8,6 @@ import os
 import sys
 import inspect
 
-sys.path.insert(0, os.path.abspath("../../.."))
-
 from litellm.types.utils import all_litellm_params
 
 

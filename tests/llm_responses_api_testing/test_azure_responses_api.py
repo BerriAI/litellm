@@ -5,7 +5,6 @@ import asyncio
 from typing import Optional
 from unittest.mock import patch, AsyncMock
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 import json

@@ -8,8 +8,6 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add the project root to the path
-sys.path.insert(0, os.path.abspath("../../.."))
-
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
 from mcp.types import Tool as MCPTool, CallToolResult as MCPCallToolResult

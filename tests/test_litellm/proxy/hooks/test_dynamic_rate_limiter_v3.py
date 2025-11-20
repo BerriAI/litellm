@@ -13,8 +13,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
-
 import litellm
 from litellm import DualCache, Router
 from litellm.proxy._types import UserAPIKeyAuth

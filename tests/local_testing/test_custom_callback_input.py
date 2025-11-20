@@ -12,7 +12,6 @@ from datetime import datetime
 import pytest
 from pydantic import BaseModel
 
-sys.path.insert(0, os.path.abspath("../.."))
 from typing import List, Literal, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 

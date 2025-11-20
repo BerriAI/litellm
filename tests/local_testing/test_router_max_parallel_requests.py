@@ -10,7 +10,6 @@ from datetime import datetime
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 from typing import Optional
 
 import litellm

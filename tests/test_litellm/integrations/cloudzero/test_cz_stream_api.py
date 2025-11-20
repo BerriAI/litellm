@@ -8,8 +8,6 @@ import httpx
 import polars as pl
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
-
 from litellm.integrations.cloudzero.cz_stream_api import CloudZeroStreamer
 
 

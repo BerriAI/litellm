@@ -21,8 +21,6 @@ import sys
 import os
 from typing import List, Dict
 
-sys.path.insert(0, os.path.abspath("../.."))
-
 from litellm.router_utils.fallback_event_handlers import (
     run_async_fallback,
     log_success_fallback_event,

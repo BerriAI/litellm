@@ -10,10 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)
-
 import litellm
 from litellm.proxy.management_endpoints.cost_tracking_settings import router
 from litellm.proxy.proxy_server import app

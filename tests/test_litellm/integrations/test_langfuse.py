@@ -13,7 +13,6 @@ import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-sys.path.insert(0, os.path.abspath("../.."))
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 # Import LangfuseUsageDetails directly from the module where it's defined

@@ -12,8 +12,6 @@ from unittest.mock import Mock
 import pytest
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
 from litellm import ModelResponse
 from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
 from litellm.types.utils import Usage

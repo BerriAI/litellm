@@ -3,9 +3,6 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
-
-
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
 )
