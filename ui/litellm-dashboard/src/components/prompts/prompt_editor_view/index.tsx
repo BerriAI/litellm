@@ -9,7 +9,7 @@ import ModelConfigCard from "./ModelConfigCard";
 import ToolsCard from "./ToolsCard";
 import DeveloperMessageCard from "./DeveloperMessageCard";
 import PromptMessagesCard from "./PromptMessagesCard";
-import ConversationPanel from "./ConversationPanel";
+import ConversationPanel from "./conversation_panel";
 import PublishModal from "./PublishModal";
 import DotpromptViewTab from "./DotpromptViewTab";
 
