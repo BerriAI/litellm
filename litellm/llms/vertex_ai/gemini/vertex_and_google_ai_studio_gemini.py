@@ -1673,6 +1673,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if thinking_blocks is not None:
                 chat_completion_message["thinking_blocks"] = thinking_blocks  # type: ignore
 
+                # Convert thinking_blocks to reasoning_content for streaming
+                # This ensures reasoning_content is available in streaming responses
+                if isinstance(model_response, ModelResponseStream) and reasoning_content is None:
+                    reasoning_content_parts = []
+                    for block in thinking_blocks:
+                        thinking_text = block.get("thinking")
+                        if thinking_text:
+                            reasoning_content_parts.append(thinking_text)
+
+                    if reasoning_content_parts:
+                        reasoning_content = "\n".join(reasoning_content_parts)
+                        chat_completion_message["reasoning_content"] = reasoning_content
+
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
                     chat_completion_message=chat_completion_message,
