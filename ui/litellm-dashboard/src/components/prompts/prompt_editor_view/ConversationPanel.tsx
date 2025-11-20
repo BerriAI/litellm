@@ -100,10 +100,29 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
       const dotpromptContent = convertToDotPrompt(prompt);
       const proxyBaseUrl = getProxyBaseUrl();
 
-      const promptVariablesWithInput = {
-        ...variables,
-        ...(messages.length === 0 && { user_message: inputMessage }),
+      // Build request body
+      const requestBody: any = {
+        dotprompt_content: dotpromptContent,
       };
+
+      // For first message, use variables and render the prompt
+      // For subsequent messages, send the full conversation history
+      if (messages.length === 0) {
+        requestBody.prompt_variables = variables;
+      } else {
+        // Send full conversation history including the new user message
+        requestBody.conversation_history = [
+          ...messages.map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+          })),
+          // Add the current user message
+          {
+            role: "user",
+            content: inputMessage,
+          },
+        ];
+      }
 
       const response = await fetch(`${proxyBaseUrl}/prompts/test`, {
         method: "POST",
@@ -111,10 +130,7 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          dotprompt_content: dotpromptContent,
-          prompt_variables: promptVariablesWithInput,
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 
@@ -270,7 +286,7 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
         </div>
       )}
 
-      <div className="flex-1 overflow-auto p-4 pb-0">
+      <div className="flex-1 overflow-y-auto p-4 pb-0">
         {messages.length === 0 && (
           <div className="h-full flex flex-col items-center justify-center text-gray-400">
             <RobotOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
