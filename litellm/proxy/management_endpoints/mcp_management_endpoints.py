@@ -653,7 +653,7 @@ if MCP_AVAILABLE:
             )
 
             return {
-                "message": "Successfully updated public agent groups",
+                "message": "Successfully updated public mcp servers",
                 "public_mcp_servers": litellm.public_mcp_servers,
                 "updated_by": user_api_key_dict.user_id,
             }
