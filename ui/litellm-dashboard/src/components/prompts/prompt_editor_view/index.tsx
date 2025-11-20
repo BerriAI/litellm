@@ -185,7 +185,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         />
 
         <div className="flex-1 flex overflow-hidden">
-          <div className="w-1/2 overflow-y-auto bg-white border-r border-gray-200">
+          <div className="w-1/2 overflow-y-auto bg-white border-r border-gray-200 flex-shrink-0">
             <div className="border-b border-gray-200 bg-white px-6 py-4 flex items-center gap-3">
               <ModelConfigCard
                 model={prompt.model}
@@ -258,7 +258,9 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
             )}
           </div>
 
-          <ConversationPanel />
+          <div className="w-1/2 flex-shrink-0">
+            <ConversationPanel prompt={prompt} accessToken={accessToken} />
+          </div>
         </div>
       </div>
 
