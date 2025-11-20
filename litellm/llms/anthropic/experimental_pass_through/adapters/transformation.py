@@ -152,7 +152,7 @@ class LiteLLMAnthropicMessagesAdapter:
         return signature
 
     def _extract_signature_from_tool_use_content(
-        self, content: dict[str, Any]
+        self, content: Dict[str, Any]
     ) -> Optional[str]:
         """
         Extract signature from a tool_use content block's provider_specific_fields.
