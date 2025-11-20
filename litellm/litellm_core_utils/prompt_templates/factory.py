@@ -1052,24 +1052,28 @@ def anthropic_messages_pt_xml(messages: list):
                         image_param = create_anthropic_image_param(m["image_url"], format=format)
                         # Convert to dict format for XML version
                         source = image_param["source"]
-                        if source.get("type") == "url":
+                        if isinstance(source, dict) and source.get("type") == "url":
+                            # Type narrowing for URL source
+                            url_source = cast(AnthropicContentParamSourceUrl, source)
                             user_content.append(
                                 {
                                     "type": "image",
                                     "source": {
                                         "type": "url",
-                                        "url": source["url"],
+                                        "url": url_source["url"],
                                     },
                                 }
                             )
                         else:
+                            # Type narrowing for base64 source
+                            base64_source = cast(AnthropicContentParamSource, source)
                             user_content.append(
                                 {
                                     "type": "image",
                                     "source": {
                                         "type": "base64",
-                                        "media_type": source["media_type"],
-                                        "data": source["data"],
+                                        "media_type": base64_source["media_type"],
+                                        "data": base64_source["data"],
                                     },
                                 }
                             )
@@ -1779,8 +1783,18 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
                             format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
+                            # Convert ChatCompletionImageUrlObject to dict if needed
+                            image_url_value = m["image_url"]
+                            if isinstance(image_url_value, str):
+                                image_url_input: Union[str, dict[str, Any]] = image_url_value
+                            else:
+                                # ChatCompletionImageUrlObject or dict case - convert to dict
+                                image_url_input = {
+                                    "url": image_url_value["url"],
+                                    "format": image_url_value.get("format"),
+                                }
                             _anthropic_content_element = create_anthropic_image_param(
-                                m["image_url"], format=format
+                                image_url_input, format=format
                             )
                             
                             _content_element = add_cache_control_to_content(
