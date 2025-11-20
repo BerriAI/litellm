@@ -8,6 +8,7 @@ from litellm.proxy.public_endpoints.provider_create_metadata import (
     get_provider_create_metadata,
 )
 from litellm.types.agents import AgentCard
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -66,6 +67,24 @@ async def get_agents():
         if agent.agent_id in litellm.public_agent_groups
     ]
     return agent_card_list
+
+
+@router.get(
+    "/public/mcp_hub",
+    tags=["[beta] MCP", "public"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=List[MCPServer],
+)
+async def get_mcp_servers():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        _redact_mcp_credentials_list,
+    )
+
+    public_mcp_servers = global_mcp_server_manager.get_public_mcp_servers()
+    return _redact_mcp_credentials_list(public_mcp_servers)  # type: ignore
 
 
 @router.get(
