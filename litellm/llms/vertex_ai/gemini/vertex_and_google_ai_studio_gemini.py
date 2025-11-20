@@ -898,11 +898,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
+            thinking_config = optional_params.get("thinkingConfig", {})
             if (
-                "thinkingConfig" not in optional_params
-                or "thinkingLevel" not in optional_params.get("thinkingConfig", {})
+                "thinkingLevel" not in thinking_config
+                and "thinkingBudget" not in thinking_config
             ):
-                thinking_config = optional_params.get("thinkingConfig", {})
                 thinking_config["thinkingLevel"] = "low"
                 optional_params["thinkingConfig"] = thinking_config
 
@@ -1892,7 +1892,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _transform_messages(
         self, messages: List[AllMessageValues], model: Optional[str] = None
     ) -> List[ContentType]:
-        return _gemini_convert_messages_with_history(messages=messages)
+        return _gemini_convert_messages_with_history(messages=messages, model=model)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
