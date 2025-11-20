@@ -225,7 +225,7 @@ from litellm.proxy.common_utils.load_config_utils import (
     get_file_contents_from_s3,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
-    remove_sensitive_info_from_deployment,
+    remove_sensitive_info_from_deployment, process_model_info_fields_from_deployment,
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
@@ -7497,7 +7497,7 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
-def _get_proxy_model_info(model: dict) -> dict:
+def _get_proxy_model_info(model: dict, model_info_fields: Optional[List[str]], return_litellm_params: bool) -> dict:
     # provided model_info in config.yaml
     model_info = model.get("model_info", {})
 
@@ -7534,6 +7534,9 @@ def _get_proxy_model_info(model: dict) -> dict:
     model["model_info"] = model_info
     # don't return the llm credentials
     model = remove_sensitive_info_from_deployment(deployment_dict=model)
+    model = process_model_info_fields_from_deployment(deployment_dict=model, model_info_fields=model_info_fields)
+    if not return_litellm_params and "litellm_params" in model:
+        del model["litellm_params"]
 
     return model
 
@@ -7551,6 +7554,8 @@ def _get_proxy_model_info(model: dict) -> dict:
 async def model_info_v1(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_model_id: Optional[str] = None,
+    model_info_fields: Optional[List[str]] = None,
+    return_litellm_params: bool = True
 ):
     """
     Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)
@@ -7603,6 +7608,14 @@ async def model_info_v1(  # noqa: PLR0915
         _deployment_info_dict = remove_sensitive_info_from_deployment(
             deployment_dict=_deployment_info_dict
         )
+        _deployment_info_dict = process_model_info_fields_from_deployment(
+            deployment_dict=_deployment_info_dict,
+            model_info_fields=model_info_fields,
+        )
+
+        if not return_litellm_params and "litellm_params" in _deployment_info_dict:
+            del _deployment_info_dict["litellm_params"]
+
         return {"data": _deployment_info_dict}
 
     if llm_model_list is None:
@@ -7632,7 +7645,9 @@ async def model_info_v1(  # noqa: PLR0915
                 },
             )
         _deployment_info_dict = _get_proxy_model_info(
-            model=deployment_info.model_dump(exclude_none=True)
+            model=deployment_info.model_dump(exclude_none=True),
+            model_info_fields=model_info_fields,
+            return_litellm_params=return_litellm_params,
         )
         return {"data": [_deployment_info_dict]}
 
@@ -7675,7 +7690,9 @@ async def model_info_v1(  # noqa: PLR0915
             all_models = []
 
     for in_place_model in all_models:
-        in_place_model = _get_proxy_model_info(model=in_place_model)
+        in_place_model = _get_proxy_model_info(
+            model=in_place_model, model_info_fields=model_info_fields, return_litellm_params=return_litellm_params
+        )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}

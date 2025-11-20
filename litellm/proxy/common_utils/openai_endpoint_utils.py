@@ -2,7 +2,7 @@
 Contains utils used by OpenAI compatible endpoints 
 """
 
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import Request
 
@@ -29,6 +29,19 @@ def remove_sensitive_info_from_deployment(deployment_dict: dict) -> dict:
     deployment_dict["litellm_params"].pop("aws_secret_access_key", None)
 
     deployment_dict["litellm_params"] = SENSITIVE_DATA_MASKER.mask_dict(deployment_dict["litellm_params"])
+
+    return deployment_dict
+
+
+def process_model_info_fields_from_deployment(
+    deployment_dict: dict, model_info_fields: Optional[List[str]]) -> dict:
+    if model_info_fields is None:
+        return deployment_dict
+
+    # Remove fields that are not in the model_info_fields list
+    for field in model_info_fields:
+        if field not in deployment_dict:
+            del deployment_dict[field]
 
     return deployment_dict
 
