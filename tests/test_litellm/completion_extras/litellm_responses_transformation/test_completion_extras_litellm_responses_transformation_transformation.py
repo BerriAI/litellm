@@ -86,6 +86,73 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.function_call is None
 
 
+def test_chunk_parser_string_output_text_delta_produces_text():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {"type": "response.output_text.delta", "delta": "literal text"}
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result["text"] == "literal text"
+    assert result.get("tool_use") is None
+    assert result.get("finish_reason") == ""
+    assert not result.get("is_finished")
+
+
+def test_chunk_parser_enum_output_text_delta_produces_text():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {"type": ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, "delta": "enum text"}
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result["text"] == "enum text"
+    assert result.get("tool_use") is None
+    assert result.get("finish_reason") == ""
+    assert not result.get("is_finished")
+
+
+def test_chunk_parser_function_call_added_produces_tool_use():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        "arguments": '{"key": "value"}',
+        "item": {"type": "function_call", "name": "fn", "call_id": "call-42"},
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    tool_use = result["tool_use"]
+    assert tool_use is not None
+    assert tool_use["id"] == "call-42"
+    assert tool_use["type"] == "function"
+    assert tool_use["function"]["name"] == "fn"
+    assert tool_use["function"]["arguments"] == '{"key": "value"}'
+    assert result.get("finish_reason") == ""
+    assert not result.get("is_finished")
+
+
 def test_transform_response_with_reasoning_and_output():
     """Test transform_response handles ResponsesAPIResponse with reasoning items and output messages."""
     from unittest.mock import Mock

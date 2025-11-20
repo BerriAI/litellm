@@ -30,6 +30,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     Reasoning,
     ResponsesAPIOptionalRequestParams,
+    ResponsesAPIStreamEvents,
 )
 
 if TYPE_CHECKING:
@@ -652,6 +653,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
         # Handle different event types from responses API
         event_type = parsed_chunk.get("type")
+        if isinstance(event_type, ResponsesAPIStreamEvents):
+            event_type = event_type.value
         verbose_logger.debug(f"Chat provider: Processing event type: {event_type}")
 
         if event_type == "response.created":
@@ -671,7 +674,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         index=0,
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
-                            name=parsed_chunk.get("name", None),
+                            name=output_item.get("name", None),
                             arguments=parsed_chunk.get("arguments", ""),
                         ),
                     ),
@@ -717,7 +720,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         index=0,
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
-                            name=parsed_chunk.get("name", None),
+                            name=output_item.get("name", None),
                             arguments="",  # responses API sends everything again, we don't
                         ),
                     ),
