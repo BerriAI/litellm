@@ -28,7 +28,9 @@ class GoogleAIStudioTokenCounter:
         """
         import copy
 
-        from google.genai.types import FunctionResponse
+        # Handle None or non-iterable inputs
+        if contents is None:
+            return None
 
         cleaned_contents = copy.deepcopy(contents)
 
@@ -36,12 +38,9 @@ class GoogleAIStudioTokenCounter:
             parts = content["parts"]
             for part in parts:
                 if "functionResponse" in part:
-                    function_response_data = part["functionResponse"]
-                    function_response_part = FunctionResponse(**function_response_data)
-                    function_response_part.id = None
-                    part["functionResponse"] = function_response_part.model_dump(
-                        exclude_none=True
-                    )
+                    # Remove 'id' from functionResponse if it exists
+                    if "id" in part["functionResponse"]:
+                        part["functionResponse"].pop("id")
 
         return cleaned_contents
 

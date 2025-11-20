@@ -1170,8 +1170,25 @@ def _get_thought_signature_from_tool(tool: dict) -> Optional[str]:
     return None
 
 
+def _is_gemini_3_or_newer(model: Optional[str]) -> bool:
+    """
+    Check if the model is Gemini 3 Pro or newer.
+
+    Gemini 3 models include:
+    - gemini-3-pro-preview
+    - Any future Gemini 3.x models
+    """
+    if model is None:
+        return False
+    # Check for Gemini 3 models
+    if "gemini-3" in model:
+        return True
+    return False
+
+
 def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
+    model: Optional[str] = None,
 ) -> List[VertexPartType]:
     """
     OpenAI tool invokes:
@@ -1216,7 +1233,8 @@ def convert_to_gemini_tool_call_invoke(
         _parts_list: List[VertexPartType] = []
         tool_calls = message.get("tool_calls", None)
         function_call = message.get("function_call", None)
-        
+        is_gemini_3 = _is_gemini_3_or_newer(model)
+
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
@@ -1230,9 +1248,16 @@ def convert_to_gemini_tool_call_invoke(
                             "function_call": gemini_function_call
                         }
                         thought_signature = _get_thought_signature_from_tool(dict(tool))
+
+                        # For Gemini 3 models, thought_signature is required in the first function call
+                        # If not present, use a dummy value to bypass validation
+                        # https://ai.google.dev/gemini-api/docs/thought-signatures
                         if thought_signature:
                             part_dict["thoughtSignature"] = thought_signature
-                        
+                        elif is_gemini_3 and idx == 0:
+                            # Only the first function call needs a signature
+                            part_dict["thoughtSignature"] = "skip_thought_signature_validator"
+
                         _parts_list.append(part_dict)
                     else:  # don't silently drop params. Make it clear to user what's happening.
                         raise Exception(
@@ -1248,14 +1273,21 @@ def convert_to_gemini_tool_call_invoke(
                 part_dict_function: VertexPartType = {
                     "function_call": gemini_function_call
                 }
-                
+
                 # Extract thought signature from function_call's provider_specific_fields
                 provider_fields = function_call.get("provider_specific_fields") if isinstance(function_call, dict) else {}
+                thought_signature = None
                 if isinstance(provider_fields, dict):
                     thought_signature = provider_fields.get("thought_signature")
-                    if thought_signature:
-                        part_dict_function["thoughtSignature"] = thought_signature
-                
+
+                # For Gemini 3 models, thought_signature is required
+                # If not present, use a dummy value to bypass validation
+                # https://ai.google.dev/gemini-api/docs/thought-signatures
+                if thought_signature:
+                    part_dict_function["thoughtSignature"] = thought_signature
+                elif is_gemini_3:
+                    part_dict_function["thoughtSignature"] = "skip_thought_signature_validator"
+
                 _parts_list.append(part_dict_function)
             else:  # don't silently drop params. Make it clear to user what's happening.
                 raise Exception(
