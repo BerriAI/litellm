@@ -93,6 +93,35 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
 
+        # Handle function_call items (e.g., from GPT-5 Codex format)
+        if item_type == "function_call":
+            # Extract provider_specific_fields if present and pass through as-is
+            provider_specific_fields = item.get("provider_specific_fields")
+            if provider_specific_fields and not isinstance(provider_specific_fields, dict):
+                provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
+            
+            tool_call_dict = {
+                "id": item.get("call_id") or item.get("id", ""),
+                "function": {
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", ""),
+                },
+                "type": "function",
+            }
+            
+            # Pass through provider_specific_fields as-is if present
+            if provider_specific_fields:
+                tool_call_dict["provider_specific_fields"] = provider_specific_fields
+                # Also add to function's provider_specific_fields for consistency
+                tool_call_dict["function"]["provider_specific_fields"] = provider_specific_fields
+            
+            msg = Message(
+                content=None,
+                tool_calls=[tool_call_dict],
+            )
+            choice = Choices(message=msg, finish_reason="tool_calls", index=index)
+            return choice, index + 1
+
         # Unknown or unsupported type
         return None, index
 
@@ -321,18 +350,34 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     reasoning_content = None  # flush reasoning content
                     index += 1
             elif isinstance(item, ResponseFunctionToolCall):
+
+                provider_specific_fields = None
+                if hasattr(item, "provider_specific_fields") and item.provider_specific_fields:
+                    provider_specific_fields = item.provider_specific_fields
+                    if not isinstance(provider_specific_fields, dict):
+                        provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
+                elif hasattr(item, "get") and callable(item.get):
+                    provider_fields = item.get("provider_specific_fields")
+                    if provider_fields:
+                        provider_specific_fields = provider_fields if isinstance(provider_fields, dict) else (dict(provider_fields) if hasattr(provider_fields, "__dict__") else {})
+                
+                tool_call_dict = {
+                    "id": item.call_id,
+                    "function": {
+                        "name": item.name,
+                        "arguments": item.arguments,
+                    },
+                    "type": "function",
+                }
+                
+                if provider_specific_fields:
+                    tool_call_dict["provider_specific_fields"] = provider_specific_fields
+                    # Also add to function's provider_specific_fields for consistency
+                    tool_call_dict["function"]["provider_specific_fields"] = provider_specific_fields
+                
                 msg = Message(
                     content=None,
-                    tool_calls=[
-                        {
-                            "id": item.call_id,
-                            "function": {
-                                "name": item.name,
-                                "arguments": item.arguments,
-                            },
-                            "type": "function",
-                        }
-                    ],
+                    tool_calls=[tool_call_dict],
                     reasoning_content=reasoning_content,
                 )
 
@@ -667,17 +712,28 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # New output item added
             output_item = parsed_chunk.get("item", {})
             if output_item.get("type") == "function_call":
+                # Extract provider_specific_fields if present
+                provider_specific_fields = output_item.get("provider_specific_fields")
+                if provider_specific_fields and not isinstance(provider_specific_fields, dict):
+                    provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
+                
+                tool_call_chunk = ChatCompletionToolCallChunk(
+                    id=output_item.get("call_id"),
+                    index=0,
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=output_item.get("name", None),
+                        arguments=parsed_chunk.get("arguments", ""),
+                    ),
+                )
+                
+                # Add provider_specific_fields if present
+                if provider_specific_fields:
+                    tool_call_chunk.provider_specific_fields = provider_specific_fields
+                
                 return GenericStreamingChunk(
                     text="",
-                    tool_use=ChatCompletionToolCallChunk(
-                        id=output_item.get("call_id"),
-                        index=0,
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=output_item.get("name", None),
-                            arguments=parsed_chunk.get("arguments", ""),
-                        ),
-                    ),
+                    tool_use=tool_call_chunk,
                     is_finished=False,
                     finish_reason="",
                     usage=None,
@@ -713,17 +769,28 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # New output item added
             output_item = parsed_chunk.get("item", {})
             if output_item.get("type") == "function_call":
+                # Extract provider_specific_fields if present
+                provider_specific_fields = output_item.get("provider_specific_fields")
+                if provider_specific_fields and not isinstance(provider_specific_fields, dict):
+                    provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
+                
+                tool_call_chunk = ChatCompletionToolCallChunk(
+                    id=output_item.get("call_id"),
+                    index=0,
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=output_item.get("name", None),
+                        arguments="",  # responses API sends everything again, we don't
+                    ),
+                )
+                
+                # Add provider_specific_fields if present
+                if provider_specific_fields:
+                    tool_call_chunk.provider_specific_fields = provider_specific_fields
+                
                 return GenericStreamingChunk(
                     text="",
-                    tool_use=ChatCompletionToolCallChunk(
-                        id=output_item.get("call_id"),
-                        index=0,
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=output_item.get("name", None),
-                            arguments="",  # responses API sends everything again, we don't
-                        ),
-                    ),
+                    tool_use=tool_call_chunk,
                     is_finished=True,
                     finish_reason="tool_calls",
                     usage=None,
