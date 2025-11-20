@@ -36,6 +36,18 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
         />
       )}
 
+      {messages.length > 0 && (
+        <div className="p-3 border-b border-gray-200 bg-white flex justify-end">
+          <TremorButton
+            onClick={handleClearConversation}
+            className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+            icon={ClearOutlined}
+          >
+            Clear Chat
+          </TremorButton>
+        </div>
+      )}
+
       <MessageList
         messages={messages}
         isLoading={isLoading}
@@ -44,18 +56,6 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
       />
 
       <div className="p-4 border-t border-gray-200 bg-white">
-        {messages.length > 0 && (
-          <div className="mb-2 flex justify-end">
-            <TremorButton
-              onClick={handleClearConversation}
-              className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
-              icon={ClearOutlined}
-            >
-              Clear Chat
-            </TremorButton>
-          </div>
-        )}
-
         <VariableWarning extractedVariables={extractedVariables} variables={variables} />
 
         <MessageInput

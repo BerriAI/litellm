@@ -12,13 +12,12 @@ interface MessageBubbleProps {
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   return (
-    <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
+    <div className={`mb-4 flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
       <div
-        className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
+        className="max-w-[85%] rounded-lg shadow-sm p-3.5 px-4"
         style={{
           backgroundColor: message.role === "user" ? "#f0f8ff" : "#ffffff",
           border: message.role === "user" ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-          textAlign: "left",
         }}
       >
         <div className="flex items-center gap-2 mb-1.5">
