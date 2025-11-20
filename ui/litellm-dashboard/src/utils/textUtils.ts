@@ -10,3 +10,15 @@ export const formatLabel = (text: string): string => {
 export function truncateString(str: string, maxLength: number) {
   return str.length > maxLength ? str.substring(0, maxLength) + "..." : str;
 }
+
+export const formItemValidateJSON = (_: any, value: string) => {
+  if (!value) {
+    return Promise.resolve();
+  }
+  try {
+    JSON.parse(value);
+    return Promise.resolve();
+  } catch (error) {
+    return Promise.reject("Please enter valid JSON");
+  }
+};

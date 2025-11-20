@@ -17,6 +17,8 @@ from functools import partial
 from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
 import httpx
+from openai.types.batch import BatchRequestCounts
+from openai.types.batch import Metadata as BatchMetadata
 
 import litellm
 from litellm._logging import verbose_logger
@@ -223,10 +225,12 @@ def create_batch(
                 api_key=optional_params.api_key,
                 logging_obj=litellm_logging_obj,
                 _is_async=_is_async,
-                client=client
-                if client is not None
-                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                else None,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
                 timeout=timeout,
                 model=model,
             )
@@ -609,10 +613,12 @@ def retrieve_batch(
                     function_id="batch_retrieve",
                 ),
                 _is_async=_is_async,
-                client=client
-                if client is not None
-                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                else None,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
                 timeout=timeout,
                 model=model,
             )
@@ -799,6 +805,7 @@ def list_batches(
 
 async def acancel_batch(
     batch_id: str,
+    model: Optional[str] = None,
     custom_llm_provider: Literal["openai", "azure"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
@@ -813,11 +820,13 @@ async def acancel_batch(
     try:
         loop = asyncio.get_event_loop()
         kwargs["acancel_batch"] = True
+        model = kwargs.pop("model", None)
 
         # Use a partial function to pass your keyword arguments
         func = partial(
             cancel_batch,
             batch_id,
+            model,
             custom_llm_provider,
             metadata,
             extra_headers,
@@ -840,7 +849,8 @@ async def acancel_batch(
 
 def cancel_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    model: Optional[str] = None,
+    custom_llm_provider: Union[Literal["openai", "azure"], str] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -852,6 +862,17 @@ def cancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
+
+        try:
+            if model is not None:
+                _, custom_llm_provider, _, _ = get_llm_provider(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                )
+        except Exception as e:
+            verbose_logger.exception(
+                f"litellm.batches.main.py::cancel_batch() - Error inferring custom_llm_provider - {str(e)}"
+            )
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params = get_litellm_params(
             custom_llm_provider=custom_llm_provider,
@@ -1005,21 +1026,28 @@ def _handle_async_invoke_status(
             created_at=status_response["submitTime"],
             in_progress_at=status_response["lastModifiedTime"],
             completed_at=status_response.get("endTime"),
-            failed_at=status_response.get("endTime")
-            if status_response["status"] == "failed"
-            else None,
-            request_counts={
-                "total": 1,
-                "completed": 1 if status_response["status"] == "completed" else 0,
-                "failed": 1 if status_response["status"] == "failed" else 0,
-            },
-            metadata={
-                "output_file_id": status_response["outputDataConfig"][
-                    "s3OutputDataConfig"
-                ]["s3Uri"],
-                "failure_message": status_response.get("failureMessage"),
-                "model_arn": status_response["modelArn"],
-            },
+            failed_at=(
+                status_response.get("endTime")
+                if status_response["status"] == "failed"
+                else None
+            ),
+            request_counts=BatchRequestCounts(
+                total=1,
+                completed=1 if status_response["status"] == "completed" else 0,
+                failed=1 if status_response["status"] == "failed" else 0,
+            ),
+            metadata=dict(
+                **{
+                    "output_file_id": status_response["outputDataConfig"][
+                        "s3OutputDataConfig"
+                    ]["s3Uri"],
+                    "failure_message": status_response.get("failureMessage") or "",
+                    "model_arn": status_response["modelArn"],
+                }
+            ),
+            completion_window="24h",
+            endpoint="/v1/embeddings",
+            input_file_id="",
         )
 
         return result

@@ -12,28 +12,30 @@ import {
   PictureOutlined,
   RobotOutlined,
   SafetyOutlined,
+  SettingOutlined,
   SoundOutlined,
   TagsOutlined,
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
-import { Button, Input, Modal, Select, Spin, Tooltip, Typography, Upload } from "antd";
+import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Typography, Upload } from "antd";
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
+import { truncateString } from "../../utils/textUtils";
 import GuardrailSelector from "../guardrails/GuardrailSelector";
 import NotificationsManager from "../molecules/notifications_manager";
 import TagSelector from "../tag_management/TagSelector";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import AdditionalModelSettings from "./AdditionalModelSettings";
 import AudioRenderer from "./AudioRenderer";
 import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
 import ChatImageRenderer from "./ChatImageRenderer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
-import { truncateString } from "../../utils/textUtils";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
 import { makeAnthropicMessagesRequest } from "./llm_calls/anthropic_messages";
@@ -67,9 +69,20 @@ interface ChatUIProps {
   userRole: string | null;
   userID: string | null;
   disabledPersonalKeyCreation: boolean;
+  proxySettings?: {
+    PROXY_BASE_URL?: string;
+    LITELLM_UI_API_DOC_BASE_URL?: string | null;
+  };
 }
 
-const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, disabledPersonalKeyCreation }) => {
+const ChatUI: React.FC<ChatUIProps> = ({
+  accessToken,
+  token,
+  userRole,
+  userID,
+  disabledPersonalKeyCreation,
+  proxySettings,
+}) => {
   const [isMCPToolsModalVisible, setIsMCPToolsModalVisible] = useState(false);
   const [mcpTools, setMCPTools] = useState<MCPTool[]>([]);
   const [selectedMCPTools, setSelectedMCPTools] = useState<string[]>(() => {
@@ -173,6 +186,9 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<"openai" | "azure">("openai");
   const [mcpEvents, setMCPEvents] = useState<MCPEvent[]>([]);
+  const [temperature, setTemperature] = useState<number>(1.0);
+  const [maxTokens, setMaxTokens] = useState<number>(2048);
+  const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -214,6 +230,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
         selectedModel,
         selectedSdk,
         selectedVoice,
+        proxySettings,
       });
       setGeneratedCode(code);
     }
@@ -231,6 +248,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     selectedMCPTools,
     endpointType,
     selectedModel,
+    proxySettings,
   ]);
 
   useEffect(() => {
@@ -752,6 +770,8 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
             selectedMCPTools, // Pass the selected tools array
             updateChatImageUI, // Pass the image callback
             updateSearchResults, // Pass the search results callback
+            useAdvancedParams ? temperature : undefined, // Pass temperature if enabled
+            useAdvancedParams ? maxTokens : undefined, // Pass max_tokens if enabled
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -937,6 +957,19 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     setShowCustomModelInput(value === "custom");
   };
 
+  // Check if the selected model is a chat model
+  const isChatModel = () => {
+    if (!selectedModel || selectedModel === "custom") {
+      return false;
+    }
+    const model = modelInfo.find((m) => m.model_group === selectedModel);
+    if (!model) {
+      return false;
+    }
+    // Check if mode is explicitly "chat" or undefined (which defaults to chat per backend)
+    return !model.mode || model.mode === "chat";
+  };
+
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
   return (
@@ -1024,8 +1057,44 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
               </div>
 
               <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                  <RobotOutlined className="mr-2" /> Select Model
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center justify-between">
+                  <span className="flex items-center">
+                    <RobotOutlined className="mr-2" /> Select Model
+                  </span>
+                  {isChatModel() ? (
+                    <Popover
+                      content={
+                        <AdditionalModelSettings
+                          temperature={temperature}
+                          maxTokens={maxTokens}
+                          useAdvancedParams={useAdvancedParams}
+                          onTemperatureChange={setTemperature}
+                          onMaxTokensChange={setMaxTokens}
+                          onUseAdvancedParamsChange={setUseAdvancedParams}
+                        />
+                      }
+                      title="Model Settings"
+                      trigger="click"
+                      placement="right"
+                    >
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<SettingOutlined />}
+                        className="text-gray-500 hover:text-gray-700"
+                      />
+                    </Popover>
+                  ) : (
+                    <Tooltip title="Advanced parameters are only supported for chat models currently">
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<SettingOutlined />}
+                        className="text-gray-300 cursor-not-allowed"
+                        disabled
+                      />
+                    </Tooltip>
+                  )}
                 </Text>
                 <Select
                   value={selectedModel}
