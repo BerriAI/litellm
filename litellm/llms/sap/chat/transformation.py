@@ -235,13 +235,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 response_format = validate_dict(response_format, ResponseFormat)
             response_format = {"response_format": response_format}
         model_params.pop("stream", False)
-        # stream_config = {}
-        # if stream or "stream_options" in model_params:
-        #     stream_config["enabled"] = True
-        #     stream_options = model_params.pop("stream_options", {})
-        #     stream_config["chunk_size"] = stream_options.get("chunk_size", 100)
-        #     if "delimiters" in stream_options:
-        #         stream_config["delimiters"] = stream_options.get("delimiters")
+        stream_config = {}
+        if "stream_options" in model_params:
+            # stream_config["enabled"] = True
+            stream_options = model_params.pop("stream_options", {})
+            stream_config["chunk_size"] = stream_options.get("chunk_size", 100)
+            if "delimiters" in stream_options:
+                stream_config["delimiters"] = stream_options.get("delimiters")
         # else:
         #     stream_config["enabled"] = False
         config = {
@@ -259,9 +259,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                             "version": model_version,
                         },
                     },
-                }
-                # },
-                # "stream": stream_config,
+                },
+                "stream": stream_config,
             }
         }
 

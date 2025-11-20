@@ -270,12 +270,10 @@ class GenAIHubOrchestration(BaseLLMHTTPHandler):
             fake_stream: bool,
             # stream_options: dict = None
             ):
-        stream_config = {}
-        stream_config["enabled"] = True
-        # stream_config["chunk_size"] = stream_options.get("chunk_size", 100)
-        # if "delimiters" in stream_options:
-        #     stream_config["delimiters"] = stream_options.get("delimiters")
-        data["config"]["stream"] = stream_config
+        if data.get("config").get("stream") is not None:
+            data["config"]["stream"]["enabled"] = True
+        else:
+            data["config"]["stream"] = {"enabled": True}
         return data
 
 # class GenAIHubOrchestration(BaseLLM):
