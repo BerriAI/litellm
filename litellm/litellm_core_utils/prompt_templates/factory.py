@@ -6,7 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, List, Optional, Tuple, cast, overload
+from typing import Any, List, Optional, Tuple, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -906,6 +906,46 @@ def convert_to_anthropic_image_obj(
         )
 
 
+def create_anthropic_image_param(
+    image_url_input: Union[str, dict], format: Optional[str] = None
+) -> AnthropicMessagesImageParam:
+    """
+    Create an AnthropicMessagesImageParam from an image URL input.
+    
+    Supports both URL references (for HTTP/HTTPS URLs) and base64 encoding.
+    """
+    # Extract URL and format from input
+    if isinstance(image_url_input, str):
+        image_url = image_url_input
+    else:
+        image_url = image_url_input.get("url", "")
+        if format is None:
+            format = image_url_input.get("format")
+    
+    # Check if the image URL is an HTTP/HTTPS URL that should be passed directly
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        return AnthropicMessagesImageParam(
+            type="image",
+            source=AnthropicContentParamSourceUrl(
+                type="url",
+                url=image_url,
+            ),
+        )
+    else:
+        # Convert to base64 for data URIs or other formats
+        image_chunk = convert_to_anthropic_image_obj(
+            openai_image_url=image_url, format=format
+        )
+        return AnthropicMessagesImageParam(
+            type="image",
+            source=AnthropicContentParamSource(
+                type="base64",
+                media_type=image_chunk["media_type"],
+                data=image_chunk["data"],
+            ),
+        )
+
+
 # The following XML functions will be deprecated once JSON schema support is available on Bedrock and Vertex
 # ------------------------------------------------------------------------------
 def convert_to_anthropic_tool_result_xml(message: dict) -> str:
@@ -1008,15 +1048,31 @@ def anthropic_messages_pt_xml(messages: list):
             if isinstance(messages[msg_i]["content"], list):
                 for m in messages[msg_i]["content"]:
                     if m.get("type", "") == "image_url":
-                        format = m["image_url"].get("format")
-                        user_content.append(
-                            {
-                                "type": "image",
-                                "source": convert_to_anthropic_image_obj(
-                                    m["image_url"]["url"], format=format
-                                ),
-                            }
-                        )
+                        format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
+                        image_param = create_anthropic_image_param(m["image_url"], format=format)
+                        # Convert to dict format for XML version
+                        source = image_param["source"]
+                        if source.get("type") == "url":
+                            user_content.append(
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "url",
+                                        "url": source["url"],
+                                    },
+                                }
+                            )
+                        else:
+                            user_content.append(
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": source["media_type"],
+                                        "data": source["data"],
+                                    },
+                                }
+                            )
                     elif m.get("type", "") == "text":
                         user_content.append({"type": "text", "text": m["text"]})
             else:
@@ -1389,24 +1445,9 @@ def convert_to_anthropic_tool_result(
                     )
                 )
             elif content["type"] == "image_url":
-                if isinstance(content["image_url"], str):
-                    image_chunk = convert_to_anthropic_image_obj(
-                        content["image_url"], format=None
-                    )
-                else:
-                    format = content["image_url"].get("format")
-                    image_chunk = convert_to_anthropic_image_obj(
-                        content["image_url"]["url"], format=format
-                    )
+                format = content["image_url"].get("format") if isinstance(content["image_url"], dict) else None
                 anthropic_content_list.append(
-                    AnthropicMessagesImageParam(
-                        type="image",
-                        source=AnthropicContentParamSource(
-                            type="base64",
-                            media_type=image_chunk["media_type"],
-                            data=image_chunk["data"],
-                        ),
-                    )
+                    create_anthropic_image_param(content["image_url"], format=format)
                 )
 
         anthropic_content = anthropic_content_list
@@ -1737,21 +1778,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
-                            format: Optional[str] = None
-                            if isinstance(m["image_url"], str):
-                                image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=m["image_url"], format=None
-                                )
-                            else:
-                                format = m["image_url"].get("format")
-                                image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=m["image_url"]["url"],
-                                    format=format,
-                                )
-
-                            _anthropic_content_element = (
-                                _anthropic_content_element_factory(image_chunk)
+                            format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
+                            _anthropic_content_element = create_anthropic_image_param(
+                                m["image_url"], format=format
                             )
+                            
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
                                 original_content_element=dict(m),

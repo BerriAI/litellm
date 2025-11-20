@@ -192,8 +192,17 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             json_str = json_str.decode("utf-8")
 
         print(f"type of json_str: {type(json_str)}")
-        assert "png" in json_str
-        assert "jpeg" not in json_str
+        
+        # For Anthropic models, HTTP/HTTPS URLs should be passed as URL references
+        if "anthropic" in model or "claude" in model.lower():
+            # Check that URL is passed directly (not converted to base64)
+            assert "https://upload.wikimedia.org" in json_str
+            # For Anthropic, URL references use "url" type, not base64
+            assert '"type":"url"' in json_str or '"type": "url"' in json_str
+        else:
+            # For other models, check format parameter is respected
+            assert "png" in json_str
+            assert "jpeg" not in json_str
 
 
 @pytest.mark.parametrize("model", ["gpt-4o-mini"])
