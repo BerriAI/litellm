@@ -220,6 +220,32 @@ export const mcpHubColumns = (
       },
     },
     {
+      header: "Public",
+      accessorKey: "mcp_info.is_public",
+      enableSorting: true,
+      sortingFn: (rowA, rowB) => {
+        const publicA = rowA.original.mcp_info?.is_public === true ? 1 : 0;
+        const publicB = rowB.original.mcp_info?.is_public === true ? 1 : 0;
+        return publicA - publicB;
+      },
+      cell: ({ row }) => {
+        const server = row.original;
+
+        return server.mcp_info?.is_public === true ? (
+          <Badge color="green" size="xs">
+            Yes
+          </Badge>
+        ) : (
+          <Badge color="gray" size="xs">
+            No
+          </Badge>
+        );
+      },
+      meta: {
+        className: "hidden md:table-cell",
+      },
+    },
+    {
       header: "Details",
       id: "details",
       enableSorting: false,
