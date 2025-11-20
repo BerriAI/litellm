@@ -4535,6 +4535,12 @@ class Router:
         ):
             raise error
 
+        # Do not retry client-side 400 errors (e.g., invalid params / max tokens exceeded)
+        if isinstance(error, litellm.BadRequestError) or getattr(
+            error, "status_code", None
+        ) == 400:
+            raise error
+
         if isinstance(error, litellm.NotFoundError):
             raise error
         # Error we should only retry if there are other deployments
