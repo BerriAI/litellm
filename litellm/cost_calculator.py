@@ -857,9 +857,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1218,26 +1218,7 @@ def response_cost_calculator(
     ],
     model: str,
     custom_llm_provider: Optional[str],
-    call_type: Literal[
-        "embedding",
-        "aembedding",
-        "completion",
-        "acompletion",
-        "atext_completion",
-        "text_completion",
-        "image_generation",
-        "aimage_generation",
-        "moderation",
-        "amoderation",
-        "atranscription",
-        "transcription",
-        "aspeech",
-        "speech",
-        "rerank",
-        "arerank",
-        "search",
-        "asearch",
-    ],
+    call_type: CallTypesLiteral,
     optional_params: dict,
     cache_hit: Optional[bool] = None,
     base_model: Optional[str] = None,

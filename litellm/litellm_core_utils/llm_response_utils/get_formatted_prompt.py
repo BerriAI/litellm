@@ -1,17 +1,11 @@
 from typing import List, Literal
 
+from litellm.types.utils import CallTypesLiteral
+
 
 def get_formatted_prompt(
     data: dict,
-    call_type: Literal[
-        "acompletion",
-        "completion",
-        "embedding",
-        "image_generation",
-        "audio_transcription",
-        "moderation",
-        "text_completion",
-    ],
+    call_type: CallTypesLiteral,
 ) -> str:
     """
     Extracts the prompt from the input data based on the call type.

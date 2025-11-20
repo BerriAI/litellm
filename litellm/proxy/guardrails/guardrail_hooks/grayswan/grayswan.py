@@ -20,7 +20,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import LLMResponseTypes
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
 
 class GraySwanGuardrailMissingSecrets(Exception):
@@ -110,18 +110,7 @@ class GraySwanGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
         if (
             self.should_run_guardrail(
@@ -158,16 +147,7 @@ class GraySwanGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
         if (
             self.should_run_guardrail(

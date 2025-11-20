@@ -22,6 +22,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolResult,
 )
 from litellm.types.utils import (
+    CallTypesLiteral,
     ChatCompletionMessageToolCall,
     Choices,
     LLMResponseTypes,
@@ -271,18 +272,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         """ """
         verbose_proxy_logger.debug("Tool Permission Guardrail Pre-Call Hook")
