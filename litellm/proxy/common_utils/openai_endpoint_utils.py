@@ -34,16 +34,33 @@ def remove_sensitive_info_from_deployment(deployment_dict: dict) -> dict:
 
 
 def process_model_info_fields_from_deployment(
-    deployment_dict: dict, model_info_fields: Optional[List[str]]) -> dict:
+    deployment_dict: dict, model_info_fields: Optional[List[str]]
+) -> dict:
+    """
+    Keeps only the specified fields in a deployment dictionary (whitelist approach).
+
+    This function filters the deployment dictionary to include only the fields
+    specified in model_info_fields. All other fields are removed.
+
+    Args:
+        deployment_dict (dict): The deployment dictionary to filter fields from.
+        model_info_fields (Optional[List[str]]): List of field names to keep in
+            the deployment dictionary. If None, all fields are kept.
+
+    Returns:
+        dict: The modified deployment dictionary with only specified fields kept.
+    """
     if model_info_fields is None:
         return deployment_dict
 
-    # Remove fields that are not in the model_info_fields list
-    for field in model_info_fields:
-        if field not in deployment_dict:
-            del deployment_dict[field]
+    # Keep only fields that are in the model_info_fields list
+    filtered_dict = {
+        key: value 
+        for key, value in deployment_dict.items() 
+        if key in model_info_fields
+    }
 
-    return deployment_dict
+    return filtered_dict
 
 
 async def get_custom_llm_provider_from_request_body(request: Request) -> Optional[str]:

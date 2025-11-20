@@ -7566,6 +7566,16 @@ async def model_info_v1(  # noqa: PLR0915
         - When litellm_model_id is passed, it will return the info for that specific model
         - When litellm_model_id is not passed, it will return the info for all models
 
+        model_info_fields: Optional[List[str]] = None (list of field names to include in the response)
+
+        - When model_info_fields is passed, only the specified fields will be included in each model's data
+        - When model_info_fields is not passed, all fields are included in the response
+
+        return_litellm_params: bool = True (controls whether to include litellm_params in the response)
+
+        - When return_litellm_params is True (default), litellm_params are included with sensitive data masked
+        - When return_litellm_params is False, litellm_params are completely removed from the response
+
     Returns:
         Returns a dictionary containing information about each model.
 
