@@ -133,6 +133,191 @@ class LoggingWorker:
             # Queue is full - handle it appropriately
             self._handle_queue_full(task)
 
+    def _should_start_aggressive_clear(self) -> bool:
+        """
+        Check if we should start a new aggressive clear operation.
+        Returns True if cooldown period has passed and no clear is in progress.
+        """
+        if self._aggressive_clear_in_progress:
+            return False
+        
+        try:
+            loop = asyncio.get_running_loop()
+            current_time = loop.time()
+            time_since_last_clear = current_time - self._last_aggressive_clear_time
+            
+            if time_since_last_clear < LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS:
+                return False
+            
+            return True
+        except RuntimeError:
+            # No event loop running, drop the task
+            return False
+
+    def _mark_aggressive_clear_started(self) -> None:
+        """
+        Mark that an aggressive clear operation has started.
+        
+        Note: This should only be called after _should_start_aggressive_clear() 
+        returns True, which guarantees an event loop exists.
+        """
+        loop = asyncio.get_running_loop()
+        self._last_aggressive_clear_time = loop.time()
+        self._aggressive_clear_in_progress = True
+
+    def _handle_queue_full(self, task: LoggingTask) -> None:
+        """
+        Handle queue full condition by either starting an aggressive clear
+        or scheduling a delayed retry.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            time_since_last_clear = loop.time() - self._last_aggressive_clear_time
+        except RuntimeError:
+            time_since_last_clear = 0.0
+        
+        if self._should_start_aggressive_clear():
+            self._mark_aggressive_clear_started()
+            # Schedule clearing as async task so enqueue returns immediately (non-blocking)
+            asyncio.create_task(self._aggressively_clear_queue_async(task))
+        else:
+            # Cooldown active or clear in progress, schedule a delayed retry
+            self._schedule_delayed_enqueue_retry(task)
+
+    def _calculate_retry_delay(self) -> float:
+        """
+        Calculate the delay before retrying an enqueue operation.
+        Returns the delay in seconds.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            current_time = loop.time()
+            time_since_last_clear = current_time - self._last_aggressive_clear_time
+            remaining_cooldown = max(
+                0.0,
+                LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS - time_since_last_clear
+            )
+            # Add a small buffer (10% of cooldown or 50ms, whichever is larger) to ensure
+            # cooldown has expired and aggressive clear has completed
+            return remaining_cooldown + max(
+                0.05, LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS * 0.1
+            )
+        except RuntimeError:
+            # No event loop, return minimum delay
+            return 0.1
+
+    def _schedule_delayed_enqueue_retry(self, task: LoggingTask) -> None:
+        """
+        Schedule a delayed retry to enqueue the task after cooldown expires.
+        This prevents dropping tasks when the queue is full during cooldown.
+        Preserves the original task context.
+        """
+        try:
+            # Check that we have a running event loop (will raise RuntimeError if not)
+            asyncio.get_running_loop()
+            delay = self._calculate_retry_delay()
+            
+            # Schedule the retry as a background task
+            asyncio.create_task(self._retry_enqueue_task(task, delay))
+        except RuntimeError:
+            # No event loop, drop the task as we can't schedule a retry
+            pass
+
+    async def _retry_enqueue_task(self, task: LoggingTask, delay: float) -> None:
+        """
+        Retry enqueueing the task after delay, preserving original context.
+        This is called as a background task from _schedule_delayed_enqueue_retry.
+        """
+        await asyncio.sleep(delay)
+        
+        # Try to enqueue the task directly, preserving its original context
+        if self._queue is None:
+            return
+        
+        try:
+            self._queue.put_nowait(task)
+        except asyncio.QueueFull:
+            # Still full - handle it appropriately (clear or retry again)
+            self._handle_queue_full(task)
+
+    def _extract_tasks_from_queue(self) -> list[LoggingTask]:
+        """
+        Extract tasks from the queue to make room.
+        Returns a list of extracted tasks based on percentage of queue size.
+        """
+        if self._queue is None:
+            return []
+        
+        # Calculate items based on percentage of queue size
+        items_to_extract = (self.max_queue_size * LOGGING_WORKER_CLEAR_PERCENTAGE) // 100
+        # Use actual queue size to avoid unnecessary iterations
+        actual_size = self._queue.qsize()
+        if actual_size == 0:
+            return []
+        items_to_extract = min(items_to_extract, actual_size)
+        
+        # Extract tasks from queue (using list comprehension would require wrapping in try/except)
+        extracted_tasks = []
+        for _ in range(items_to_extract):
+            try:
+                extracted_tasks.append(self._queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        
+        return extracted_tasks
+
+    async def _aggressively_clear_queue_async(self, new_task: Optional[LoggingTask] = None) -> None:
+        """
+        Aggressively clear the queue by extracting and processing items.
+        This is called when the queue is full to prevent dropping logs.
+        Fully async and non-blocking - runs in background task.
+        """
+        try:
+            if self._queue is None:
+                return
+            
+            extracted_tasks = self._extract_tasks_from_queue()
+            
+            # Add new task to extracted tasks to process directly
+            if new_task is not None:
+                extracted_tasks.append(new_task)
+            
+            # Process extracted tasks directly
+            if extracted_tasks:
+                await self._process_extracted_tasks(extracted_tasks)
+        except Exception as e:
+            verbose_logger.exception(f"LoggingWorker error during aggressive clear: {e}")
+        finally:
+            # Always reset the flag even if an error occurs
+            self._aggressive_clear_in_progress = False
+
+    async def _process_single_task(self, task: LoggingTask) -> None:
+        """Process a single task and mark it done."""
+        if self._queue is None:
+            return
+        
+        try:
+            await asyncio.wait_for(
+                task["context"].run(asyncio.create_task, task["coroutine"]),
+                timeout=self.timeout,
+            )
+        except Exception:
+            # Suppress errors during processing to ensure we keep going
+            pass
+        finally:
+            self._queue.task_done()
+
+    async def _process_extracted_tasks(self, tasks: list[LoggingTask]) -> None:
+        """
+        Process tasks that were extracted from the queue to make room.
+        Processes them concurrently without semaphore limits for maximum speed.
+        """
+        if not tasks or self._queue is None:
+            return
+        
+        # Process all tasks concurrently for maximum speed
+        await asyncio.gather(*[self._process_single_task(task) for task in tasks])
+
     def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine):
         """
         Ensure the logging worker is initialized and enqueue the coroutine.
