@@ -4015,7 +4015,11 @@ def embedding(  # noqa: PLR0915
     azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
     aembedding: Optional[bool] = kwargs.get("aembedding", None)
     extra_headers = kwargs.get("extra_headers", None)
-    headers = kwargs.get("headers", None)
+    headers = kwargs.get("headers", None) or extra_headers
+    if headers is None:
+        headers = {}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
@@ -4326,7 +4330,7 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
                 api_base=api_base,
                 print_verbose=print_verbose,
-                extra_headers=extra_headers,
+                extra_headers=headers,
                 api_key=api_key,
             )
         elif custom_llm_provider == "triton":
