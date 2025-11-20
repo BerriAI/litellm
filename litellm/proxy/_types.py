@@ -516,6 +516,7 @@ class LiteLLMRoutes(enum.Enum):
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
             "/public/agent_hub",
+            "/public/mcp_hub",
         ]
     )
 
@@ -1097,6 +1098,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+
+
+class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
+    mcp_server_ids: List[str]
 
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
