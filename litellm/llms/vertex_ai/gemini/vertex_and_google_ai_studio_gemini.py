@@ -1154,6 +1154,44 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return None
 
     @staticmethod
+    def _encode_tool_call_id_with_signature(
+        base_id: str, thought_signature: Optional[str]
+    ) -> str:
+        """
+        Encode thought signature into tool call ID for OpenAI client compatibility.
+        
+        Format: call_<uuid>__thought__<base64_signature>
+        This allows OpenAI clients (which don't support provider_specific_fields) 
+        to preserve thought signatures in the tool_call_id field.
+        """
+        if thought_signature:
+            import base64
+            # Use URL-safe base64 encoding to avoid special characters in ID
+            encoded_sig = base64.urlsafe_b64encode(thought_signature.encode()).decode()
+            return f"{base_id}__thought__{encoded_sig}"
+        return base_id
+    
+    @staticmethod
+    def _decode_tool_call_id_for_signature(tool_call_id: str) -> Tuple[str, Optional[str]]:
+        """
+        Extract thought signature from tool call ID if present.
+        
+        Returns: (original_id, thought_signature)
+        """
+        if "__thought__" in tool_call_id:
+            import base64
+            parts = tool_call_id.split("__thought__", 1)
+            if len(parts) == 2:
+                base_id, encoded_sig = parts
+                try:
+                    thought_signature = base64.urlsafe_b64decode(encoded_sig.encode()).decode()
+                    return base_id, thought_signature
+                except Exception:
+                    # If decoding fails, return original ID
+                    pass
+        return tool_call_id, None
+
+    @staticmethod
     def _transform_parts(
         parts: List[HttpxPartType],
         cumulative_tool_call_idx: int,
@@ -1186,13 +1224,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         ] = thought_signature
                     function = cast(ChatCompletionToolCallFunctionChunk, function_dict)
                 else:
+                    # Generate base tool call ID
+                    base_id = f"call_{uuid.uuid4().hex[:28]}"
+                    # Embed thought signature in ID for OpenAI client compatibility
+                    tool_call_id = VertexGeminiConfig._encode_tool_call_id_with_signature(
+                        base_id, thought_signature
+                    )
+                    
                     _tool_response_chunk: ChatCompletionToolCallChunk = {
-                        "id": f"call_{uuid.uuid4().hex[:28]}",
+                        "id": tool_call_id,
                         "type": "function",
                         "function": _function_chunk,
                         "index": cumulative_tool_call_idx,
                     }
                     if thought_signature:
+                        # Still include in provider_specific_fields for LiteLLM SDK clients
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
                         }

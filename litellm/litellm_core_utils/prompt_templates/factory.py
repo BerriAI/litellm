@@ -1164,6 +1164,8 @@ def _gemini_tool_call_invoke_helper(
 
 def _get_thought_signature_from_tool(tool: dict, model: Optional[str] = None) -> Optional[str]:
     """Extract thought signature from tool call's provider_specific_fields.
+
+    If not provided try to extract thought signature from tool call id
     
     Checks both tool.provider_specific_fields and tool.function.provider_specific_fields.
     If no signature is found and model is gemini-3, returns a dummy signature.
@@ -1189,7 +1191,19 @@ def _get_thought_signature_from_tool(tool: dict, model: Optional[str] = None) ->
                 signature = function.provider_specific_fields.get("thought_signature")
                 if signature:
                     return signature
-    
+    # Check if thought signature is embedded in tool call ID
+    tool_call_id = tool.get("id")
+    if tool_call_id and "__thought__" in tool_call_id:
+        import base64
+        parts = tool_call_id.split("__thought__", 1)
+        if len(parts) == 2:
+            _, encoded_sig = parts
+            try:
+                signature = base64.urlsafe_b64decode(encoded_sig.encode()).decode()
+                return signature
+            except Exception:
+                pass
+                
     # If no signature found and model is gemini-3, return dummy signature
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
     if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
