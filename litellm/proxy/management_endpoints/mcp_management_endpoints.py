@@ -58,6 +58,7 @@ if MCP_AVAILABLE:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+    from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
@@ -300,7 +301,16 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_dict
             )
         )
-        return _redact_mcp_credentials_list(mcp_servers)
+        redacted_mcp_servers = _redact_mcp_credentials_list(mcp_servers)
+
+        # augment the mcp servers with public status
+        if litellm.public_mcp_servers is not None:
+            for server in redacted_mcp_servers:
+                if server.server_id in litellm.public_mcp_servers:
+                    if server.mcp_info is None:
+                        server.mcp_info = {}
+                    server.mcp_info["is_public"] = True
+        return redacted_mcp_servers
 
     @router.get(
         "/server/{server_id}",

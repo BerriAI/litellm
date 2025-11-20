@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Form, Steps, Button, Checkbox } from "antd";
 import { Text, Title, Badge } from "@tremor/react";
-import { makeMCPPublicCall, mcpHubPublicServersCall } from "./networking";
+import { makeMCPPublicCall } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
 import { MCPServerData } from "./mcp_hub_table_columns";
 
@@ -71,28 +71,16 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 
   // Initialize and preselect already public servers when modal opens
   useEffect(() => {
-    const fetchPublicServers = async () => {
-      if (visible && mcpHubData.length > 0) {
-        try {
-          // Fetch public MCP servers from the public endpoint
-          const publicServers = await mcpHubPublicServersCall();
-          console.log("Public MCP servers:", publicServers);
-          
-          // Extract server IDs from the public servers
-          const publicServerIds = publicServers.map((server: any) => server.server_id);
-          
-          // Preselect servers that are already public
-          setSelectedServers(new Set(publicServerIds));
-        } catch (error) {
-          console.error("Error fetching public MCP servers:", error);
-          // If there's an error, just start with empty selection
-          setSelectedServers(new Set());
-        }
-      }
-    };
-
-    fetchPublicServers();
-  }, [visible, mcpHubData]);
+    if (visible && mcpHubData.length > 0) {
+      // Extract server IDs from servers that are already public
+      const publicServerIds = mcpHubData
+        .filter((server) => server.mcp_info?.is_public === true)
+        .map((server) => server.server_id);
+      
+      // Preselect servers that are already public
+      setSelectedServers(new Set(publicServerIds));
+    }
+  }, [visible]); // Only re-run when modal visibility changes, not when mcpHubData updates
 
   const handleSubmit = async () => {
     if (selectedServers.size === 0) {
@@ -152,6 +140,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
               </div>
             ) : (
               mcpHubData.map((server) => {
+                const isPublic = server.mcp_info?.is_public === true;
                 return (
                   <div
                     key={server.server_id}
@@ -164,6 +153,11 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                     <div className="flex-1">
                       <div className="flex items-center space-x-2">
                         <Text className="font-medium">{server.server_name}</Text>
+                        {isPublic && (
+                          <Badge color="emerald" size="sm">
+                            Public
+                          </Badge>
+                        )}
                         <Badge color="blue" size="sm">
                           {server.transport}
                         </Badge>
