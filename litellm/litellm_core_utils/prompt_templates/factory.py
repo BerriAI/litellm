@@ -1165,31 +1165,35 @@ def _gemini_tool_call_invoke_helper(
     )
     return function_call
 
+
 def _encode_tool_call_id_with_signature(
     tool_call_id: str, thought_signature: Optional[str]
 ) -> str:
     """
     Embed thought signature into tool call ID for OpenAI client compatibility.
-    
+
     Args:
         tool_call_id: The tool call ID (e.g., "call_abc123...")
         thought_signature: Base64-encoded signature from Gemini response
-    
+
     Returns:
         Tool call ID with embedded signature if present, otherwise original ID
         Format: call_<uuid>__thought__<base64_signature>
-    
+
     See: https://ai.google.dev/gemini-api/docs/thought-signatures
     """
     if thought_signature:
         return f"{tool_call_id}{THOUGHT_SIGNATURE_SEPARATOR}{thought_signature}"
     return tool_call_id
-    
-def _get_thought_signature_from_tool(tool: dict, model: Optional[str] = None) -> Optional[str]:
+
+
+def _get_thought_signature_from_tool(
+    tool: dict, model: Optional[str] = None
+) -> Optional[str]:
     """Extract thought signature from tool call's provider_specific_fields.
 
     If not provided try to extract thought signature from tool call id
-    
+
     Checks both tool.provider_specific_fields and tool.function.provider_specific_fields.
     If no signature is found and model is gemini-3, returns a dummy signature.
     """
@@ -1199,7 +1203,7 @@ def _get_thought_signature_from_tool(tool: dict, model: Optional[str] = None) ->
         signature = provider_fields.get("thought_signature")
         if signature:
             return signature
-    
+
     # Then check function's provider_specific_fields
     function = tool.get("function")
     if function:
@@ -1209,7 +1213,10 @@ def _get_thought_signature_from_tool(tool: dict, model: Optional[str] = None) ->
                 signature = func_provider_fields.get("thought_signature")
                 if signature:
                     return signature
-        elif hasattr(function, "provider_specific_fields") and function.provider_specific_fields:
+        elif (
+            hasattr(function, "provider_specific_fields")
+            and function.provider_specific_fields
+        ):
             if isinstance(function.provider_specific_fields, dict):
                 signature = function.provider_specific_fields.get("thought_signature")
                 if signature:
@@ -1222,15 +1229,18 @@ def _get_thought_signature_from_tool(tool: dict, model: Optional[str] = None) ->
             _, signature = parts
             return signature
     # If no signature found and model is gemini-3, return dummy signature
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
     if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
-        return _get_dummy_thought_signature()    
+        return _get_dummy_thought_signature()
     return None
 
 
 def _get_dummy_thought_signature() -> str:
     """Generate a dummy thought signature for models that require it.
-    
+
     This is used when transferring conversation history from older models
     (like gemini-2.5-flash) to gemini-3, which requires thought_signature
     for strict validation.
@@ -1288,23 +1298,25 @@ def convert_to_gemini_tool_call_invoke(
         _parts_list: List[VertexPartType] = []
         tool_calls = message.get("tool_calls", None)
         function_call = message.get("function_call", None)
-        
+
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
-                    gemini_function_call: Optional[VertexFunctionCall] = (
-                        _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
-                        )
+                    gemini_function_call: Optional[
+                        VertexFunctionCall
+                    ] = _gemini_tool_call_invoke_helper(
+                        function_call_params=tool["function"]
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {
                             "function_call": gemini_function_call
                         }
-                        thought_signature = _get_thought_signature_from_tool(dict(tool), model=model)
+                        thought_signature = _get_thought_signature_from_tool(
+                            dict(tool), model=model
+                        )
                         if thought_signature:
                             part_dict["thoughtSignature"] = thought_signature
-                        
+
                         _parts_list.append(part_dict)
                     else:  # don't silently drop params. Make it clear to user what's happening.
                         raise Exception(
@@ -1320,21 +1332,32 @@ def convert_to_gemini_tool_call_invoke(
                 part_dict_function: VertexPartType = {
                     "function_call": gemini_function_call
                 }
-                
+
                 # Extract thought signature from function_call's provider_specific_fields
                 thought_signature = None
-                provider_fields = function_call.get("provider_specific_fields") if isinstance(function_call, dict) else {}
+                provider_fields = (
+                    function_call.get("provider_specific_fields")
+                    if isinstance(function_call, dict)
+                    else {}
+                )
                 if isinstance(provider_fields, dict):
                     thought_signature = provider_fields.get("thought_signature")
-                
+
                 # If no signature found and model is gemini-3, use dummy signature
-                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-                if not thought_signature and model and VertexGeminiConfig._is_gemini_3_or_newer(model):
+                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+                    VertexGeminiConfig,
+                )
+
+                if (
+                    not thought_signature
+                    and model
+                    and VertexGeminiConfig._is_gemini_3_or_newer(model)
+                ):
                     thought_signature = _get_dummy_thought_signature()
-                
+
                 if thought_signature:
                     part_dict_function["thoughtSignature"] = thought_signature
-                
+
                 _parts_list.append(part_dict_function)
             else:  # don't silently drop params. Make it clear to user what's happening.
                 raise Exception(
@@ -1837,9 +1860,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element["cache_control"] = (
-                                    _content_element["cache_control"]
-                                )
+                                _anthropic_content_element[
+                                    "cache_control"
+                                ] = _content_element["cache_control"]
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1877,9 +1900,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_content_text_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2645,17 +2668,19 @@ class BedrockImageProcessor:
     """Handles both sync and async image processing for Bedrock conversations."""
 
     @staticmethod
-    def _post_call_image_processing(response: httpx.Response, image_url: str = "") -> Tuple[str, str]:
+    def _post_call_image_processing(
+        response: httpx.Response, image_url: str = ""
+    ) -> Tuple[str, str]:
         # Check the response's content type to ensure it is an image
         content_type = response.headers.get("content-type")
-        
+
         # Use helper function to infer content type with fallback logic
         content_type = infer_content_type_from_url_and_content(
             url=image_url,
             content=response.content,
             current_content_type=content_type,
         )
-        
+
         content_type = _parse_content_type(content_type)
 
         # Convert the image content to base64 bytes
@@ -2674,7 +2699,9 @@ class BedrockImageProcessor:
             response = await client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response, image_url)
+            return BedrockImageProcessor._post_call_image_processing(
+                response, image_url
+            )
 
         except Exception as e:
             raise e
@@ -2687,7 +2714,9 @@ class BedrockImageProcessor:
             response = client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response, image_url)
+            return BedrockImageProcessor._post_call_image_processing(
+                response, image_url
+            )
 
         except Exception as e:
             raise e
@@ -3944,7 +3973,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             )
                         elif element["type"] == "text":
                             # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
-                            text_content = element["text"] if element["text"].strip() else "."
+                            text_content = (
+                                element["text"] if element["text"].strip() else "."
+                            )
                             assistants_part = BedrockContentBlock(text=text_content)
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":

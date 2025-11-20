@@ -25,9 +25,7 @@ def test_encode_decode_tool_call_id_with_signature():
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
 
     # Test encoding
-    encoded_id = _encode_tool_call_id_with_signature(
-        base_id, test_signature
-    )
+    encoded_id = _encode_tool_call_id_with_signature(base_id, test_signature)
     assert THOUGHT_SIGNATURE_SEPARATOR in encoded_id
     assert encoded_id.startswith(base_id)
 
@@ -43,7 +41,7 @@ def test_encode_decode_tool_call_id_with_signature():
 
     extracted_signature = _get_thought_signature_from_tool(tool)
     assert extracted_signature == test_signature
-    
+
     # Verify base ID is preserved
     decoded_base_id = encoded_id.split(THOUGHT_SIGNATURE_SEPARATOR)[0]
     assert decoded_base_id == base_id
@@ -120,9 +118,7 @@ def test_get_thought_signature_prioritizes_provider_fields():
     signature_in_fields = "signature_from_fields"
     signature_in_id = "signature_from_id"
 
-    encoded_id = _encode_tool_call_id_with_signature(
-        "call_abc123", signature_in_id
-    )
+    encoded_id = _encode_tool_call_id_with_signature("call_abc123", signature_in_id)
 
     tool = {
         "id": encoded_id,
@@ -145,9 +141,7 @@ def test_convert_to_gemini_with_embedded_signature():
 
     # Create tool call ID with embedded signature (as OpenAI client would send)
     base_id = "call_abc123"
-    encoded_id = _encode_tool_call_id_with_signature(
-        base_id, test_signature
-    )
+    encoded_id = _encode_tool_call_id_with_signature(base_id, test_signature)
 
     # Assistant message as sent by OpenAI client (no provider_specific_fields)
     assistant_message = {
@@ -268,4 +262,3 @@ def test_parallel_tool_calls_with_signatures():
     assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]
     sig2 = _get_thought_signature_from_tool({"id": tools[1]["id"], "type": "function"})
     assert sig2 is None
-
