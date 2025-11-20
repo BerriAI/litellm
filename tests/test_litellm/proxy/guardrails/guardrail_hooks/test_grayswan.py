@@ -1,3 +1,5 @@
+from typing import Optional
+
 import pytest
 from fastapi import HTTPException
 
@@ -22,7 +24,9 @@ def grayswan_guardrail() -> GraySwanGuardrail:
     )
 
 
-def test_prepare_payload_uses_dynamic_overrides(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_prepare_payload_uses_dynamic_overrides(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     messages = [{"role": "user", "content": "hello"}]
     dynamic_body = {
         "categories": {"custom": "override"},
@@ -38,7 +42,9 @@ def test_prepare_payload_uses_dynamic_overrides(grayswan_guardrail: GraySwanGuar
     assert payload["reasoning_mode"] == "thinking"
 
 
-def test_prepare_payload_falls_back_to_guardrail_defaults(grayswan_guardrail: GraySwanGuardrail) -> None:
+def test_prepare_payload_falls_back_to_guardrail_defaults(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     messages = [{"role": "user", "content": "hello"}]
 
     payload = grayswan_guardrail._prepare_payload(messages, {})
@@ -48,8 +54,12 @@ def test_prepare_payload_falls_back_to_guardrail_defaults(grayswan_guardrail: Gr
     assert payload["reasoning_mode"] == "hybrid"
 
 
-def test_process_response_does_not_block_under_threshold(grayswan_guardrail: GraySwanGuardrail) -> None:
-    grayswan_guardrail._process_grayswan_response({"violation": 0.3, "violated_rules": []})
+def test_process_response_does_not_block_under_threshold(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    grayswan_guardrail._process_grayswan_response(
+        {"violation": 0.3, "violated_rules": []}
+    )
 
 
 def test_process_response_blocks_when_threshold_exceeded() -> None:
@@ -85,18 +95,22 @@ class _DummyClient:
         self.calls: list[dict] = []
 
     async def post(self, *, url: str, headers: dict, json: dict, timeout: float):
-        self.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        self.calls.append(
+            {"url": url, "headers": headers, "json": json, "timeout": timeout}
+        )
         return _DummyResponse(self.payload)
 
 
 @pytest.mark.asyncio
-async def test_run_guardrail_posts_payload(monkeypatch, grayswan_guardrail: GraySwanGuardrail) -> None:
+async def test_run_guardrail_posts_payload(
+    monkeypatch, grayswan_guardrail: GraySwanGuardrail
+) -> None:
     dummy_client = _DummyClient({"violation": 0.1})
     grayswan_guardrail.async_handler = dummy_client
 
     captured = {}
 
-    def fake_process(response_json: dict) -> None:
+    def fake_process(response_json: dict, data: Optional[dict] = None) -> None:
         captured["response"] = response_json
 
     monkeypatch.setattr(grayswan_guardrail, "_process_grayswan_response", fake_process)
@@ -110,7 +124,9 @@ async def test_run_guardrail_posts_payload(monkeypatch, grayswan_guardrail: Gray
 
 
 @pytest.mark.asyncio
-async def test_run_guardrail_raises_api_error(grayswan_guardrail: GraySwanGuardrail) -> None:
+async def test_run_guardrail_raises_api_error(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
     class _FailingClient:
         async def post(self, **_kwargs):
             raise RuntimeError("boom")
