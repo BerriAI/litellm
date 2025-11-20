@@ -6720,7 +6720,6 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
   }
 };
 
-
 export const getAgentsList = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
@@ -6837,7 +6836,6 @@ export const patchAgentCall = async (
     throw error;
   }
 };
-
 
 export const updateGuardrailCall = async (
   accessToken: string,
