@@ -9,7 +9,6 @@ import httpx
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
-from ...custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -185,11 +184,11 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     def get_complete_url(
             self,
-            api_base: Optional[str] = None,
-            api_key: Optional[str] = None,
-            model: str = None,
-            optional_params: dict = None,
-            litellm_params: dict = None,
+            api_base: Optional[str],
+            api_key: Optional[str],
+            model: str,
+            optional_params: dict,
+            litellm_params: dict,
             stream: Optional[bool] = None,
     ):
         api_base_ = f"{self.deployment_url}/v2/completion"
@@ -198,7 +197,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, str]], # type: ignore
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -295,7 +294,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             json_mode: Optional[bool] = False,
     ):
         if sync_stream:
-            return SAPStreamIterator(response=streaming_response)
+            return SAPStreamIterator(response=streaming_response) # type: ignore
         else:
-            return AsyncSAPStreamIterator(response=streaming_response)
-
+            return AsyncSAPStreamIterator(response=streaming_response) # type: ignore

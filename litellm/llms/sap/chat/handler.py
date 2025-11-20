@@ -2,22 +2,12 @@ from __future__ import annotations
 
 import json
 import time
-from functools import cached_property
-from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union, Callable, AsyncIterator
-
 import httpx
+
+from typing import Iterator, Optional, AsyncIterator
+
 from litellm.llms.base_llm.chat.transformation import BaseConfig
-from aiohttp import ClientSession
-
-import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
-from litellm.types.utils import ModelResponse
-from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
-
-from ..credentials import get_token_creator
-from ...base import BaseLLM
 from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
 
@@ -181,9 +171,7 @@ class SAPStreamIterator:
     def _safe_close(self) -> None:
         if self._done:
             return
-        try:
-            self._resp.close()
-        finally:
+        else:
             self._done = True
 
 
@@ -253,9 +241,7 @@ class AsyncSAPStreamIterator:
     async def _aclose(self):
         if self._done:
             return
-        try:
-            await self._resp.aclose()
-        finally:
+        else:
             self._done = True
 
 
@@ -267,346 +253,10 @@ class GenAIHubOrchestration(BaseLLMHTTPHandler):
             self,
             data: dict,
             provider_config: BaseConfig,
-            fake_stream: bool,
-            # stream_options: dict = None
+            fake_stream: bool
             ):
-        if data.get("config").get("stream") is not None:
+        if data.get("config", {}).get("stream", None) is not None:
             data["config"]["stream"]["enabled"] = True
         else:
             data["config"]["stream"] = {"enabled": True}
         return data
-
-# class GenAIHubOrchestration(BaseLLM):
-#     def __init__(self) -> None:
-#         super().__init__()
-#         self.token_creator = None
-#         self._base_url = None
-#         self._resource_group = None
-#
-#     def run_env_setup(self, service_key: Optional[str] = None) -> None:
-#         try:
-#             self.token_creator, self._base_url, self._resource_group = get_token_creator(service_key) # type: ignore
-#         except ValueError as err:
-#             raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
-#
-#
-#     @property
-#     def headers(self) -> Dict[str, str]:
-#         if self.token_creator is None:
-#             self.run_env_setup()
-#         access_token = self.token_creator() # type: ignore
-#         return {
-#             "Authorization": access_token,
-#             "AI-Resource-Group": self.resource_group,
-#             "Content-Type": "application/json",
-#         }
-#
-#     @property
-#     def base_url(self) -> str:
-#         if self._base_url is None:
-#             self.run_env_setup()
-#         return self._base_url # type: ignore
-#
-#
-#     @property
-#     def resource_group(self) -> str:
-#         if self._resource_group is None:
-#             self.run_env_setup()
-#         return self._resource_group # type: ignore
-#
-#     @cached_property
-#     def deployment_url(self) -> str:
-#         # Keep a short, tight client lifecycle here to avoid fd leaks
-#         client = litellm.module_level_client
-#         # with httpx.Client(timeout=30) as client:
-#         deployments = client.get(
-#             f"{self.base_url}/lm/deployments", headers=self.headers
-#         ).json()
-#         valid: List[Tuple[str, str]] = []
-#         for dep in deployments.get("resources", []):
-#             if dep.get("scenarioId") == "orchestration":
-#                 cfg = client.get(
-#                     f'{self.base_url}/lm/configurations/{dep["configurationId"]}',
-#                     headers=self.headers,
-#                 ).json()
-#                 if cfg.get("executableId") == "orchestration":
-#                     valid.append((dep["deploymentUrl"], dep["createdAt"]))
-#             # newest first
-#         return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
-#
-#     def validate_environment(
-#         self, endpoint_type: Literal["chat_completions", "embeddings"]
-#     ) -> Tuple[str, Dict[str, str]]:
-#         api_base = (
-#             f"{self.deployment_url}/v2/completion"
-#             if endpoint_type == "chat_completions"
-#             else f"{self.deployment_url}/v2/embeddings"
-#         )
-#         return api_base, self.headers
-#
-#     # ---------- Async paths ----------
-#     async def _async_streaming(
-#         self,
-#         config: Dict[str, Any],
-#         model: str,
-#         api_base: str,
-#         headers: Dict[str, str],
-#         model_response: ModelResponse,
-#         print_verbose: Callable,
-#         timeout: Optional[Union[float, httpx.Timeout]],
-#         encoding,
-#         logging_obj,
-#         optional_params: Dict[str, Any],
-#         extra_headers: Optional[Dict[str, str]] = None,
-#         shared_session: Optional[ClientSession] = None,
-#         client: Optional[AsyncHTTPHandler] = None,
-#     ) -> CustomStreamWrapper:
-#         try:
-#             # Ensure the server returns SSE:
-#             hdrs = dict(headers)
-#             hdrs.setdefault("Accept", "text/event-stream")
-#             hdrs.setdefault("Cache-Control", "no-cache")
-#             hdrs.setdefault("Connection", "keep-alive")
-#             hdrs.setdefault("Accept-Encoding", "identity")
-#
-#             client = litellm.AsyncHTTPHandler(shared_session=shared_session)
-#             resp = await client.post(
-#                 url=api_base, headers=hdrs, json=config, timeout=timeout
-#             )
-#             resp.raise_for_status()
-#             completion_stream = AsyncSAPStreamIterator(resp)
-#
-#         except httpx.HTTPStatusError as err:
-#             raise GenAIHubOrchestrationError(
-#                 err.response.status_code, err.response.text
-#             )
-#         except httpx.TimeoutException:
-#             raise GenAIHubOrchestrationError(408, "Timeout error occurred.")
-#         except ValueError as in_stream_err:
-#             raise GenAIHubOrchestrationError(502, str(in_stream_err))
-#
-#         return CustomStreamWrapper(
-#             completion_stream=completion_stream,
-#             model=model,
-#             logging_obj=logging_obj,
-#             stream_options={},
-#             make_call=None,
-#         )
-#
-#     async def _async_completion(
-#         self,
-#         config: Dict[str, Any],
-#         model: str,
-#         api_base: str,
-#         headers: Dict[str, str],
-#         model_response: ModelResponse,
-#         print_verbose: Callable,
-#         timeout: Optional[Union[float, httpx.Timeout]],
-#         encoding,
-#         logging_obj,
-#         optional_params: Dict[str, Any],
-#         extra_headers: Optional[Dict[str, str]] = None,
-#         client: Optional[AsyncHTTPHandler] = None,
-#         shared_session: Optional[ClientSession] = None,
-#     ) -> ModelResponse:
-#         try:
-#             if client is None or not isinstance(client, AsyncHTTPHandler):
-#                 client = litellm.AsyncHTTPHandler(shared_session=shared_session)
-#             resp = await client.post(
-#                 url=api_base, headers=headers, json=config, timeout=timeout
-#             )
-#             resp.raise_for_status()
-#         except httpx.HTTPStatusError as err:
-#             raise GenAIHubOrchestrationError(
-#                 err.response.status_code, err.response.text
-#             )
-#         except httpx.TimeoutException:
-#             raise GenAIHubOrchestrationError(408, "Timeout error occurred.")
-#
-#         return litellm.GenAIHubOrchestrationConfig()._transform_response(response=resp)
-#
-#     # ---------- Sync paths ----------
-#     def _streaming(
-#         self,
-#         config: Dict[str, Any],
-#         model: str,
-#         api_base: str,
-#         headers: Dict[str, str],
-#         model_response: ModelResponse,
-#         print_verbose: Callable,
-#         timeout: Optional[Union[float, httpx.Timeout]],
-#         encoding,
-#         logging_obj,
-#         optional_params: Dict[str, Any],
-#         extra_headers: Optional[Dict[str, str]] = None,
-#         client: Optional[HTTPHandler] = None,
-#     ) -> CustomStreamWrapper:
-#         try:
-#             if client is None or not isinstance(client, HTTPHandler):
-#                 client = litellm.module_level_client
-#
-#             resp = client.post(
-#                 url=api_base,
-#                 headers=headers,
-#                 json=config,
-#                 stream=True,
-#                 timeout=timeout,
-#             )
-#             resp.raise_for_status()
-#
-#             completion_stream = SAPStreamIterator(resp)
-#
-#         except httpx.HTTPStatusError as err:
-#             raise GenAIHubOrchestrationError(
-#                 err.response.status_code, err.response.text
-#             )
-#         except httpx.TimeoutException:
-#             raise GenAIHubOrchestrationError(408, "Timeout error occurred.")
-#         except ValueError as in_stream_err:
-#             raise GenAIHubOrchestrationError(502, str(in_stream_err))
-#
-#         return CustomStreamWrapper(
-#             completion_stream=completion_stream,
-#             model=model,
-#             logging_obj=logging_obj,
-#             stream_options={},
-#             make_call=None,
-#         )
-#
-#     def _complete(
-#         self,
-#         config: Dict[str, Any],
-#         model: str,
-#         api_base: str,
-#         headers: Dict[str, str],
-#         model_response: ModelResponse,
-#         print_verbose: Callable,
-#         timeout: Optional[Union[float, httpx.Timeout]],
-#         encoding,
-#         logging_obj,
-#         optional_params: Dict[str, Any],
-#         extra_headers: Optional[Dict[str, str]] = None,
-#         client: Optional[HTTPHandler] = None,
-#     ) -> ModelResponse:
-#         try:
-#             if client is None or not isinstance(client, HTTPHandler):
-#                 client = litellm.module_level_client
-#             resp = client.post(
-#                 url=api_base, headers=headers, json=config, timeout=timeout
-#             )
-#             resp.raise_for_status()
-#         except httpx.HTTPStatusError as err:
-#             raise GenAIHubOrchestrationError(
-#                 err.response.status_code, err.response.text
-#             )
-#         except httpx.TimeoutException:
-#             raise GenAIHubOrchestrationError(408, "Timeout error occurred.")
-#
-#         return litellm.GenAIHubOrchestrationConfig()._transform_response(response=resp)
-#
-#     # ---------- entrypoint ----------
-#     def completion(
-#         self,
-#         model: str,
-#         messages: List[Dict[str, str]],
-#         model_response: ModelResponse,
-#         print_verbose: Callable,
-#         encoding,
-#         logging_obj: LiteLLMLoggingObject,
-#         optional_params: Dict[str, Any],
-#         acompletion: bool,
-#         headers: Optional[Dict[str, str]] = None,
-#         timeout: Optional[Union[float, httpx.Timeout]] = None,
-#         litellm_params: Optional[Dict[str, Any]] = None,
-#         logger_fn=None,
-#         extra_headers: Optional[Dict[str, str]] = None,
-#         shared_session: Optional[ClientSession] = None,
-#         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
-#         api_key: Optional[str] = None,
-#         **kwargs,
-#     ):
-#         if api_key:
-#             self.run_env_setup(api_key)
-#         stream = optional_params.get("stream", None)
-#         api_base, hdrs = self.validate_environment("chat_completions")
-#
-#         config = litellm.GenAIHubOrchestrationConfig()._transform_request(
-#             model=model,
-#             messages=messages,
-#             optional_params=optional_params,
-#         )
-#
-#         # logging
-#         logging_obj.pre_call(
-#             input=messages,
-#             api_key=api_key,
-#             additional_args={
-#                 "complete_input_dict": config,
-#                 "api_base": api_base,
-#                 "headers": hdrs,
-#             },
-#         )
-#
-#         if acompletion:
-#             if stream:
-#                 return self._async_streaming(
-#                     config=config,
-#                     model=model,
-#                     api_base=api_base,
-#                     headers=hdrs,
-#                     model_response=model_response,
-#                     print_verbose=print_verbose,
-#                     timeout=timeout,
-#                     encoding=encoding,
-#                     logging_obj=logging_obj,
-#                     optional_params=optional_params,
-#                     extra_headers=extra_headers,
-#                     shared_session=shared_session,
-#                     client=client if isinstance(client, AsyncHTTPHandler) else None,
-#                 )
-#             return self._async_completion(
-#                 config=config,
-#                 model=model,
-#                 api_base=api_base,
-#                 headers=hdrs,
-#                 model_response=model_response,
-#                 print_verbose=print_verbose,
-#                 timeout=timeout,
-#                 encoding=encoding,
-#                 logging_obj=logging_obj,
-#                 optional_params=optional_params,
-#                 extra_headers=extra_headers,
-#                 client=client if isinstance(client, AsyncHTTPHandler) else None,
-#                 shared_session=shared_session,
-#             )
-#
-#         if stream:
-#             return self._streaming(
-#                 config=config,
-#                 model=model,
-#                 api_base=api_base,
-#                 headers=hdrs,
-#                 model_response=model_response,
-#                 print_verbose=print_verbose,
-#                 timeout=timeout,
-#                 encoding=encoding,
-#                 logging_obj=logging_obj,
-#                 optional_params=optional_params,
-#                 extra_headers=extra_headers,
-#                 client=client if isinstance(client, HTTPHandler) else None,
-#             )
-#
-#         return self._complete(
-#             config=config,
-#             model=model,
-#             api_base=api_base,
-#             headers=hdrs,
-#             model_response=model_response,
-#             print_verbose=print_verbose,
-#             timeout=timeout,
-#             encoding=encoding,
-#             logging_obj=logging_obj,
-#             optional_params=optional_params,
-#             extra_headers=extra_headers,
-#             client=client if isinstance(client, HTTPHandler) else None,
-#         )
