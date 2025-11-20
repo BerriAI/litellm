@@ -1976,19 +1976,21 @@ def completion(  # type: ignore # noqa: PLR0915
                 messages=messages,
                 headers=headers,
                 model_response=model_response,
-                print_verbose=print_verbose,
+                # print_verbose=print_verbose,
                 acompletion=acompletion,
                 logging_obj=logging,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                logger_fn=logger_fn,
+                # logger_fn=logger_fn,
                 timeout=timeout,  # type: ignore
                 shared_session=shared_session,
-                custom_prompt_dict=custom_prompt_dict,
+                # custom_prompt_dict=custom_prompt_dict,
                 client=client,
                 custom_llm_provider=custom_llm_provider,
                 encoding=encoding,
                 api_key=api_key,
+                api_base=api_base,
+                stream=stream,
             )
         elif custom_llm_provider == "aiohttp_openai":
             # NEW aiohttp provider for 10-100x higher RPS
