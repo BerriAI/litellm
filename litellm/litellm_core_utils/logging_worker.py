@@ -8,7 +8,15 @@ import atexit
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.constants import LOGGING_WORKER_CONCURRENCY
+from litellm.constants import (
+    LOGGING_WORKER_CONCURRENCY,
+    LOGGING_WORKER_MAX_QUEUE_SIZE,
+    LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
+    LOGGING_WORKER_CLEAR_PERCENTAGE,
+    LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS,
+    MAX_ITERATIONS_TO_CLEAR_QUEUE,
+    MAX_TIME_TO_CLEAR_QUEUE,
+)
 
 
 class LoggingTask(TypedDict):
@@ -29,11 +37,6 @@ class LoggingWorker:
     This leads to a +200 RPS performance improvement when using LiteLLM Python SDK or Proxy Server.
     - Use this to queue coroutine tasks that are not critical to the main flow of the application. e.g Success/Error callbacks, logging, etc.
     """
-
-    LOGGING_WORKER_MAX_QUEUE_SIZE = 50_000
-    LOGGING_WORKER_MAX_TIME_PER_COROUTINE = 20.0
-    MAX_ITERATIONS_TO_CLEAR_QUEUE = 200
-    MAX_TIME_TO_CLEAR_QUEUE = 5.0
 
     def __init__(
         self,
