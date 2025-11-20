@@ -51,6 +51,8 @@ class LoggingWorker:
         self._worker_task: Optional[asyncio.Task] = None
         self._running_tasks: set[asyncio.Task] = set()
         self._sem: Optional[asyncio.Semaphore] = None
+        self._last_aggressive_clear_time: float = 0.0
+        self._aggressive_clear_in_progress: bool = False
 
         # Register cleanup handler to flush remaining events on exit
         atexit.register(self._flush_on_exit)
@@ -117,19 +119,19 @@ class LoggingWorker:
     def enqueue(self, coroutine: Coroutine) -> None:
         """
         Add a coroutine to the logging queue.
-        Hot path: never blocks, drops logs if queue is full.
+        Hot path: never blocks, aggressively clears queue if full.
         """
         if self._queue is None:
             return
 
+        # Capture the current context when enqueueing
+        task = LoggingTask(coroutine=coroutine, context=contextvars.copy_context())
+        
         try:
-            # Capture the current context when enqueueing
-            task = LoggingTask(coroutine=coroutine, context=contextvars.copy_context())
             self._queue.put_nowait(task)
-        except asyncio.QueueFull as e:
-            verbose_logger.exception(f"LoggingWorker queue is full: {e}")
-            # Drop logs on overload to protect request throughput
-            pass
+        except asyncio.QueueFull:
+            # Queue is full - handle it appropriately
+            self._handle_queue_full(task)
 
     def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine):
         """
