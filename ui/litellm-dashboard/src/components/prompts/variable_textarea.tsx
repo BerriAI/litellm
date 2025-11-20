@@ -142,7 +142,11 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({
                 className="cursor-pointer hover:opacity-80 transition-all m-0"
                 icon={<EditOutlined />}
                 onClick={() => {
-                  setEditingVariable(variable);
+                  setEditingVariable({
+                    oldName: variable.name,
+                    start: variable.start,
+                    end: variable.end,
+                  });
                   setNewVariableName(variable.name);
                 }}
               >

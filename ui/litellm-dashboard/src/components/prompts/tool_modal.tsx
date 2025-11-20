@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { Modal, Button } from "antd";
-import { XIcon } from "lucide-react";
 
 interface ToolModalProps {
   visible: boolean;

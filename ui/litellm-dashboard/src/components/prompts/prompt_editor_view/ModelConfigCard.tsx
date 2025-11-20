@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Card, Text } from "@tremor/react";
+import { Text } from "@tremor/react";
 import { Input } from "antd";
 import { SettingsIcon } from "lucide-react";
 import ModelSelector from "../../common_components/ModelSelector";
