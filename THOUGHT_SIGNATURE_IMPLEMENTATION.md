@@ -214,12 +214,15 @@ Test coverage includes:
 ## Files Modified
 
 1. `litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py`
-   - Added `_encode_tool_call_id_with_signature()`
-   - Added `_decode_tool_call_id_for_signature()`
-   - Modified `_transform_parts()` to embed signatures
+   - Added `THOUGHT_SIGNATURE_SEPARATOR` constant
+   - Added `_encode_tool_call_id_with_signature()` to embed signatures in tool call IDs
+   - Modified `_transform_parts()` to embed signatures in tool call IDs
+   - Note: Thought signatures from Gemini are already base64-encoded, no additional encoding needed
 
 2. `litellm/litellm_core_utils/prompt_templates/factory.py`
-   - Modified `_get_thought_signature_from_tool()` to extract from IDs
+   - Modified `_get_thought_signature_from_tool()` to extract signatures from tool call IDs
+   - Removed base64 decoding (signatures are already base64-encoded from Gemini)
+   - Updated to use `THOUGHT_SIGNATURE_SEPARATOR` constant
    - Updated signature extraction in `convert_to_gemini_tool_call_invoke()`
 
 3. `tests/test_litellm/llms/vertex_ai/gemini/test_thought_signature_in_tool_call_id.py`

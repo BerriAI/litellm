@@ -58,6 +58,10 @@ def prompt_injection_detection_default_pt():
 
 BAD_MESSAGE_ERROR_STR = "Invalid Message "
 
+# Separator used to embed Gemini thought signatures in tool call IDs
+# See: https://ai.google.dev/gemini-api/docs/thought-signatures
+THOUGHT_SIGNATURE_SEPARATOR = "__thought__"
+
 # used to interweave user messages, to ensure user/assistant alternating
 DEFAULT_USER_CONTINUE_MESSAGE = {
     "role": "user",
@@ -1193,22 +1197,15 @@ def _get_thought_signature_from_tool(tool: dict, model: Optional[str] = None) ->
                     return signature
     # Check if thought signature is embedded in tool call ID
     tool_call_id = tool.get("id")
-    if tool_call_id and "__thought__" in tool_call_id:
-        import base64
-        parts = tool_call_id.split("__thought__", 1)
+    if tool_call_id and THOUGHT_SIGNATURE_SEPARATOR in tool_call_id:
+        parts = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
         if len(parts) == 2:
-            _, encoded_sig = parts
-            try:
-                signature = base64.urlsafe_b64decode(encoded_sig.encode()).decode()
-                return signature
-            except Exception:
-                pass
-                
+            _, signature = parts
+            return signature
     # If no signature found and model is gemini-3, return dummy signature
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
     if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
-        return _get_dummy_thought_signature()
-    
+        return _get_dummy_thought_signature()    
     return None
 
 

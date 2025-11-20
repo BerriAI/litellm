@@ -11,6 +11,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
     convert_to_gemini_tool_call_invoke,
     _get_thought_signature_from_tool,
 )
@@ -26,15 +27,16 @@ def test_encode_decode_tool_call_id_with_signature():
     encoded_id = VertexGeminiConfig._encode_tool_call_id_with_signature(
         base_id, test_signature
     )
-    assert "__thought__" in encoded_id
+    assert THOUGHT_SIGNATURE_SEPARATOR in encoded_id
     assert encoded_id.startswith(base_id)
 
-    # Test decoding
-    decoded_base_id, decoded_signature = VertexGeminiConfig._decode_tool_call_id_for_signature(
-        encoded_id
-    )
-    assert decoded_base_id == base_id
+    # Test decoding using factory function
+    tool_obj = {"id": encoded_id, "type": "function"}
+    decoded_signature = _get_thought_signature_from_tool(tool_obj)
     assert decoded_signature == test_signature
+    # Verify base ID is preserved
+    decoded_base_id = encoded_id.split(THOUGHT_SIGNATURE_SEPARATOR)[0]
+    assert decoded_base_id == base_id
 
 
 def test_encode_tool_call_id_without_signature():
@@ -44,13 +46,11 @@ def test_encode_tool_call_id_without_signature():
     # Encode without signature
     encoded_id = VertexGeminiConfig._encode_tool_call_id_with_signature(base_id, None)
     assert encoded_id == base_id
-    assert "__thought__" not in encoded_id
+    assert THOUGHT_SIGNATURE_SEPARATOR not in encoded_id
 
-    # Decode ID without signature
-    decoded_base_id, decoded_signature = VertexGeminiConfig._decode_tool_call_id_for_signature(
-        base_id
-    )
-    assert decoded_base_id == base_id
+    # Decode ID without signature using factory function
+    tool_obj = {"id": base_id, "type": "function"}
+    decoded_signature = _get_thought_signature_from_tool(tool_obj)
     assert decoded_signature is None
 
 
@@ -78,10 +78,11 @@ def test_tool_call_id_includes_signature_in_response():
     assert tools is not None
     assert len(tools) == 1
     tool_call_id = tools[0]["id"]
-    assert "__thought__" in tool_call_id
+    assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
 
-    # Verify we can decode it
-    _, decoded_sig = VertexGeminiConfig._decode_tool_call_id_for_signature(tool_call_id)
+    # Verify we can decode it using the factory function
+    tool_obj = {"id": tool_call_id, "type": "function"}
+    decoded_sig = _get_thought_signature_from_tool(tool_obj)
     assert decoded_sig == test_signature
 
 
@@ -218,7 +219,7 @@ def test_openai_client_e2e_flow():
     assert tools is not None
     assert len(tools) == 1
     tool_call_id = tools[0]["id"]
-    assert "__thought__" in tool_call_id
+    assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
 
     # Step 3: OpenAI client sends back assistant message (preserves tool_call_id)
     openai_assistant_message = {
@@ -273,12 +274,12 @@ def test_parallel_tool_calls_with_signatures():
     assert len(tools) == 2
 
     # First tool call has signature in ID
-    assert "__thought__" in tools[0]["id"]
-    _, sig1 = VertexGeminiConfig._decode_tool_call_id_for_signature(tools[0]["id"])
+    assert THOUGHT_SIGNATURE_SEPARATOR in tools[0]["id"]
+    sig1 = _get_thought_signature_from_tool({"id": tools[0]["id"], "type": "function"})
     assert sig1 == signature1
 
     # Second tool call has no signature in ID
-    assert "__thought__" not in tools[1]["id"]
-    _, sig2 = VertexGeminiConfig._decode_tool_call_id_for_signature(tools[1]["id"])
+    assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]
+    sig2 = _get_thought_signature_from_tool({"id": tools[1]["id"], "type": "function"})
     assert sig2 is None
 
