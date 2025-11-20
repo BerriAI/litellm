@@ -78,14 +78,16 @@ export interface MessageType {
   isAudio?: boolean;
   reasoningContent?: string;
   timeToFirstToken?: number;
+  totalLatency?: number;
   usage?: {
     completionTokens?: number;
     promptTokens?: number;
     totalTokens?: number;
     reasoningTokens?: number;
+    cost?: number;
   };
   toolName?: string;
-  imagePreviewUrl?: string; // For storing image preview URL in chat history
+  imagePreviewUrl?: string;
   image?: {
     url: string;
     detail: string;

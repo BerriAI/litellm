@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { MessageType } from "../types";
-import { TokenUsage } from "../ResponseMetrics";
+import { MessageType } from "../chat_ui/types";
+import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
 
