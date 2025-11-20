@@ -6,7 +6,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
@@ -20,6 +28,7 @@ from litellm.types.prompts.init_prompts import (
     PromptSpec,
     PromptTemplateBase,
 )
+from litellm.types.proxy.prompt_endpoints import TestPromptRequest
 
 router = APIRouter()
 
@@ -664,6 +673,145 @@ async def patch_prompt(
         raise e
     except Exception as e:
         verbose_proxy_logger.exception(f"Error patching prompt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/prompts/test",
+    tags=["Prompt Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def test_prompt(
+    request: TestPromptRequest,
+    fastapi_request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Test a prompt by rendering it with variables and executing an LLM call.
+    
+    This endpoint allows testing prompts before saving them to the database.
+    The response is always streamed.
+    
+    👉 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)
+    
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/prompts/test" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "dotprompt_content": "---\\nmodel: gpt-4o\\ntemperature: 0.7\\n---\\n\\nUser: Hello {{name}}",
+            "prompt_variables": {
+                "name": "World"
+            }
+        }'
+    ```
+    """
+    from pydantic import BaseModel
+
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+    from litellm.integrations.dotprompt.prompt_manager import (
+        PromptManager,
+        PromptTemplate,
+    )
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+    
+    try:
+        # Parse the dotprompt content and create PromptTemplate
+        prompt_manager = PromptManager()
+        frontmatter, template_content = prompt_manager._parse_frontmatter(
+            content=request.dotprompt_content
+        )
+        
+        # Create PromptTemplate to leverage existing parameter extraction logic
+        template = PromptTemplate(
+            content=template_content,
+            metadata=frontmatter,
+            template_id="test_prompt"
+        )
+        
+        # Extract model from template
+        if not template.model:
+            raise HTTPException(
+                status_code=400,
+                detail="Model is required in dotprompt metadata"
+            )
+        
+        # Render template with variables using PromptManager's Jinja2 environment
+        variables = request.prompt_variables or {}
+        rendered_content = prompt_manager.jinja_env.from_string(
+            template_content
+        ).render(**variables)
+        
+        # Convert rendered content to messages using DotpromptManager's method
+        dotprompt_manager = DotpromptManager()
+        messages = dotprompt_manager._convert_to_messages(
+            rendered_content=rendered_content
+        )
+        
+        if not messages:
+            raise HTTPException(
+                status_code=400,
+                detail="No messages found in rendered prompt"
+            )
+        
+        # Use PromptTemplate's optional_params which already extracts all parameters
+        optional_params = template.optional_params.copy()
+        
+        # Always stream the response
+        optional_params["stream"] = True
+        
+        # Build request data for chat completion
+        data = {
+            "model": template.model,
+            "messages": messages,
+        }
+        data.update(optional_params)
+        
+        # Use ProxyBaseLLMRequestProcessing to go through all proxy logic
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        result = await base_llm_response_processor.base_process_llm_request(
+            request=fastapi_request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+        
+        if isinstance(result, BaseModel):
+            return result.model_dump(exclude_none=True, exclude_unset=True)
+        else:
+            return result
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error testing prompt: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
