@@ -11,6 +11,7 @@ Error: ValidationError: 1 validation error for OCIStreamChunk message.toolCalls.
 import os
 import sys
 import pytest
+from unittest.mock import MagicMock
 
 # Adds the parent directory to the system path
 sys.path.insert(0, os.path.abspath("../../../../.."))
@@ -51,7 +52,7 @@ class TestOCIStreamingToolCalls:
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=None,  # type: ignore
+            logging_obj=MagicMock()
         )
 
         # This should not raise a ValidationError
@@ -88,7 +89,7 @@ class TestOCIStreamingToolCalls:
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=None,  # type: ignore
+            logging_obj=MagicMock()
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
@@ -122,7 +123,7 @@ class TestOCIStreamingToolCalls:
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=None,  # type: ignore
+            logging_obj=MagicMock()
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
@@ -154,7 +155,7 @@ class TestOCIStreamingToolCalls:
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=None,  # type: ignore
+            logging_obj=MagicMock()
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
@@ -190,7 +191,7 @@ class TestOCIStreamingToolCalls:
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=None,  # type: ignore
+            logging_obj=MagicMock()
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
@@ -240,7 +241,7 @@ class TestOCIStreamingToolCalls:
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=None,  # type: ignore
+            logging_obj=MagicMock()
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
@@ -286,7 +287,7 @@ class TestOCIStreamingToolCalls:
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=None,  # type: ignore
+            logging_obj=MagicMock()
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
