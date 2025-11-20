@@ -19,10 +19,10 @@ documentation = "https://docs.litellm.ai"
 Documentation = "https://docs.litellm.ai"
 
 [tool.poetry.dependencies]
-python = ">=3.8.1,<4.0, !=3.9.7"
+python = ">=3.9,<4.0"
 fastuuid = ">=0.13.0"
 httpx = ">=0.23.0"
-openai = ">=1.99.5"
+openai = ">=2.8.0"
 python-dotenv = ">=0.2.0"
 tiktoken = ">=0.7.0"
 importlib-metadata = ">=6.8.0"
@@ -53,18 +53,18 @@ azure-keyvault-secrets = {version = "^4.8.0", optional = true}
 azure-storage-blob = {version="^12.25.1", optional=true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
 google-cloud-iam = {version = "^2.19.1", optional = true}
-resend = {version = "^0.8.0", optional = true}
+resend = {version = ">=0.8.0", optional = true}
 pynacl = {version = "^1.5.0", optional = true}
 websockets = {version = "^13.1.0", optional = true}
 boto3 = {version = "1.36.0", optional = true}
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = "^1.10.0", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.5", optional = true}
+litellm-proxy-extras = {version = "0.4.6", optional = true}
 rich = {version = "13.7.1", optional = true}
-litellm-enterprise = {version = "0.1.21", optional = true}
+litellm-enterprise = {version = "0.1.22", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
 polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
-semantic-router = {version = "*", optional = true, python = ">=3.9"}
+semantic-router = {version = ">=0.1.12", optional = true, python = ">=3.9,<3.14"}
 mlflow = {version = ">3.1.4", optional = true, python = ">=3.10"}
 soundfile = {version = "^0.12.1", optional = true}
 

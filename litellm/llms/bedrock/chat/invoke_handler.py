@@ -493,9 +493,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params["original_response"] = (
-                            outputText  # allow user to access raw anthropic tool calling response
-                        )
+                        model_response._hidden_params[
+                            "original_response"
+                        ] = outputText  # allow user to access raw anthropic tool calling response
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -793,9 +793,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params["stream"] = (
-                        True  # cohere requires stream = True in inference params
-                    )
+                    inference_params[
+                        "stream"
+                    ] = True  # cohere requires stream = True in inference params
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
@@ -1184,6 +1184,7 @@ class AWSEventStreamDecoder:
         self.parser = EventStreamJSONParser()
         self.content_blocks: List[ContentBlockDeltaEvent] = []
         self.tool_calls_index: Optional[int] = None
+        self.response_id: Optional[str] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1247,6 +1248,17 @@ class AWSEventStreamDecoder:
 
     def converse_chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         try:
+            # Capture the conversationId from the first messageStart event
+            # and use it as the consistent ID for all subsequent chunks.
+            if self.response_id is None:
+                if "messageStart" in chunk_data:
+                    conversation_id = chunk_data["messageStart"].get("conversationId")
+                    if conversation_id:
+                        self.response_id = f"chatcmpl-{conversation_id}"
+                else:
+                    # Fallback to generating a UUID if the first chunk is not messageStart
+                    self.response_id = f"chatcmpl-{uuid.uuid4()}"
+
             verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
@@ -1378,6 +1390,7 @@ class AWSEventStreamDecoder:
                         ),
                     )
                 ],
+                id=self.response_id,
                 usage=usage,
                 provider_specific_fields=model_response_provider_specific_fields,
             )
