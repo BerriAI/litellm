@@ -1,6 +1,6 @@
 ---
 slug: gemini_3
-title: Using Gemini 3 on LiteLLM
+title: DAY 0 Support: Gemini 3 on LiteLLM
 date: 2025-11-19T10:00:00
 authors:
   - name: Sameer Kankute
