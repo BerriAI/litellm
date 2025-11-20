@@ -746,7 +746,79 @@ async def pass_through_request(  # noqa: PLR0915
                 headers=headers,
             )
 
-            response = await async_client.send(req, stream=stream)
+
+            async def mock_vertex_anthropic_streaming_response():
+                import json
+                async def sse_event(event, data):
+                    return f"event: {event}\ndata: {json.dumps(data) if not isinstance(data, str) else data}\n\n"
+
+                # Claude Sonnet 4 - public Vertex AI "Anthropic" style events
+                events = [
+                    (
+                        "message_start",
+                        {
+                            "type": "message_start",
+                            "message": {
+                                "model": "claude-sonnet-4-20250514",
+                                "id": "msg_vrtx_01Dj",
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [],
+                                "stop_reason": None,
+                                "stop_sequence": None,
+                                "usage": {
+                                    "input_tokens": 13735,
+                                    "cache_creation_input_tokens": 0,
+                                    "cache_read_input_tokens": 0,
+                                    "output_tokens": 1,
+                                },
+                            },
+                        },
+                    ),
+                    ("ping", {"type": "ping"}),
+                    (
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": 0,
+                            "content_block": {"type": "text", "text": ""},
+                        },
+                    ),
+                    (
+                        "message_delta",
+                        {
+                            "type": "message_delta",
+                            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                            "usage": {"output_tokens": 89},
+                        },
+                    ),
+                    (
+                        "message_stop",
+                        {
+                            "type": "message_stop"
+                        },
+                    ),
+                ]
+                for event, data in events:
+                    await asyncio.sleep(0.1)
+                    yield await sse_event(event, data)
+
+            class MockAsyncResponse:
+                # Minimal mimic of httpx.Response for streaming purposes
+                status_code = 200
+                headers = {}
+
+                async def aiter_bytes(self):
+                    async for s in mock_vertex_anthropic_streaming_response():
+                        # Each event is a string -> bytes
+                        yield s.encode("utf-8")
+
+                def raise_for_status(self):
+                    return
+
+            response = MockAsyncResponse()
+            # else:
+            #     response = await async_client.send(req, stream=stream)
 
             try:
                 response.raise_for_status()
