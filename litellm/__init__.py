@@ -388,6 +388,7 @@ disable_add_prefix_to_prompt: bool = (
 disable_copilot_system_to_assistant: bool = (
     False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 )
+public_mcp_servers: Optional[List[str]] = None
 public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
@@ -1342,6 +1343,9 @@ from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
+from .llms.github_copilot.responses.transformation import (
+    GithubCopilotResponsesAPIConfig,
+)
 from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
