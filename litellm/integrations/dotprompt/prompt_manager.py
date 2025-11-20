@@ -161,7 +161,8 @@ class PromptManager:
             template_id=prompt_id,
         )
 
-    def _parse_frontmatter(self, content: str) -> Tuple[Dict[str, Any], str]:
+    @staticmethod
+    def _parse_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:
         """Parse YAML frontmatter from prompt content."""
         # Match YAML frontmatter between --- delimiters
         frontmatter_pattern = r"^---\s*\n(.*?)\n---\s*\n(.*)$"
