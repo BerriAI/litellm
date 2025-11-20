@@ -973,28 +973,39 @@ print(response.choices[0].message.content)`}
             <div>
               <Text className="text-lg font-semibold mb-4">Usage Example</Text>
               <SyntaxHighlighter language="python" className="text-sm">
-                {`import openai
+                {`from fastmcp import Client
+import asyncio
 
-client = openai.OpenAI(
-    api_key="your_api_key",
-    base_url="http://0.0.0.0:4000"  # Your LiteLLM Proxy URL
-)
-
-# Use the MCP server via an agent
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[
-        {
-            "role": "user",
-            "content": "Hello, use the ${selectedMcpServer.server_name} MCP server"
+# Standard MCP configuration
+config = {
+    "mcpServers": {
+        "${selectedMcpServer.server_name}": {
+            "url": "http://localhost:4000/${selectedMcpServer.server_name}/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234"
+            }
         }
-    ],
-    extra_body={
-        "mcp_server": "${selectedMcpServer.server_name}"
     }
-)
+}
 
-print(response.choices[0].message.content)`}
+# Create a client that connects to the server
+client = Client(config)
+
+async def main():
+    async with client:
+        # List available tools
+        tools = await client.list_tools()
+        print(f"Available tools: {[tool.name for tool in tools]}")
+
+        # Call a tool
+        response = await client.call_tool(
+            name="tool_name", 
+            arguments={"arg": "value"}
+        )
+        print(f"Response: {response}")
+
+if __name__ == "__main__":
+    asyncio.run(main())`}
               </SyntaxHighlighter>
             </div>
           </div>

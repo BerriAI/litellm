@@ -1846,45 +1846,81 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                 <Text className="text-lg font-semibold mb-4">Usage Example</Text>
                 <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
                   <pre className="text-sm">
-{`# Using LiteLLM Proxy with MCP Server
+{`# Using MCP Server with Python FastMCP
 
-import openai
-client = openai.OpenAI(
-    base_url="https://your-proxy-url.com",
-    api_key="your_api_key"
-)
+from fastmcp import Client
+import asyncio
 
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[
-        {"role": "user", "content": "Hello!"}
-    ],
-    extra_body={
-        "mcp_servers": ["${selectedMcpServer.server_name}"]
+# Standard MCP configuration
+config = {
+    "mcpServers": {
+        "${selectedMcpServer.server_name}": {
+            "url": "http://localhost:4000/${selectedMcpServer.server_name}/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234"
+            }
+        }
     }
-)`}
+}
+
+# Create a client that connects to the server
+client = Client(config)
+
+async def main():
+    async with client:
+        # List available tools
+        tools = await client.list_tools()
+        print(f"Available tools: {[tool.name for tool in tools]}")
+
+        # Call a tool
+        response = await client.call_tool(
+            name="tool_name", 
+            arguments={"arg": "value"}
+        )
+        print(f"Response: {response}")
+
+if __name__ == "__main__":
+    asyncio.run(main())`}
                   </pre>
                 </div>
                 <div className="mt-2 text-right">
                   <button
                     onClick={() => {
-                      const codeSnippet = `# Using LiteLLM Proxy with MCP Server
+                      const codeSnippet = `# Using MCP Server with Python FastMCP
 
-import openai
-client = openai.OpenAI(
-    base_url="https://your-proxy-url.com",
-    api_key="your_api_key"
-)
+from fastmcp import Client
+import asyncio
 
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[
-        {"role": "user", "content": "Hello!"}
-    ],
-    extra_body={
-        "mcp_servers": ["${selectedMcpServer.server_name}"]
+# Standard MCP configuration
+config = {
+    "mcpServers": {
+        "${selectedMcpServer.server_name}": {
+            "url": "http://localhost:4000/${selectedMcpServer.server_name}/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234"
+            }
+        }
     }
-)`;
+}
+
+# Create a client that connects to the server
+client = Client(config)
+
+async def main():
+    async with client:
+        # List available tools
+        tools = await client.list_tools()
+        print(f"Available tools: {[tool.name for tool in tools]}")
+
+        # Call a tool
+        response = await client.call_tool(
+            name="tool_name", 
+            arguments={"arg": "value"}
+        )
+        print(f"Response: {response}")
+
+if __name__ == "__main__":
+    asyncio.run(main())`;
                       copyToClipboard(codeSnippet);
                     }}
                     className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer"
