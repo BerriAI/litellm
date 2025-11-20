@@ -138,9 +138,10 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
                   <SearchResultsDisplay searchResults={assistantMessage.searchResults} />
                 )}
                 {renderMessageBody(assistantMessage)}
-                {(assistantMessage.timeToFirstToken || assistantMessage.usage) && (
+                {(assistantMessage.timeToFirstToken || assistantMessage.totalLatency || assistantMessage.usage) && (
                   <ResponseMetrics
                     timeToFirstToken={assistantMessage.timeToFirstToken}
+                    totalLatency={assistantMessage.totalLatency}
                     usage={assistantMessage.usage}
                     toolName={assistantMessage.toolName}
                   />

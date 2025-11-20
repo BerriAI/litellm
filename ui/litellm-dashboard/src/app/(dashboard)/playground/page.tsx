@@ -1,29 +1,37 @@
+"use client";
+
+import { useState, useEffect } from "react";
 import ChatUI from "@/components/playground/chat_ui/ChatUI";
 import CompareUI from "@/components/playground/compareUI/CompareUI";
 import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useState } from "react";
+import { fetchProxySettings } from "@/utils/proxyUtils";
 
-export interface PlaygroundPageProps {
-  accessToken: string | null;
-  token: string | null;
-  userRole: string | null;
-  userID: string | null;
-  disabledPersonalKeyCreation: boolean;
-  proxySettings?: {
-    PROXY_BASE_URL?: string;
-    LITELLM_UI_API_DOC_BASE_URL?: string | null;
-  };
+interface ProxySettings {
+  PROXY_BASE_URL?: string;
+  LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
 
-export function PlaygroundPage({
-  accessToken,
-  token,
-  userRole,
-  userID,
-  disabledPersonalKeyCreation,
-  proxySettings,
-}: PlaygroundPageProps) {
+export default function PlaygroundPage() {
+  const { accessToken, userRole, userId, disabledPersonalKeyCreation, token } = useAuthorized();
+  const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
+
+  useEffect(() => {
+    const initializeProxySettings = async () => {
+      if (accessToken) {
+        const settings = await fetchProxySettings(accessToken);
+        if (settings) {
+          setProxySettings({
+            PROXY_BASE_URL: settings.PROXY_BASE_URL,
+            LITELLM_UI_API_DOC_BASE_URL: settings.LITELLM_UI_API_DOC_BASE_URL,
+          });
+        }
+      }
+    };
+
+    initializeProxySettings();
+  }, [accessToken]);
+
   return (
     <TabGroup className="h-full w-full">
       <TabList className="mb-0">
@@ -36,7 +44,7 @@ export function PlaygroundPage({
             accessToken={accessToken}
             token={token}
             userRole={userRole}
-            userID={userID}
+            userID={userId}
             disabledPersonalKeyCreation={disabledPersonalKeyCreation}
             proxySettings={proxySettings}
           />
@@ -46,22 +54,5 @@ export function PlaygroundPage({
         </TabPanel>
       </TabPanels>
     </TabGroup>
-  );
-}
-
-// Default export for Next.js page routing (uses useAuthorized hook)
-export default function PlaygroundPageWithAuth() {
-  const { accessToken, token, userRole, userId, disabledPersonalKeyCreation } = useAuthorized();
-  const [proxySettings, setProxySettings] = useState<PlaygroundPageProps["proxySettings"]>(undefined);
-
-  return (
-    <PlaygroundPage
-      accessToken={accessToken}
-      token={token}
-      userRole={userRole}
-      userID={userId}
-      disabledPersonalKeyCreation={disabledPersonalKeyCreation}
-      proxySettings={proxySettings}
-    />
   );
 }

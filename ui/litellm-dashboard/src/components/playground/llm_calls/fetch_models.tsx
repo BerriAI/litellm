@@ -1,6 +1,6 @@
 // fetch_models.ts
 
-import { modelHubCall } from "../../../networking";
+import { modelHubCall } from "../../networking";
 
 export interface ModelGroup {
   model_group: string;

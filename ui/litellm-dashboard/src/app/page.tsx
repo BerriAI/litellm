@@ -21,7 +21,7 @@ import SpendLogsTable from "@/components/view_logs";
 import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
 import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
-import { PlaygroundPage } from "@/app/(dashboard)/playground/page";
+import PlaygroundPage from "@/app/(dashboard)/playground/page";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
@@ -362,17 +362,7 @@ export default function CreateKeyPage() {
                     teams={teams}
                   />
                 ) : page == "llm-playground" ? (
-                  <PlaygroundPage
-                    userID={userID}
-                    userRole={userRole}
-                    token={token}
-                    accessToken={accessToken}
-                    disabledPersonalKeyCreation={disabledPersonalKeyCreation}
-                    proxySettings={{
-                      PROXY_BASE_URL: proxySettings.PROXY_BASE_URL,
-                      LITELLM_UI_API_DOC_BASE_URL: proxySettings.LITELLM_UI_API_DOC_BASE_URL,
-                    }}
-                  />
+                  <PlaygroundPage />
                 ) : page == "users" ? (
                   <ViewUserDashboard
                     userID={userID}

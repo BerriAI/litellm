@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
-import * as fetchModelsModule from "./llm_calls/fetch_models";
+import * as fetchModelsModule from "../llm_calls/fetch_models";
 
 // Mock the fetchAvailableModels function
-vi.mock("./llm_calls/fetch_models", () => ({
+vi.mock("../llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 
@@ -32,7 +32,7 @@ describe("ChatUI", () => {
     Element.prototype.scrollIntoView = vi.fn();
 
     // Mock the fetchAvailableModels to return test models
-    vi.mocked(fetchModelsModule.fetchAvailableModels).mockResolvedValue([
+    (fetchModelsModule.fetchAvailableModels as any).mockResolvedValue([
       { model_group: "Model 1", mode: "chat" },
       { model_group: "Model 2", mode: "chat" },
       { model_group: "Model 3", mode: "chat" },
@@ -134,7 +134,7 @@ describe("ChatUI", () => {
   });
 
   it("shows only chat-compatible models when chat endpoint is selected", async () => {
-    vi.mocked(fetchModelsModule.fetchAvailableModels).mockResolvedValueOnce([
+    (fetchModelsModule.fetchAvailableModels as any).mockResolvedValueOnce([
       { model_group: "ChatModel", mode: "chat" },
       { model_group: "SpeechModel", mode: "audio_speech" },
       { model_group: "ImageModel", mode: "image_generation" },

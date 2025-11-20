@@ -6,8 +6,7 @@ import { ModelSelector } from "./ModelSelector";
 import TagSelector from "../../../tag_management/TagSelector";
 import VectorStoreSelector from "../../../vector_store_management/VectorStoreSelector";
 import GuardrailSelector from "../../../guardrails/GuardrailSelector";
-import { MCPTool } from "../../chat_ui/llm_calls/fetch_mcp_tools";
-import { Checkbox, Divider, Popover, Select, Slider } from "antd";
+import { Checkbox, Divider, Popover, Slider } from "antd";
 interface ComparisonPanelProps {
   comparison: ComparisonInstance;
   onUpdate: (
@@ -19,8 +18,6 @@ interface ComparisonPanelProps {
   modelOptions: string[];
   isLoadingModels: boolean;
   apiKey: string;
-  availableMcpTools: MCPTool[];
-  isLoadingMcpTools: boolean;
 }
 export function ComparisonPanel({
   comparison,
@@ -30,8 +27,6 @@ export function ComparisonPanel({
   modelOptions,
   isLoadingModels,
   apiKey,
-  availableMcpTools,
-  isLoadingMcpTools,
 }: ComparisonPanelProps) {
   const [popoverVisible, setPopoverVisible] = useState(false);
 
@@ -43,22 +38,13 @@ export function ComparisonPanel({
           temperature: comparison.temperature,
           maxTokens: comparison.maxTokens,
           tags: [...comparison.tags],
-          mcpTools: [...comparison.mcpTools],
           vectorStores: [...comparison.vectorStores],
           guardrails: [...comparison.guardrails],
           useAdvancedParams: comparison.useAdvancedParams,
         },
         {
           applyToAll: true,
-          keysToApply: [
-            "temperature",
-            "maxTokens",
-            "tags",
-            "mcpTools",
-            "vectorStores",
-            "guardrails",
-            "useAdvancedParams",
-          ],
+          keysToApply: ["temperature", "maxTokens", "tags", "vectorStores", "guardrails", "useAdvancedParams"],
         },
       );
     } else {
@@ -129,33 +115,6 @@ export function ComparisonPanel({
                 onChange={(value) => handleSettingChange("tags", value)}
                 accessToken={apiKey}
               />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">MCP Tools</label>
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="Select MCP tools"
-                value={comparison.mcpTools}
-                onChange={(value) => handleSettingChange("mcpTools", value as string[])}
-                loading={isLoadingMcpTools}
-                className="w-full"
-                optionLabelProp="label"
-                maxTagCount="responsive"
-              >
-                {availableMcpTools.map((tool) => (
-                  <Select.Option
-                    key={tool.name}
-                    value={tool.name}
-                    label={<span className="font-medium">{tool.name}</span>}
-                  >
-                    <div className="flex flex-col py-1">
-                      <span className="font-medium">{tool.name}</span>
-                      {tool.description && <span className="text-xs text-gray-500 mt-1">{tool.description}</span>}
-                    </div>
-                  </Select.Option>
-                ))}
-              </Select>
             </div>
             <div>
               <label className="text-xs font-medium text-gray-600 block mb-0.5">Vector Stores</label>

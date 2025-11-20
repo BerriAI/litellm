@@ -1,11 +1,12 @@
+"use client";
+
 import React, { useEffect, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { Select, Input, Tooltip, Button } from "antd";
 import { ClearOutlined, PlusOutlined } from "@ant-design/icons";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { fetchAvailableModels } from "../chat_ui/llm_calls/fetch_models";
-import { fetchAvailableMCPTools, MCPTool } from "../chat_ui/llm_calls/fetch_mcp_tools";
-import { makeOpenAIChatCompletionRequest } from "../chat_ui/llm_calls/chat_completion";
+import { fetchAvailableModels } from "../llm_calls/fetch_models";
+import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
 import type { TokenUsage } from "../chat_ui/ResponseMetrics";
 import type { MessageType, VectorStoreSearchResponse } from "../chat_ui/types";
 import { ComparisonPanel } from "./components/ComparisonPanel";
@@ -85,8 +86,6 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     () => (apiKeySource === "session" ? accessToken || "" : debouncedCustomApiKey.trim()),
     [apiKeySource, accessToken, debouncedCustomApiKey],
   );
-  const [availableMcpTools, setAvailableMcpTools] = useState<MCPTool[]>([]);
-  const [isLoadingMcpTools, setIsLoadingMcpTools] = useState(false);
   const haveAllResponses = useMemo(
     () =>
       comparisons.length > 0 &&
@@ -120,34 +119,6 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       }
     };
     loadModels();
-    return () => {
-      active = false;
-    };
-  }, [effectiveApiKey]);
-  useEffect(() => {
-    let active = true;
-    const loadMcpTools = async () => {
-      if (!effectiveApiKey) {
-        setAvailableMcpTools([]);
-        return;
-      }
-      setIsLoadingMcpTools(true);
-      try {
-        const tools = await fetchAvailableMCPTools(effectiveApiKey);
-        if (!active) return;
-        setAvailableMcpTools(tools);
-      } catch (error) {
-        console.error("CompareUI: failed to fetch MCP tools", error);
-        if (active) {
-          setAvailableMcpTools([]);
-        }
-      } finally {
-        if (active) {
-          setIsLoadingMcpTools(false);
-        }
-      }
-    };
-    loadMcpTools();
     return () => {
       active = false;
     };
@@ -344,6 +315,33 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       }),
     );
   };
+  const updateTotalLatencyForComparison = (comparisonId: string, totalLatency: number) => {
+    setComparisons((prev) =>
+      prev.map((comparison) => {
+        if (comparison.id !== comparisonId) {
+          return comparison;
+        }
+        const messages = [...comparison.messages];
+        const last = messages[messages.length - 1];
+        if (last && last.role === "assistant") {
+          messages[messages.length - 1] = {
+            ...last,
+            totalLatency,
+          };
+        } else if (last && last.role === "user") {
+          messages.push({
+            role: "assistant",
+            content: "",
+            totalLatency,
+          });
+        }
+        return {
+          ...comparison,
+          messages,
+        };
+      }),
+    );
+  };
   const updateUsageDataForComparison = (comparisonId: string, usage: TokenUsage, toolName?: string) => {
     setComparisons((prev) =>
       prev.map((comparison) => {
@@ -415,7 +413,6 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         model: string;
         traceId: string;
         tags: string[];
-        mcpTools: string[];
         vectorStores: string[];
         guardrails: string[];
         temperature: number;
@@ -434,7 +431,6 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         model: comparison.model,
         traceId,
         tags: comparison.tags,
-        mcpTools: comparison.mcpTools,
         vectorStores: comparison.vectorStores,
         guardrails: comparison.guardrails,
         temperature: comparison.temperature,
@@ -467,7 +463,6 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       const tags = prepared.tags.length > 0 ? prepared.tags : undefined;
       const vectorStoreIds = prepared.vectorStores.length > 0 ? prepared.vectorStores : undefined;
       const guardrails = prepared.guardrails.length > 0 ? prepared.guardrails : undefined;
-      const mcpTools = prepared.mcpTools.length > 0 ? prepared.mcpTools : undefined;
       const comparison = comparisons.find((c) => c.id === prepared.id);
       const useAdvancedParams = comparison?.useAdvancedParams ?? false;
       makeOpenAIChatCompletionRequest(
@@ -483,11 +478,12 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         prepared.traceId,
         vectorStoreIds,
         guardrails,
-        mcpTools,
+        undefined,
         undefined,
         (searchResults) => updateSearchResultsForComparison(prepared.id, searchResults),
         useAdvancedParams ? prepared.temperature : undefined,
         useAdvancedParams ? prepared.maxTokens : undefined,
+        (latency) => updateTotalLatencyForComparison(prepared.id, latency),
       )
         .catch((error) => {
           const errorMessage = error instanceof Error ? error.message : String(error);
@@ -617,8 +613,6 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
               modelOptions={modelOptions}
               isLoadingModels={isLoadingModels}
               apiKey={effectiveApiKey}
-              availableMcpTools={availableMcpTools}
-              isLoadingMcpTools={isLoadingMcpTools}
             />
           ))}
         </div>

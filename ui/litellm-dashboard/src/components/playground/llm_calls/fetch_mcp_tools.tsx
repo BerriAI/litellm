@@ -1,4 +1,4 @@
-import { mcpToolsCall } from "../../../networking";
+import { mcpToolsCall } from "../../networking";
 
 export interface MCPTool {
   name: string;

@@ -1,4 +1,4 @@
-import { TokenUsage } from "../ResponseMetrics";
+import { TokenUsage } from "../chat_ui/ResponseMetrics";
 
 export interface StreamingResponse {
   id: string;
