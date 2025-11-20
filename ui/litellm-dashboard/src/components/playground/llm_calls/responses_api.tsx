@@ -1,9 +1,9 @@
 import openai from "openai";
-import { MessageType } from "../types";
-import { TokenUsage } from "../ResponseMetrics";
+import { MessageType } from "../chat_ui/types";
+import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { MCPEvent } from "../MCPEventsDisplay";
+import { MCPEvent } from "../chat_ui/MCPEventsDisplay";
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],

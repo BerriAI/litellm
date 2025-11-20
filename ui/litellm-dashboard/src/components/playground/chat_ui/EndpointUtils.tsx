@@ -1,4 +1,4 @@
-import { ModelGroup } from "./llm_calls/fetch_models";
+import { ModelGroup } from "../llm_calls/fetch_models";
 import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 
 /**

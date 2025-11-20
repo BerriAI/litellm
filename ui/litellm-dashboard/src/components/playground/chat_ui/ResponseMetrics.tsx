@@ -7,6 +7,7 @@ import {
   ExportOutlined,
   BulbOutlined,
   ToolOutlined,
+  DollarOutlined,
 } from "@ant-design/icons";
 
 export interface TokenUsage {
@@ -14,16 +15,18 @@ export interface TokenUsage {
   promptTokens?: number;
   totalTokens?: number;
   reasoningTokens?: number;
+  cost?: number;
 }
 
 interface ResponseMetricsProps {
-  timeToFirstToken?: number; // in milliseconds
+  timeToFirstToken?: number;
+  totalLatency?: number;
   usage?: TokenUsage;
   toolName?: string;
 }
 
-const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, usage, toolName }) => {
-  if (!timeToFirstToken && !usage) return null;
+const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, totalLatency, usage, toolName }) => {
+  if (!timeToFirstToken && !totalLatency && !usage) return null;
 
   return (
     <div className="response-metrics mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500 flex flex-wrap gap-3">
@@ -31,7 +34,16 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, usa
         <Tooltip title="Time to first token">
           <div className="flex items-center">
             <ClockCircleOutlined className="mr-1" />
-            <span>{(timeToFirstToken / 1000).toFixed(2)}s</span>
+            <span>TTFT: {(timeToFirstToken / 1000).toFixed(2)}s</span>
+          </div>
+        </Tooltip>
+      )}
+
+      {totalLatency !== undefined && (
+        <Tooltip title="Total latency">
+          <div className="flex items-center">
+            <ClockCircleOutlined className="mr-1" />
+            <span>Total Latency: {(totalLatency / 1000).toFixed(2)}s</span>
           </div>
         </Tooltip>
       )}
@@ -68,6 +80,21 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, usa
           <div className="flex items-center">
             <NumberOutlined className="mr-1" />
             <span>Total: {usage.totalTokens}</span>
+          </div>
+        </Tooltip>
+      )}
+
+      {usage && (
+        <Tooltip
+          title={
+            usage.cost !== undefined
+              ? "Cost"
+              : "Cost tracking is disabled. Set include_cost_in_streaming_usage: true in your proxy config to enable cost tracking."
+          }
+        >
+          <div className="flex items-center">
+            <DollarOutlined className="mr-1" />
+            <span>{usage.cost !== undefined ? `$${usage.cost.toFixed(6)}` : "Not Tracked"}</span>
           </div>
         </Tooltip>
       )}

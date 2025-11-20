@@ -1,3 +1,5 @@
+"use client";
+
 import {
   ApiOutlined,
   ArrowUpOutlined,
@@ -25,11 +27,11 @@ import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
-import { truncateString } from "../../utils/textUtils";
-import GuardrailSelector from "../guardrails/GuardrailSelector";
-import NotificationsManager from "../molecules/notifications_manager";
-import TagSelector from "../tag_management/TagSelector";
-import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { truncateString } from "../../../utils/textUtils";
+import GuardrailSelector from "../../guardrails/GuardrailSelector";
+import NotificationsManager from "../../molecules/notifications_manager";
+import TagSelector from "../../tag_management/TagSelector";
+import VectorStoreSelector from "../../vector_store_management/VectorStoreSelector";
 import AdditionalModelSettings from "./AdditionalModelSettings";
 import AudioRenderer from "./AudioRenderer";
 import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
@@ -38,17 +40,17 @@ import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
-import { makeAnthropicMessagesRequest } from "./llm_calls/anthropic_messages";
-import { makeOpenAIAudioSpeechRequest } from "./llm_calls/audio_speech";
-import { makeOpenAIAudioTranscriptionRequest } from "./llm_calls/audio_transcriptions";
-import { makeOpenAIChatCompletionRequest } from "./llm_calls/chat_completion";
-import { makeOpenAIEmbeddingsRequest } from "./llm_calls/embeddings_api";
-import type { MCPTool } from "./llm_calls/fetch_mcp_tools";
-import { fetchAvailableMCPTools } from "./llm_calls/fetch_mcp_tools";
-import { fetchAvailableModels, ModelGroup } from "./llm_calls/fetch_models";
-import { makeOpenAIImageEditsRequest } from "./llm_calls/image_edits";
-import { makeOpenAIImageGenerationRequest } from "./llm_calls/image_generation";
-import { makeOpenAIResponsesRequest } from "./llm_calls/responses_api";
+import { makeAnthropicMessagesRequest } from "../llm_calls/anthropic_messages";
+import { makeOpenAIAudioSpeechRequest } from "../llm_calls/audio_speech";
+import { makeOpenAIAudioTranscriptionRequest } from "../llm_calls/audio_transcriptions";
+import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
+import { makeOpenAIEmbeddingsRequest } from "../llm_calls/embeddings_api";
+import type { MCPTool } from "../llm_calls/fetch_mcp_tools";
+import { fetchAvailableMCPTools } from "../llm_calls/fetch_mcp_tools";
+import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
+import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
+import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
+import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
 import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import ReasoningContent from "./ReasoningContent";
@@ -467,6 +469,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
     });
   };
 
+  const updateTotalLatency = (totalLatency: number) => {
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+
+      if (lastMessage && lastMessage.role === "assistant") {
+        return [
+          ...prevHistory.slice(0, prevHistory.length - 1),
+          {
+            ...lastMessage,
+            totalLatency,
+          },
+        ];
+      }
+
+      return prevHistory;
+    });
+  };
+
   const updateSearchResults = (searchResults: any[]) => {
     console.log("Received search results:", searchResults);
     setChatHistory((prevHistory) => {
@@ -767,11 +787,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tools array
-            updateChatImageUI, // Pass the image callback
-            updateSearchResults, // Pass the search results callback
-            useAdvancedParams ? temperature : undefined, // Pass temperature if enabled
-            useAdvancedParams ? maxTokens : undefined, // Pass max_tokens if enabled
+            selectedMCPTools,
+            updateChatImageUI,
+            updateSearchResults,
+            useAdvancedParams ? temperature : undefined,
+            useAdvancedParams ? maxTokens : undefined,
+            updateTotalLatency,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -973,7 +994,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
   return (
-    <div className="w-full h-screen p-4 bg-white">
+    <div className="w-full p-4 pb-0 bg-white">
       <Card className="w-full rounded-xl shadow-md overflow-hidden">
         <div className="flex h-[80vh] w-full gap-4">
           {/* Left Sidebar with Controls */}
@@ -1418,13 +1439,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           </>
                         )}
 
-                        {message.role === "assistant" && (message.timeToFirstToken || message.usage) && (
-                          <ResponseMetrics
-                            timeToFirstToken={message.timeToFirstToken}
-                            usage={message.usage}
-                            toolName={message.toolName}
-                          />
-                        )}
+                        {message.role === "assistant" &&
+                          (message.timeToFirstToken || message.totalLatency || message.usage) && (
+                            <ResponseMetrics
+                              timeToFirstToken={message.timeToFirstToken}
+                              totalLatency={message.totalLatency}
+                              usage={message.usage}
+                              toolName={message.toolName}
+                            />
+                          )}
                       </div>
                     </div>
                   </div>
