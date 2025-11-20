@@ -363,14 +363,14 @@ class LoggingWorker:
 
         start_time = asyncio.get_event_loop().time()
 
-        for _ in range(self.MAX_ITERATIONS_TO_CLEAR_QUEUE):
+        for _ in range(MAX_ITERATIONS_TO_CLEAR_QUEUE):
             # Check if we've exceeded the maximum time
             if (
                 asyncio.get_event_loop().time() - start_time
-                >= self.MAX_TIME_TO_CLEAR_QUEUE
+                >= MAX_TIME_TO_CLEAR_QUEUE
             ):
                 verbose_logger.warning(
-                    f"clear_queue exceeded max_time of {self.MAX_TIME_TO_CLEAR_QUEUE}s, stopping early"
+                    f"clear_queue exceeded max_time of {MAX_TIME_TO_CLEAR_QUEUE}s, stopping early"
                 )
                 break
 
@@ -417,10 +417,10 @@ class LoggingWorker:
             processed = 0
             start_time = loop.time()
 
-            while not self._queue.empty() and processed < self.MAX_ITERATIONS_TO_CLEAR_QUEUE:
-                if loop.time() - start_time >= self.MAX_TIME_TO_CLEAR_QUEUE:
+            while not self._queue.empty() and processed < MAX_ITERATIONS_TO_CLEAR_QUEUE:
+                if loop.time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE:
                     verbose_logger.warning(
-                        f"[LoggingWorker] atexit: Reached time limit ({self.MAX_TIME_TO_CLEAR_QUEUE}s), stopping flush"
+                        f"[LoggingWorker] atexit: Reached time limit ({MAX_TIME_TO_CLEAR_QUEUE}s), stopping flush"
                     )
                     break
 
