@@ -21,7 +21,7 @@ from litellm.types.llms.vertex_ai import HttpxPartType
 
 def test_encode_decode_tool_call_id_with_signature():
     """Test that thought signatures can be encoded in and decoded from tool call IDs"""
-    base_id = "call_abc123def456"
+    base_id = "call_abc123"
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
 
     # Test encoding
@@ -31,10 +31,19 @@ def test_encode_decode_tool_call_id_with_signature():
     assert THOUGHT_SIGNATURE_SEPARATOR in encoded_id
     assert encoded_id.startswith(base_id)
 
-    # Test decoding using factory function
-    tool_obj = {"id": encoded_id, "type": "function"}
-    decoded_signature = _get_thought_signature_from_tool(tool_obj)
-    assert decoded_signature == test_signature
+    # Test decoding using factory function with realistic tool call structure
+    tool = {
+        "id": encoded_id,
+        "type": "function",
+        "function": {
+            "name": "get_current_temperature",
+            "arguments": '{"location": "Paris"}',
+        },
+    }
+
+    extracted_signature = _get_thought_signature_from_tool(tool)
+    assert extracted_signature == test_signature
+    
     # Verify base ID is preserved
     decoded_base_id = encoded_id.split(THOUGHT_SIGNATURE_SEPARATOR)[0]
     assert decoded_base_id == base_id
@@ -85,30 +94,6 @@ def test_tool_call_id_includes_signature_in_response():
     tool_obj = {"id": tool_call_id, "type": "function"}
     decoded_sig = _get_thought_signature_from_tool(tool_obj)
     assert decoded_sig == test_signature
-
-
-def test_get_thought_signature_from_tool_call_id():
-    """Test that _get_thought_signature_from_tool extracts signatures from tool call IDs"""
-    test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-
-    # Create encoded tool call ID
-    base_id = "call_abc123"
-    encoded_id = _encode_tool_call_id_with_signature(
-        base_id, test_signature
-    )
-
-    # Test extracting from tool call ID (OpenAI client scenario)
-    tool = {
-        "id": encoded_id,
-        "type": "function",
-        "function": {
-            "name": "get_current_temperature",
-            "arguments": '{"location": "Paris"}',
-        },
-    }
-
-    extracted_signature = _get_thought_signature_from_tool(tool)
-    assert extracted_signature == test_signature
 
 
 def test_get_thought_signature_backward_compatibility():
