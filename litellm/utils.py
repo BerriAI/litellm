@@ -7757,6 +7757,10 @@ class ProviderConfigManager:
             )
 
             return LiteLLMProxyImageEditConfig()
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.image_edit import get_vertex_ai_image_edit_config
+
+            return get_vertex_ai_image_edit_config(model)
         return None
 
     @staticmethod
