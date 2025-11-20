@@ -82,7 +82,6 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    THOUGHT_SIGNATURE_SEPARATOR,
     _encode_tool_call_id_with_signature,
 )
 from litellm.utils import (
