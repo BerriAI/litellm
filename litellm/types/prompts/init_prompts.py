@@ -23,6 +23,11 @@ class PromptLiteLLMParams(BaseModel):
     prompt_id: str
     prompt_integration: str
 
+    dotprompt_content: Optional[str] = None
+    """
+    allows saving the dotprompt file content
+    """
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
