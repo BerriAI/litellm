@@ -376,3 +376,71 @@ def test_extract_extra_body_params_reasoning_effort_override():
 
     # extra_body should no longer be in optional_params (it was popped)
     assert "extra_body" not in result
+
+
+def test_transform_request_single_char_keys_not_matched():
+    """Test that single-character keys are not incorrectly matched to 'metadata' or 'previous_response_id'
+
+    This is a regression test for a bug where:
+    - key in ("metadata") was used instead of key == "metadata"
+    - In Python, ("metadata") is a string, not a tuple
+    - So "m" in ("metadata") returns True (character in string)
+    - This caused single-char keys like "m", "e", "t", etc. to incorrectly match
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create mock objects
+    logging_obj = Mock()
+
+    messages = [{"role": "user", "content": "test"}]
+
+    # Test with single-character keys that are in "metadata" string
+    # These should NOT be treated as metadata
+    optional_params = {
+        "m": "should_not_be_metadata",  # "m" is in "metadata"
+        "e": "should_not_be_metadata",  # "e" is in "metadata"
+        "t": "should_not_be_metadata",  # "t" is in "metadata"
+        "p": "should_not_be_previous_response_id",  # "p" is in "previous_response_id"
+        "r": "should_not_be_previous_response_id",  # "r" is in "previous_response_id"
+    }
+
+    litellm_params = {}
+    headers = {}
+
+    result = handler.transform_request(
+        model="gpt-4",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=logging_obj,
+    )
+
+    # Verify that single-char keys were NOT mapped to metadata or previous_response_id
+    assert result.get("metadata") != "should_not_be_metadata"
+    assert result.get("previous_response_id") != "should_not_be_previous_response_id"
+
+    # Now test that the actual keys DO work correctly
+    optional_params_correct = {
+        "metadata": {"user_id": "123"},
+        "previous_response_id": "resp_abc",
+    }
+
+    result_correct = handler.transform_request(
+        model="gpt-4",
+        messages=messages,
+        optional_params=optional_params_correct,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=logging_obj,
+    )
+
+    # Verify that the correct keys ARE mapped properly
+    assert result_correct.get("metadata") == {"user_id": "123"}
+    assert result_correct.get("previous_response_id") == "resp_abc"
+
+    print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
