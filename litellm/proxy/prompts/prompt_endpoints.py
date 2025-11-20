@@ -751,7 +751,7 @@ async def test_prompt(
                 detail="Model is required in dotprompt metadata"
             )
         
-        # Render template with variables using PromptManager's Jinja2 environment
+        # Always render the template to extract system messages and other metadata
         variables = request.prompt_variables or {}
         rendered_content = prompt_manager.jinja_env.from_string(
             template_content
@@ -759,15 +759,24 @@ async def test_prompt(
         
         # Convert rendered content to messages using DotpromptManager's method
         dotprompt_manager = DotpromptManager()
-        messages = dotprompt_manager._convert_to_messages(
+        rendered_messages = dotprompt_manager._convert_to_messages(
             rendered_content=rendered_content
         )
         
-        if not messages:
+        if not rendered_messages:
             raise HTTPException(
                 status_code=400,
                 detail="No messages found in rendered prompt"
             )
+        
+        # If conversation history is provided, use it but preserve system messages
+        if request.conversation_history:
+            # Extract system messages from rendered prompt
+            system_messages = [msg for msg in rendered_messages if msg.get("role") == "system"]
+            # Use conversation history for user/assistant messages
+            messages = system_messages + request.conversation_history
+        else:
+            messages = rendered_messages
         
         # Use PromptTemplate's optional_params which already extracts all parameters
         optional_params = template.optional_params.copy()
