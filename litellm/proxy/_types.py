@@ -516,6 +516,7 @@ class LiteLLMRoutes(enum.Enum):
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
             "/public/agent_hub",
+            "/public/mcp_hub",
         ]
     )
 
