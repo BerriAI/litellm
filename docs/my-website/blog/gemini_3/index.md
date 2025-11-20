@@ -5,7 +5,7 @@ date: 2025-11-19T10:00:00
 authors:
   - name: Sameer Kankute
     title: SWE @ LiteLLM (LLM Translation)
-    url: https://www.linkedin.com/in/krish-d/
+    url: https://www.linkedin.com/in/sameer-kankute/
     image_url: https://media.licdn.com/dms/image/v2/D4D03AQHB_loQYd5gjg/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1719137160975?e=1765411200&v=beta&t=c8396f--_lH6Fb_pVvx_jGholPfcl0bvwmNynbNdnII
   - name: Krrish Dholakia
     title: CEO, LiteLLM
@@ -90,6 +90,7 @@ LiteLLM provides **full end-to-end support** for Gemini 3 Pro Preview on:
 - ✅ `/v1/chat/completions` - OpenAI-compatible chat completions endpoint
 - ✅ `/v1/responses` - OpenAI Responses API endpoint (streaming and non-streaming)
 - ✅ [`/v1/messages`](../../docs/anthropic_unified) - Anthropic-compatible messages endpoint
+- ✅ `/v1/generateContent` – [Google Gemini API](https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/gemini#rest) compatible endpoint (for code, see: `client.models.generate_content(...)`)
 
 All endpoints support:
 - Streaming and non-streaming responses
@@ -548,6 +549,129 @@ curl http://localhost:4000/v1/chat/completions \
    - Failure on complex tasks
 
 3. **Automatic Defaults**: If you don't specify `reasoning_effort`, LiteLLM automatically sets `thinking_level="low"` for optimal performance.
+
+## Cost Tracking: Prompt Caching & Context Window
+
+LiteLLM provides comprehensive cost tracking for Gemini 3 Pro Preview, including support for prompt caching and tiered pricing based on context window size.
+
+### Prompt Caching Cost Tracking
+
+Gemini 3 supports prompt caching, which allows you to cache frequently used prompt prefixes to reduce costs. LiteLLM automatically tracks and calculates costs for:
+
+- **Cache Hit Tokens**: Tokens that are read from cache (charged at a lower rate)
+- **Cache Creation Tokens**: Tokens that are written to cache (one-time cost)
+- **Text Tokens**: Regular prompt tokens that are processed normally
+
+#### How It Works
+
+LiteLLM extracts caching information from the `prompt_tokens_details` field in the usage object:
+
+```python
+{
+  "usage": {
+    "prompt_tokens": 50000,
+    "completion_tokens": 1000,
+    "total_tokens": 51000,
+    "prompt_tokens_details": {
+      "cached_tokens": 30000,  # Cache hit tokens
+      "cache_creation_tokens": 5000,  # Tokens written to cache
+      "text_tokens": 15000  # Regular processed tokens
+    }
+  }
+}
+```
+
+### Context Window Tiered Pricing
+
+Gemini 3 Pro Preview supports up to 1M tokens of context, with tiered pricing that automatically applies when your prompt exceeds 200k tokens.
+
+#### Automatic Tier Detection
+
+LiteLLM automatically detects when your prompt exceeds the 200k token threshold and applies the appropriate tiered pricing:
+
+```python
+from litellm import completion_cost
+
+# Example: Small prompt (< 200k tokens)
+response_small = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+# Uses base pricing: $0.000002/input token, $0.000012/output token
+
+# Example: Large prompt (> 200k tokens)
+response_large = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[{"role": "user", "content": "..." * 250000}]  # 250k tokens
+)
+# Automatically uses tiered pricing: $0.000004/input token, $0.000018/output token
+```
+
+#### Cost Breakdown
+
+The cost calculation includes:
+
+1. **Text Processing Cost**: Regular tokens processed at base or tiered rate
+2. **Cache Read Cost**: Cached tokens read at discounted rate
+3. **Cache Creation Cost**: One-time cost for writing tokens to cache (applies tiered rate if above 200k)
+4. **Output Cost**: Generated tokens at base or tiered rate
+
+### Example: Viewing Cost Breakdown
+
+You can view the detailed cost breakdown using LiteLLM's cost tracking:
+
+```python
+from litellm import completion, completion_cost
+
+response = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[{"role": "user", "content": "Explain prompt caching"}],
+    caching=True  # Enable prompt caching
+)
+
+# Get total cost
+total_cost = completion_cost(completion_response=response)
+print(f"Total cost: ${total_cost:.6f}")
+
+# Access usage details
+usage = response.usage
+print(f"Prompt tokens: {usage.prompt_tokens}")
+print(f"Completion tokens: {usage.completion_tokens}")
+
+# Access caching details
+if usage.prompt_tokens_details:
+    print(f"Cache hit tokens: {usage.prompt_tokens_details.cached_tokens}")
+    print(f"Cache creation tokens: {usage.prompt_tokens_details.cache_creation_tokens}")
+    print(f"Text tokens: {usage.prompt_tokens_details.text_tokens}")
+```
+
+### Cost Optimization Tips
+
+1. **Use Prompt Caching**: For repeated prompt prefixes, enable caching to reduce costs by up to 90% for cached portions
+2. **Monitor Context Size**: Be aware that prompts above 200k tokens use tiered pricing (2x for input, 1.5x for output)
+3. **Cache Management**: Cache creation tokens are charged once when writing to cache, then subsequent reads are much cheaper
+4. **Track Usage**: Use LiteLLM's built-in cost tracking to monitor spending across different token types
+
+### Integration with LiteLLM Proxy
+
+When using LiteLLM Proxy, all cost tracking is automatically logged and available through:
+
+- **Usage Logs**: Detailed token and cost breakdowns in proxy logs
+- **Budget Management**: Set budgets and alerts based on actual usage
+- **Analytics Dashboard**: View cost trends and breakdowns by token type
+
+```yaml
+# config.yaml
+model_list:
+  - model_name: gemini-3-pro-preview
+    litellm_params:
+      model: gemini/gemini-3-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+
+litellm_settings:
+  # Enable detailed cost tracking
+  success_callback: ["langfuse"]  # or your preferred logging service
+```
 
 ## Using with Claude Code CLI
 
