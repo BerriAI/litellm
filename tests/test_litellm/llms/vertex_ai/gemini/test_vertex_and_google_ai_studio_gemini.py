@@ -1507,7 +1507,7 @@ def test_is_gemini_3_or_newer():
 
 
 def test_reasoning_effort_maps_to_thinking_level_gemini_3():
-    """Test that reasoning_effort maps to thinking_level for Gemini 3+ models"""
+    """Test that reasoning_effort maps to thinking_level AND includeThoughts for Gemini 3+ models"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
@@ -1516,7 +1516,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     model = "gemini-3-pro-preview"
     optional_params = {}
 
-    # Test minimal -> low
+    # Test minimal -> low + includeThoughts=True
     non_default_params = {"reasoning_effort": "minimal"}
     result = v.map_openai_params(
         non_default_params=non_default_params,
@@ -1525,8 +1525,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test low -> low
+    # Test low -> low + includeThoughts=True
     optional_params = {}
     non_default_params = {"reasoning_effort": "low"}
     result = v.map_openai_params(
@@ -1536,8 +1537,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test medium -> high (medium not available yet)
+    # Test medium -> high + includeThoughts=True (medium not available yet)
     optional_params = {}
     non_default_params = {"reasoning_effort": "medium"}
     result = v.map_openai_params(
@@ -1547,8 +1549,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test high -> high
+    # Test high -> high + includeThoughts=True
     optional_params = {}
     non_default_params = {"reasoning_effort": "high"}
     result = v.map_openai_params(
@@ -1558,8 +1561,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test disable -> low (cannot fully disable in Gemini 3)
+    # Test disable -> low + includeThoughts=False (cannot fully disable in Gemini 3)
     optional_params = {}
     non_default_params = {"reasoning_effort": "disable"}
     result = v.map_openai_params(
@@ -1569,8 +1573,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is False
 
-    # Test none -> low (cannot fully disable in Gemini 3)
+    # Test none -> low + includeThoughts=False (cannot fully disable in Gemini 3)
     optional_params = {}
     non_default_params = {"reasoning_effort": "none"}
     result = v.map_openai_params(
@@ -1580,6 +1585,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is False
 
 
 def test_temperature_default_for_gemini_3():
