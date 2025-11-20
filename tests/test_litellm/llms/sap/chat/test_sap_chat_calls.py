@@ -80,11 +80,11 @@ async def test_sap_chat(
 
     litellm.disable_aiohttp_transport = True
     with patch(
-        "litellm.llms.sap.chat.handler.GenAIHubOrchestration.deployment_url",
+        "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
         new_callable=PropertyMock,
         return_value=fake_deployment_url,
     ), patch(
-        "litellm.llms.sap.chat.handler.get_token_creator",
+        "litellm.llms.sap.chat.transformation.get_token_creator",
         return_value=fake_token_creator,
     ):
         model = "sap/gpt-4o"
@@ -114,11 +114,11 @@ async def test_sap_streaming(
 
     litellm.disable_aiohttp_transport = True
     with patch(
-        "litellm.llms.sap.chat.handler.GenAIHubOrchestration.deployment_url",
+        "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
         new_callable=PropertyMock,
         return_value=fake_deployment_url,
     ), patch(
-        "litellm.llms.sap.chat.handler.get_token_creator",
+        "litellm.llms.sap.chat.transformation.get_token_creator",
         return_value=fake_token_creator,
     ):
         model = "sap/gpt-4o"
