@@ -25,6 +25,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_key_object,
+    _delete_cache_key_object,
     _get_user_role,
     _is_user_proxy_admin,
     _virtual_key_max_budget_check,
@@ -730,7 +731,29 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             and isinstance(valid_token, UserAPIKeyAuth)
             and valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
-            # update end-user params on valid token
+            if valid_token.expires is not None:
+                current_time = datetime.now(timezone.utc)
+                if isinstance(valid_token.expires, datetime):
+                    expiry_time = valid_token.expires
+                else:
+                    expiry_time = datetime.fromisoformat(valid_token.expires)
+                if (
+                    expiry_time.tzinfo is None
+                    or expiry_time.tzinfo.utcoffset(expiry_time) is None
+                ):
+                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                if expiry_time < current_time:
+                    await _delete_cache_key_object(
+                        hashed_token=hash_token(api_key),
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                    raise ProxyException(
+                        message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                        type=ProxyErrorTypes.expired_key,
+                        code=400,
+                        param=api_key,
+                    )
             valid_token = update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
             )
