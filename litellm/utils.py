@@ -7272,6 +7272,12 @@ class ProviderConfigManager:
             )
 
             return VolcEngineEmbeddingConfig()
+        elif litellm.LlmProviders.GIGACHAT == provider:
+            from litellm.llms.gigachat.embedding.transformation import (
+                GigaChatEmbeddingConfig
+            )
+
+            return GigaChatEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
