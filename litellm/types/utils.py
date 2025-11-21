@@ -2478,6 +2478,7 @@ all_litellm_params = (
         "use_litellm_proxy",
         "prompt_label",
         "shared_session",
+        "search_tool_name",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
