@@ -365,13 +365,18 @@ class NewRelicLogger(CustomLogger):
         vendor: str
     ) -> List[Dict[str, Any]]:
         """
-        Extract all messages (request + response) with sequence numbers.
+        Extract all messages (request + response) with sequence numbers and timestamps.
 
         Processes request messages from kwargs["messages"] and response messages
         from response_obj["choices"]. Assigns sequential numbers starting at 0.
+        Adds timestamps from kwargs if available (converted to epoch milliseconds).
         """
         messages = []
         sequence = 0
+
+        # Extract timestamps from kwargs and convert to milliseconds
+        start_time = kwargs.get("start_time")
+        end_time = kwargs.get("end_time")
 
         # Extract request messages
         request_messages = kwargs.get("messages", [])
@@ -382,6 +387,14 @@ class NewRelicLogger(CustomLogger):
                 "response.model": response_model,
                 "vendor": vendor
             }
+
+            # Add timestamp for request message if available (convert to milliseconds)
+            if start_time is not None:
+                # Handle both datetime objects and float timestamps
+                if hasattr(start_time, 'timestamp'):
+                    message_data["timestamp"] = int(start_time.timestamp() * 1000.0)
+                else:
+                    message_data["timestamp"] = int(start_time * 1000.0)
 
             # Only add content if recording is enabled
             if self._should_record_content():
@@ -403,6 +416,14 @@ class NewRelicLogger(CustomLogger):
                         "vendor": vendor,
                         "is_response": True
                     }
+
+                    # Add timestamp for response message if available (convert to milliseconds)
+                    if end_time is not None:
+                        # Handle both datetime objects and float timestamps
+                        if hasattr(end_time, 'timestamp'):
+                            message_data["timestamp"] = int(end_time.timestamp() * 1000.0)
+                        else:
+                            message_data["timestamp"] = int(end_time * 1000.0)
 
                     # Only add content if recording is enabled
                     if self._should_record_content():
