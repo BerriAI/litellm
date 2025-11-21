@@ -903,6 +903,7 @@ model_list = list(
     | wandb_models
     | ovhcloud_models
     | lemonade_models
+    | docker_model_runner_models
     | set(clarifai_models)
 )
 
