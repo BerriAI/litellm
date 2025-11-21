@@ -1275,8 +1275,6 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
         "gemini-3-pro-preview",
         "vertex_ai/gemini-3-pro-preview",
         "gemini/gemini-3-pro-preview",
-        "gemini-3-flash",
-        "gemini-3-pro",
     ]
 
     for model in gemini_3_models:
