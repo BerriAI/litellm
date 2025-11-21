@@ -20,6 +20,7 @@ from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
@@ -385,12 +386,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[
-                        base_tool_name
-                    ] = server_prefix
-                    self.tool_name_to_mcp_server_name_mapping[
-                        prefixed_tool_name
-                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
+                        server_prefix
+                    )
+                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
+                        server_prefix
+                    )
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -1668,11 +1669,16 @@ class MCPServerManager:
                 return server
         return None
 
-    def get_mcp_servers_from_ids(self, server_ids: List[str]) -> List[MCPServer]:
-        servers = []
-        registry = self.get_registry()
-        for server in registry.values():
-            if server.server_id in server_ids:
+    def get_public_mcp_servers(self) -> List[MCPServer]:
+        """
+        Get the public MCP servers
+        """
+        servers: List[MCPServer] = []
+        if litellm.public_mcp_servers is None:
+            return servers
+        for server_id in litellm.public_mcp_servers:
+            server = self.get_mcp_server_by_id(server_id)
+            if server:
                 servers.append(server)
         return servers
 
