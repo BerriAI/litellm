@@ -809,7 +809,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base, api_key
         )
     elif custom_llm_provider == "burncloud":
-        api_base = api_base or get_secret("BURNCLOUD_API_BASE")  # type: ignore
+        api_base = api_base or get_secret("BURNCLOUD_API_BASE")
         dynamic_api_key = api_key or get_secret_str("BURNCLOUD_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):

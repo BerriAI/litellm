@@ -2963,6 +2963,19 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                 )
         else:
             optional_params = non_default_params
+    elif custom_llm_provider == "burncloud":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="burncloud",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.BurnCloudEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
     else:
         optional_params = non_default_params
 
@@ -7253,7 +7266,7 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudChatConfig()
         elif litellm.LlmProviders.BURNCLOUD == provider:
-            return litellm.BurnCloudConfig()
+            return litellm.BurnCloudChatConfig()
         return None
 
     @staticmethod
@@ -7309,6 +7322,12 @@ class ProviderConfigManager:
             )
 
             return SagemakerEmbeddingConfig.get_model_config(model)
+        elif litellm.LlmProviders.BURNCLOUD == provider:
+            from litellm.llms.burncloud.embedding.transformation import (
+                BurnCloudEmbeddingConfig,
+            )
+
+            return BurnCloudEmbeddingConfig()
         return None
 
     @staticmethod
@@ -7342,6 +7361,8 @@ class ProviderConfigManager:
             return litellm.NvidiaNimRerankConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             return litellm.VertexAIRerankConfig()
+        elif litellm.LlmProviders.BURNCLOUD == provider:
+            return litellm.BurnCloudRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -7392,6 +7413,8 @@ class ProviderConfigManager:
             )
 
             return HostedVLLMAudioTranscriptionConfig()
+        if litellm.LlmProviders.BURNCLOUD == provider:
+            return litellm.BurnCloudAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -7694,6 +7717,12 @@ class ProviderConfigManager:
             )
 
             return get_runwayml_image_generation_config(model)
+        elif LlmProviders.BURNCLOUD == provider:
+            from litellm.llms.burncloud.image_generation import (
+                get_burncloud_image_generation_config,
+            )
+
+            return get_burncloud_image_generation_config(model)
         return None
 
     @staticmethod
@@ -7723,6 +7752,12 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.BURNCLOUD == provider:
+            from litellm.llms.burncloud.videos.transformation import (
+                BurnCloudVideoConfig,
+            )
+
+            return BurnCloudVideoConfig()
         return None
 
     @staticmethod

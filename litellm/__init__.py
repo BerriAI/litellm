@@ -1129,6 +1129,7 @@ from .llms.cohere.rerank.transformation import CohereRerankConfig
 from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
 from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 from .llms.infinity.rerank.transformation import InfinityRerankConfig
+from .llms.burncloud.rerank.transformation import BurnCloudRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
@@ -1317,6 +1318,8 @@ from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
 )
 from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
+from .llms.burncloud.embedding.transformation import BurnCloudEmbeddingConfig
+from .llms.burncloud.audio_transcription.transformation import BurnCloudAudioTranscriptionConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
 from .llms.aiml.chat.transformation import AIMLChatConfig
@@ -1362,7 +1365,7 @@ from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
 from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
-from .llms.burncloud.chat.transformation import BurnCloudConfig
+from .llms.burncloud.chat.transformation import BurnCloudChatConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
