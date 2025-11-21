@@ -60,12 +60,13 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
         """
         Get API base and key for Docker Model Runner.
         
-        Default API base: http://localhost:22088
+        Default API base: http://localhost:22088/engines/llama.cpp
+        The engine path should be included in the api_base.
         """
         api_base = (
             api_base
             or get_secret_str("DOCKER_MODEL_RUNNER_API_BASE")
-            or "http://localhost:22088"
+            or "http://localhost:22088/engines/llama.cpp"
         )  # type: ignore
         # Docker Model Runner may not require authentication for local instances
         dynamic_api_key = api_key or get_secret_str("DOCKER_MODEL_RUNNER_API_KEY") or "dummy-key"
@@ -85,15 +86,14 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
         
         Docker Model Runner uses URLs in the format: /engines/{engine}/v1/chat/completions
         
-        The engine name can be specified in the model string after a "/" or defaults to "llama.cpp"
-        Examples:
-            - model="llama-3.1" -> /engines/llama.cpp/v1/chat/completions
-            - model="llama.cpp/llama-3.1" -> /engines/llama.cpp/v1/chat/completions
+        The engine name should be specified in the api_base:
+            - api_base="http://model-runner.docker.internal/engines/llama.cpp"
+            - Default: "http://localhost:22088/engines/llama.cpp"
         
         Args:
-            api_base: Base URL for the Docker Model Runner instance
+            api_base: Base URL for the Docker Model Runner instance including engine path
             api_key: API key (may not be required for local instances)
-            model: Model name, optionally including engine prefix
+            model: Model name (e.g., "llama-3.1")
             optional_params: Optional parameters
             litellm_params: LiteLLM parameters
             stream: Whether streaming is enabled
@@ -102,13 +102,14 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
             Complete URL for the API call
         """
         if not api_base:
-            api_base = "http://localhost:22088"
+            api_base = "http://localhost:22088/engines/llama.cpp"
         
         # Remove trailing slashes from api_base
         api_base = api_base.rstrip("/")
-
-        # Build the URL: /engines/{engine}/v1/chat/completions
-        complete_url = f"{api_base}/engines/{model}/v1/chat/completions"
+ 
+        # Build the URL: {api_base}/v1/chat/completions
+        # api_base is expected to already contain the engine path
+        complete_url = f"{api_base}/v1/chat/completions"
         
         return complete_url
 
