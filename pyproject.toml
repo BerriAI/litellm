@@ -34,7 +34,7 @@ pydantic = "^2.5.0"
 jsonschema = "^4.22.0"
 numpydoc = {version = "*", optional = true} # used in utils.py
 
-uvicorn = {version = "^0.29.0", optional = true}
+uvicorn = {version = "^0.31.1", optional = true}
 uvloop = {version = "^0.21.0", optional = true, markers="sys_platform != 'win32'"}
 gunicorn = {version = "^23.0.0", optional = true}
 fastapi = {version = ">=0.120.1", optional = true}
@@ -44,11 +44,11 @@ rq = {version = "*", optional = true}
 orjson = {version = "^3.9.7", optional = true}
 apscheduler = {version = "^3.10.4", optional = true}
 fastapi-sso = { version = "^0.16.0", optional = true }
-PyJWT = { version = "^2.8.0", optional = true }
+PyJWT = { version = "^2.10.1", optional = true, python = ">=3.9" }
 python-multipart = { version = "^0.0.18", optional = true}
 cryptography = {version = "*", optional = true}
 prisma = {version = "0.11.0", optional = true}
-azure-identity = {version = "^1.15.0", optional = true}
+azure-identity = {version = "^1.15.0", optional = true, python = ">=3.9"}
 azure-keyvault-secrets = {version = "^4.8.0", optional = true}
 azure-storage-blob = {version="^12.25.1", optional=true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
@@ -58,7 +58,7 @@ pynacl = {version = "^1.5.0", optional = true}
 websockets = {version = "^13.1.0", optional = true}
 boto3 = {version = "1.36.0", optional = true}
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
-mcp = {version = "^1.10.0", optional = true, python = ">=3.10"}
+mcp = {version = "^1.21.2", optional = true, python = ">=3.10"}
 litellm-proxy-extras = {version = "0.4.6", optional = true}
 rich = {version = "13.7.1", optional = true}
 litellm-enterprise = {version = "0.1.22", optional = true}
@@ -152,7 +152,7 @@ prometheus-client = "0.20.0"
 opentelemetry-api = "1.25.0"
 opentelemetry-sdk = "1.25.0"
 opentelemetry-exporter-otlp = "1.25.0"
-azure-identity = "^1.15.0"
+azure-identity = {version = "^1.15.0", python = ">=3.9"}
 
 [build-system]
 requires = ["poetry-core", "wheel"]
