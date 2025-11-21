@@ -150,6 +150,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               model={promptModel}
               promptVariables={extractTemplateVariables(promptTemplate?.content)}
               accessToken={accessToken}
+              version={currentVersion}
             />
             <TremorButton
               icon={PencilIcon}

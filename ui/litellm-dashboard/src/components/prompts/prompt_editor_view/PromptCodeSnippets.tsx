@@ -11,6 +11,7 @@ interface PromptCodeSnippetsProps {
   model: string;
   promptVariables?: Record<string, string>;
   accessToken: string | null;
+  version?: string;
   proxySettings?: {
     PROXY_BASE_URL?: string;
     LITELLM_UI_API_DOC_BASE_URL?: string | null;
@@ -22,6 +23,7 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   model,
   promptVariables = {},
   accessToken,
+  version = "1",
   proxySettings,
 }) => {
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -84,7 +86,7 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   -d '{
     "model": "${model}",
     "prompt_id": "${promptId}",
-    "prompt_version": 2,
+    "prompt_version": ${version},
     "messages": [
       {
         "role": "user",
@@ -135,7 +137,7 @@ response = client.chat.completions.create(
     ],
     extra_body={
         "prompt_id": "${promptId}",
-        "prompt_version": 2
+        "prompt_version": ${version}
     }
 )
 
@@ -188,7 +190,7 @@ async function main() {
             { role: "user", content: "Who are u" }
         ],
         prompt_id: "${promptId}",
-        prompt_version: 2
+        prompt_version: ${version}
     });
     
     console.log(response);
