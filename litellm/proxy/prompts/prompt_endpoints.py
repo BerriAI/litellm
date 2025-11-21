@@ -554,8 +554,6 @@ async def update_prompt(
         }'
     ```
     """
-    from datetime import datetime
-
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
     from litellm.proxy.proxy_server import prisma_client
 
@@ -925,7 +923,7 @@ async def test_prompt(
             # Use conversation history for user/assistant messages
             messages = system_messages + request.conversation_history
         else:
-            messages = rendered_messages
+            messages = rendered_messages  # type: ignore[assignment]
         
         # Use PromptTemplate's optional_params which already extracts all parameters
         optional_params = template.optional_params.copy()
