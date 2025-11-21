@@ -36,6 +36,7 @@ class CustomGuardrail(CustomLogger):
         default_on: bool = False,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
+        violation_message_template: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -57,11 +58,33 @@ class CustomGuardrail(CustomLogger):
         self.default_on: bool = default_on
         self.mask_request_content: bool = mask_request_content
         self.mask_response_content: bool = mask_response_content
+        self.violation_message_template: Optional[str] = violation_message_template
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
             self._validate_event_hook(event_hook, supported_event_hooks)
         super().__init__(**kwargs)
+
+    def render_violation_message(
+        self, default: str, context: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Return a custom violation message if template is configured."""
+
+        if not self.violation_message_template:
+            return default
+
+        format_context: Dict[str, Any] = {"default_message": default}
+        if context:
+            format_context.update(context)
+        try:
+            return self.violation_message_template.format(**format_context)
+        except Exception as e:
+            verbose_logger.warning(
+                "Failed to format violation message template for guardrail %s: %s",
+                self.guardrail_name,
+                e,
+            )
+            return default
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
@@ -279,7 +302,7 @@ class CustomGuardrail(CustomLogger):
                 data, self.event_hook
             )
             if result is not None:
-                return result        
+                return result
         return True
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
