@@ -296,13 +296,20 @@ async def list_prompts(
     if key_metadata is not None:
         prompts = cast(Optional[List[str]], key_metadata.get("prompts", None))
         if prompts is not None:
-            return ListPromptsResponse(
-                prompts=[
-                    IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt]
-                    for prompt in prompts
-                    if prompt in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS
-                ]
-            )
+            prompt_list = []
+            for prompt_id in prompts:
+                if prompt_id in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS:
+                    original_prompt = IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
+                    # Create a copy with base prompt_id (without version suffix)
+                    prompt_copy = PromptSpec(
+                        prompt_id=get_base_prompt_id(prompt_id=original_prompt.prompt_id),
+                        litellm_params=original_prompt.litellm_params,
+                        prompt_info=original_prompt.prompt_info,
+                        created_at=original_prompt.created_at,
+                        updated_at=original_prompt.updated_at,
+                    )
+                    prompt_list.append(prompt_copy)
+            return ListPromptsResponse(prompts=prompt_list)
     # check if user is proxy admin - show all prompts
     if user_api_key_dict.user_role is not None and (
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
@@ -311,7 +318,18 @@ async def list_prompts(
         # Get all prompts and filter to show only the latest version of each
         all_prompts = list(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values())
         latest_prompts = get_latest_prompt_versions(prompts=all_prompts)
-        return ListPromptsResponse(prompts=latest_prompts)
+        # Create copies with base prompt_id (without version suffix) for display
+        prompts_for_display = []
+        for original_prompt in latest_prompts:
+            prompt_copy = PromptSpec(
+                prompt_id=get_base_prompt_id(prompt_id=original_prompt.prompt_id),
+                litellm_params=original_prompt.litellm_params,
+                prompt_info=original_prompt.prompt_info,
+                created_at=original_prompt.created_at,
+                updated_at=original_prompt.updated_at,
+            )
+            prompts_for_display.append(prompt_copy)
+        return ListPromptsResponse(prompts=prompts_for_display)
     else:
         return ListPromptsResponse(prompts=[])
 
@@ -457,7 +475,17 @@ async def get_prompt_info(
             detail=f"You are not authorized to access this prompt. Your role - {user_api_key_dict.user_role}, Your key's prompts - {prompts}",
         )
 
+    # Try to get prompt directly first
     prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+    
+    # If not found, try to find the latest version
+    if prompt_spec is None:
+        latest_prompt_id = get_latest_version_prompt_id(
+            prompt_id=prompt_id,
+            all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS
+        )
+        prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(latest_prompt_id)
+    
     if prompt_spec is None:
         raise HTTPException(status_code=400, detail=f"Prompt {prompt_id} not found")
 
@@ -743,8 +771,19 @@ async def delete_prompt(
         )
 
     try:
-        # Check if prompt exists
+        # Try to get prompt directly first
         existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+        
+        # If not found, try to find the latest version
+        if existing_prompt is None:
+            latest_prompt_id = get_latest_version_prompt_id(
+                prompt_id=prompt_id,
+                all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS
+            )
+            existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(latest_prompt_id)
+            # Use the resolved prompt_id for deletion
+            prompt_id = latest_prompt_id
+        
         if existing_prompt is None:
             raise HTTPException(
                 status_code=404, detail=f"Prompt with ID {prompt_id} not found"
