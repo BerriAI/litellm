@@ -15,9 +15,7 @@ USER root
 RUN apk add --no-cache \
     build-base \
     python3-dev \
-    openssl-dev \
-    cargo \
-    rust
+    openssl-dev
 
 
 RUN pip install --upgrade pip && \
