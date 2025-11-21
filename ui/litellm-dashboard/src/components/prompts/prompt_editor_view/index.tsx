@@ -45,6 +45,9 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   const [prompt, setPrompt] = useState<PromptType>(getInitialPrompt());
   const [editMode, setEditMode] = useState<boolean>(!!initialPromptData);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [activeVersionId, setActiveVersionId] = useState<string | undefined>(
+    initialPromptData?.prompt_spec?.prompt_id
+  );
 
   const [showToolModal, setShowToolModal] = useState(false);
   const [showNameModal, setShowNameModal] = useState(false);
@@ -143,6 +146,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
     try {
       const loadedPrompt = parseExistingPrompt({ prompt_spec: versionData });
       setPrompt(loadedPrompt);
+      setActiveVersionId(versionData.prompt_id);
       // NotificationsManager.success(`Loaded version ${versionData.prompt_id}`);
     } catch (error) {
       console.error("Error loading version:", error);
@@ -204,6 +208,16 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
     }
   };
 
+  const getVersionNumber = (pid?: string) => {
+    if (!pid) return null;
+    if (pid.includes(".v")) {
+      return `v${pid.split(".v")[1]}`;
+    }
+    return null;
+  };
+
+  const currentVersion = getVersionNumber(activeVersionId);
+
   return (
     <div className="flex h-full bg-white">
       <div className="flex-1 flex flex-col">
@@ -215,6 +229,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           isSaving={isSaving}
           editMode={editMode}
           onShowHistory={() => setShowHistoryModal(true)}
+          version={currentVersion}
         />
 
         <div className="flex-1 flex overflow-hidden">
@@ -323,6 +338,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         onClose={() => setShowHistoryModal(false)}
         accessToken={accessToken}
         promptId={initialPromptData?.prompt_spec?.prompt_id || prompt.name}
+        activeVersionId={activeVersionId}
         onSelectVersion={handleLoadVersion}
       />
     </div>

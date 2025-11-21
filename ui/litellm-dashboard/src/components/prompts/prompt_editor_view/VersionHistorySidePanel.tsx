@@ -10,6 +10,7 @@ interface VersionHistorySidePanelProps {
   onClose: () => void;
   accessToken: string | null;
   promptId: string;
+  activeVersionId?: string;
   onSelectVersion?: (version: PromptSpec) => void;
 }
 
@@ -18,6 +19,7 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
   onClose,
   accessToken,
   promptId,
+  activeVersionId,
   onSelectVersion,
 }) => {
   const [versions, setVersions] = useState<PromptSpec[]>([]);
@@ -75,7 +77,7 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
         <List
           dataSource={versions}
           renderItem={(item, index) => {
-            const isSelected = item.prompt_id === promptId;
+            const isSelected = item.prompt_id === (activeVersionId || promptId);
             return (
               <div
                 key={item.prompt_id}

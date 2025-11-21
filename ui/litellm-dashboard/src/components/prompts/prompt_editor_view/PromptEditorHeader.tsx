@@ -11,6 +11,7 @@ interface PromptEditorHeaderProps {
   isSaving: boolean;
   editMode?: boolean;
   onShowHistory?: () => void;
+  version?: string | null;
 }
 
 const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
@@ -21,6 +22,7 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
   isSaving,
   editMode = false,
   onShowHistory,
+  version,
 }) => {
   return (
     <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
@@ -34,6 +36,11 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
           className="text-base font-medium border-none shadow-none"
           style={{ width: "200px" }}
         />
+        {version && (
+          <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded font-medium">
+            {version}
+          </span>
+        )}
         <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">Draft</span>
         <span className="text-xs text-gray-400">Unsaved changes</span>
       </div>
