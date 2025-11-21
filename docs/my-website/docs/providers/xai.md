@@ -13,9 +13,9 @@ https://docs.x.ai/docs
 
 ## Supported Models
 
-### Grok 4.1 Fast ⭐ Recommended
 
-**Latest Release** - Optimized for high-performance agentic tool calling with 2M context and prompt caching.
+
+**Latest Release** - Grok 4.1 Fast: Optimized for high-performance agentic tool calling with 2M context and prompt caching.
 
 | Model | Context | Features |
 |-------|---------|----------|
@@ -30,13 +30,13 @@ https://docs.x.ai/docs
 ```python
 from litellm import completion
 
-# With reasoning for complex tasks
+# With reasoning
 response = completion(
     model="xai/grok-4-1-fast-reasoning",
     messages=[{"role": "user", "content": "Analyze this problem step by step..."}]
 )
 
-# Without reasoning for simple/fast tasks
+# Without reasoning
 response = completion(
     model="xai/grok-4-1-fast-non-reasoning",
     messages=[{"role": "user", "content": "What's 2+2?"}]
