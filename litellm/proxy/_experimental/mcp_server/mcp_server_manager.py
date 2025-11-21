@@ -1928,6 +1928,41 @@ class MCPServerManager:
             f"Registry now contains {len(self.get_registry())} servers"
         )
 
+    def get_mcp_servers_from_ids(
+        self, server_ids: List[str]
+    ) -> List[MCPServer]:
+        """Resolve a list of MCP server identifiers to in-memory MCPServer objects."""
+        if not server_ids:
+            return []
+
+        registry = self.get_registry()
+        resolved_servers: List[MCPServer] = []
+        seen_ids: Set[str] = set()
+
+        for identifier in server_ids:
+            server: Optional[MCPServer] = registry.get(identifier)
+
+            # Allow referencing servers by name or alias for backward compatibility
+            if server is None:
+                for candidate in registry.values():
+                    if candidate.server_name == identifier or candidate.alias == identifier:
+                        server = candidate
+                        break
+
+            if server is None:
+                verbose_logger.debug(
+                    "MCP server identifier '%s' not found in registry", identifier
+                )
+                continue
+
+            if server.server_id in seen_ids:
+                continue
+
+            seen_ids.add(server.server_id)
+            resolved_servers.append(server)
+
+        return resolved_servers
+
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
         """
         Get the MCP Server from the server id
