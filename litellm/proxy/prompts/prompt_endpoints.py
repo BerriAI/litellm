@@ -33,6 +33,25 @@ from litellm.types.proxy.prompt_endpoints import TestPromptRequest
 router = APIRouter()
 
 
+def get_base_prompt_id(prompt_id: str) -> str:
+    """
+    Extract the base prompt ID by stripping the version suffix if present.
+    
+    Args:
+        prompt_id: Prompt ID that may include version suffix (e.g., "jack_success.v1")
+    
+    Returns:
+        Base prompt ID without version suffix (e.g., "jack_success")
+    
+    Examples:
+        >>> get_base_prompt_id("jack_success.v1")
+        "jack_success"
+        >>> get_base_prompt_id("jack_success")
+        "jack_success"
+    """
+    return prompt_id.split(".v")[0] if ".v" in prompt_id else prompt_id
+
+
 async def get_next_version_for_prompt(prisma_client, prompt_id: str) -> int:
     """
     Get the next version number for a prompt.
@@ -427,19 +446,21 @@ async def update_prompt(
         )
 
     try:
+        # Strip version suffix from prompt_id if present (e.g., "jack_success.v1" -> "jack_success")
+        base_prompt_id = get_base_prompt_id(prompt_id=prompt_id)
+        
         # Check if any version exists
         existing_prompts = await prisma_client.db.litellm_prompttable.find_many(
-            where={"prompt_id": request.prompt_id}
+            where={"prompt_id": base_prompt_id}
         )
         
         if not existing_prompts:
             raise HTTPException(
-                status_code=404, detail=f"Prompt with ID {request.prompt_id} not found"
+                status_code=404, detail=f"Prompt with ID {base_prompt_id} not found"
             )
 
         # Check if it's a config prompt
-        base_prompt_id = request.prompt_id
-        existing_in_memory = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(base_prompt_id)
+        existing_in_memory = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
         if existing_in_memory and existing_in_memory.prompt_info.prompt_type == "config":
             raise HTTPException(
                 status_code=400,
@@ -448,13 +469,13 @@ async def update_prompt(
 
         # Get next version number (UPDATE creates a new version)
         new_version = await get_next_version_for_prompt(
-            prisma_client=prisma_client, prompt_id=request.prompt_id
+            prisma_client=prisma_client, prompt_id=base_prompt_id
         )
 
         # Store new version in db
         prompt_db_entry = await prisma_client.db.litellm_prompttable.create(
             data={
-                "prompt_id": request.prompt_id,
+                "prompt_id": base_prompt_id,
                 "version": new_version,
                 "litellm_params": request.litellm_params.model_dump_json(),
                 "prompt_info": (
