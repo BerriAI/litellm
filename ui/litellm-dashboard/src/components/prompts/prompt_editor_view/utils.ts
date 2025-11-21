@@ -146,8 +146,12 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
   const tools: Tool[] = [];
   // TODO: Add tool parsing if needed
 
+  // Strip version suffix from prompt name for display
+  const promptId = apiResponse?.prompt_spec?.prompt_id || "Unnamed Prompt";
+  const baseName = stripVersionFromPromptId(promptId) || promptId;
+
   return {
-    name: apiResponse?.prompt_spec?.prompt_id || "Unnamed Prompt",
+    name: baseName,
     model: metadata.model || "gpt-4o",
     config: {
       temperature: metadata.temperature,
@@ -158,4 +162,17 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
     developerMessage: developerMessage,
     messages: messages.length > 0 ? messages : [{ role: "user", content: "Enter task specifics. Use {{template_variables}} for dynamic inputs" }],
   };
+};
+
+export const getVersionNumber = (promptId?: string): string => {
+  if (!promptId) return "1";
+  // Match version with dot (.v), underscore (_v), or hyphen (-v) separator
+  const match = promptId.match(/[._-]v(\d+)$/);
+  return match ? match[1] : "1";
+};
+
+export const stripVersionFromPromptId = (promptId?: string): string => {
+  if (!promptId) return "";
+  // Remove version suffix with dot (.v), underscore (_v), or hyphen (-v) separator
+  return promptId.replace(/[._-]v\d+$/, "");
 };

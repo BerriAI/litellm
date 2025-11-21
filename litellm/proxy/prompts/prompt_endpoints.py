@@ -38,7 +38,7 @@ def get_base_prompt_id(prompt_id: str) -> str:
     Extract the base prompt ID by stripping the version suffix if present.
     
     Args:
-        prompt_id: Prompt ID that may include version suffix (e.g., "jack_success.v1")
+        prompt_id: Prompt ID that may include version suffix (e.g., "jack_success.v1" or "jack_success_v1")
     
     Returns:
         Base prompt ID without version suffix (e.g., "jack_success")
@@ -46,10 +46,18 @@ def get_base_prompt_id(prompt_id: str) -> str:
     Examples:
         >>> get_base_prompt_id("jack_success.v1")
         "jack_success"
+        >>> get_base_prompt_id("jack_success_v1")
+        "jack_success"
         >>> get_base_prompt_id("jack_success")
         "jack_success"
     """
-    return prompt_id.split(".v")[0] if ".v" in prompt_id else prompt_id
+    # Try dot separator first (.v)
+    if ".v" in prompt_id:
+        return prompt_id.split(".v")[0]
+    # Try underscore separator (_v)
+    if "_v" in prompt_id:
+        return prompt_id.split("_v")[0]
+    return prompt_id
 
 
 def get_version_number(prompt_id: str) -> int:
@@ -57,7 +65,7 @@ def get_version_number(prompt_id: str) -> int:
     Extract the version number from a versioned prompt ID.
     
     Args:
-        prompt_id: Prompt ID that may include version suffix (e.g., "jack_success.v2")
+        prompt_id: Prompt ID that may include version suffix (e.g., "jack_success.v2" or "jack_success_v2")
     
     Returns:
         Version number (defaults to 1 if no version suffix or invalid format)
@@ -65,15 +73,27 @@ def get_version_number(prompt_id: str) -> int:
     Examples:
         >>> get_version_number("jack_success.v2")
         2
+        >>> get_version_number("jack_success_v2")
+        2
         >>> get_version_number("jack_success")
         1
     """
+    # Try dot separator first (.v)
     if ".v" in prompt_id:
         version_str = prompt_id.split(".v")[1]
         try:
             return int(version_str)
         except ValueError:
-            return 1
+            pass
+    
+    # Try underscore separator (_v)
+    if "_v" in prompt_id:
+        version_str = prompt_id.split("_v")[1]
+        try:
+            return int(version_str)
+        except ValueError:
+            pass
+    
     return 1
 
 
@@ -403,10 +423,31 @@ async def get_prompt_versions(
             status_code=404, detail=f"No versions found for prompt ID {base_prompt_id}"
         )
     
-    # Sort by version number (descending - newest first)
-    prompt_versions.sort(key=lambda p: get_version_number(prompt_id=p.prompt_id), reverse=True)
+    # Create response with explicit version field for each prompt
+    versioned_prompts = []
+    for prompt in prompt_versions:
+        # Extract version number from the root prompt_id which has version suffix
+        # (e.g., "jack-sparrow.v3" -> 3)
+        version_number = get_version_number(prompt_id=prompt.prompt_id)
+        
+        # Strip version from prompt_id for clean display
+        base_prompt_id = get_base_prompt_id(prompt_id=prompt.prompt_id)
+        
+        # Create a copy with explicit version field and clean prompt_id
+        versioned_prompt = PromptSpec(
+            prompt_id=base_prompt_id,  # Clean ID without version (e.g., "jack-sparrow")
+            litellm_params=prompt.litellm_params,
+            prompt_info=prompt.prompt_info,
+            created_at=prompt.created_at,
+            updated_at=prompt.updated_at,
+            version=version_number,  # Explicit version field (e.g., 3)
+        )
+        versioned_prompts.append(versioned_prompt)
     
-    return ListPromptsResponse(prompts=prompt_versions)
+    # Sort by version number (descending - newest first)
+    versioned_prompts.sort(key=lambda p: p.version or 1, reverse=True)
+    
+    return ListPromptsResponse(prompts=versioned_prompts)
 
 
 @router.get(
@@ -489,6 +530,20 @@ async def get_prompt_info(
     if prompt_spec is None:
         raise HTTPException(status_code=400, detail=f"Prompt {prompt_id} not found")
 
+    # Extract version number from the prompt_id
+    version_number = get_version_number(prompt_id=prompt_spec.prompt_id)
+    
+    # Create a copy of the prompt spec with the base prompt ID (stripped of version)
+    # and explicit version field for consistency with list_prompts and versions endpoints
+    prompt_spec_response = PromptSpec(
+        prompt_id=get_base_prompt_id(prompt_id=prompt_spec.prompt_id),
+        litellm_params=prompt_spec.litellm_params,  # This preserves the versioned ID
+        prompt_info=prompt_spec.prompt_info,
+        created_at=prompt_spec.created_at,
+        updated_at=prompt_spec.updated_at,
+        version=version_number,  # Explicit version field
+    )
+
     # Get prompt content from the callback
     prompt_template: Optional[PromptTemplateBase] = None
     try:
@@ -519,7 +574,7 @@ async def get_prompt_info(
 
     # Create response with content
     return PromptInfoResponse(
-        prompt_spec=prompt_spec,
+        prompt_spec=prompt_spec_response,
         raw_prompt_template=prompt_template,
     )
 

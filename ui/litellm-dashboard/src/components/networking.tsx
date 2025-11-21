@@ -124,6 +124,7 @@ export interface PromptSpec {
   prompt_info: PromptInfo;
   created_at?: string;
   updated_at?: string;
+  version?: number;  // Explicit version number for version history
 }
 
 export interface PromptTemplateBase {
