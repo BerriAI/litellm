@@ -45,6 +45,12 @@ export const getVersionedPromptId = (promptData?: PromptSpec): string => {
  * Get current version number from prompt data
  */
 export const getCurrentVersion = (promptData?: PromptSpec): string => {
+  // Use explicit version field if available (from API response)
+  if (promptData?.version) {
+    return String(promptData.version);
+  }
+  
+  // Fallback: extract from versioned ID in litellm_params
   const versionedId = getVersionedPromptId(promptData);
   return getVersionNumber(versionedId);
 };
