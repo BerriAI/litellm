@@ -1,8 +1,14 @@
 import base64
+import json
 import re
-from typing import List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+
+from fastapi import Request
 
 from litellm.types.utils import SpecialEnums
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import FileExpiresAfter
 
 
 def _is_base64_encoded_unified_file_id(b64_uid: str) -> Union[str, Literal[False]]:
@@ -76,3 +82,48 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
         return file_id.split("llm_batch_id:")[1].split(",")[0]
     else:
         return file_id.split("generic_response_id:")[1].split(",")[0]
+
+
+async def parse_expires_after_from_request(
+    expires_after: Optional[Union[str, Dict[str, Any]]], request: Request
+) -> Optional["FileExpiresAfter"]:
+    """
+    Parse expires_after from request form data.
+    
+    Handles two formats:
+    1. Direct form parameter: expires_after as JSON string
+    2. Bracket notation: expires_after[anchor] and expires_after[seconds] (or expires_after[days])
+    """
+    expires_after_dict: Optional[Dict[str, Any]] = None
+    
+    if expires_after:
+        try:
+            if isinstance(expires_after, str):
+                expires_after_dict = json.loads(expires_after)
+            elif isinstance(expires_after, dict):
+                expires_after_dict = expires_after
+        except (json.JSONDecodeError, ValueError) as e:
+            raise ValueError(
+                f"Invalid expires_after format. Expected JSON object, got: {expires_after}. Error: {str(e)}"
+            )
+    else:
+        # Try to get expires_after from bracket notation form fields
+        # The OpenAI SDK sends expires_after as separate form fields: expires_after[anchor] and expires_after[seconds]
+        try:
+            form_data = await request.form()
+            form_dict = dict(form_data)            
+            anchor = form_dict.get("expires_after[anchor]")
+            seconds = form_dict.get("expires_after[seconds]")
+            
+            if anchor:
+                expires_after_dict = {"anchor": anchor}
+                if seconds:
+                    expires_after_dict["seconds"] = int(seconds) if isinstance(seconds, str) else seconds  
+        except Exception:
+            # If form parsing fails, continue without expires_after
+            pass
+    
+    if expires_after_dict is not None:
+        from litellm.types.llms.openai import FileExpiresAfter
+        return cast(FileExpiresAfter, expires_after_dict)
+    return None

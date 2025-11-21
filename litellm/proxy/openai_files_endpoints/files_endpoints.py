@@ -6,8 +6,9 @@
 ######################################################################
 
 import asyncio
+import json
 import traceback
-from typing import Optional, cast, get_args
+from typing import Any, Dict, Optional, cast, get_args
 
 import httpx
 from fastapi import (
@@ -42,7 +43,10 @@ from litellm.types.llms.openai import (
     OpenAIFilesPurpose,
 )
 
-from .common_utils import _is_base64_encoded_unified_file_id
+from .common_utils import (
+    _is_base64_encoded_unified_file_id,
+    parse_expires_after_from_request,
+)
 
 router = APIRouter()
 
@@ -206,6 +210,7 @@ async def create_file(
     provider: Optional[str] = None,
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
+    expires_after: Optional[str] = Form(default=None),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -275,6 +280,11 @@ async def create_file(
             proxy_config=proxy_config,
         )
 
+        # Handle expires_after: check form parameter first, then bracket notation
+        expires_after_dict = await parse_expires_after_from_request(
+            expires_after=expires_after, request=request
+        )
+
         # Prepare the file data according to FileTypes
         file_data = (file.filename, file_content, file.content_type)
 
@@ -290,7 +300,10 @@ async def create_file(
                 )
 
         _create_file_request = CreateFileRequest(
-            file=file_data, purpose=cast(CREATE_FILE_REQUESTS_PURPOSE, purpose), **data
+            file=file_data,
+            purpose=cast(CREATE_FILE_REQUESTS_PURPOSE, purpose),
+            expires_after=expires_after_dict,
+            **data
         )
 
         response = await route_create_file(
