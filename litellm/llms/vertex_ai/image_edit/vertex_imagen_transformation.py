@@ -10,6 +10,7 @@ from httpx._types import RequestFiles
 
 import litellm
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
@@ -286,11 +287,18 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         return reference_images
 
-    def _read_all_bytes(self, image: Any) -> bytes:
+    def _read_all_bytes(
+        self, image: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
+    ) -> bytes:
+        if depth > max_depth:
+            raise ValueError(
+                f"Max recursion depth {max_depth} reached while reading image bytes for Vertex AI Imagen image edit."
+            )
+
         if isinstance(image, (list, tuple)):
             for item in image:
                 if item is not None:
-                    return self._read_all_bytes(item)
+                    return self._read_all_bytes(item, depth=depth + 1, max_depth=max_depth)
             raise ValueError("Unsupported image type for Vertex AI Imagen image edit.")
 
         if isinstance(image, dict):
@@ -302,9 +310,9 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
                             return base64.b64decode(value)
                         except Exception:
                             continue
-                    return self._read_all_bytes(value)
+                    return self._read_all_bytes(value, depth=depth + 1, max_depth=max_depth)
             if "path" in image:
-                return self._read_all_bytes(image["path"])
+                return self._read_all_bytes(image["path"], depth=depth + 1, max_depth=max_depth)
 
         if isinstance(image, bytes):
             return image

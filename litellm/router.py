@@ -835,8 +835,8 @@ class Router:
             litellm.acancel_batch, call_type="acancel_batch"
         )
 
-    def _initialize_specialized_endpoints(self):
-        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container)."""
+    def _initialize_vector_store_endpoints(self):
+        """Initialize vector store endpoints."""
         from litellm.vector_stores.main import acreate, asearch, create, search
 
         self.avector_store_search = self.factory_function(
@@ -852,6 +852,8 @@ class Router:
             create, call_type="vector_store_create"
         )
 
+    def _initialize_vector_store_file_endpoints(self):
+        """Initialize vector store file endpoints."""
         from litellm.vector_store_files.main import (
             acreate as avector_store_file_create_fn,
         )
@@ -921,6 +923,8 @@ class Router:
             vector_store_file_delete_fn, call_type="vector_store_file_delete"
         )
 
+    def _initialize_google_genai_endpoints(self):
+        """Initialize Google GenAI endpoints."""
         from litellm.google_genai import (
             agenerate_content,
             agenerate_content_stream,
@@ -941,6 +945,8 @@ class Router:
             generate_content_stream, call_type="generate_content_stream"
         )
 
+    def _initialize_ocr_search_endpoints(self):
+        """Initialize OCR and search endpoints."""
         from litellm.ocr import aocr, ocr
 
         self.aocr = self.factory_function(aocr, call_type="aocr")
@@ -951,6 +957,8 @@ class Router:
         self.asearch = self.factory_function(asearch, call_type="asearch")
         self.search = self.factory_function(search, call_type="search")
 
+    def _initialize_video_endpoints(self):
+        """Initialize video endpoints."""
         from litellm.videos import (
             avideo_content,
             avideo_generation,
@@ -989,6 +997,8 @@ class Router:
         )
         self.video_remix = self.factory_function(video_remix, call_type="video_remix")
 
+    def _initialize_container_endpoints(self):
+        """Initialize container endpoints."""
         from litellm.containers import (
             acreate_container,
             adelete_container,
@@ -1024,6 +1034,15 @@ class Router:
         self.delete_container = self.factory_function(
             delete_container, call_type="delete_container"
         )
+
+    def _initialize_specialized_endpoints(self):
+        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container)."""
+        self._initialize_vector_store_endpoints()
+        self._initialize_vector_store_file_endpoints()
+        self._initialize_google_genai_endpoints()
+        self._initialize_ocr_search_endpoints()
+        self._initialize_video_endpoints()
+        self._initialize_container_endpoints()
 
     def initialize_router_endpoints(self):
         self._initialize_core_endpoints()

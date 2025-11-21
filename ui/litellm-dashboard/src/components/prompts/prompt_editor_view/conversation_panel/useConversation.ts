@@ -17,7 +17,7 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
   const extractedVariables = extractVariables(prompt);
 
   const allVariablesFilled = extractedVariables.every(
-    (varName) => variables[varName] && variables[varName].trim() !== ""
+    (varName) => variables[varName] && variables[varName].trim() !== "",
   );
 
   const scrollToBottom = () => {
@@ -115,6 +115,7 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
       let usage: TokenUsage | undefined;
       setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
+      // eslint-disable-next-line no-constant-condition
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -182,10 +183,7 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1];
           if (lastMsg && lastMsg.role === "assistant" && lastMsg.content === "") {
-            return [
-              ...prev.slice(0, -1),
-              { role: "assistant", content: `Error: ${error.message}` },
-            ];
+            return [...prev.slice(0, -1), { role: "assistant", content: `Error: ${error.message}` }];
           }
           return [...prev, { role: "assistant", content: `Error: ${error.message}` }];
         });
@@ -242,4 +240,3 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
     handleVariableChange,
   };
 };
-
