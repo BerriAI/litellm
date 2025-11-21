@@ -9,6 +9,7 @@ interface PromptEditorHeaderProps {
   onBack: () => void;
   onSave: () => void;
   isSaving: boolean;
+  editMode?: boolean;
 }
 
 const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
@@ -17,6 +18,7 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
   onBack,
   onSave,
   isSaving,
+  editMode = false,
 }) => {
   return (
     <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
@@ -40,7 +42,7 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
           loading={isSaving}
           disabled={isSaving}
         >
-          Save
+          {editMode ? "Update" : "Save"}
         </TremorButton>
       </div>
     </div>

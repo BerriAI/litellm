@@ -21,6 +21,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [showEditorView, setShowEditorView] = useState(false);
+  const [editPromptData, setEditPromptData] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
 
@@ -55,6 +56,12 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     if (selectedPromptId) {
       setSelectedPromptId(null);
     }
+    setEditPromptData(null);
+    setShowEditorView(true);
+  };
+
+  const handleEditPrompt = (promptData: any) => {
+    setEditPromptData(promptData);
     setShowEditorView(true);
   };
 
@@ -71,10 +78,14 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
 
   const handleCloseEditor = () => {
     setShowEditorView(false);
+    setEditPromptData(null);
   };
 
   const handleSuccess = () => {
     fetchPrompts();
+    setShowEditorView(false);
+    setEditPromptData(null);
+    setSelectedPromptId(null);
   };
 
   const handleDeleteClick = (promptId: string, promptName: string) => {
@@ -109,6 +120,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
           onClose={handleCloseEditor}
           onSuccess={handleSuccess}
           accessToken={accessToken}
+          initialPromptData={editPromptData}
         />
       ) : selectedPromptId ? (
         <PromptInfoView
@@ -117,6 +129,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
           accessToken={accessToken}
           isAdmin={isAdmin}
           onDelete={fetchPrompts}
+          onEdit={handleEditPrompt}
         />
       ) : (
         <>

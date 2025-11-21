@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import ToolModal from "../tool_modal";
 import NotificationsManager from "../../molecules/notifications_manager";
-import { createPromptCall } from "../../networking";
+import { createPromptCall, updatePromptCall } from "../../networking";
 import { PromptType, PromptEditorViewProps, Tool } from "./types";
-import { convertToDotPrompt } from "./utils";
+import { convertToDotPrompt, parseExistingPrompt } from "./utils";
 import PromptEditorHeader from "./PromptEditorHeader";
 import ModelConfigCard from "./ModelConfigCard";
 import ToolsCard from "./ToolsCard";
@@ -13,23 +13,36 @@ import ConversationPanel from "./conversation_panel";
 import PublishModal from "./PublishModal";
 import DotpromptViewTab from "./DotpromptViewTab";
 
-const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess, accessToken }) => {
-  const [prompt, setPrompt] = useState<PromptType>({
-    name: "New prompt",
-    model: "gpt-4o",
-    config: {
-      temperature: 1,
-      max_tokens: 1000,
-    },
-    tools: [],
-    developerMessage: "",
-    messages: [
-      {
-        role: "user",
-        content: "Enter task specifics. Use {{template_variables}} for dynamic inputs",
+const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess, accessToken, initialPromptData }) => {
+  const getInitialPrompt = (): PromptType => {
+    if (initialPromptData) {
+      try {
+        return parseExistingPrompt(initialPromptData);
+      } catch (error) {
+        console.error("Error parsing existing prompt:", error);
+        NotificationsManager.fromBackend("Failed to parse prompt data");
+      }
+    }
+    return {
+      name: "New prompt",
+      model: "gpt-4o",
+      config: {
+        temperature: 1,
+        max_tokens: 1000,
       },
-    ],
-  });
+      tools: [],
+      developerMessage: "",
+      messages: [
+        {
+          role: "user",
+          content: "Enter task specifics. Use {{template_variables}} for dynamic inputs",
+        },
+      ],
+    };
+  };
+
+  const [prompt, setPrompt] = useState<PromptType>(getInitialPrompt());
+  const [editMode, setEditMode] = useState<boolean>(!!initialPromptData);
 
   const [showToolModal, setShowToolModal] = useState(false);
   const [showNameModal, setShowNameModal] = useState(false);
@@ -160,13 +173,18 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         },
       };
 
-      await createPromptCall(accessToken, promptData);
-      NotificationsManager.success("Prompt created successfully!");
+      if (editMode && initialPromptData?.prompt_spec?.prompt_id) {
+        await updatePromptCall(accessToken, initialPromptData.prompt_spec.prompt_id, promptData);
+        NotificationsManager.success("Prompt updated successfully!");
+      } else {
+        await createPromptCall(accessToken, promptData);
+        NotificationsManager.success("Prompt created successfully!");
+      }
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Error saving prompt:", error);
-      NotificationsManager.fromBackend("Failed to save prompt");
+      NotificationsManager.fromBackend(editMode ? "Failed to update prompt" : "Failed to save prompt");
     } finally {
       setIsSaving(false);
       setShowNameModal(false);
@@ -182,6 +200,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           onBack={onClose}
           onSave={handleSaveClick}
           isSaving={isSaving}
+          editMode={editMode}
         />
 
         <div className="flex-1 flex overflow-hidden">
