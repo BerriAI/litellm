@@ -378,6 +378,15 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = litellm.model_alias_map[self.data["model"]]
 
+        # Check key-specific aliases
+        if (
+            isinstance(self.data["model"], str)
+            and user_api_key_dict.aliases
+            and isinstance(user_api_key_dict.aliases, dict)
+            and self.data["model"] in user_api_key_dict.aliases
+        ):
+            self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
+
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
