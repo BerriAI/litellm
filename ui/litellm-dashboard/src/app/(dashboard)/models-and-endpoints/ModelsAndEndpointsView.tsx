@@ -10,7 +10,7 @@ import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react
 import { DateRangePickerValue } from "@tremor/react";
 import {
   modelInfoCall,
-  modelProviderMap,
+  modelCostMap,
   modelMetricsCall,
   streamingModelMetricsCall,
   modelExceptionsCall,
@@ -418,17 +418,13 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       fetchData();
     }
 
-    const fetchModelProviderMap = async () => {
-      try {
-        const data = await modelProviderMap();
-        console.log(`received model provider map data: ${Object.keys(data).length} models`);
-        setModelMap(data);
-      } catch (error) {
-        console.error("Failed to fetch model provider map:", error);
-      }
+    const fetchModelMap = async () => {
+      const data = await modelCostMap(accessToken);
+      console.log(`received model cost map data: ${Object.keys(data)}`);
+      setModelMap(data);
     };
     if (modelMap == null) {
-      fetchModelProviderMap();
+      fetchModelMap();
     }
 
     handleRefreshClick();
