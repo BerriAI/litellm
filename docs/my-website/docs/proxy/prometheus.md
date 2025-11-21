@@ -4,15 +4,6 @@ import Image from '@theme/IdealImage';
 
 # 📈 Prometheus metrics
 
-:::info
-
-✨ Prometheus metrics is on LiteLLM Enterprise
-
-[Enterprise Pricing](https://www.litellm.ai/#pricing)
-
-[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
-
-:::
 
 LiteLLM Exposes a `/metrics` endpoint for Prometheus to Poll
 
@@ -23,11 +14,12 @@ If you're using the LiteLLM CLI with `litellm --config proxy_config.yaml` then y
 Add this to your proxy config.yaml 
 ```yaml
 model_list:
- - model_name: gpt-4o
+  - model_name: gpt-4o
     litellm_params:
       model: gpt-4o
 litellm_settings:
-  callbacks: ["prometheus"]
+  callbacks:
+    - prometheus
 ```
 
 Start the proxy

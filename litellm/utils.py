@@ -230,6 +230,7 @@ from typing import (
     Iterable,
     List,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     Type,
@@ -273,6 +274,9 @@ from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.vector_store_files.transformation import (
+    BaseVectorStoreFilesConfig,
+)
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 
 from ._logging import _is_debugging_on, verbose_logger
@@ -3383,6 +3387,7 @@ def get_optional_params(  # noqa: PLR0915
     drop_params=None,
     allowed_openai_params: Optional[List[str]] = None,
     reasoning_effort=None,
+    verbosity=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
@@ -6675,7 +6680,13 @@ def _get_base_model_from_metadata(model_call_details=None):
             return _base_model
         metadata = litellm_params.get("metadata", {})
 
-        return _get_base_model_from_litellm_call_metadata(metadata=metadata)
+        base_model_from_metadata = _get_base_model_from_litellm_call_metadata(metadata=metadata)
+        if base_model_from_metadata is not None:
+            return base_model_from_metadata
+
+        # Also check litellm_metadata (used by Responses API and other generic API calls)
+        litellm_metadata = litellm_params.get("litellm_metadata", {})
+        return _get_base_model_from_litellm_call_metadata(metadata=litellm_metadata)
     return None
 
 
@@ -7263,6 +7274,8 @@ class ProviderConfigManager:
             return VolcEngineEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
+        elif litellm.LlmProviders.SNOWFLAKE == provider:
+            return litellm.SnowflakeEmbeddingConfig()
         elif litellm.LlmProviders.COMETAPI == provider:
             return litellm.CometAPIEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
@@ -7376,6 +7389,8 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            return litellm.GithubCopilotResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
         return None
@@ -7571,6 +7586,18 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
+    def get_provider_vector_store_files_config(
+        provider: LlmProviders,
+    ) -> Optional[BaseVectorStoreFilesConfig]:
+        if litellm.LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.vector_store_files.transformation import (
+                OpenAIVectorStoreFilesConfig,
+            )
+
+            return OpenAIVectorStoreFilesConfig()
+        return None
+
+    @staticmethod
     def get_provider_image_generation_config(
         model: str,
         provider: LlmProviders,
@@ -7730,6 +7757,10 @@ class ProviderConfigManager:
             )
 
             return LiteLLMProxyImageEditConfig()
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.image_edit import get_vertex_ai_image_edit_config
+
+            return get_vertex_ai_image_edit_config(model)
         return None
 
     @staticmethod
@@ -8023,7 +8054,7 @@ def get_non_default_transcription_params(kwargs: dict) -> dict:
     return non_default_params
 
 
-def add_openai_metadata(metadata: dict) -> dict:
+def add_openai_metadata(metadata: Optional[Mapping[str, Any]]) -> Optional[Dict[str, str]]:
     """
     Add metadata to openai optional parameters, excluding hidden params.
 
@@ -8039,10 +8070,10 @@ def add_openai_metadata(metadata: dict) -> dict:
     if metadata is None:
         return None
     # Only include non-hidden parameters
-    visible_metadata = {
-        k: v
+    visible_metadata: Dict[str, str] = {
+        str(k): v
         for k, v in metadata.items()
-        if k != "hidden_params" and isinstance(v, (str))
+        if k != "hidden_params" and isinstance(v, str)
     }
 
     # max 16 keys allowed by openai - trim down to 16

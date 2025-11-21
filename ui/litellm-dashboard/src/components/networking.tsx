@@ -5,6 +5,36 @@ export const formatDate = (date: Date) => {
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 };
+
+export const getCallbackConfigsCall = async (accessToken: string) => {
+  /**
+   * Get callback configuration metadata (logos, params, etc.)
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/callbacks/configs` : `/callbacks/configs`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get callbacks:", error);
+    throw error;
+  }
+};
 /**
  * Helper file for calls being made to proxy
  */
@@ -112,7 +142,7 @@ export interface ListPromptsResponse {
 }
 
 export interface Organization {
-  organization_id: string | null;
+  organization_id: string;
   organization_alias: string;
   budget_id: string;
   metadata: Record<string, any>;
@@ -182,11 +212,13 @@ export interface CredentialsResponse {
 
 let lastErrorTime = 0;
 
-const handleError = async (errorData: string) => {
+const handleError = async (errorData: string | any) => {
   const currentTime = Date.now();
   if (currentTime - lastErrorTime > 60000) {
     // 60000 milliseconds = 60 seconds
-    if (errorData.includes("Authentication Error - Expired Key")) {
+    // Convert errorData to string if it isn't already
+    const errorString = typeof errorData === 'string' ? errorData : JSON.stringify(errorData);
+    if (errorString.includes("Authentication Error - Expired Key")) {
       NotificationsManager.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
       clearTokenCookies();
@@ -1537,21 +1569,70 @@ export const transformRequestCall = async (accessToken: string, request: object)
   }
 };
 
-export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1) => {
-  /**
-   * Get daily user activity on proxy
-   */
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/daily/activity` : `/user/daily/activity`;
-    const queryParams = new URLSearchParams();
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
-    queryParams.append("page_size", "1000");
-    queryParams.append("page", page.toString());
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
+type DailyActivityQueryValue = string | number | string[] | null | undefined;
+
+const DEFAULT_DAILY_ACTIVITY_PAGE_SIZE = "1000";
+
+const appendDailyActivityQueryParam = (params: URLSearchParams, key: string, value: DailyActivityQueryValue) => {
+  if (value === null || value === undefined) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length > 0) {
+      params.append(key, value.join(","));
     }
+    return;
+  }
+
+  params.append(key, `${value}`);
+};
+
+const buildDailyActivityUrl = (
+  endpoint: string,
+  startTime: Date,
+  endTime: Date,
+  page: number,
+  extraQueryParams?: Record<string, DailyActivityQueryValue>,
+) => {
+  const resolvedEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  const baseUrl = proxyBaseUrl ? `${proxyBaseUrl}${resolvedEndpoint}` : resolvedEndpoint;
+
+  const params = new URLSearchParams();
+  params.append("start_date", formatDate(startTime));
+  params.append("end_date", formatDate(endTime));
+  params.append("page_size", DEFAULT_DAILY_ACTIVITY_PAGE_SIZE);
+  params.append("page", page.toString());
+
+  if (extraQueryParams) {
+    Object.entries(extraQueryParams).forEach(([key, value]) => {
+      appendDailyActivityQueryParam(params, key, value);
+    });
+  }
+
+  const queryString = params.toString();
+  return queryString ? `${baseUrl}?${queryString}` : baseUrl;
+};
+
+type DailyActivityCallOptions = {
+  accessToken: string;
+  endpoint: string;
+  startTime: Date;
+  endTime: Date;
+  page?: number;
+  extraQueryParams?: Record<string, DailyActivityQueryValue>;
+};
+
+const fetchDailyActivity = async ({
+  accessToken,
+  endpoint,
+  startTime,
+  endTime,
+  page = 1,
+  extraQueryParams,
+}: DailyActivityCallOptions) => {
+  try {
+    const url = buildDailyActivityUrl(endpoint, startTime, endTime, page, extraQueryParams);
 
     const response = await fetch(url, {
       method: "GET",
@@ -1571,9 +1652,22 @@ export const userDailyActivityCall = async (accessToken: string, startTime: Date
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error(`Failed to fetch daily activity (${endpoint}):`, error);
     throw error;
   }
+};
+
+export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1) => {
+  /**
+   * Get daily user activity on proxy
+   */
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/user/daily/activity",
+    startTime,
+    endTime,
+    page,
+  });
 };
 
 export const tagDailyActivityCall = async (
@@ -1586,42 +1680,16 @@ export const tagDailyActivityCall = async (
   /**
    * Get daily user activity on proxy
    */
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/daily/activity` : `/tag/daily/activity`;
-    const queryParams = new URLSearchParams();
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
-    queryParams.append("page_size", "1000");
-    queryParams.append("page", page.toString());
-    if (tags) {
-      queryParams.append("tags", tags.join(","));
-    }
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/tag/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      tags,
+    },
+  });
 };
 
 export const teamDailyActivityCall = async (
@@ -1634,43 +1702,36 @@ export const teamDailyActivityCall = async (
   /**
    * Get daily user activity on proxy
    */
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/daily/activity` : `/team/daily/activity`;
-    const queryParams = new URLSearchParams();
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
-    queryParams.append("page_size", "1000");
-    queryParams.append("page", page.toString());
-    if (teamIds) {
-      queryParams.append("team_ids", teamIds.join(","));
-    }
-    queryParams.append("exclude_team_ids", "litellm-dashboard");
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/team/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      team_ids: teamIds,
+      exclude_team_ids: "litellm-dashboard",
+    },
+  });
+};
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
+export const organizationDailyActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  organizationIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/organization/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      organization_ids: organizationIds,
+    },
+  });
 };
 
 export const getTotalSpendCall = async (accessToken: string) => {
@@ -1894,6 +1955,28 @@ export const modelInfoV1Call = async (accessToken: string, modelId: string) => {
 
 export const modelHubPublicModelsCall = async () => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
+};
+
+export const agentHubPublicModelsCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/agent_hub` : `/public/agent_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
+};
+
+export const mcpHubPublicServersCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/mcp_hub` : `/public/mcp_hub`;
   const response = await fetch(url, {
     method: "GET",
     headers: {
@@ -5299,6 +5382,36 @@ export const patchPromptCall = async (accessToken: string, promptId: string, pro
   }
 };
 
+export const createAgentCall = async (accessToken: string, agentData: any) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...agentData,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Create agent response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create agent:", error);
+    throw error;
+  }
+};
+
 export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails` : `/guardrails`;
@@ -6408,6 +6521,120 @@ export const resetEmailEventSettings = async (accessToken: string) => {
 export { type UserInfo } from "./view_users/types"; // Re-export UserInfo
 export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
 
+export const deleteAgentCall = async (accessToken: string, agentId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}` : `/v1/agents/${agentId}`;
+
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Delete agent response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete agent:", error);
+    throw error;
+  }
+};
+
+export const makeAgentPublicCall = async (accessToken: string, agentId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}/make_public` : `/v1/agents/${agentId}/make_public`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Make agent public response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to make agent public:", error);
+    throw error;
+  }
+};
+
+export const makeAgentsPublicCall = async (accessToken: string, agentIds: string[]) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/make_public` : `/v1/agents/make_public`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent_ids: agentIds,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Make agents public response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to make agents public:", error);
+    throw error;
+  }
+};
+
+export const makeMCPPublicCall = async (accessToken: string, mcpServerIds: string[]) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/make_public` : `/v1/mcp/make_public`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        mcp_server_ids: mcpServerIds,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Make agents public response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to make agents public:", error);
+    throw error;
+  }
+};
+
 export const deleteGuardrailCall = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
@@ -6493,6 +6720,61 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
   }
 };
 
+
+export const getAgentsList = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get agents list");
+    }
+
+    const data = await response.json();
+    console.log("Agents list response:", data);
+    return { agents: data };
+  } catch (error) {
+    console.error("Failed to get agents list:", error);
+    throw error;
+  }
+};
+
+export const getAgentInfo = async (accessToken: string, agentId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}` : `/v1/agents/${agentId}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get agent info");
+    }
+
+    const data = await response.json();
+    console.log("Agent info response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get agent info:", error);
+    throw error;
+  }
+};
+
 export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
@@ -6519,6 +6801,43 @@ export const getGuardrailInfo = async (accessToken: string, guardrailId: string)
     throw error;
   }
 };
+
+export const patchAgentCall = async (
+  accessToken: string,
+  agentId: string,
+  updateData: {
+    agent_name?: string;
+    litellm_params?: Record<string, any>;
+    agent_card_params?: Record<string, any>;
+  },
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}` : `/v1/agents/${agentId}`;
+
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(updateData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to patch agent");
+    }
+
+    const data = await response.json();
+    console.log("Patch agent response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update guardrail:", error);
+    throw error;
+  }
+};
+
 
 export const updateGuardrailCall = async (
   accessToken: string,
