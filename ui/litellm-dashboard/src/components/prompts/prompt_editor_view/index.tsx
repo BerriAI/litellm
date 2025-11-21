@@ -45,9 +45,28 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   const [prompt, setPrompt] = useState<PromptType>(getInitialPrompt());
   const [editMode, setEditMode] = useState<boolean>(!!initialPromptData);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
-  const [activeVersionId, setActiveVersionId] = useState<string | undefined>(
-    initialPromptData?.prompt_spec?.prompt_id
-  );
+  
+  // Construct versioned ID from prompt_id and version field
+  const getInitialVersionId = () => {
+    if (!initialPromptData?.prompt_spec) return undefined;
+    const baseId = initialPromptData.prompt_spec.prompt_id;
+    const version = initialPromptData.prompt_spec.version || 
+                   (initialPromptData.prompt_spec.litellm_params as any)?.prompt_id;
+    
+    // If version is a number, construct versioned ID
+    if (typeof version === 'number') {
+      return `${baseId}.v${version}`;
+    }
+    
+    // If version is a string with version suffix, use it
+    if (typeof version === 'string' && (version.includes('.v') || version.includes('_v'))) {
+      return version;
+    }
+    
+    return baseId;
+  };
+  
+  const [activeVersionId, setActiveVersionId] = useState<string | undefined>(getInitialVersionId());
 
   const [showToolModal, setShowToolModal] = useState(false);
   const [showNameModal, setShowNameModal] = useState(false);
@@ -146,8 +165,10 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
     try {
       const loadedPrompt = parseExistingPrompt({ prompt_spec: versionData });
       setPrompt(loadedPrompt);
-      setActiveVersionId(versionData.prompt_id);
-      // NotificationsManager.success(`Loaded version ${versionData.prompt_id}`);
+      // Store the version number or construct versioned ID for tracking
+      const versionNum = versionData.version || 1;
+      setActiveVersionId(`${versionData.prompt_id}.v${versionNum}`);
+      // NotificationsManager.success(`Loaded version v${versionNum}`);
     } catch (error) {
       console.error("Error loading version:", error);
       NotificationsManager.fromBackend("Failed to load prompt version");
