@@ -22604,7 +22604,7 @@
         "supports_tool_choice": true
     },
     "together_ai/zai-org/GLM-4.6": {
-        "input_cost_per_token": 6e-07,
+        "input_cost_per_token": 0.6e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 200000,
         "max_output_tokens": 200000,
