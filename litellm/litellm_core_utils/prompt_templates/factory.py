@@ -2988,21 +2988,33 @@ def _convert_to_bedrock_tool_call_result(
     """
     - 
     """
-    content_str: str = ""
+    tool_result_content_blocks:List[BedrockToolResultContentBlock] = []
     if isinstance(message["content"], str):
-        content_str = message["content"]
+        tool_result_content_blocks.append(BedrockToolResultContentBlock(text=message["content"]))
     elif isinstance(message["content"], List):
         content_list = message["content"]
         for content in content_list:
             if content["type"] == "text":
-                content_str += content["text"]
+                tool_result_content_blocks.append(BedrockToolResultContentBlock(text=content["text"]))
+            elif content["type"] == "image_url":
+                format: Optional[str] = None
+                if isinstance(content["image_url"], dict):
+                    image_url = content["image_url"]["url"]
+                    format = content["image_url"].get("format")
+                else:
+                    image_url = content["image_url"]
+                _block:BedrockContentBlock = BedrockImageProcessor.process_image_sync(
+                    image_url=image_url,
+                    format=format,
+                )
+                if "image" in _block:
+                    tool_result_content_blocks.append(BedrockToolResultContentBlock(image=_block["image"]))
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
 
-    tool_result_content_block = BedrockToolResultContentBlock(text=content_str)
     tool_result = BedrockToolResultBlock(
-        content=[tool_result_content_block],
+        content=tool_result_content_blocks,
         toolUseId=id,
     )
 
