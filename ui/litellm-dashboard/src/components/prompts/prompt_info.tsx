@@ -115,28 +115,10 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     setShowDeleteConfirm(false);
   };
 
-  // Extract template variables for code snippets
-  const extractTemplateVariables = (): Record<string, string> => {
-    if (!promptTemplate?.content) return {};
-    
-    const variables: Record<string, string> = {};
-    const variableRegex = /\{\{(\w+)\}\}/g;
-    let match;
-    while ((match = variableRegex.exec(promptTemplate.content)) !== null) {
-      const varName = match[1];
-      if (!variables[varName]) {
-        variables[varName] = `example_${varName}`;
-      }
-    }
-    return variables;
-  };
-
+  // Use utility functions to extract prompt data
   const promptModel = promptData ? extractModel(promptData) || "gpt-4o" : "gpt-4o";
-  // The root prompt_id is stripped of version, use it directly
-  const basePromptId = promptData?.prompt_id || "";
-  // Get version from litellm_params.prompt_id which preserves the full versioned ID
-  const versionedPromptId = (promptData?.litellm_params as any)?.prompt_id || basePromptId;
-  const currentVersion = getVersionNumber(versionedPromptId);
+  const basePromptId = getBasePromptId(promptData);
+  const currentVersion = getCurrentVersion(promptData);
 
   return (
     <div className="p-4">
@@ -166,7 +148,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
             <PromptCodeSnippets
               promptId={basePromptId}
               model={promptModel}
-              promptVariables={extractTemplateVariables()}
+              promptVariables={extractTemplateVariables(promptTemplate?.content)}
               accessToken={accessToken}
             />
             <TremorButton

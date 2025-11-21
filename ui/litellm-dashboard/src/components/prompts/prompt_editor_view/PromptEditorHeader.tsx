@@ -2,6 +2,7 @@ import React from "react";
 import { Button as TremorButton } from "@tremor/react";
 import { Input } from "antd";
 import { ArrowLeftIcon, SaveIcon, ClockIcon } from "lucide-react";
+import PromptCodeSnippets from "./PromptCodeSnippets";
 
 interface PromptEditorHeaderProps {
   promptName: string;
@@ -12,6 +13,13 @@ interface PromptEditorHeaderProps {
   editMode?: boolean;
   onShowHistory?: () => void;
   version?: string | null;
+  promptModel?: string;
+  promptVariables?: Record<string, string>;
+  accessToken: string | null;
+  proxySettings?: {
+    PROXY_BASE_URL?: string;
+    LITELLM_UI_API_DOC_BASE_URL?: string | null;
+  };
 }
 
 const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
@@ -23,6 +31,10 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
   editMode = false,
   onShowHistory,
   version,
+  promptModel = "gpt-4o",
+  promptVariables = {},
+  accessToken,
+  proxySettings,
 }) => {
   return (
     <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
@@ -45,6 +57,13 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
         <span className="text-xs text-gray-400">Unsaved changes</span>
       </div>
       <div className="flex items-center space-x-2">
+        <PromptCodeSnippets
+          promptId={promptName}
+          model={promptModel}
+          promptVariables={promptVariables}
+          accessToken={accessToken}
+          proxySettings={proxySettings}
+        />
         {editMode && onShowHistory && (
           <TremorButton
             icon={ClockIcon}

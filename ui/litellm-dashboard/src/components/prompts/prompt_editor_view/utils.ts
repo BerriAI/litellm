@@ -159,3 +159,10 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
     messages: messages.length > 0 ? messages : [{ role: "user", content: "Enter task specifics. Use {{template_variables}} for dynamic inputs" }],
   };
 };
+
+export const getVersionNumber = (promptId?: string): string => {
+  if (!promptId) return "1";
+  // Match version with dot (.v), underscore (_v), or hyphen (-v) separator
+  const match = promptId.match(/[._-]v(\d+)$/);
+  return match ? match[1] : "1";
+};
