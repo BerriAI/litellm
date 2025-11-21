@@ -28,7 +28,7 @@ class TestDockerModelRunnerIntegration:
     async def test_completion_hits_correct_url_and_body(self):
         """
         Test that litellm.completion with docker_model_runner provider:
-        1. Hits the correct URL: /engines/{model}/v1/chat/completions
+        1. Hits the correct URL: {api_base}/v1/chat/completions where api_base includes engine path
         2. Sends the correct request body with messages and parameters
         """
         with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
@@ -57,11 +57,11 @@ class TestDockerModelRunnerIntegration:
             mock_response.headers = {"content-type": "application/json"}
             mock_post.return_value = mock_response
 
-            # Make the completion call
+            # Make the completion call with engine in api_base
             response = completion(
                 model="docker_model_runner/llama-3.1",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
-                api_base="http://localhost:22088",
+                api_base="http://localhost:22088/engines/llama.cpp",
                 temperature=0.7,
                 max_tokens=100
             )
@@ -73,8 +73,8 @@ class TestDockerModelRunnerIntegration:
             print("URL For request", url)
             print("request body for request", json.dumps(call_args[1]["data"], indent=4))
             
-            # Should hit /engines/{model}/v1/chat/completions
-            assert "/engines/llama-3.1/v1/chat/completions" in url
+            # Should hit {api_base}/v1/chat/completions where api_base includes engine
+            assert "/engines/llama.cpp/v1/chat/completions" in url
             assert "http://localhost:22088" in url
 
             # Verify the request body
