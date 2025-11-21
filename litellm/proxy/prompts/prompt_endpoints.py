@@ -489,6 +489,11 @@ async def get_prompt_info(
     if prompt_spec is None:
         raise HTTPException(status_code=400, detail=f"Prompt {prompt_id} not found")
 
+    # Create a copy of the prompt spec with the base prompt ID (stripped of version)
+    # This ensures the UI receives the clean ID it expects
+    prompt_spec_response = prompt_spec.copy()
+    prompt_spec_response.prompt_id = get_base_prompt_id(prompt_id=prompt_spec.prompt_id)
+
     # Get prompt content from the callback
     prompt_template: Optional[PromptTemplateBase] = None
     try:
@@ -519,7 +524,7 @@ async def get_prompt_info(
 
     # Create response with content
     return PromptInfoResponse(
-        prompt_spec=prompt_spec,
+        prompt_spec=prompt_spec_response,
         raw_prompt_template=prompt_template,
     )
 
