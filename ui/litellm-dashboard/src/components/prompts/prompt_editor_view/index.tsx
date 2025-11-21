@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import ToolModal from "../tool_modal";
 import NotificationsManager from "../../molecules/notifications_manager";
-import { createPromptCall } from "../../networking";
+import { createPromptCall, updatePromptCall } from "../../networking";
 import { PromptType, PromptEditorViewProps, Tool } from "./types";
-import { convertToDotPrompt } from "./utils";
+import { convertToDotPrompt, parseExistingPrompt } from "./utils";
 import PromptEditorHeader from "./PromptEditorHeader";
 import ModelConfigCard from "./ModelConfigCard";
 import ToolsCard from "./ToolsCard";
@@ -12,9 +12,19 @@ import PromptMessagesCard from "./PromptMessagesCard";
 import ConversationPanel from "./conversation_panel";
 import PublishModal from "./PublishModal";
 import DotpromptViewTab from "./DotpromptViewTab";
+import VersionHistorySidePanel from "./VersionHistorySidePanel";
 
-const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess, accessToken }) => {
-  const [prompt, setPrompt] = useState<PromptType>({
+const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess, accessToken, initialPromptData }) => {
+  const getInitialPrompt = (): PromptType => {
+    if (initialPromptData) {
+      try {
+        return parseExistingPrompt(initialPromptData);
+      } catch (error) {
+        console.error("Error parsing existing prompt:", error);
+        NotificationsManager.fromBackend("Failed to parse prompt data");
+      }
+    }
+    return {
     name: "New prompt",
     model: "gpt-4o",
     config: {
@@ -29,7 +39,15 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         content: "Enter task specifics. Use {{template_variables}} for dynamic inputs",
       },
     ],
-  });
+    };
+  };
+
+  const [prompt, setPrompt] = useState<PromptType>(getInitialPrompt());
+  const [editMode, setEditMode] = useState<boolean>(!!initialPromptData);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [activeVersionId, setActiveVersionId] = useState<string | undefined>(
+    initialPromptData?.prompt_spec?.prompt_id
+  );
 
   const [showToolModal, setShowToolModal] = useState(false);
   const [showNameModal, setShowNameModal] = useState(false);
@@ -124,6 +142,18 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
     setShowToolModal(true);
   };
 
+  const handleLoadVersion = (versionData: any) => {
+    try {
+      const loadedPrompt = parseExistingPrompt({ prompt_spec: versionData });
+      setPrompt(loadedPrompt);
+      setActiveVersionId(versionData.prompt_id);
+      // NotificationsManager.success(`Loaded version ${versionData.prompt_id}`);
+    } catch (error) {
+      console.error("Error loading version:", error);
+      NotificationsManager.fromBackend("Failed to load prompt version");
+    }
+  };
+
   const handleSaveClick = () => {
     if (!prompt.name || prompt.name.trim() === "" || prompt.name === "New prompt") {
       setShowNameModal(true);
@@ -160,18 +190,33 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         },
       };
 
+      if (editMode && initialPromptData?.prompt_spec?.prompt_id) {
+        await updatePromptCall(accessToken, initialPromptData.prompt_spec.prompt_id, promptData);
+        NotificationsManager.success("Prompt updated successfully!");
+      } else {
       await createPromptCall(accessToken, promptData);
       NotificationsManager.success("Prompt created successfully!");
+      }
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Error saving prompt:", error);
-      NotificationsManager.fromBackend("Failed to save prompt");
+      NotificationsManager.fromBackend(editMode ? "Failed to update prompt" : "Failed to save prompt");
     } finally {
       setIsSaving(false);
       setShowNameModal(false);
     }
   };
+
+  const getVersionNumber = (pid?: string) => {
+    if (!pid) return null;
+    if (pid.includes(".v")) {
+      return `v${pid.split(".v")[1]}`;
+    }
+    return null;
+  };
+
+  const currentVersion = getVersionNumber(activeVersionId);
 
   return (
     <div className="flex h-full bg-white">
@@ -182,6 +227,9 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           onBack={onClose}
           onSave={handleSaveClick}
           isSaving={isSaving}
+          editMode={editMode}
+          onShowHistory={() => setShowHistoryModal(true)}
+          version={currentVersion}
         />
 
         <div className="flex-1 flex overflow-hidden">
@@ -284,6 +332,15 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           }}
         />
       )}
+
+      <VersionHistorySidePanel
+        isOpen={showHistoryModal}
+        onClose={() => setShowHistoryModal(false)}
+        accessToken={accessToken}
+        promptId={initialPromptData?.prompt_spec?.prompt_id || prompt.name}
+        activeVersionId={activeVersionId}
+        onSelectVersion={handleLoadVersion}
+      />
     </div>
   );
 };
