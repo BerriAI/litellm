@@ -139,7 +139,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               onClick={() => onEdit?.(rawApiResponse)}
               className="flex items-center"
             >
-              Edit Prompt
+              Prompt Studio
             </TremorButton>
           {isAdmin && (
             <TremorButton
