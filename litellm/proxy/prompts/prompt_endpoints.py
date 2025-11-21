@@ -52,6 +52,58 @@ def get_base_prompt_id(prompt_id: str) -> str:
     return prompt_id.split(".v")[0] if ".v" in prompt_id else prompt_id
 
 
+def get_version_number(prompt_id: str) -> int:
+    """
+    Extract the version number from a versioned prompt ID.
+    
+    Args:
+        prompt_id: Prompt ID that may include version suffix (e.g., "jack_success.v2")
+    
+    Returns:
+        Version number (defaults to 1 if no version suffix or invalid format)
+    
+    Examples:
+        >>> get_version_number("jack_success.v2")
+        2
+        >>> get_version_number("jack_success")
+        1
+    """
+    if ".v" in prompt_id:
+        version_str = prompt_id.split(".v")[1]
+        try:
+            return int(version_str)
+        except ValueError:
+            return 1
+    return 1
+
+
+def get_latest_prompt_versions(prompts: List[PromptSpec]) -> List[PromptSpec]:
+    """
+    Filter a list of prompts to return only the latest version of each unique prompt.
+    
+    Args:
+        prompts: List of PromptSpec objects
+    
+    Returns:
+        List of PromptSpec objects with only the latest version of each prompt
+    """
+    latest_prompts: Dict[str, PromptSpec] = {}
+    
+    for prompt in prompts:
+        base_id = get_base_prompt_id(prompt_id=prompt.prompt_id)
+        version = get_version_number(prompt_id=prompt.prompt_id)
+        
+        # Keep the prompt with the highest version number
+        if base_id not in latest_prompts:
+            latest_prompts[base_id] = prompt
+        else:
+            existing_version = get_version_number(prompt_id=latest_prompts[base_id].prompt_id)
+            if version > existing_version:
+                latest_prompts[base_id] = prompt
+    
+    return list(latest_prompts.values())
+
+
 async def get_next_version_for_prompt(prisma_client, prompt_id: str) -> int:
     """
     Get the next version number for a prompt.
@@ -190,11 +242,87 @@ async def list_prompts(
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     ):
-        return ListPromptsResponse(
-            prompts=list(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values())
-        )
+        # Get all prompts and filter to show only the latest version of each
+        all_prompts = list(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values())
+        latest_prompts = get_latest_prompt_versions(prompts=all_prompts)
+        return ListPromptsResponse(prompts=latest_prompts)
     else:
         return ListPromptsResponse(prompts=[])
+
+
+@router.get(
+    "/prompts/{prompt_id}/versions",
+    tags=["Prompt Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ListPromptsResponse,
+)
+async def get_prompt_versions(
+    prompt_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get all versions of a specific prompt by base prompt ID
+    
+    👉 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)
+    
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/prompts/jack_success/versions" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+    
+    Example Response:
+    ```json
+    {
+        "prompts": [
+            {
+                "prompt_id": "jack_success.v1",
+                "litellm_params": {...},
+                "prompt_info": {"prompt_type": "db"},
+                "created_at": "2023-11-09T12:34:56.789Z",
+                "updated_at": "2023-11-09T12:34:56.789Z"
+            },
+            {
+                "prompt_id": "jack_success.v2",
+                "litellm_params": {...},
+                "prompt_info": {"prompt_type": "db"},
+                "created_at": "2023-11-09T13:45:12.345Z",
+                "updated_at": "2023-11-09T13:45:12.345Z"
+            }
+        ]
+    }
+    ```
+    """
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+    # Only allow proxy admins to view version history
+    if user_api_key_dict.user_role is None or (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can view prompt versions"
+        )
+    
+    # Strip version suffix if provided (e.g., "jack_success.v1" -> "jack_success")
+    base_prompt_id = get_base_prompt_id(prompt_id=prompt_id)
+    
+    # Get all prompts and filter by base_prompt_id
+    all_prompts = list(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values())
+    prompt_versions = [
+        prompt for prompt in all_prompts
+        if get_base_prompt_id(prompt_id=prompt.prompt_id) == base_prompt_id
+    ]
+    
+    if not prompt_versions:
+        raise HTTPException(
+            status_code=404, detail=f"No versions found for prompt ID {base_prompt_id}"
+        )
+    
+    # Sort by version number (descending - newest first)
+    prompt_versions.sort(key=lambda p: get_version_number(prompt_id=p.prompt_id), reverse=True)
+    
+    return ListPromptsResponse(prompts=prompt_versions)
 
 
 @router.get(
