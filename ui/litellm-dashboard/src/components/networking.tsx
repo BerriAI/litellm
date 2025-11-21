@@ -306,31 +306,6 @@ export const getOpenAPISchema = async () => {
   return jsonData;
 };
 
-export const modelProviderMap = async () => {
-  try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_provider_map` : `/public/model_provider_map`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Failed to fetch model provider map:", response.status, errorText);
-      throw new Error("Failed to load model provider mapping");
-    }
-
-    const jsonData = await response.json();
-    console.log(`received model provider map data: ${Object.keys(jsonData).length} models`);
-    return jsonData;
-  } catch (error) {
-    console.error("Failed to get model provider map:", error);
-    throw error;
-  }
-};
-
 export const modelCostMap = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/get/litellm_model_cost_map` : `/get/litellm_model_cost_map`;
@@ -6702,6 +6677,7 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
   }
 };
 
+
 export const getAgentsList = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
@@ -6818,6 +6794,7 @@ export const patchAgentCall = async (
     throw error;
   }
 };
+
 
 export const updateGuardrailCall = async (
   accessToken: string,
