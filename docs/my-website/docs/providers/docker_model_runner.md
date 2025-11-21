@@ -33,24 +33,27 @@ Docker Model Runner is a Docker Desktop feature that lets you run AI models loca
 ## Environment Variables
 
 ```python showLineNumbers title="Environment Variables"
-os.environ["DOCKER_MODEL_RUNNER_API_BASE"] = "http://localhost:22088"  # Optional - defaults to this
+os.environ["DOCKER_MODEL_RUNNER_API_BASE"] = "http://localhost:22088/engines/llama.cpp"  # Optional - defaults to this
 os.environ["DOCKER_MODEL_RUNNER_API_KEY"] = "dummy-key"  # Optional - Docker Model Runner may not require auth for local instances
 ```
 
-**Note:** Docker Model Runner typically runs locally and may not require authentication. LiteLLM will use a dummy key by default if no key is provided.
+**Note:** 
+- Docker Model Runner typically runs locally and may not require authentication. LiteLLM will use a dummy key by default if no key is provided.
+- The API base should include the engine path (e.g., `/engines/llama.cpp`)
 
-## URL Structure
+## API Base Structure
 
 Docker Model Runner uses a unique URL structure:
 
 ```
-/engines/{engine}/v1/chat/completions
+http://model-runner.docker.internal/engines/{engine}/v1/chat/completions
 ```
 
-Where `{engine}` is typically `llama.cpp` for most models. LiteLLM handles this automatically:
+Where `{engine}` is the engine you want to use (typically `llama.cpp`). 
 
-- By default, uses `llama.cpp` as the engine
-- You can specify a custom engine in the model name: `docker_model_runner/llama.cpp/model-name`
+**Important:** Specify the engine in your `api_base` URL, not in the model name:
+- ✅ Correct: `api_base="http://localhost:22088/engines/llama.cpp"`, `model="docker_model_runner/llama-3.1"`
+- ❌ Incorrect: `api_base="http://localhost:22088"`, `model="docker_model_runner/llama.cpp/llama-3.1"`
 
 ## Usage - LiteLLM Python SDK
 
@@ -61,7 +64,8 @@ import os
 import litellm
 from litellm import completion
 
-os.environ["DOCKER_MODEL_RUNNER_API_BASE"] = "http://localhost:22088"
+# Specify the engine in the api_base URL
+os.environ["DOCKER_MODEL_RUNNER_API_BASE"] = "http://localhost:22088/engines/llama.cpp"
 
 messages = [{"content": "Hello, how are you?", "role": "user"}]
 
@@ -81,7 +85,8 @@ import os
 import litellm
 from litellm import completion
 
-os.environ["DOCKER_MODEL_RUNNER_API_BASE"] = "http://localhost:22088"
+# Specify the engine in the api_base URL
+os.environ["DOCKER_MODEL_RUNNER_API_BASE"] = "http://localhost:22088/engines/llama.cpp"
 
 messages = [{"content": "Hello, how are you?", "role": "user"}]
 
@@ -96,37 +101,39 @@ for chunk in response:
     print(chunk)
 ```
 
-### Custom API Base
+### Custom API Base and Engine
 
-```python showLineNumbers title="Custom API Base"
+```python showLineNumbers title="Custom API Base with Different Engine"
 import litellm
 from litellm import completion
 
 messages = [{"content": "Hello, how are you?", "role": "user"}]
 
-# Specify custom API base directly
+# Specify the engine in the api_base URL
+# Using a different host and engine
 response = completion(
     model="docker_model_runner/llama-3.1",
     messages=messages,
-    api_base="http://localhost:22088"
+    api_base="http://model-runner.docker.internal/engines/llama.cpp"
 )
 
 print(response)
 ```
 
-### Specifying Engine Name
+### Using Different Engines
 
-```python showLineNumbers title="Custom Engine Name"
+```python showLineNumbers title="Using a Different Engine"
 import litellm
 from litellm import completion
 
 messages = [{"content": "Hello, how are you?", "role": "user"}]
 
-# Specify engine in model name: {engine}/{model}
-# This will use /engines/llama.cpp/v1/chat/completions
+# To use a different engine, specify it in the api_base
+# For example, if Docker Model Runner supports other engines:
 response = completion(
-    model="docker_model_runner/llama.cpp/llama-3.1",
-    messages=messages
+    model="docker_model_runner/mistral-7b",
+    messages=messages,
+    api_base="http://localhost:22088/engines/custom-engine"
 )
 
 print(response)
@@ -141,12 +148,12 @@ model_list:
   - model_name: llama-3.1
     litellm_params:
       model: docker_model_runner/llama-3.1
-      api_base: http://localhost:22088
+      api_base: http://localhost:22088/engines/llama.cpp
 
   - model_name: mistral-7b
     litellm_params:
       model: docker_model_runner/mistral-7b
-      api_base: http://localhost:22088
+      api_base: http://localhost:22088/engines/llama.cpp
 ```
 
 Start your LiteLLM Proxy server:
@@ -299,13 +306,6 @@ response = completion(
 )
 ```
 
-## Benefits of Docker Model Runner
-
-1. **Better Performance**: Docker Model Runner optimizes model inference for better performance compared to other local solutions
-2. **Easy Setup**: Integrated with Docker Desktop for simple installation and management
-3. **OpenAI Compatible**: Works seamlessly with OpenAI-compatible tools and frameworks
-4. **Local Execution**: Run models on your machine without external API calls
-5. **Privacy**: Keep your data local without sending it to external services
 
 ## API Reference
 
