@@ -2048,6 +2048,146 @@ async def test_model_info_v1_oci_secrets_not_leaked():
         assert "/path/to/oci_api_key.pem" not in result_str
 
 
+@pytest.mark.asyncio
+async def test_model_info_v1_with_model_info_fields_filter():
+    """Test that model_info_fields parameter keeps only specified fields (whitelist approach)"""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import model_info_v1
+    from litellm.types.router import Deployment as RouterDeployment
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.router import ModelInfo
+
+    # Mock user
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_user",
+        api_key="test_key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    # Create mock model data with multiple fields
+    mock_model_data = {
+        "model_name": "gpt-4",
+        "litellm_params": {
+            "model": "gpt-4",
+            "api_key": "sk-***",
+            "api_base": "https://api.openai.com/v1",
+        },
+        "model_info": {
+            "id": "test-model-id",
+            "db_model": False,
+            "description": "Test model description",
+            "tags": ["production", "test"],
+        },
+    }
+
+    # Mock router with deployment
+    mock_router = MagicMock()
+    mock_deployment = RouterDeployment(
+        model_name="gpt-4",
+        litellm_params=LiteLLM_Params(model="gpt-4"),
+        model_info=ModelInfo(id="test-model-id", db_model=False),
+    )
+    mock_router.get_deployment.return_value = mock_deployment
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"infer_model_from_keys": False},
+        ),
+        patch("litellm.proxy.proxy_server.user_model", None),
+    ):
+
+        # Call model_info_v1 with model_info_fields to keep only "model_name" and "model_info"
+        result = await model_info_v1(
+            user_api_key_dict=user_api_key_dict,
+            litellm_model_id="test-model-id",
+            model_info_fields=["model_name", "model_info"],
+        )
+
+        # Verify the result structure
+        assert "data" in result
+        assert len(result["data"]) == 1
+
+        model_data = result["data"][0]
+
+        assert set(model_data.keys()) == {
+            "model_name",
+            "model_info",
+        }, f"Expected only ['model_name', 'model_info'], but got {list(model_data.keys())}"
+        assert "model_name" in model_data, "model_name should be present"
+        assert "model_info" in model_data, "model_info should be present"
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_with_return_litellm_params_false():
+    """Test that return_litellm_params=False removes litellm_params from /v1/model/info response"""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import model_info_v1
+    from litellm.types.router import Deployment as RouterDeployment
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.router import ModelInfo
+
+    # Mock user
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_user",
+        api_key="test_key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    # Create mock model data
+    mock_model_data = {
+        "model_name": "gpt-4",
+        "litellm_params": {
+            "model": "gpt-4",
+            "api_key": "sk-***",
+            "api_base": "https://api.openai.com/v1",
+        },
+        "model_info": {"id": "test-model-id", "db_model": False},
+    }
+
+    # Mock router with deployment
+    mock_router = MagicMock()
+    mock_deployment = RouterDeployment(
+        model_name="gpt-4",
+        litellm_params=LiteLLM_Params(model="gpt-4"),
+        model_info=ModelInfo(id="test-model-id", db_model=False),
+    )
+    mock_router.get_deployment.return_value = mock_deployment
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"infer_model_from_keys": False},
+        ),
+        patch("litellm.proxy.proxy_server.user_model", None),
+    ):
+
+        # Call model_info_v1 with return_litellm_params=False
+        result = await model_info_v1(
+            user_api_key_dict=user_api_key_dict,
+            litellm_model_id="test-model-id",
+            return_litellm_params=False,
+        )
+
+        # Verify the result structure
+        assert "data" in result
+        assert len(result["data"]) == 1
+
+        model_data = result["data"][0]
+
+        # Verify litellm_params is NOT present
+        assert (
+            "litellm_params" not in model_data
+        ), "litellm_params should be removed when return_litellm_params=False"
+
 def test_add_callback_from_db_to_in_memory_litellm_callbacks():
     """
     Test that _add_callback_from_db_to_in_memory_litellm_callbacks correctly adds callbacks
