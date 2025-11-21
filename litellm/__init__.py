@@ -27,7 +27,6 @@ from litellm.types.integrations.datadog import DatadogInitParams
 # from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 # Caching classes are lazy-loaded to reduce import-time memory cost
 # from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
-from litellm.caching.llm_caching_handler import LLMClientCache
 
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm.types.utils import (
@@ -84,11 +83,6 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.integrations.dotprompt import (
-    global_prompt_manager,
-    global_prompt_directory,
-    set_global_prompt_directory,
-)
 from litellm.types.guardrails import GuardrailItem
 from litellm.types.secret_managers.main import (
     KeyManagementSystem,
@@ -104,8 +98,9 @@ from litellm.types.utils import (
     SearchProviders,
 )
 from litellm.types.utils import PriorityReservationSettings
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
+# Import only for type checking; runtime access is via __getattr__
+if TYPE_CHECKING:
+    from litellm.integrations.custom_logger import CustomLogger
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -121,12 +116,27 @@ if set_verbose:
     _turn_on_debug()
 ####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
-CALLBACK_TYPES = Union[str, Callable, CustomLogger]
+CALLBACK_TYPES = Union[str, Callable, "CustomLogger"]
 input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
-logging_callback_manager = LoggingCallbackManager()
+_logging_callback_manager_instance: Optional[Any] = None
+
+class _LazyLoggingCallbackManagerWrapper:
+    """Wrapper to lazy-load LoggingCallbackManager instance."""
+    def _get_instance(self) -> Any:
+        """Lazy initialization of logging_callback_manager."""
+        global _logging_callback_manager_instance
+        if _logging_callback_manager_instance is None:
+            from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
+            _logging_callback_manager_instance = LoggingCallbackManager()
+        return _logging_callback_manager_instance
+    
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get_instance(), name)
+
+logging_callback_manager: Any = _LazyLoggingCallbackManagerWrapper()
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -175,7 +185,7 @@ _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
 callbacks: List[
-    Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
+    Union[Callable, _custom_logger_compatible_callbacks_literal, "CustomLogger"]
 ] = []
 initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
@@ -191,13 +201,13 @@ generic_api_use_v1: Optional[bool] = (
     False  # if you want to use v1 generic api logged payload
 )
 argilla_transformation_object: Optional[Dict[str, Any]] = None
-_async_input_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_input_callback: List[Union[str, Callable, "CustomLogger"]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_success_callback: List[Union[str, Callable, "CustomLogger"]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
@@ -282,7 +292,22 @@ disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
-in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
+_in_memory_llm_clients_cache_instance: Optional[Any] = None
+
+class _LazyLLMClientCacheWrapper:
+    """Wrapper to lazy-load LLMClientCache instance."""
+    def _get_instance(self) -> Any:
+        """Lazy initialization of in_memory_llm_clients_cache."""
+        global _in_memory_llm_clients_cache_instance
+        if _in_memory_llm_clients_cache_instance is None:
+            from litellm.caching.llm_caching_handler import LLMClientCache
+            _in_memory_llm_clients_cache_instance = LLMClientCache()
+        return _in_memory_llm_clients_cache_instance
+    
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get_instance(), name)
+
+in_memory_llm_clients_cache: Any = _LazyLLMClientCacheWrapper()
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
@@ -1726,6 +1751,11 @@ def _lazy_import_caching(name: str) -> Any:
         globals()["InMemoryCache"] = _InMemoryCache
         return _InMemoryCache
     
+    if name == "LLMClientCache":
+        from litellm.caching.llm_caching_handler import LLMClientCache as _LLMClientCache
+        globals()["LLMClientCache"] = _LLMClientCache
+        return _LLMClientCache
+    
     raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
 
 
@@ -1766,7 +1796,35 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_http_handlers(name)
     
     # Lazy-load caching classes to reduce import-time memory cost
-    if name in {"Cache", "DualCache", "RedisCache", "InMemoryCache"}:
+    if name in {"Cache", "DualCache", "RedisCache", "InMemoryCache", "LLMClientCache"}:
         return _lazy_import_caching(name)
+    
+    # Lazy-load CustomLogger to avoid circular imports
+    if name == "CustomLogger":
+        from litellm.integrations.custom_logger import CustomLogger as _CustomLogger
+        globals()["CustomLogger"] = _CustomLogger
+        return _CustomLogger
+    
+    # Lazy-load LoggingCallbackManager to avoid circular imports
+    if name == "LoggingCallbackManager":
+        from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager as _LoggingCallbackManager
+        globals()["LoggingCallbackManager"] = _LoggingCallbackManager
+        return _LoggingCallbackManager
+    
+    # Lazy-load dotprompt imports to avoid circular imports
+    if name == "global_prompt_manager":
+        from litellm.integrations.dotprompt import global_prompt_manager as _global_prompt_manager
+        globals()["global_prompt_manager"] = _global_prompt_manager
+        return _global_prompt_manager
+    
+    if name == "global_prompt_directory":
+        from litellm.integrations.dotprompt import global_prompt_directory as _global_prompt_directory
+        globals()["global_prompt_directory"] = _global_prompt_directory
+        return _global_prompt_directory
+    
+    if name == "set_global_prompt_directory":
+        from litellm.integrations.dotprompt import set_global_prompt_directory as _set_global_prompt_directory
+        globals()["set_global_prompt_directory"] = _set_global_prompt_directory
+        return _set_global_prompt_directory
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
