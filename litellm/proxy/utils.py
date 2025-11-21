@@ -904,13 +904,21 @@ class ProxyLogging:
         ):
             from litellm.proxy.prompts.prompt_endpoints import (
                 construct_versioned_prompt_id,
+                get_latest_version_prompt_id,
             )
             from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
 
-            # Construct versioned prompt_id if prompt_version is provided
-            lookup_prompt_id = construct_versioned_prompt_id(
-                prompt_id=prompt_id, version=prompt_version
-            )
+            # If no version is specified, find the latest version
+            if prompt_version is None:
+                lookup_prompt_id = get_latest_version_prompt_id(
+                    prompt_id=prompt_id,
+                    all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS,
+                )
+            else:
+                # Construct versioned prompt_id if prompt_version is provided
+                lookup_prompt_id = construct_versioned_prompt_id(
+                    prompt_id=prompt_id, version=prompt_version
+                )
 
             custom_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
                 lookup_prompt_id
