@@ -110,3 +110,57 @@ The `primary_secret_name` allows you to read multiple keys from a single AWS Sec
 
 This reduces the number of AWS Secrets you need to manage.
 
+## IAM Role Assumption
+
+Use IAM roles instead of static AWS credentials for better security.
+
+### Basic IAM Role
+
+```yaml
+general_settings:
+  key_management_system: "aws_secret_manager"
+  key_management_settings:
+    store_virtual_keys: true
+    aws_region_name: "us-east-1"
+    aws_role_name: "arn:aws:iam::123456789012:role/LiteLLMSecretManagerRole"
+    aws_session_name: "litellm-session"
+```
+
+### Cross-Account Access
+
+```yaml
+general_settings:
+  key_management_system: "aws_secret_manager"
+  key_management_settings:
+    store_virtual_keys: true
+    aws_region_name: "us-east-1"
+    aws_role_name: "arn:aws:iam::999999999999:role/CrossAccountRole"
+    aws_external_id: "unique-external-id"
+```
+
+### EKS with IRSA
+
+```yaml
+general_settings:
+  key_management_system: "aws_secret_manager"
+  key_management_settings:
+    store_virtual_keys: true
+    aws_region_name: "us-east-1"
+    aws_role_name: "arn:aws:iam::123456789012:role/LiteLLMServiceAccountRole"
+    aws_web_identity_token: "os.environ/AWS_WEB_IDENTITY_TOKEN_FILE"
+```
+
+### Configuration Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `aws_region_name` | AWS region |
+| `aws_role_name` | IAM role ARN to assume |
+| `aws_session_name` | Session name (optional) |
+| `aws_external_id` | External ID for cross-account |
+| `aws_profile_name` | AWS profile from `~/.aws/credentials` |
+| `aws_web_identity_token` | OIDC token path for IRSA |
+| `aws_sts_endpoint` | Custom STS endpoint for VPC |
+
+
+

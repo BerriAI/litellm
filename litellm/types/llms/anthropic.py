@@ -25,6 +25,7 @@ AnthropicInputSchema = TypedDict(
         "additionalProperties": Optional[bool],
         "required": Optional[List[str]],
         "$defs": Optional[Dict],
+        "strict": Optional[bool],
     },
     total=False,
 )
@@ -457,6 +458,10 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     id: str
     name: str
     input: dict
+    provider_specific_fields: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        extra = "allow"  # Allow provider_specific_fields
 
 
 class AnthropicResponseContentBlockThinking(BaseModel):
