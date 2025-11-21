@@ -152,8 +152,8 @@ class NewRelicLogger(CustomLogger):
         current_time = time.time()
         time_since_last_emission = current_time - _last_metric_emission_time
 
-        # 23 hours in seconds = 82800
-        if time_since_last_emission >= 82800:
+        # 1 hour in seconds = 3600
+        if time_since_last_emission >= 3600:
             # Acquire lock to ensure only one thread emits
             with _metric_lock:
                 # Double-check inside lock in case another thread just emitted
