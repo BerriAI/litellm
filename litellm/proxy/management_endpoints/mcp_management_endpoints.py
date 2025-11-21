@@ -58,7 +58,6 @@ if MCP_AVAILABLE:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-    from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,

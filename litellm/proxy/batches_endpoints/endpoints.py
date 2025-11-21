@@ -22,7 +22,6 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
-    convert_b64_uid_to_unified_uid,
     get_batch_id_from_unified_batch_id,
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,

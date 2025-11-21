@@ -563,6 +563,7 @@ wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
 lemonade_models: Set = set()
+burncloud_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -797,6 +798,8 @@ def add_known_models():
             ovhcloud_embedding_models.add(key)
         elif value.get("litellm_provider") == "lemonade":
             lemonade_models.add(key)
+        elif value.get("litellm_provider") == "burncloud":
+            burncloud_models.add(key)
 
 
 add_known_models()
@@ -901,6 +904,7 @@ model_list = list(
     | ovhcloud_models
     | lemonade_models
     | set(clarifai_models)
+    | burncloud_models
 )
 
 model_list_set = set(model_list)
@@ -991,6 +995,7 @@ models_by_provider: dict = {
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
     "clarifai": clarifai_models,
+    "burncloud": burncloud_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1125,6 +1130,7 @@ from .llms.cohere.rerank.transformation import CohereRerankConfig
 from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
 from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 from .llms.infinity.rerank.transformation import InfinityRerankConfig
+from .llms.burncloud.rerank.transformation import BurnCloudRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
@@ -1313,6 +1319,8 @@ from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
 )
 from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
+from .llms.burncloud.embedding.transformation import BurnCloudEmbeddingConfig
+from .llms.burncloud.audio_transcription.transformation import BurnCloudAudioTranscriptionConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
 from .llms.aiml.chat.transformation import AIMLChatConfig
@@ -1361,6 +1369,7 @@ from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
 from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
+from .llms.burncloud.chat.transformation import BurnCloudChatConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
