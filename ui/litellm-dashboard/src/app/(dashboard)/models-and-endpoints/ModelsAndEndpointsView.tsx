@@ -419,7 +419,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     }
 
     const fetchModelMap = async () => {
-      const data = await modelCostMap(accessToken);
+      const data = await modelCostMap();
       console.log(`received model cost map data: ${Object.keys(data)}`);
       setModelMap(data);
     };
