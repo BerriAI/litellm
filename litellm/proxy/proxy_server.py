@@ -9710,31 +9710,6 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
     return {"hello": "world"}
 
 
-@router.get(
-    "/get/litellm_model_cost_map",
-    include_in_schema=False,
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def get_litellm_model_cost_map(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    # Check if user is admin
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
-        )
-
-    try:
-        _model_cost_map = litellm.model_cost
-        return _model_cost_map
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal Server Error ({str(e)})",
-        )
-
-
 @router.post(
     "/reload/model_cost_map",
     tags=["model management"],
