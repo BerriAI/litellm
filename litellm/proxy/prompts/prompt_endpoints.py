@@ -490,9 +490,14 @@ async def get_prompt_info(
         raise HTTPException(status_code=400, detail=f"Prompt {prompt_id} not found")
 
     # Create a copy of the prompt spec with the base prompt ID (stripped of version)
-    # This ensures the UI receives the clean ID it expects
-    prompt_spec_response = prompt_spec.copy()
-    prompt_spec_response.prompt_id = get_base_prompt_id(prompt_id=prompt_spec.prompt_id)
+    # This ensures consistency with list_prompts endpoint
+    prompt_spec_response = PromptSpec(
+        prompt_id=get_base_prompt_id(prompt_id=prompt_spec.prompt_id),
+        litellm_params=prompt_spec.litellm_params,  # This preserves the versioned ID
+        prompt_info=prompt_spec.prompt_info,
+        created_at=prompt_spec.created_at,
+        updated_at=prompt_spec.updated_at,
+    )
 
     # Get prompt content from the callback
     prompt_template: Optional[PromptTemplateBase] = None
