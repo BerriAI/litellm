@@ -60,9 +60,8 @@ if MCP_AVAILABLE:
         auth_context_var,
     )
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from mcp.types import EmbeddedResource, ImageContent, TextContent
+    from mcp.types import EmbeddedResource, ImageContent, Prompt, TextContent
     from mcp.types import Tool as MCPTool
-    from mcp.types import Prompt
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
@@ -647,9 +646,13 @@ if MCP_AVAILABLE:
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
-            allowed_mcp_server_ids
-        )
+        allowed_mcp_servers: List[MCPServer] = []
+        for allowed_mcp_server_id in allowed_mcp_server_ids:
+            mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+                allowed_mcp_server_id
+            )
+            if mcp_server is not None:
+                allowed_mcp_servers.append(mcp_server)
 
         if mcp_servers is not None:
             allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
@@ -1173,9 +1176,13 @@ if MCP_AVAILABLE:
             )
         )
 
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
-            allowed_mcp_server_ids
-        )
+        allowed_mcp_servers: List[MCPServer] = []
+        for allowed_mcp_server_id in allowed_mcp_server_ids:
+            mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+                allowed_mcp_server_id
+            )
+            if mcp_server is not None:
+                allowed_mcp_servers.append(mcp_server)
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
@@ -1216,9 +1223,9 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details[
-                "mcp_tool_call_metadata"
-            ] = standard_logging_mcp_tool_call
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
             litellm_logging_obj.model = f"MCP: {name}"
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
@@ -1719,16 +1726,14 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> (
-        Tuple[
-            Optional[UserAPIKeyAuth],
-            Optional[str],
-            Optional[List[str]],
-            Optional[Dict[str, Dict[str, str]]],
-            Optional[Dict[str, str]],
-            Optional[Dict[str, str]],
-        ]
-    ):
+    def get_auth_context() -> Tuple[
+        Optional[UserAPIKeyAuth],
+        Optional[str],
+        Optional[List[str]],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+    ]:
         """
         Get the UserAPIKeyAuth from the auth context variable.
 
