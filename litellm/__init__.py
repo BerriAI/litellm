@@ -1431,213 +1431,265 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 # This significantly reduces memory usage when importing litellm
 def _lazy_import_cost_calculator(name: str) -> Any:
     """Lazy import for cost_calculator functions."""
-    from .cost_calculator import (
-        completion_cost as _completion_cost,
-        cost_per_token as _cost_per_token,
-        response_cost_calculator as _response_cost_calculator,
-    )
+    if name == "completion_cost":
+        from .cost_calculator import completion_cost as _completion_cost
+        globals()["completion_cost"] = _completion_cost
+        return _completion_cost
     
-    # Map names to imported functions
-    _cost_functions = {
-        "completion_cost": _completion_cost,
-        "cost_per_token": _cost_per_token,
-        "response_cost_calculator": _response_cost_calculator,
-    }
+    if name == "cost_per_token":
+        from .cost_calculator import cost_per_token as _cost_per_token
+        globals()["cost_per_token"] = _cost_per_token
+        return _cost_per_token
     
-    # Cache the imported function in the module namespace
-    func = _cost_functions[name]
-    globals()[name] = func
+    if name == "response_cost_calculator":
+        from .cost_calculator import response_cost_calculator as _response_cost_calculator
+        globals()["response_cost_calculator"] = _response_cost_calculator
+        return _response_cost_calculator
     
-    return func
-
+    raise AttributeError(f"Cost calculator lazy import: unknown attribute {name!r}")
 
 # Lazy import for litellm_logging to avoid loading the module at import time
 # This significantly reduces memory usage when importing litellm
 def _lazy_import_litellm_logging(name: str) -> Any:
-    """Lazy import for litellm_logging module."""
-    from litellm.litellm_core_utils.litellm_logging import (
-        Logging as _Logging,
-        modify_integration as _modify_integration,
-    )
+    if name == "Logging":
+        from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
+        globals()["Logging"] = _Logging
+        return _Logging
     
-    # Map names to imported objects
-    _logging_objects = {
-        "Logging": _Logging,
-        "modify_integration": _modify_integration,
-    }
+    if name == "modify_integration":
+        from litellm.litellm_core_utils.litellm_logging import modify_integration as _modify_integration
+        globals()["modify_integration"] = _modify_integration
+        return _modify_integration
     
-    # Cache the imported object in the module namespace
-    obj = _logging_objects[name]
-    globals()[name] = obj
-    
-    return obj
+    raise AttributeError(f"Litellm logging lazy import: unknown attribute {name!r}")
 
 
 # Lazy import for utils functions to avoid loading utils.py (which imports tiktoken) at import time
 # This significantly reduces memory usage when importing litellm
 def _lazy_import_utils(name: str) -> Any:
-    """Lazy import for utils module."""
-    from .utils import (
-        exception_type as _exception_type,
-        get_optional_params as _get_optional_params,
-        get_response_string as _get_response_string,
-        token_counter as _token_counter,
-        create_pretrained_tokenizer as _create_pretrained_tokenizer,
-        create_tokenizer as _create_tokenizer,
-        supports_function_calling as _supports_function_calling,
-        supports_web_search as _supports_web_search,
-        supports_url_context as _supports_url_context,
-        supports_response_schema as _supports_response_schema,
-        supports_parallel_function_calling as _supports_parallel_function_calling,
-        supports_vision as _supports_vision,
-        supports_audio_input as _supports_audio_input,
-        supports_audio_output as _supports_audio_output,
-        supports_system_messages as _supports_system_messages,
-        supports_reasoning as _supports_reasoning,
-        get_litellm_params as _get_litellm_params,
-        acreate as _acreate,
-        get_max_tokens as _get_max_tokens,
-        get_model_info as _get_model_info,
-        register_prompt_template as _register_prompt_template,
-        validate_environment as _validate_environment,
-        check_valid_key as _check_valid_key,
-        register_model as _register_model,
-        encode as _encode,
-        decode as _decode,
-        _calculate_retry_after as __calculate_retry_after,
-        _should_retry as __should_retry,
-        get_supported_openai_params as _get_supported_openai_params,
-        get_api_base as _get_api_base,
-        get_first_chars_messages as _get_first_chars_messages,
-        ModelResponse as _ModelResponse,
-        ModelResponseStream as _ModelResponseStream,
-        EmbeddingResponse as _EmbeddingResponse,
-        ImageResponse as _ImageResponse,
-        TranscriptionResponse as _TranscriptionResponse,
-        TextCompletionResponse as _TextCompletionResponse,
-        get_provider_fields as _get_provider_fields,
-        ModelResponseListIterator as _ModelResponseListIterator,
-        get_valid_models as _get_valid_models,
-    )
+    """Lazy import for utils module - imports only the requested item by name."""
+    if name == "exception_type":
+        from .utils import exception_type as _exception_type
+        globals()["exception_type"] = _exception_type
+        return _exception_type
     
-    # Map names to imported objects
-    _utils_objects = {
-        "exception_type": _exception_type,
-        "get_optional_params": _get_optional_params,
-        "get_response_string": _get_response_string,
-        "token_counter": _token_counter,
-        "create_pretrained_tokenizer": _create_pretrained_tokenizer,
-        "create_tokenizer": _create_tokenizer,
-        "supports_function_calling": _supports_function_calling,
-        "supports_web_search": _supports_web_search,
-        "supports_url_context": _supports_url_context,
-        "supports_response_schema": _supports_response_schema,
-        "supports_parallel_function_calling": _supports_parallel_function_calling,
-        "supports_vision": _supports_vision,
-        "supports_audio_input": _supports_audio_input,
-        "supports_audio_output": _supports_audio_output,
-        "supports_system_messages": _supports_system_messages,
-        "supports_reasoning": _supports_reasoning,
-        "get_litellm_params": _get_litellm_params,
-        "acreate": _acreate,
-        "get_max_tokens": _get_max_tokens,
-        "get_model_info": _get_model_info,
-        "register_prompt_template": _register_prompt_template,
-        "validate_environment": _validate_environment,
-        "check_valid_key": _check_valid_key,
-        "register_model": _register_model,
-        "encode": _encode,
-        "decode": _decode,
-        "_calculate_retry_after": __calculate_retry_after,
-        "_should_retry": __should_retry,
-        "get_supported_openai_params": _get_supported_openai_params,
-        "get_api_base": _get_api_base,
-        "get_first_chars_messages": _get_first_chars_messages,
-        "ModelResponse": _ModelResponse,
-        "ModelResponseStream": _ModelResponseStream,
-        "EmbeddingResponse": _EmbeddingResponse,
-        "ImageResponse": _ImageResponse,
-        "TranscriptionResponse": _TranscriptionResponse,
-        "TextCompletionResponse": _TextCompletionResponse,
-        "get_provider_fields": _get_provider_fields,
-        "ModelResponseListIterator": _ModelResponseListIterator,
-        "get_valid_models": _get_valid_models,
-    }
+    if name == "get_optional_params":
+        from .utils import get_optional_params as _get_optional_params
+        globals()["get_optional_params"] = _get_optional_params
+        return _get_optional_params
     
-    # Cache the imported object in the module namespace
-    obj = _utils_objects[name]
-    globals()[name] = obj
+    if name == "get_response_string":
+        from .utils import get_response_string as _get_response_string
+        globals()["get_response_string"] = _get_response_string
+        return _get_response_string
     
-    return obj
+    if name == "token_counter":
+        from .utils import token_counter as _token_counter
+        globals()["token_counter"] = _token_counter
+        return _token_counter
+    
+    if name == "create_pretrained_tokenizer":
+        from .utils import create_pretrained_tokenizer as _create_pretrained_tokenizer
+        globals()["create_pretrained_tokenizer"] = _create_pretrained_tokenizer
+        return _create_pretrained_tokenizer
+    
+    if name == "create_tokenizer":
+        from .utils import create_tokenizer as _create_tokenizer
+        globals()["create_tokenizer"] = _create_tokenizer
+        return _create_tokenizer
+    
+    if name == "supports_function_calling":
+        from .utils import supports_function_calling as _supports_function_calling
+        globals()["supports_function_calling"] = _supports_function_calling
+        return _supports_function_calling
+    
+    if name == "supports_web_search":
+        from .utils import supports_web_search as _supports_web_search
+        globals()["supports_web_search"] = _supports_web_search
+        return _supports_web_search
+    
+    if name == "supports_url_context":
+        from .utils import supports_url_context as _supports_url_context
+        globals()["supports_url_context"] = _supports_url_context
+        return _supports_url_context
+    
+    if name == "supports_response_schema":
+        from .utils import supports_response_schema as _supports_response_schema
+        globals()["supports_response_schema"] = _supports_response_schema
+        return _supports_response_schema
+    
+    if name == "supports_parallel_function_calling":
+        from .utils import supports_parallel_function_calling as _supports_parallel_function_calling
+        globals()["supports_parallel_function_calling"] = _supports_parallel_function_calling
+        return _supports_parallel_function_calling
+    
+    if name == "supports_vision":
+        from .utils import supports_vision as _supports_vision
+        globals()["supports_vision"] = _supports_vision
+        return _supports_vision
+    
+    if name == "supports_audio_input":
+        from .utils import supports_audio_input as _supports_audio_input
+        globals()["supports_audio_input"] = _supports_audio_input
+        return _supports_audio_input
+    
+    if name == "supports_audio_output":
+        from .utils import supports_audio_output as _supports_audio_output
+        globals()["supports_audio_output"] = _supports_audio_output
+        return _supports_audio_output
+    
+    if name == "supports_system_messages":
+        from .utils import supports_system_messages as _supports_system_messages
+        globals()["supports_system_messages"] = _supports_system_messages
+        return _supports_system_messages
+    
+    if name == "supports_reasoning":
+        from .utils import supports_reasoning as _supports_reasoning
+        globals()["supports_reasoning"] = _supports_reasoning
+        return _supports_reasoning
+    
+    if name == "get_litellm_params":
+        from .utils import get_litellm_params as _get_litellm_params
+        globals()["get_litellm_params"] = _get_litellm_params
+        return _get_litellm_params
+    
+    if name == "acreate":
+        from .utils import acreate as _acreate
+        globals()["acreate"] = _acreate
+        return _acreate
+    
+    if name == "get_max_tokens":
+        from .utils import get_max_tokens as _get_max_tokens
+        globals()["get_max_tokens"] = _get_max_tokens
+        return _get_max_tokens
+    
+    if name == "get_model_info":
+        from .utils import get_model_info as _get_model_info
+        globals()["get_model_info"] = _get_model_info
+        return _get_model_info
+    
+    if name == "register_prompt_template":
+        from .utils import register_prompt_template as _register_prompt_template
+        globals()["register_prompt_template"] = _register_prompt_template
+        return _register_prompt_template
+    
+    if name == "validate_environment":
+        from .utils import validate_environment as _validate_environment
+        globals()["validate_environment"] = _validate_environment
+        return _validate_environment
+    
+    if name == "check_valid_key":
+        from .utils import check_valid_key as _check_valid_key
+        globals()["check_valid_key"] = _check_valid_key
+        return _check_valid_key
+    
+    if name == "register_model":
+        from .utils import register_model as _register_model
+        globals()["register_model"] = _register_model
+        return _register_model
+    
+    if name == "encode":
+        from .utils import encode as _encode
+        globals()["encode"] = _encode
+        return _encode
+    
+    if name == "decode":
+        from .utils import decode as _decode
+        globals()["decode"] = _decode
+        return _decode
+    
+    if name == "_calculate_retry_after":
+        from .utils import _calculate_retry_after as __calculate_retry_after
+        globals()["_calculate_retry_after"] = __calculate_retry_after
+        return __calculate_retry_after
+    
+    if name == "_should_retry":
+        from .utils import _should_retry as __should_retry
+        globals()["_should_retry"] = __should_retry
+        return __should_retry
+    
+    if name == "get_supported_openai_params":
+        from .utils import get_supported_openai_params as _get_supported_openai_params
+        globals()["get_supported_openai_params"] = _get_supported_openai_params
+        return _get_supported_openai_params
+    
+    if name == "get_api_base":
+        from .utils import get_api_base as _get_api_base
+        globals()["get_api_base"] = _get_api_base
+        return _get_api_base
+    
+    if name == "get_first_chars_messages":
+        from .utils import get_first_chars_messages as _get_first_chars_messages
+        globals()["get_first_chars_messages"] = _get_first_chars_messages
+        return _get_first_chars_messages
+    
+    if name == "ModelResponse":
+        from .utils import ModelResponse as _ModelResponse
+        globals()["ModelResponse"] = _ModelResponse
+        return _ModelResponse
+    
+    if name == "ModelResponseStream":
+        from .utils import ModelResponseStream as _ModelResponseStream
+        globals()["ModelResponseStream"] = _ModelResponseStream
+        return _ModelResponseStream
+    
+    if name == "EmbeddingResponse":
+        from .utils import EmbeddingResponse as _EmbeddingResponse
+        globals()["EmbeddingResponse"] = _EmbeddingResponse
+        return _EmbeddingResponse
+    
+    if name == "ImageResponse":
+        from .utils import ImageResponse as _ImageResponse
+        globals()["ImageResponse"] = _ImageResponse
+        return _ImageResponse
+    
+    if name == "TranscriptionResponse":
+        from .utils import TranscriptionResponse as _TranscriptionResponse
+        globals()["TranscriptionResponse"] = _TranscriptionResponse
+        return _TranscriptionResponse
+    
+    if name == "TextCompletionResponse":
+        from .utils import TextCompletionResponse as _TextCompletionResponse
+        globals()["TextCompletionResponse"] = _TextCompletionResponse
+        return _TextCompletionResponse
+    
+    if name == "get_provider_fields":
+        from .utils import get_provider_fields as _get_provider_fields
+        globals()["get_provider_fields"] = _get_provider_fields
+        return _get_provider_fields
+    
+    if name == "ModelResponseListIterator":
+        from .utils import ModelResponseListIterator as _ModelResponseListIterator
+        globals()["ModelResponseListIterator"] = _ModelResponseListIterator
+        return _ModelResponseListIterator
+    
+    if name == "get_valid_models":
+        from .utils import get_valid_models as _get_valid_models
+        globals()["get_valid_models"] = _get_valid_models
+        return _get_valid_models
+    
+    raise AttributeError(f"Utils lazy import: unknown attribute {name!r}")
 
 
-def __getattr__(name: str) -> Any:
-    """Lazy import for cost_calculator, litellm_logging, and utils functions."""
-    if name in ("completion_cost", "response_cost_calculator", "cost_per_token"):
-        return _lazy_import_cost_calculator(name)
-    
-    if name in ("Logging", "modify_integration"):
-        return _lazy_import_litellm_logging(name)
-    
-    # Lazy load utils functions
-    _utils_names = (
-        "exception_type", "get_optional_params", "get_response_string", "token_counter",
-        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
-        "supports_web_search", "supports_url_context", "supports_response_schema",
-        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
-        "supports_audio_output", "supports_system_messages", "supports_reasoning",
-        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
-        "register_prompt_template", "validate_environment", "check_valid_key",
-        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
-        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
-        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
-        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
-        "ModelResponseListIterator", "get_valid_models",
-    )
-    if name in _utils_names:
-        return _lazy_import_utils(name)
-    
-    # Lazy-load ALL_LITELLM_RESPONSE_TYPES
-    if name == "ALL_LITELLM_RESPONSE_TYPES":
-        from .utils import (
-            ModelResponse,
-            EmbeddingResponse,
-            ImageResponse,
-            TranscriptionResponse,
-            TextCompletionResponse,
-        )
-        _all_response_types = [
-            ModelResponse,
-            EmbeddingResponse,
-            ImageResponse,
-            TranscriptionResponse,
-            TextCompletionResponse,
-        ]
-        globals()["ALL_LITELLM_RESPONSE_TYPES"] = _all_response_types
-        return _all_response_types
-    
-    # Lazy-load encoding to avoid loading tiktoken at import time
-    if name == "encoding":
-        from litellm.litellm_core_utils.default_encoding import encoding as _encoding
-        globals()["encoding"] = _encoding
-        return _encoding
-    
-    # Lazy-load HTTP handlers to reduce import-time memory cost
+# Lazy import for HTTP handlers to reduce import-time memory cost
+def _lazy_import_http_handlers(name: str) -> Any:
+    """Lazy import for HTTP handler instances and classes - imports only what's needed per name."""
+    # Handle HTTP handler instances
     if name == "module_level_aclient":
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-        _module_level_aclient = AsyncHTTPHandler(
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as _AsyncHTTPHandler
+        _module_level_aclient = _AsyncHTTPHandler(
             timeout=request_timeout, client_alias="module level aclient"
         )
         globals()["module_level_aclient"] = _module_level_aclient
         return _module_level_aclient
     
     if name == "module_level_client":
-        from litellm.llms.custom_httpx.http_handler import HTTPHandler
-        _module_level_client = HTTPHandler(timeout=request_timeout)
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler as _HTTPHandler
+        _module_level_client = _HTTPHandler(timeout=request_timeout)
         globals()["module_level_client"] = _module_level_client
         return _module_level_client
     
-    # Lazy-load HTTP handler classes for backward compatibility
+    # Handle HTTP handler classes for backward compatibility
     if name == "AsyncHTTPHandler":
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as _AsyncHTTPHandler
         globals()["AsyncHTTPHandler"] = _AsyncHTTPHandler
@@ -1648,7 +1700,12 @@ def __getattr__(name: str) -> Any:
         globals()["HTTPHandler"] = _HTTPHandler
         return _HTTPHandler
     
-    # Lazy-load caching classes to reduce import-time memory cost
+    raise AttributeError(f"HTTP handler lazy import: unknown attribute {name!r}")
+
+
+# Lazy import for caching classes to reduce import-time memory cost
+def _lazy_import_caching(name: str) -> Any:
+    """Lazy import for caching classes - imports only the requested class by name."""
     if name == "Cache":
         from litellm.caching.caching import Cache as _Cache
         globals()["Cache"] = _Cache
@@ -1669,7 +1726,47 @@ def __getattr__(name: str) -> Any:
         globals()["InMemoryCache"] = _InMemoryCache
         return _InMemoryCache
     
+    raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import for cost_calculator, litellm_logging, and utils functions."""
+    if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
+        return _lazy_import_cost_calculator(name)
+    
+    if name in {"Logging", "modify_integration"}:
+        return _lazy_import_litellm_logging(name)
+    
+    # Lazy load utils functions
+    _utils_names = {
+        "exception_type", "get_optional_params", "get_response_string", "token_counter",
+        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+        "supports_web_search", "supports_url_context", "supports_response_schema",
+        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+        "supports_audio_output", "supports_system_messages", "supports_reasoning",
+        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+        "register_prompt_template", "validate_environment", "check_valid_key",
+        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+        "ModelResponseListIterator", "get_valid_models",
+    }
+    if name in _utils_names:
+        return _lazy_import_utils(name)
+    
+    # Lazy-load encoding to avoid loading tiktoken at import time
+    if name == "encoding":
+        from litellm.litellm_core_utils.default_encoding import encoding as _encoding
+        globals()["encoding"] = _encoding
+        return _encoding
+    
+    # Lazy-load HTTP handlers to reduce import-time memory cost
+    if name in {"module_level_aclient", "module_level_client", "AsyncHTTPHandler", "HTTPHandler"}:
+        return _lazy_import_http_handlers(name)
+    
+    # Lazy-load caching classes to reduce import-time memory cost
+    if name in {"Cache", "DualCache", "RedisCache", "InMemoryCache"}:
+        return _lazy_import_caching(name)
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-# ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time
