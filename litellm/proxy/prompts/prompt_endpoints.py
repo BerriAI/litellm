@@ -21,8 +21,74 @@ from litellm.types.prompts.init_prompts import (
     PromptTemplateBase,
 )
 
-
 router = APIRouter()
+
+
+async def get_next_version_for_prompt(prisma_client, prompt_id: str) -> int:
+    """
+    Get the next version number for a prompt.
+    
+    Args:
+        prisma_client: Prisma database client
+        prompt_id: Base prompt ID
+    
+    Returns:
+        Next version number (1 if no versions exist, max_version + 1 otherwise)
+    """
+    existing_prompts = await prisma_client.db.litellm_prompttable.find_many(
+        where={"prompt_id": prompt_id}
+    )
+    
+    if existing_prompts:
+        max_version = max(p.version for p in existing_prompts)
+        return max_version + 1
+    else:
+        return 1
+
+
+def create_versioned_prompt_spec(db_prompt) -> PromptSpec:
+    """
+    Helper function to create a PromptSpec with versioned prompt_id from a DB prompt entry.
+    
+    Args:
+        db_prompt: The DB prompt object (from prisma)
+    
+    Returns:
+        PromptSpec with versioned prompt_id (e.g., "chat_prompt.v1")
+    """
+    import json
+
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams
+    
+    prompt_dict = db_prompt.model_dump()
+    base_prompt_id = prompt_dict["prompt_id"]
+    version = prompt_dict.get("version", 1)
+    
+    # Parse litellm_params
+    litellm_params_data = prompt_dict.get("litellm_params")
+    if isinstance(litellm_params_data, str):
+        litellm_params_data = json.loads(litellm_params_data)
+    litellm_params = PromptLiteLLMParams(**litellm_params_data)
+    
+    # Parse prompt_info
+    prompt_info_data = prompt_dict.get("prompt_info")
+    if prompt_info_data:
+        if isinstance(prompt_info_data, str):
+            prompt_info_data = json.loads(prompt_info_data)
+        prompt_info = PromptInfo(**prompt_info_data)
+    else:
+        prompt_info = PromptInfo(prompt_type="db")
+    
+    # Create versioned prompt_id
+    versioned_prompt_id = f"{base_prompt_id}.v{version}"
+    
+    return PromptSpec(
+        prompt_id=versioned_prompt_id,
+        litellm_params=litellm_params,
+        prompt_info=prompt_info,
+        created_at=prompt_dict.get("created_at"),
+        updated_at=prompt_dict.get("updated_at"),
+    )
 
 
 class Prompt(BaseModel):
@@ -261,19 +327,16 @@ async def create_prompt(
         )
 
     try:
-        # Create the prompt spec
-        # Check if prompt exists and get current data
-        existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(request.prompt_id)
-        if existing_prompt is not None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Prompt with ID {request.prompt_id} already exists",
-            )
+        # Get next version number
+        new_version = await get_next_version_for_prompt(
+            prisma_client=prisma_client, prompt_id=request.prompt_id
+        )
 
-        # store prompt in db
+        # Store prompt in db with version
         prompt_db_entry = await prisma_client.db.litellm_prompttable.create(
             data={
                 "prompt_id": request.prompt_id,
+                "version": new_version,
                 "litellm_params": request.litellm_params.model_dump_json(),
                 "prompt_info": (
                     request.prompt_info.model_dump_json()
@@ -283,7 +346,8 @@ async def create_prompt(
             }
         )
 
-        prompt_spec = PromptSpec(**prompt_db_entry.model_dump())
+        # Create versioned prompt spec
+        prompt_spec = create_versioned_prompt_spec(db_prompt=prompt_db_entry)
 
         # Initialize the prompt
         initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
@@ -354,45 +418,50 @@ async def update_prompt(
         )
 
     try:
-        # Check if prompt exists
-        existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
-        if existing_prompt is None:
+        # Check if any version exists
+        existing_prompts = await prisma_client.db.litellm_prompttable.find_many(
+            where={"prompt_id": request.prompt_id}
+        )
+        
+        if not existing_prompts:
             raise HTTPException(
-                status_code=404, detail=f"Prompt with ID {prompt_id} not found"
+                status_code=404, detail=f"Prompt with ID {request.prompt_id} not found"
             )
 
-        if existing_prompt.prompt_info.prompt_type == "config":
+        # Check if it's a config prompt
+        base_prompt_id = request.prompt_id
+        existing_in_memory = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(base_prompt_id)
+        if existing_in_memory and existing_in_memory.prompt_info.prompt_type == "config":
             raise HTTPException(
                 status_code=400,
                 detail="Cannot update config prompts.",
             )
 
-        # Create updated prompt spec
-        updated_prompt_spec = PromptSpec(
-            prompt_id=prompt_id,
-            litellm_params=request.litellm_params,
-            prompt_info=request.prompt_info or PromptInfo(prompt_type="db"),
-            created_at=existing_prompt.created_at,
-            updated_at=datetime.now(),
+        # Get next version number (UPDATE creates a new version)
+        new_version = await get_next_version_for_prompt(
+            prisma_client=prisma_client, prompt_id=request.prompt_id
         )
 
-        updated_prompt_db_entry = await prisma_client.db.litellm_prompttable.update(
-            where={"prompt_id": prompt_id},
+        # Store new version in db
+        prompt_db_entry = await prisma_client.db.litellm_prompttable.create(
             data={
-                "litellm_params": updated_prompt_spec.litellm_params.model_dump_json(),
-                "prompt_info": updated_prompt_spec.prompt_info.model_dump_json(),
-            },
+                "prompt_id": request.prompt_id,
+                "version": new_version,
+                "litellm_params": request.litellm_params.model_dump_json(),
+                "prompt_info": (
+                    request.prompt_info.model_dump_json()
+                    if request.prompt_info
+                    else PromptInfo(prompt_type="db").model_dump_json()
+                ),
+            }
         )
 
-        # Remove the old prompt from memory
-        del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
-        if prompt_id in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
-            del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[prompt_id]
+        # Create versioned prompt spec
+        prompt_spec = create_versioned_prompt_spec(db_prompt=prompt_db_entry)
 
-        # Initialize the updated prompt
+        # Initialize the new version
         initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
-            prompt=PromptSpec(**updated_prompt_db_entry.model_dump()),
-            config_file_path=None,
+            prompt=prompt_spec, config_file_path=None
         )
 
         if initialized_prompt is None:

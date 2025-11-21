@@ -86,7 +86,7 @@ export const provider_map: Record<string, string> = {
   Infinity: "infinity",
 };
 
-const asset_logos_folder = "/ui/assets/logos/";
+const asset_logos_folder = "../ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
   [Providers.AIML]: `${asset_logos_folder}aiml_api.svg`,
@@ -176,7 +176,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
   } else if (selectedProvider == Providers.Azure_AI_Studio) {
     return "azure_ai/command-r-plus";
   } else if (selectedProvider == Providers.Azure) {
-    return "azure/my-deployment";
+    return "my-deployment";
   } else if (selectedProvider == Providers.Oracle) {
     return "oci/xai.grok-4";
   } else if (selectedProvider == Providers.Snowflake) {

@@ -768,6 +768,52 @@ def test_anthropic_map_openai_params_tools_and_json_schema():
     assert "Question" in json.dumps(mapped_params)
 
 
+def test_anthropic_map_openai_params_tools_with_defs():
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "create_user",
+                        "description": "Create a user from provided profile data.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user": {"$ref": "#/$defs/User"},
+                            },
+                            "required": ["user"],
+                            "$defs": {
+                                "User": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "email": {"type": "string"},
+                                    },
+                                    "required": ["name", "email"],
+                                }
+                            },
+                        },
+                    },
+                }
+            ]
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-3-5-sonnet-20240620",
+        drop_params=False,
+    )
+
+    tool = mapped_params["tools"][0]
+    assert tool["input_schema"]["properties"]["user"]["$ref"] == "#/$defs/User"
+    assert (
+        tool["input_schema"]["$defs"]["User"]["properties"]["name"]["type"] == "string"
+    )
+
+
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
 
@@ -1645,3 +1691,78 @@ def test_anthropic_via_responses_api():
 
     print(f"✓ All {len(events_seen)} events matched expected structure")
     print(f"✓ Received {text_delta_count} text delta chunks")
+
+def test_anthropic_strict_parameter_passthrough():
+    """Test that the strict parameter in tool parameters is passed through to Anthropic input_schema"""
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather information",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {"type": "string"},
+                            },
+                            "required": ["location"],
+                            "strict": True,
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    # Verify the strict parameter is in the mapped tool's input_schema
+    assert "tools" in mapped_params
+    assert len(mapped_params["tools"]) == 1
+    tool = mapped_params["tools"][0]
+    assert "input_schema" in tool
+    assert tool["input_schema"]["strict"] is True
+
+def test_anthropic_strict_not_present():
+    """Test that the strict parameter in tool parameters is passed through to Anthropic input_schema"""
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather information",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {"type": "string"},
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    # Verify the strict parameter does not exist if it is not passed in
+    assert "tools" in mapped_params
+    assert len(mapped_params["tools"]) == 1
+    tool = mapped_params["tools"][0]
+    assert "input_schema" in tool
+    assert "strict" not in tool["input_schema"]

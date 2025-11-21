@@ -110,7 +110,7 @@ class ExpectNoException(Exception):
         # "latency-based-routing",
     ],
 )
-def test_rate_limit(
+def test_async_rate_limit(
     router_factory, num_try_send, num_allowed_send, sync_mode, routing_strategy
 ):
     """

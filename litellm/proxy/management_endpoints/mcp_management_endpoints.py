@@ -49,6 +49,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
+        MakeMCPServersPublicRequest,
         NewMCPServerRequest,
         SpecialMCPServerName,
         UpdateMCPServerRequest,
@@ -57,6 +58,7 @@ if MCP_AVAILABLE:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+    from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
@@ -292,13 +294,23 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
+
         # Use server manager to get all servers with health and team data
         mcp_servers = (
             await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=user_api_key_dict
             )
         )
-        return _redact_mcp_credentials_list(mcp_servers)
+        redacted_mcp_servers = _redact_mcp_credentials_list(mcp_servers)
+
+        # augment the mcp servers with public status
+        if litellm.public_mcp_servers is not None:
+            for server in redacted_mcp_servers:
+                if server.server_id in litellm.public_mcp_servers:
+                    if server.mcp_info is None:
+                        server.mcp_info = {}
+                    server.mcp_info["is_public"] = True
+        return redacted_mcp_servers
 
     @router.get(
         "/server/{server_id}",
@@ -585,3 +597,78 @@ if MCP_AVAILABLE:
             pass
 
         return _redact_mcp_credentials(mcp_server_record_updated)
+
+    @router.post(
+        "/make_public",
+        description="Allows making MCP servers public for AI Hub",
+        dependencies=[Depends(user_api_key_auth)],
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def make_mcp_servers_public(
+        request: MakeMCPServersPublicRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Make MCP servers public for AI Hub
+        """
+        try:
+            # Update the public model groups
+            import litellm
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+            from litellm.proxy.proxy_server import proxy_config
+
+            # Load existing config
+            config = await proxy_config.get_config()
+            # Check if user has admin permissions
+            if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Only proxy admins can update public mcp servers. Your role={}".format(
+                            user_api_key_dict.user_role
+                        )
+                    },
+                )
+
+            if litellm.public_mcp_servers is None:
+                litellm.public_mcp_servers = []
+
+            for server_id in request.mcp_server_ids:
+                server = global_mcp_server_manager.get_mcp_server_by_id(
+                    server_id=server_id
+                )
+                if server is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"MCP Server with ID {server_id} not found",
+                    )
+
+            litellm.public_mcp_servers = request.mcp_server_ids
+
+            # Update config with new settings
+            if "litellm_settings" not in config or config["litellm_settings"] is None:
+                config["litellm_settings"] = {}
+
+            config["litellm_settings"][
+                "public_mcp_servers"
+            ] = litellm.public_mcp_servers
+
+            # Save the updated config
+            await proxy_config.save_config(new_config=config)
+
+            verbose_proxy_logger.debug(
+                f"Updated public mcp servers to: {litellm.public_mcp_servers} by user: {user_api_key_dict.user_id}"
+            )
+
+            return {
+                "message": "Successfully updated public mcp servers",
+                "public_mcp_servers": litellm.public_mcp_servers,
+                "updated_by": user_api_key_dict.user_id,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error making agent public: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
