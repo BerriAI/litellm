@@ -2728,7 +2728,7 @@ class LiteLLMFineTuningJob(FineTuningJob):
 
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
-    usage: Optional[Usage] = None
+    usage: Optional[Usage] = None  # type: ignore[assignment]
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator

@@ -1,7 +1,6 @@
+import { Drawer, List, Skeleton, Tag, Typography } from "antd";
 import React, { useEffect, useState } from "react";
-import { Drawer, List, Tag, Typography, Skeleton, Button } from "antd";
 import { getPromptVersions, PromptSpec } from "../../networking";
-import NotificationsManager from "../../molecules/notifications_manager";
 
 const { Text } = Typography;
 
@@ -80,9 +79,7 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
       {loading ? (
         <Skeleton active paragraph={{ rows: 4 }} />
       ) : versions.length === 0 ? (
-        <div className="text-center py-8 text-gray-500">
-          No version history available.
-        </div>
+        <div className="text-center py-8 text-gray-500">No version history available.</div>
       ) : (
         <List
           dataSource={versions}
@@ -107,9 +104,7 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
               <div
                 key={`${item.prompt_id}-v${item.version || itemVersionNum}`}
                 className={`mb-4 p-4 rounded-lg border cursor-pointer transition-all hover:shadow-md ${
-                  isSelected
-                    ? "border-blue-500 bg-blue-50"
-                    : "border-gray-200 bg-white hover:border-blue-300"
+                  isSelected ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-white hover:border-blue-300"
                 }`}
                 onClick={() => onSelectVersion?.(item)}
               >
@@ -126,11 +121,9 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
                     </Tag>
                   )}
                 </div>
-                
+
                 <div className="flex flex-col gap-1">
-                  <Text className="text-sm text-gray-600 font-medium">
-                    {formatDate(item.created_at)}
-                  </Text>
+                  <Text className="text-sm text-gray-600 font-medium">{formatDate(item.created_at)}</Text>
                   <Text type="secondary" className="text-xs">
                     {item.prompt_info?.prompt_type === "db" ? "Saved to Database" : "Config Prompt"}
                   </Text>
@@ -145,4 +138,3 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
 };
 
 export default VersionHistorySidePanel;
-

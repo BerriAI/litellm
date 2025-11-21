@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import ToolModal from "../tool_modal";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { createPromptCall, updatePromptCall } from "../../networking";
@@ -25,20 +25,20 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
       }
     }
     return {
-    name: "New prompt",
-    model: "gpt-4o",
-    config: {
-      temperature: 1,
-      max_tokens: 1000,
-    },
-    tools: [],
-    developerMessage: "",
-    messages: [
-      {
-        role: "user",
-        content: "Enter task specifics. Use {{template_variables}} for dynamic inputs",
+      name: "New prompt",
+      model: "gpt-4o",
+      config: {
+        temperature: 1,
+        max_tokens: 1000,
       },
-    ],
+      tools: [],
+      developerMessage: "",
+      messages: [
+        {
+          role: "user",
+          content: "Enter task specifics. Use {{template_variables}} for dynamic inputs",
+        },
+      ],
     };
   };
 
@@ -215,8 +215,8 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         await updatePromptCall(accessToken, initialPromptData.prompt_spec.prompt_id, promptData);
         NotificationsManager.success("Prompt updated successfully!");
       } else {
-      await createPromptCall(accessToken, promptData);
-      NotificationsManager.success("Prompt created successfully!");
+        await createPromptCall(accessToken, promptData);
+        NotificationsManager.success("Prompt created successfully!");
       }
       onSuccess();
       onClose();
@@ -301,9 +301,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
               <div className="ml-auto inline-flex items-center bg-gray-200 rounded-full p-0.5">
                 <button
                   className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-                    viewMode === "pretty"
-                      ? "bg-white text-gray-900 shadow-sm"
-                      : "text-gray-600"
+                    viewMode === "pretty" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"
                   }`}
                   onClick={() => setViewMode("pretty")}
                 >
@@ -311,9 +309,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                 </button>
                 <button
                   className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-                    viewMode === "dotprompt"
-                      ? "bg-white text-gray-900 shadow-sm"
-                      : "text-gray-600"
+                    viewMode === "dotprompt" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"
                   }`}
                   onClick={() => setViewMode("dotprompt")}
                 >
@@ -389,4 +385,3 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 };
 
 export default PromptEditorView;
-

@@ -218,7 +218,7 @@ const handleError = async (errorData: string | any) => {
   if (currentTime - lastErrorTime > 60000) {
     // 60000 milliseconds = 60 seconds
     // Convert errorData to string if it isn't already
-    const errorString = typeof errorData === 'string' ? errorData : JSON.stringify(errorData);
+    const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
     if (errorString.includes("Authentication Error - Expired Key")) {
       NotificationsManager.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
@@ -239,7 +239,7 @@ export const getProviderCreateMetadata = async (): Promise<ProviderCreateInfo[]>
    * Fetch provider credential field metadata from the proxy's public endpoint.
    * This is used by the UI to dynamically render provider-specific credential fields.
    */
-  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/public/providers/fields` : `/public/providers/fields`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/providers/fields` : `/public/providers/fields`;
   const response = await fetch(url, {
     method: "GET",
   });
@@ -296,7 +296,7 @@ export const getUiConfig = async () => {
 };
 
 export const getPublicModelHubInfo = async () => {
-  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/public/model_hub/info` : `/public/model_hub/info`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub/info` : `/public/model_hub/info`;
   const response = await fetch(url);
   const jsonData: PublicModelHubInfo = await response.json();
   return jsonData;
@@ -6750,7 +6750,6 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
   }
 };
 
-
 export const getAgentsList = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
@@ -6867,7 +6866,6 @@ export const patchAgentCall = async (
     throw error;
   }
 };
-
 
 export const updateGuardrailCall = async (
   accessToken: string,
