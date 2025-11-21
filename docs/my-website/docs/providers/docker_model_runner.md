@@ -271,42 +271,6 @@ curl http://localhost:4000/v1/chat/completions \
 
 For more detailed information on using the LiteLLM Proxy, see the [LiteLLM Proxy documentation](../providers/litellm_proxy).
 
-## Supported OpenAI Parameters
-
-Docker Model Runner is OpenAI-compatible and supports standard parameters:
-
-- `temperature`
-- `max_tokens`
-- `top_p`
-- `frequency_penalty`
-- `presence_penalty`
-- `stop`
-- `n`
-- `stream`
-- `tools`
-- `tool_choice`
-- `response_format`
-- `seed`
-- `user`
-- `logit_bias`
-- `logprobs`
-- `top_logprobs`
-
-Example with parameters:
-
-```python showLineNumbers title="Docker Model Runner with Parameters"
-response = completion(
-    model="docker_model_runner/llama-3.1",
-    messages=[{"content": "Explain quantum computing", "role": "user"}],
-    temperature=0.7,
-    max_tokens=500,
-    top_p=0.9,
-    frequency_penalty=0.2,
-    presence_penalty=0.1
-)
-```
-
-
 ## API Reference
 
 For detailed API information, see the [Docker Model Runner API Reference](https://docs.docker.com/ai/model-runner/api-reference/).
