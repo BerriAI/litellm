@@ -1,7 +1,7 @@
 import React from "react";
 import { Button as TremorButton } from "@tremor/react";
 import { Input } from "antd";
-import { ArrowLeftIcon, SaveIcon } from "lucide-react";
+import { ArrowLeftIcon, SaveIcon, ClockIcon } from "lucide-react";
 
 interface PromptEditorHeaderProps {
   promptName: string;
@@ -10,6 +10,7 @@ interface PromptEditorHeaderProps {
   onSave: () => void;
   isSaving: boolean;
   editMode?: boolean;
+  onShowHistory?: () => void;
 }
 
 const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
@@ -19,6 +20,7 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
   onSave,
   isSaving,
   editMode = false,
+  onShowHistory,
 }) => {
   return (
     <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
@@ -36,6 +38,15 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
         <span className="text-xs text-gray-400">Unsaved changes</span>
       </div>
       <div className="flex items-center space-x-2">
+        {editMode && onShowHistory && (
+          <TremorButton
+            icon={ClockIcon}
+            variant="secondary"
+            onClick={onShowHistory}
+          >
+            History
+          </TremorButton>
+        )}
         <TremorButton
           icon={SaveIcon}
           onClick={onSave}

@@ -141,16 +141,16 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
             >
               Edit Prompt
             </TremorButton>
-            {isAdmin && (
-              <TremorButton
-                icon={TrashIcon}
-                variant="secondary"
-                onClick={handleDeleteClick}
-                className="flex items-center"
-              >
-                Delete Prompt
-              </TremorButton>
-            )}
+          {isAdmin && (
+            <TremorButton
+              icon={TrashIcon}
+              variant="secondary"
+              onClick={handleDeleteClick}
+              className="flex items-center"
+            >
+              Delete Prompt
+            </TremorButton>
+          )}
           </div>
         </div>
       </div>
