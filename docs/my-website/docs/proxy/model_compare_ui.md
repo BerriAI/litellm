@@ -146,7 +146,7 @@ If cost tracking is enabled in your LiteLLM configuration, you'll see:
 - Cost breakdown by input/output tokens
 - Comparison of costs across models
 
-<Image img={require('../../img/comparison_metrics.png')} />
+<Image img={require('../../img/ui_model_compare_cost_metrics.png')} />
 
 ## Use Cases
 
