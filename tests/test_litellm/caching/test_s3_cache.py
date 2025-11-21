@@ -266,13 +266,18 @@ async def test_s3_cache_async_set_cache_pipeline(mock_s3_dependencies):
     # Should have called put_object 3 times
     assert cache.s3_client.put_object.call_count == 3
 
-    # Verify each call
+    # Verify each call (order may vary due to concurrent execution)
     calls = cache.s3_client.put_object.call_args_list
-    for i, (key, value) in enumerate(cache_list):
-        call_args = calls[i][1]
+    expected_items = {key: json.dumps(value) for key, value in cache_list}
+    actual_items = {}
+    
+    for call in calls:
+        call_args = call[1]
         assert call_args["Bucket"] == "test-bucket"
-        assert call_args["Key"] == key
-        assert call_args["Body"] == json.dumps(value)
+        actual_items[call_args["Key"]] = call_args["Body"]
+    
+    # Verify all expected keys and values are present (order doesn't matter)
+    assert actual_items == expected_items
 
 
 @pytest.mark.asyncio
@@ -294,11 +299,18 @@ async def test_s3_cache_concurrent_async_operations(mock_s3_dependencies):
     assert cache.s3_client.put_object.call_count == 5
 
     # Verify each call had correct parameters
+    # Collect all keys from calls (order may vary due to concurrency)
     calls = cache.s3_client.put_object.call_args_list
-    for i, call in enumerate(calls):
+    actual_keys = set()
+    expected_keys = {f"concurrent_key_{i}" for i in range(5)}
+    
+    for call in calls:
         call_args = call[1]
         assert call_args["Bucket"] == "test-bucket"
-        assert f"concurrent_key_{i}" == call_args["Key"]
+        actual_keys.add(call_args["Key"])
+    
+    # Verify all expected keys are present (order doesn't matter for concurrent operations)
+    assert actual_keys == expected_keys
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ import TabItem from '@theme/TabItem';
 
 Use this if you want to write code to run a custom guardrail
 
-## Quick Start 
+## Quick Start
 
 ### 1. Write a `CustomGuardrail` Class
 
@@ -36,7 +36,7 @@ class myCustomGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         text: str, # IMPORTANT: This is the text to check against your guardrail rules. It's extracted from the request or response across all LLM call types.
-        language: Optional[str] = None, # ignore 
+        language: Optional[str] = None, # ignore
         entities: Optional[List[PiiEntityType]] = None, # ignore
         request_data: Optional[dict] = None, # ignore
     ) -> str:
@@ -46,27 +46,27 @@ class myCustomGuardrail(CustomGuardrail):
         Return the text (optionally modified) to allow it through.
         """
         result = await self._check_with_api(text, request_data)
-        
+
         if result.get("action") == "BLOCK":
             raise Exception(f"Content blocked: {result.get('reason', 'Policy violation')}")
-        
+
         return text
 
     async def _check_with_api(self, text: str, request_data: Optional[dict]) -> dict:
         async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
-        
+
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
-        
+
         response = await async_client.post(
             f"{self.api_base}/check",
             headers=headers,
             json={"text": text},
             timeout=5,
         )
-        
+
         response.raise_for_status()
         return response.json()
 ```
@@ -103,8 +103,8 @@ model_list:
 guardrails:
   - guardrail_name: "my-custom-guardrail"
     litellm_params:
-      guardrail: custom_guardrail.myCustomGuardrail  # 👈 Key change
-      mode: "during_call"               # runs apply_guardrail method
+      guardrail: custom_guardrail.myCustomGuardrail # 👈 Key change
+      mode: "during_call" # runs apply_guardrail method
       api_key: os.environ/MY_GUARDRAIL_API_KEY
       api_base: https://api.myguardrail.com
 ```
@@ -127,20 +127,20 @@ guardrails:
   - guardrail_name: "custom-pre-guard"
     litellm_params:
       guardrail: custom_guardrail.myCustomGuardrail
-      mode: "pre_call"                  # runs async_pre_call_hook
+      mode: "pre_call" # runs async_pre_call_hook
   - guardrail_name: "custom-during-guard"
     litellm_params:
-      guardrail: custom_guardrail.myCustomGuardrail  
-      mode: "during_call"               # runs async_moderation_hook
+      guardrail: custom_guardrail.myCustomGuardrail
+      mode: "during_call" # runs async_moderation_hook
   - guardrail_name: "custom-post-guard"
     litellm_params:
       guardrail: custom_guardrail.myCustomGuardrail
-      mode: "post_call"                 # runs async_post_call_success_hook
+      mode: "post_call" # runs async_post_call_success_hook
 ```
 
 </details>
 
-### 3. Start LiteLLM Gateway 
+### 3. Start LiteLLM Gateway
 
 <Tabs>
 <TabItem value="docker" label="Docker Run">
@@ -148,7 +148,6 @@ guardrails:
 Mount your `custom_guardrail.py` on the LiteLLM Docker container
 
 This mounts your `custom_guardrail.py` file from your local directory to the `/app` directory in the Docker container, making it accessible to the LiteLLM Gateway.
-
 
 ```shell
 docker run -d \
@@ -167,7 +166,6 @@ docker run -d \
 
 <TabItem value="py" label="litellm pip">
 
-
 ```shell
 litellm --config config.yaml --detailed_debug
 ```
@@ -176,7 +174,7 @@ litellm --config config.yaml --detailed_debug
 
 </Tabs>
 
-### 4. Test it 
+### 4. Test it
 
 **[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
@@ -265,6 +263,36 @@ curl -i  -X POST http://localhost:4000/v1/chat/completions \
 }'
 ```
 
+Expected response after pre-guard
+
+```json
+{
+  "id": "chatcmpl-9zREDkBIG20RJB4pMlyutmi1hXQWc",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "It looks like you've chosen a string of asterisks. This could be a way to censor or hide certain text. However, without more context, I can't provide a specific word or phrase. If there's something specific you'd like me to say or if you need help with a topic, feel free to let me know!",
+        "role": "assistant",
+        "tool_calls": null,
+        "function_call": null
+      }
+    }
+  ],
+  "created": 1724429701,
+  "model": "gpt-4o-2024-05-13",
+  "object": "chat.completion",
+  "system_fingerprint": "fp_3aa7262c27",
+  "usage": {
+    "completion_tokens": 65,
+    "prompt_tokens": 14,
+    "total_tokens": 79
+  },
+  "service_tier": null
+}
+```
+
 </TabItem>
 
 <TabItem label="Successful Call " value = "allowed">
@@ -287,6 +315,8 @@ curl -i http://localhost:4000/v1/chat/completions \
 </Tabs>
 
 #### Test `"custom-during-guard"`
+
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Unsuccessful call" value = "not-allowed">
@@ -344,6 +374,8 @@ curl -i http://localhost:4000/v1/chat/completions \
 </Tabs>
 
 #### Test `"custom-post-guard"`
+
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Unsuccessful call" value = "not-allowed">
@@ -412,7 +444,6 @@ curl -i  -X POST http://localhost:4000/v1/chat/completions \
 ✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 :::
-
 
 Use this to pass additional parameters to the guardrail API call. e.g. things like success threshold
 
@@ -483,6 +514,7 @@ response = client.chat.completions.create(
     }
 )
 ```
+
 </TabItem>
 
 <TabItem value="curl" label="Curl">
@@ -507,15 +539,103 @@ curl 'http://0.0.0.0:4000/chat/completions' \
     ]
 }'
 ```
+
 </TabItem>
 </Tabs>
 
 The `get_guardrail_dynamic_request_body_params` method will return:
+
 ```json
 {
-    "success_threshold": 0.9
+  "success_threshold": 0.9
 }
 ```
+
+---
+
+## ✨ Pass custom HTTP headers to guardrail API
+
+You can pass custom HTTP headers that will be sent to the guardrail API endpoint at runtime by including them in your client request. This allows you to dynamically add headers like authentication tokens, tracking IDs, or override default headers without modifying your configuration.
+
+### How it works
+
+1. Use `get_guardrail_custom_headers` in your guardrail implementation
+
+`get_guardrail_custom_headers` is a method of the `litellm.integrations.custom_guardrail.CustomGuardrail` class that extracts custom headers from the incoming HTTP request.
+
+```python
+from litellm.integrations.custom_guardrail import CustomGuardrail
+
+class myCustomGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        # Get custom headers from request
+        custom_headers = self.get_guardrail_custom_headers(request_data=data)
+        # custom_headers will contain: {"X-Custom-Header": "value", "X-Tracking-ID": "123"}
+
+        # Use custom headers when making API calls
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            **custom_headers  # Merge custom headers
+        }
+        # ... make API call with headers
+        return data
+```
+
+2. Pass headers in your API requests:
+
+Pass a header named `X-LiteLLM-Guardrail-{guardrail_name}` (where `{guardrail_name}` matches your guardrail's name) with a JSON object containing the HTTP headers to send to the guardrail API.
+
+<Tabs>
+<TabItem value="curl" label="cURL">
+
+```bash
+curl -X POST http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-LiteLLM-Guardrail-my-guardrail: {\"X-Custom-Header\": \"custom-value\", \"X-Tracking-ID\": \"track-123\"}" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python
+import openai
+import json
+
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://localhost:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "Hello"}],
+    extra_headers={
+        "X-LiteLLM-Guardrail-my-guardrail": json.dumps({
+            "X-Custom-Header": "custom-value",
+            "X-Tracking-ID": "track-123"
+        })
+    }
+)
+```
+
+</TabItem>
+</Tabs>
+
+### Notes
+
+- Header names are case-insensitive (HTTP standard)
+- The header value must be valid JSON
+- Invalid JSON will be ignored and the guardrail will use default headers only
+- All custom headers are merged with default headers and sent to the guardrail API
+- This feature is available for all guardrails that inherit from `CustomGuardrail`
+- Use `extra_body` in request metadata for payload parameters (not HTTP headers)
+
+---
 
 ## Advanced: Individual Event Hooks
 
@@ -523,6 +643,7 @@ Pro: More flexibility
 Con: You need to implement this for each LLM call type (chat completions, text completions, embeddings, image generation, moderation, audio transcription, pass through endpoint, rerank, etc. )
 
 For more fine-grained control over when and how your guardrail runs, you can implement individual event hooks. This gives you flexibility to:
+
 - Modify inputs before the LLM call
 - Run checks in parallel with the LLM call (lower latency)
 - Validate or modify outputs after the LLM call
@@ -650,14 +771,13 @@ class myCustomGuardrail(CustomGuardrail):
 
 ## **CustomGuardrail methods**
 
-| Component | Description | Optional | Checked Data | Can Modify Input | Can Modify Output | Can Fail Call |
-|-----------|-------------|----------|--------------|------------------|-------------------|----------------|
-| `apply_guardrail` | Simple method to check and optionally modify text | ✅ | INPUT or OUTPUT | ✅ | ✅ | ✅ |
-| `async_pre_call_hook` | A hook that runs before the LLM API call | ✅ | INPUT | ✅ | ❌ | ✅ |
-| `async_moderation_hook` | A hook that runs during the LLM API call| ✅ | INPUT | ❌ | ❌ | ✅ |
-| `async_post_call_success_hook` | A hook that runs after a successful LLM API call| ✅ | INPUT, OUTPUT | ❌ | ✅ | ✅ |
-| `async_post_call_streaming_iterator_hook` | A hook that processes streaming responses | ✅ | OUTPUT | ❌ | ✅ | ✅ |
-
+| Component                                 | Description                                       | Optional | Checked Data    | Can Modify Input | Can Modify Output | Can Fail Call |
+| ----------------------------------------- | ------------------------------------------------- | -------- | --------------- | ---------------- | ----------------- | ------------- |
+| `apply_guardrail`                         | Simple method to check and optionally modify text | ✅       | INPUT or OUTPUT | ✅               | ✅                | ✅            |
+| `async_pre_call_hook`                     | A hook that runs before the LLM API call          | ✅       | INPUT           | ✅               | ❌                | ✅            |
+| `async_moderation_hook`                   | A hook that runs during the LLM API call          | ✅       | INPUT           | ❌               | ❌                | ✅            |
+| `async_post_call_success_hook`            | A hook that runs after a successful LLM API call  | ✅       | INPUT, OUTPUT   | ❌               | ✅                | ✅            |
+| `async_post_call_streaming_iterator_hook` | A hook that processes streaming responses         | ✅       | OUTPUT          | ❌               | ✅                | ✅            |
 
 ## Frequently Asked Questions
 
@@ -669,7 +789,7 @@ class myCustomGuardrail(CustomGuardrail):
 
 **A.** The main one you should care about is 'text' - this is what you'll want to send to your api for verification - See implementation [here](https://github.com/BerriAI/litellm/blob/0292b84dc47473ddeff29bd5a86f529bc523034b/litellm/llms/anthropic/chat/guardrail_translation/handler.py#L102)
 
-**Q. Is this function agnostic to the LLM provider? Meaning does it pass the same values for OpenAI and Anthropic for example?
+**Q. Is this function agnostic to the LLM provider? Meaning does it pass the same values for OpenAI and Anthropic for example?**
 
 **A.** Yes
 
