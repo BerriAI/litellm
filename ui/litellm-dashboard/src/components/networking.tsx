@@ -5,6 +5,36 @@ export const formatDate = (date: Date) => {
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 };
+
+export const getCallbackConfigsCall = async (accessToken: string) => {
+  /**
+   * Get callback configuration metadata (logos, params, etc.)
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/callbacks/configs` : `/callbacks/configs`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get callbacks:", error);
+    throw error;
+  }
+};
 /**
  * Helper file for calls being made to proxy
  */
@@ -182,11 +212,13 @@ export interface CredentialsResponse {
 
 let lastErrorTime = 0;
 
-const handleError = async (errorData: string) => {
+const handleError = async (errorData: string | any) => {
   const currentTime = Date.now();
   if (currentTime - lastErrorTime > 60000) {
     // 60000 milliseconds = 60 seconds
-    if (errorData.includes("Authentication Error - Expired Key")) {
+    // Convert errorData to string if it isn't already
+    const errorString = typeof errorData === 'string' ? errorData : JSON.stringify(errorData);
+    if (errorString.includes("Authentication Error - Expired Key")) {
       NotificationsManager.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
       clearTokenCookies();
@@ -1923,6 +1955,28 @@ export const modelInfoV1Call = async (accessToken: string, modelId: string) => {
 
 export const modelHubPublicModelsCall = async () => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
+};
+
+export const agentHubPublicModelsCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/agent_hub` : `/public/agent_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
+};
+
+export const mcpHubPublicServersCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/mcp_hub` : `/public/mcp_hub`;
   const response = await fetch(url, {
     method: "GET",
     headers: {
@@ -5328,6 +5382,36 @@ export const patchPromptCall = async (accessToken: string, promptId: string, pro
   }
 };
 
+export const createAgentCall = async (accessToken: string, agentData: any) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...agentData,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Create agent response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create agent:", error);
+    throw error;
+  }
+};
+
 export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails` : `/guardrails`;
@@ -6437,6 +6521,120 @@ export const resetEmailEventSettings = async (accessToken: string) => {
 export { type UserInfo } from "./view_users/types"; // Re-export UserInfo
 export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
 
+export const deleteAgentCall = async (accessToken: string, agentId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}` : `/v1/agents/${agentId}`;
+
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Delete agent response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete agent:", error);
+    throw error;
+  }
+};
+
+export const makeAgentPublicCall = async (accessToken: string, agentId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}/make_public` : `/v1/agents/${agentId}/make_public`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Make agent public response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to make agent public:", error);
+    throw error;
+  }
+};
+
+export const makeAgentsPublicCall = async (accessToken: string, agentIds: string[]) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/make_public` : `/v1/agents/make_public`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent_ids: agentIds,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Make agents public response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to make agents public:", error);
+    throw error;
+  }
+};
+
+export const makeMCPPublicCall = async (accessToken: string, mcpServerIds: string[]) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/make_public` : `/v1/mcp/make_public`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        mcp_server_ids: mcpServerIds,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Make agents public response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to make agents public:", error);
+    throw error;
+  }
+};
+
 export const deleteGuardrailCall = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
@@ -6522,6 +6720,61 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
   }
 };
 
+
+export const getAgentsList = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get agents list");
+    }
+
+    const data = await response.json();
+    console.log("Agents list response:", data);
+    return { agents: data };
+  } catch (error) {
+    console.error("Failed to get agents list:", error);
+    throw error;
+  }
+};
+
+export const getAgentInfo = async (accessToken: string, agentId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}` : `/v1/agents/${agentId}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get agent info");
+    }
+
+    const data = await response.json();
+    console.log("Agent info response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get agent info:", error);
+    throw error;
+  }
+};
+
 export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
@@ -6548,6 +6801,43 @@ export const getGuardrailInfo = async (accessToken: string, guardrailId: string)
     throw error;
   }
 };
+
+export const patchAgentCall = async (
+  accessToken: string,
+  agentId: string,
+  updateData: {
+    agent_name?: string;
+    litellm_params?: Record<string, any>;
+    agent_card_params?: Record<string, any>;
+  },
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}` : `/v1/agents/${agentId}`;
+
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(updateData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to patch agent");
+    }
+
+    const data = await response.json();
+    console.log("Patch agent response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update guardrail:", error);
+    throw error;
+  }
+};
+
 
 export const updateGuardrailCall = async (
   accessToken: string,

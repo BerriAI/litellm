@@ -1,9 +1,8 @@
 import { PencilAltIcon, PlayIcon, TrashIcon } from "@heroicons/react/outline";
 import { Button, Icon } from "@tremor/react";
 import type { TableProps } from "antd";
-import { Table } from "antd";
+import { Table, Tooltip } from "antd";
 import Title from "antd/es/typography/Title";
-import { PlusCircle } from "lucide-react";
 import React from "react";
 import { AlertingObject } from "./types";
 
@@ -80,31 +79,31 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       align: "right",
       render: (_: unknown, record: CallbackRow) => (
         <div className="flex justify-end gap-2">
-          <span>
+          <Tooltip title="Test Callback">
             <Icon
               icon={PlayIcon}
               size="sm"
               className="cursor-pointer text-indigo-600 hover:text-indigo-700"
               onClick={() => onTest(record)}
             />
-          </span>
+          </Tooltip>
 
-          <span>
+          <Tooltip title="Edit Callback">
             <Icon
               icon={PencilAltIcon}
               size="sm"
               className="cursor-pointer text-indigo-600 hover:text-indigo-700"
               onClick={() => onEdit(record)}
             />
-          </span>
-          <span>
+          </Tooltip>
+          <Tooltip title="Delete Callback">
             <Icon
               icon={TrashIcon}
               size="sm"
               className="cursor-pointer text-indigo-600 hover:text-red-600"
               onClick={() => onDelete(record)}
             />
-          </span>
+          </Tooltip>
         </div>
       ),
       width: 240,
@@ -124,16 +123,9 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
           <div className="flex flex-col items-center justify-center p-8 bg-gray-50 border border-gray-200 rounded-lg">
             <div className="text-center">
               <h3 className="text-lg font-medium text-gray-700 mb-2">No callbacks configured</h3>
-              <p className="text-gray-500 mb-4">Add your first callback to start logging data to external services.</p>
-              <button
-                onClick={onAdd}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] text-white rounded-md hover:bg-[#5558eb] transition-colors"
-              >
-                <PlusCircle size={18} />
-                Add Callback
-              </button>
+              <p className="text-gray-500">Add your first callback to start logging data to external services.</p>
             </div>
-          </div> /* Callbacks list */
+          </div>
         ) : (
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
             <Table

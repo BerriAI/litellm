@@ -300,21 +300,28 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       const canEditModel = userRole === "Admin" || model.model_info?.created_by === userID;
+      const isConfigModel = !model.model_info?.db_model;
       return (
         <div className="flex items-center justify-end gap-2 pr-4">
-          <Tooltip title="Delete model">
-            <Icon
-              icon={TrashIcon}
-              size="sm"
-              onClick={() => {
-                if (canEditModel) {
-                  setSelectedModelId(model.model_info.id);
-                  setEditModel(false);
-                }
-              }}
-              className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:text-red-600"}
-            />
-          </Tooltip>
+          {isConfigModel ? (
+            <Tooltip title="Config model cannot be deleted on the dashboard. Please delete it from the config file.">
+              <Icon icon={TrashIcon} size="sm" className="opacity-50 cursor-not-allowed" />
+            </Tooltip>
+          ) : (
+            <Tooltip title="Delete model">
+              <Icon
+                icon={TrashIcon}
+                size="sm"
+                onClick={() => {
+                  if (canEditModel) {
+                    setSelectedModelId(model.model_info.id);
+                    setEditModel(false);
+                  }
+                }}
+                className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:text-red-600"}
+              />
+            </Tooltip>
+          )}
         </div>
       );
     },

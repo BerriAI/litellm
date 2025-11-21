@@ -765,9 +765,10 @@ class OCIChatConfig(BaseConfig):
             )
 
         if oci_serving_mode == "DEDICATED":
+            oci_endpoint_id = optional_params.get("oci_endpoint_id", model)
             servingMode = OCIServingMode(
                 servingType="DEDICATED",
-                endpointId=model,
+                endpointId=oci_endpoint_id,
             )
         else:
             servingMode = OCIServingMode(

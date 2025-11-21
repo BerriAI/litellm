@@ -94,6 +94,10 @@ LiteLLM supports MCP for agent workflows:
 - Support for external MCP servers (Zapier, Jira, Linear, etc.)
 - See `litellm/experimental_mcp_client/` and `litellm/proxy/_experimental/mcp_server/`
 
+## RUNNING SCRIPTS
+
+Use `poetry run python script.py` to run Python scripts in the project environment (for non-test files).
+
 ## TESTING CONSIDERATIONS
 
 1. **Provider Tests**: Test against real provider APIs when possible

@@ -54,8 +54,6 @@ async def test_mcp_cost_tracking():
             inputSchema={"type": "object", "properties": {"test": {"type": "string"}}}
         )
     ])
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
     
     # Mock the MCPClient constructor
     def mock_client_constructor(*args, **kwargs):
@@ -118,7 +116,6 @@ async def test_mcp_cost_tracking():
             assert response_list[0].text == "Test response"
             
             # Verify client methods were called
-            mock_client.__aenter__.assert_called()
             mock_client.call_tool.assert_called_once()
 
             ######
@@ -153,9 +150,6 @@ async def test_mcp_cost_tracking_per_tool():
             inputSchema={"type": "object", "properties": {"data": {"type": "string"}}}
         )
     ])
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.disconnect = AsyncMock(return_value=None)
     
     # Mock the MCPClient constructor
     def mock_client_constructor(*args, **kwargs):
@@ -297,9 +291,6 @@ async def test_mcp_tool_call_hook():
             inputSchema={"type": "object", "properties": {"test": {"type": "string"}}}
         )
     ])
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.disconnect = AsyncMock(return_value=None)
     
     # Mock the MCPClient constructor
     def mock_client_constructor(*args, **kwargs):

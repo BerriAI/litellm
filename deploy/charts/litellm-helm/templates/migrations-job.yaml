@@ -22,6 +22,9 @@ spec:
     metadata:
       labels:
         {{- include "litellm.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         {{- with .Values.migrationJob.annotations }}
         {{- toYaml . | nindent 8 }}

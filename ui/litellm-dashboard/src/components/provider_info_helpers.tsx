@@ -176,7 +176,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
   } else if (selectedProvider == Providers.Azure_AI_Studio) {
     return "azure_ai/command-r-plus";
   } else if (selectedProvider == Providers.Azure) {
-    return "azure/my-deployment";
+    return "my-deployment";
   } else if (selectedProvider == Providers.Oracle) {
     return "oci/xai.grok-4";
   } else if (selectedProvider == Providers.Snowflake) {

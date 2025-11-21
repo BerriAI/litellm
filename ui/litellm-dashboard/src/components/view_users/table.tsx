@@ -39,7 +39,7 @@ interface UserDataTableProps {
   userRole: string | null;
   possibleUIRoles: Record<string, Record<string, string>> | null;
   handleEdit: (user: UserInfo) => void;
-  handleDelete: (userId: string) => void;
+  handleDelete: (user: UserInfo) => void;
   handleResetPassword: (userId: string) => void;
   selectedUsers?: UserInfo[];
   onSelectionChange?: (selectedUsers: UserInfo[]) => void;

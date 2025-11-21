@@ -6,6 +6,7 @@ import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } fro
 import PromptTable from "./prompts/prompt_table";
 import PromptInfoView from "./prompts/prompt_info";
 import AddPromptForm from "./prompts/add_prompt_form";
+import PromptEditorView from "./prompts/prompt_editor_view";
 import NotificationsManager from "./molecules/notifications_manager";
 import { isAdminRole } from "@/utils/roles";
 
@@ -19,6 +20,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+  const [showEditorView, setShowEditorView] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
 
@@ -53,11 +55,22 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     if (selectedPromptId) {
       setSelectedPromptId(null);
     }
+    setShowEditorView(true);
+  };
+
+  const handleAddPromptFromFile = () => {
+    if (selectedPromptId) {
+      setSelectedPromptId(null);
+    }
     setIsAddModalVisible(true);
   };
 
   const handleCloseModal = () => {
     setIsAddModalVisible(false);
+  };
+
+  const handleCloseEditor = () => {
+    setShowEditorView(false);
   };
 
   const handleSuccess = () => {
@@ -91,7 +104,13 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      {selectedPromptId ? (
+      {showEditorView ? (
+        <PromptEditorView
+          onClose={handleCloseEditor}
+          onSuccess={handleSuccess}
+          accessToken={accessToken}
+        />
+      ) : selectedPromptId ? (
         <PromptInfoView
           promptId={selectedPromptId}
           onClose={() => setSelectedPromptId(null)}
@@ -102,9 +121,14 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
       ) : (
         <>
           <div className="flex justify-between items-center mb-4">
+            <div className="flex gap-2">
             <Button onClick={handleAddPrompt} disabled={!accessToken}>
               + Add New Prompt
             </Button>
+              <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
+                Upload .prompt File
+              </Button>
+            </div>
           </div>
 
           <PromptTable

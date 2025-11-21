@@ -26,7 +26,12 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
-from litellm.types.llms.openai import ChatCompletionToolParamFunctionChunk, Reasoning
+from litellm.types.llms.openai import (
+    ChatCompletionToolParamFunctionChunk,
+    Reasoning,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIStreamEvents,
+)
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -165,12 +170,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: Optional[Any] = None,
     ) -> dict:
-        from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
-
         (
             input_items,
             instructions,
         ) = self.convert_chat_completion_messages_to_responses_api(messages)
+
+        optional_params = self._extract_extra_body_params(optional_params)
 
         # Build responses API request using the reverse transformation logic
         responses_api_request = ResponsesAPIOptionalRequestParams()
@@ -194,9 +199,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 )
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
-            elif key in ("metadata"):
+            elif key == "metadata":
                 responses_api_request["metadata"] = value
-            elif key in ("previous_response_id"):
+            elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
                 responses_api_request["reasoning"] = self._map_reasoning_effort(value)
@@ -538,6 +543,35 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return cast(List["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
+    def _extract_extra_body_params(self, optional_params: dict):
+        """
+        Extract extra_body from optional_params and separate supported Responses API params
+        from unsupported ones. Supported params are moved to top-level optional_params,
+        unsupported params remain in extra_body.
+        """
+        # Extract extra_body and separate supported params from unsupported ones
+        extra_body = optional_params.pop("extra_body", None) or {}
+        if not extra_body:
+            return optional_params
+
+        supported_responses_api_params = set(
+            ResponsesAPIOptionalRequestParams.__annotations__.keys()
+        )
+        # Also include params we handle specially
+        supported_responses_api_params.update({
+            "previous_response_id",
+            "reasoning_effort",  # We map this to "reasoning"
+        })
+        
+        # Extract supported params from extra_body and merge into optional_params
+        extra_body_copy = extra_body.copy()
+        for key, value in extra_body_copy.items():
+            if key in supported_responses_api_params:
+                # Prefer extra_body value if it exists (may have more complete info like summary in reasoning_effort)
+                optional_params[key] = extra_body.pop(key)
+
+        return optional_params
+
     def _map_reasoning_effort(self, reasoning_effort: Union[str, Dict[str, Any]]) -> Optional[Reasoning]:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
@@ -619,6 +653,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
         # Handle different event types from responses API
         event_type = parsed_chunk.get("type")
+        if isinstance(event_type, ResponsesAPIStreamEvents):
+            event_type = event_type.value
         verbose_logger.debug(f"Chat provider: Processing event type: {event_type}")
 
         if event_type == "response.created":
@@ -638,7 +674,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         index=0,
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
-                            name=parsed_chunk.get("name", None),
+                            name=output_item.get("name", None),
                             arguments=parsed_chunk.get("arguments", ""),
                         ),
                     ),
@@ -684,7 +720,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         index=0,
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
-                            name=parsed_chunk.get("name", None),
+                            name=output_item.get("name", None),
                             arguments="",  # responses API sends everything again, we don't
                         ),
                     ),
