@@ -126,7 +126,7 @@ async def create_batch(
             unified_file_id = _is_base64_encoded_unified_file_id(input_file_id)
         
         # SCENARIO 1: File ID is encoded with model info
-        if model_from_file_id is not None:
+        if model_from_file_id is not None and input_file_id:
             credentials = get_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_file_id,
