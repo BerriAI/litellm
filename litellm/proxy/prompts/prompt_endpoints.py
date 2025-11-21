@@ -398,7 +398,6 @@ async def update_prompt(
         }'
     ```
     """
-    from datetime import datetime
 
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
     from litellm.proxy.proxy_server import prisma_client
