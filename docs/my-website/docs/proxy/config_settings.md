@@ -682,7 +682,7 @@ router_settings:
 | LOGGING_WORKER_CONCURRENCY | Maximum number of concurrent coroutine slots for the logging worker on the asyncio event loop. **Default is 100**. Setting too high will flood the event loop with logging tasks which will lower the overall latency of the requests. |
 | LOGGING_WORKER_MAX_QUEUE_SIZE | Maximum size of the logging worker queue. When the queue is full, the worker aggressively clears tasks to make room instead of dropping logs. **Default is 50,000** |
 | LOGGING_WORKER_MAX_TIME_PER_COROUTINE | Maximum time in seconds allowed for each coroutine in the logging worker before timing out. **Default is 20.0** |
-| LOGGING_WORKER_CLEAR_PERCENTAGE | Percentage of the queue to extract when clearing. **Default is 50** |
+| LOGGING_WORKER_CLEAR_PERCENTAGE | Percentage of the queue to extract when clearing. **Default is 50** (50%) |
 | MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
 | MAX_ITERATIONS_TO_CLEAR_QUEUE | Maximum number of iterations to attempt when clearing the logging worker queue during shutdown. **Default is 200** |
 | MAX_TIME_TO_CLEAR_QUEUE | Maximum time in seconds to spend clearing the logging worker queue during shutdown. **Default is 5.0** |
