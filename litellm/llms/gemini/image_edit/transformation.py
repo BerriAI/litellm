@@ -22,7 +22,7 @@ else:
 
 class GeminiImageEditConfig(BaseImageEditConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
-    SUPPORTED_PARAMS: List[str] = ["size"]
+    SUPPORTED_PARAMS: List[str] = ["size", "image_size"]
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         return list(self.SUPPORTED_PARAMS)
@@ -46,6 +46,9 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(
                 filtered_params["size"]  # type: ignore[arg-type]
             )
+
+        if "image_size" in filtered_params:
+            mapped_params["imageSize"] = filtered_params["image_size"]
 
         return mapped_params
 
@@ -95,11 +98,18 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         request_body: Dict[str, Any] = {"contents": contents}
 
         generation_config: Dict[str, Any] = {}
+        image_config: Dict[str, Any] = {}
 
         if "aspectRatio" in image_edit_optional_request_params:
-            generation_config["aspectRatio"] = image_edit_optional_request_params[
+            image_config["aspectRatio"] = image_edit_optional_request_params[
                 "aspectRatio"
             ]
+
+        if "imageSize" in image_edit_optional_request_params:
+            image_config["imageSize"] = image_edit_optional_request_params["imageSize"]
+
+        if image_config:
+            generation_config["imageConfig"] = image_config
 
         if generation_config:
             request_body["generationConfig"] = generation_config
