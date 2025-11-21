@@ -1162,16 +1162,58 @@ def _gemini_tool_call_invoke_helper(
     return function_call
 
 
-def _get_thought_signature_from_tool(tool: dict) -> Optional[str]:
-    """Extract thought signature from tool call's provider_specific_fields"""
+def _get_thought_signature_from_tool(tool: dict, model: Optional[str] = None) -> Optional[str]:
+    """Extract thought signature from tool call's provider_specific_fields.
+    
+    Checks both tool.provider_specific_fields and tool.function.provider_specific_fields.
+    If no signature is found and model is gemini-3, returns a dummy signature.
+    """
+    # First check tool's provider_specific_fields
     provider_fields = tool.get("provider_specific_fields") or {}
     if isinstance(provider_fields, dict):
-        return provider_fields.get("thought_signature")
+        signature = provider_fields.get("thought_signature")
+        if signature:
+            return signature
+    
+    # Then check function's provider_specific_fields
+    function = tool.get("function")
+    if function:
+        if isinstance(function, dict):
+            func_provider_fields = function.get("provider_specific_fields") or {}
+            if isinstance(func_provider_fields, dict):
+                signature = func_provider_fields.get("thought_signature")
+                if signature:
+                    return signature
+        elif hasattr(function, "provider_specific_fields") and function.provider_specific_fields:
+            if isinstance(function.provider_specific_fields, dict):
+                signature = function.provider_specific_fields.get("thought_signature")
+                if signature:
+                    return signature
+    
+    # If no signature found and model is gemini-3, return dummy signature
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
+        return _get_dummy_thought_signature()
+    
     return None
+
+
+def _get_dummy_thought_signature() -> str:
+    """Generate a dummy thought signature for models that require it.
+    
+    This is used when transferring conversation history from older models
+    (like gemini-2.5-flash) to gemini-3, which requires thought_signature
+    for strict validation.
+    """
+    # Return a base64-encoded dummy signature string
+    # Below dummy signature is recommended by google - https://ai.google.dev/gemini-api/docs/thought-signatures#faqs
+    dummy_data = b"skip_thought_signature_validator"
+    return base64.b64encode(dummy_data).decode("utf-8")
 
 
 def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
+    model: Optional[str] = None,
 ) -> List[VertexPartType]:
     """
     OpenAI tool invokes:
@@ -1229,7 +1271,7 @@ def convert_to_gemini_tool_call_invoke(
                         part_dict: VertexPartType = {
                             "function_call": gemini_function_call
                         }
-                        thought_signature = _get_thought_signature_from_tool(dict(tool))
+                        thought_signature = _get_thought_signature_from_tool(dict(tool), model=model)
                         if thought_signature:
                             part_dict["thoughtSignature"] = thought_signature
                         
@@ -1250,11 +1292,18 @@ def convert_to_gemini_tool_call_invoke(
                 }
                 
                 # Extract thought signature from function_call's provider_specific_fields
+                thought_signature = None
                 provider_fields = function_call.get("provider_specific_fields") if isinstance(function_call, dict) else {}
                 if isinstance(provider_fields, dict):
                     thought_signature = provider_fields.get("thought_signature")
-                    if thought_signature:
-                        part_dict_function["thoughtSignature"] = thought_signature
+                
+                # If no signature found and model is gemini-3, use dummy signature
+                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+                if not thought_signature and model and VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    thought_signature = _get_dummy_thought_signature()
+                
+                if thought_signature:
+                    part_dict_function["thoughtSignature"] = thought_signature
                 
                 _parts_list.append(part_dict_function)
             else:  # don't silently drop params. Make it clear to user what's happening.

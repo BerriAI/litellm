@@ -1120,6 +1120,7 @@ SECRET_MANAGER_REFRESH_INTERVAL = int(
 )
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
+    "public_mcp_servers",
     "public_agent_groups",
     "public_model_groups",
     "public_model_groups_links",
