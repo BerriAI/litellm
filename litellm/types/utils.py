@@ -302,6 +302,10 @@ class CallTypes(str, Enum):
     avector_store_file_update = "avector_store_file_update"
     vector_store_file_delete = "vector_store_file_delete"
     avector_store_file_delete = "avector_store_file_delete"
+    vector_store_create = "vector_store_create"
+    avector_store_create = "avector_store_create"
+    vector_store_search = "vector_store_search"
+    avector_store_search = "avector_store_search"
 
     #########################################################
     # Container Call Types
@@ -375,8 +379,10 @@ CallTypesLiteral = Literal[
     "agenerate_content_stream",
     "ocr",
     "aocr",
-    "avector_store_search",
+    "vector_store_create",
+    "avector_store_create",
     "vector_store_search",
+    "avector_store_search",
     "vector_store_file_create",
     "avector_store_file_create",
     "vector_store_file_list",
