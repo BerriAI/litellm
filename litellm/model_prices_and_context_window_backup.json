@@ -5906,7 +5906,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
-    "cerebras/openai/gpt-oss-120b": {
+    "cerebras/gpt-oss-120b": {
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "cerebras",
         "max_input_tokens": 131072,
