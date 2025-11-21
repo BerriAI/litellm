@@ -942,9 +942,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           {!isEmbedded && (
             <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">About</Title>
-              <p className="text-gray-700 mb-6 text-base leading-relaxed">
-                {customDocsDescription ? customDocsDescription : "Proxy Server to call 100+ LLMs in the OpenAI format."}
-              </p>
+              <div 
+                className="text-gray-700 mb-6 text-base leading-relaxed"
+                dangerouslySetInnerHTML={{ 
+                  __html: customDocsDescription || "Proxy Server to call 100+ LLMs in the OpenAI format." 
+                }} 
+              />
               <div className="flex items-center space-x-3 text-sm text-gray-600">
                 <span className="flex items-center">
                   <span className="w-4 h-4 mr-2">🔧</span>
