@@ -13,7 +13,7 @@ import {
   TabPanels,
 } from "@tremor/react";
 import { Button, Modal } from "antd";
-import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, TrashIcon, PencilIcon } from "@heroicons/react/outline";
 import { getPromptInfo, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -25,9 +25,10 @@ export interface PromptInfoProps {
   accessToken: string | null;
   isAdmin: boolean;
   onDelete?: () => void;
+  onEdit?: (promptData: any) => void;
 }
 
-const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessToken, isAdmin, onDelete }) => {
+const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessToken, isAdmin, onDelete, onEdit }) => {
   const [promptData, setPromptData] = useState<PromptSpec | null>(null);
   const [promptTemplate, setPromptTemplate] = useState<PromptTemplateBase | null>(null);
   const [rawApiResponse, setRawApiResponse] = useState<any>(null);
@@ -131,6 +132,15 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               />
             </div>
           </div>
+          <div className="flex gap-2">
+            <TremorButton
+              icon={PencilIcon}
+              variant="primary"
+              onClick={() => onEdit?.(rawApiResponse)}
+              className="flex items-center"
+            >
+              Edit Prompt
+            </TremorButton>
           {isAdmin && (
             <TremorButton
               icon={TrashIcon}
@@ -141,6 +151,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               Delete Prompt
             </TremorButton>
           )}
+          </div>
         </div>
       </div>
 
