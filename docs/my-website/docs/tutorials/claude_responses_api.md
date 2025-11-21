@@ -221,7 +221,6 @@ You can also connect MCP servers to Claude Code via LiteLLM Proxy.
 Limitations:
 
 - Currently, only HTTP MCP servers are supported
-- Does not work in Cursor IDE yet.
 
 :::
 
