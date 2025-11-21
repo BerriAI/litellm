@@ -1,55 +1,54 @@
-import React, { useState, useEffect } from "react";
-import { Typography } from "antd";
-import { teamDeleteCall, Organization, fetchMCPAccessGroups } from "./networking";
-import { fetchTeams } from "./common_components/fetch_teams";
-import { PencilAltIcon, RefreshIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { Button as Button2, Modal, Form, Input, Select as Select2, Tooltip } from "antd";
-import NumericalInput from "./shared/numerical_input";
-import {
-  fetchAvailableModelsForTeamOrKey,
-  getModelDisplayName,
-  unfurlWildcardModelsInList,
-} from "./key_team_helpers/fetch_available_models_team_key";
-import { Select, SelectItem } from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { getGuardrailsList } from "./networking";
+import AvailableTeamsPanel from "@/components/team/available_teams";
 import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
-import { isAdminRole } from "@/utils/roles";
+import { isProxyAdminRole } from "@/utils/roles";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { ChevronDownIcon, ChevronRightIcon, PencilAltIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
+  Accordion,
+  AccordionBody,
+  AccordionHeader,
+  Badge,
+  Button,
+  Card,
+  Col,
+  Grid,
+  Icon,
+  Select,
+  SelectItem,
+  Tab,
+  TabGroup,
+  TabList,
+  TabPanel,
+  TabPanels,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeaderCell,
   TableRow,
-  TextInput,
-  Card,
-  Icon,
-  Button,
-  Badge,
-  Col,
   Text,
-  Grid,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Tab,
+  TextInput,
 } from "@tremor/react";
-import AvailableTeamsPanel from "@/components/team/available_teams";
-import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
-import type { KeyResponse, Team } from "./key_team_helpers/key_list";
-import { formatNumberWithCommas } from "../utils/dataUtils";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Tooltip, Typography } from "antd";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { formatNumberWithCommas } from "../utils/dataUtils";
+import { fetchTeams } from "./common_components/fetch_teams";
+import ModelAliasManager from "./common_components/ModelAliasManager";
+import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
+import {
+  fetchAvailableModelsForTeamOrKey,
+  getModelDisplayName,
+  unfurlWildcardModelsInList,
+} from "./key_team_helpers/fetch_available_models_team_key";
+import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
-import ModelAliasManager from "./common_components/ModelAliasManager";
 import NotificationsManager from "./molecules/notifications_manager";
+import { Organization, fetchMCPAccessGroups, getGuardrailsList, teamDeleteCall } from "./networking";
+import NumericalInput from "./shared/numerical_input";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
 interface TeamProps {
   teams: Team[] | null;
@@ -77,8 +76,8 @@ interface EditTeamModalProps {
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
-import { teamCreateCall, Member, v2TeamListCall } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
+import { Member, teamCreateCall, v2TeamListCall } from "./networking";
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -614,7 +613,7 @@ const Teams: React.FC<TeamProps> = ({
                 <div className="flex">
                   <Tab>Your Teams</Tab>
                   <Tab>Available Teams</Tab>
-                  {isAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
+                  {isProxyAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
                 </div>
                 <div className="flex items-center space-x-2">
                   {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
@@ -1063,7 +1062,7 @@ const Teams: React.FC<TeamProps> = ({
                 <TabPanel>
                   <AvailableTeamsPanel accessToken={accessToken} userID={userID} />
                 </TabPanel>
-                {isAdminRole(userRole || "") && (
+                {isProxyAdminRole(userRole || "") && (
                   <TabPanel>
                     <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />
                   </TabPanel>
