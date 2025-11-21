@@ -218,6 +218,25 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
   const currentVersion = getVersionNumber(activeVersionId);
 
+  // Extract template variables from prompt content for code examples
+  const extractTemplateVariables = (): Record<string, string> => {
+    const variables: Record<string, string> = {};
+    const allContent = [
+      prompt.developerMessage,
+      ...prompt.messages.map(m => m.content)
+    ].join(' ');
+    
+    const variableRegex = /\{\{(\w+)\}\}/g;
+    let match;
+    while ((match = variableRegex.exec(allContent)) !== null) {
+      const varName = match[1];
+      if (!variables[varName]) {
+        variables[varName] = `example_${varName}`;
+      }
+    }
+    return variables;
+  };
+
   return (
     <div className="flex h-full bg-white">
       <div className="flex-1 flex flex-col">
@@ -230,6 +249,9 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           editMode={editMode}
           onShowHistory={() => setShowHistoryModal(true)}
           version={currentVersion}
+          promptModel={prompt.model}
+          promptVariables={extractTemplateVariables()}
+          accessToken={accessToken}
         />
 
         <div className="flex-1 flex overflow-hidden">
