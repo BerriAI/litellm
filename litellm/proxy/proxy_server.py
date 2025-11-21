@@ -32,6 +32,7 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_KEEPALIVE_TIMEOUT,
     AIOHTTP_TTL_DNS_CACHE,
+    AUDIO_SPEECH_CHUNK_SIZE,
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
@@ -5240,7 +5241,7 @@ async def _audio_speech_chunk_generator(
     # too small: latency is high
     # too large: latency is low, but memory usage is high
     # 8192 is a good compromise
-    _generator = await _response.aiter_bytes(chunk_size=8192)
+    _generator = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
     async for chunk in _generator:
         yield chunk
 
