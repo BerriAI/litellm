@@ -1272,6 +1272,7 @@ if MCP_AVAILABLE:
         # Allow modifying the MCP tool call response before it is returned to the user
         #########################################################
         if litellm_logging_obj:
+            litellm_logging_obj.post_call(original_response=response)
             end_time = datetime.now()
             await litellm_logging_obj.async_post_mcp_tool_call_hook(
                 kwargs=litellm_logging_obj.model_call_details,
