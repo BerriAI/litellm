@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional
 
 import litellm
 from litellm import get_secret
@@ -268,13 +268,9 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
             litellm.callbacks = imported_list  # type: ignore
 
         if "prometheus" in value:
-            try:
-                from litellm_enterprise.integrations.prometheus import PrometheusLogger
-            except Exception:
-                PrometheusLogger = None
+            from litellm.integrations.prometheus import PrometheusLogger
 
-            if PrometheusLogger:
-                PrometheusLogger._mount_metrics_endpoint(premium_user)
+            PrometheusLogger._mount_metrics_endpoint()
     else:
         litellm.callbacks = [
             get_instance_fn(
@@ -289,7 +285,9 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
 
 def get_model_group_from_litellm_kwargs(kwargs: dict) -> Optional[str]:
     _litellm_params = kwargs.get("litellm_params", None) or {}
-    _metadata = _litellm_params.get(get_metadata_variable_name_from_kwargs(kwargs)) or {}
+    _metadata = (
+        _litellm_params.get(get_metadata_variable_name_from_kwargs(kwargs)) or {}
+    )
     _model_group = _metadata.get("model_group", None)
     if _model_group is not None:
         return _model_group
@@ -368,17 +366,23 @@ def add_guardrail_to_applied_guardrails_header(
 
 
 def get_metadata_variable_name_from_kwargs(
-        kwargs: dict
-    ) -> Literal["metadata", "litellm_metadata"]:
-        """
-        Helper to return what the "metadata" field should be called in the request data
+    kwargs: dict,
+) -> Literal["metadata", "litellm_metadata"]:
+    """
+    Helper to return what the "metadata" field should be called in the request data
 
-        - New endpoints return `litellm_metadata`
-        - Old endpoints return `metadata`
+    - New endpoints return `litellm_metadata`
+    - Old endpoints return `metadata`
 
-        Context:
-        - LiteLLM used `metadata` as an internal field for storing metadata
-        - OpenAI then started using this field for their metadata
-        - LiteLLM is now moving to using `litellm_metadata` for our metadata
-        """
-        return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+    Context:
+    - LiteLLM used `metadata` as an internal field for storing metadata
+    - OpenAI then started using this field for their metadata
+    - LiteLLM is now moving to using `litellm_metadata` for our metadata
+    """
+    return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+
+
+def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
+    if callbacks is None:
+        return []
+    return [c.lower() if isinstance(c, str) else c for c in callbacks]

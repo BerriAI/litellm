@@ -22,6 +22,9 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    convert_b64_uid_to_unified_uid,
+    get_batch_id_from_unified_batch_id,
+    get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
@@ -506,6 +509,7 @@ async def cancel_batch(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -517,6 +521,7 @@ async def cancel_batch(
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
+        unified_batch_id = _is_base64_encoded_unified_file_id(batch_id)
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -528,14 +533,36 @@ async def cancel_batch(
             proxy_config=proxy_config,
         )
 
-        custom_llm_provider = (
-            provider or data.pop("custom_llm_provider", None) or "openai"
-        )
-        _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
-        response = await litellm.acancel_batch(
-            custom_llm_provider=custom_llm_provider,  # type: ignore
-            **_cancel_batch_data,
-        )
+        if unified_batch_id:
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "LLM Router not initialized. Ensure models added to proxy."
+                    },
+                )
+
+            model = (
+                get_model_id_from_unified_batch_id(unified_batch_id)
+                if unified_batch_id
+                else None
+            )
+
+            model_batch_id = get_batch_id_from_unified_batch_id(unified_batch_id)
+
+            data["batch_id"] = model_batch_id
+
+            response = await llm_router.acancel_batch(model=model, **data)  # type: ignore
+        else:
+
+            custom_llm_provider = (
+                provider or data.pop("custom_llm_provider", None) or "openai"
+            )
+            _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
+            response = await litellm.acancel_batch(
+                custom_llm_provider=custom_llm_provider,  # type: ignore
+                **_cancel_batch_data,
+            )
 
         ### ALERTING ###
         asyncio.create_task(

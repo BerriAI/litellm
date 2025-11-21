@@ -4,6 +4,7 @@ from typing import cast
 import httpx
 from httpx._types import RequestFiles
 
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.router import GenericLiteLLMParams
@@ -15,15 +16,12 @@ from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    BaseVideoConfig = _BaseVideoConfig
     BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    BaseVideoConfig = Any
     BaseLLMException = Any
 
 
@@ -178,10 +176,10 @@ class OpenAIVideoConfig(BaseVideoConfig):
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{original_video_id}/content"
         
-        # Add video_id as query parameter
-        params = {"video_id": original_video_id}
-        
-        return url, params
+        # No additional data needed for GET content request
+        data: Dict[str, Any] = {}
+
+        return url, data
 
     def transform_video_remix_request(
         self,
