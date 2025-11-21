@@ -19,6 +19,8 @@ Usage:
 
 import json
 import os
+import threading
+import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -27,6 +29,12 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import ModelResponse, Message
 
 import newrelic.agent
+
+
+# Global state for supportability metric emission
+# Protected by _metric_lock to ensure thread-safe access
+_last_metric_emission_time: float = 0.0
+_metric_lock = threading.Lock()
 
 
 class NewRelicLogger(CustomLogger):
@@ -58,7 +66,8 @@ class NewRelicLogger(CustomLogger):
         else:
             # Validate that newrelic package is available
             try:
-                import newrelic.agent
+                newrelic.agent.register_application()
+
                 self.enabled = True
                 verbose_logger.info(
                     f"New Relic AI Monitoring initialized for app: {self.app_name}, "
@@ -79,6 +88,80 @@ class NewRelicLogger(CustomLogger):
             return default
         # Spec requires value to be either true (bool) or 'true' (string)
         return value.lower() == "true"
+
+    def _get_litellm_version(self) -> str:
+        """
+        Get litellm version for supportability metrics.
+
+        Returns:
+            Version string (e.g., "1.80.0") or "unknown" if unable to determine
+        """
+        try:
+            from importlib.metadata import version
+            return version('litellm')
+        except Exception as e:
+            verbose_logger.warning(f"Unable to determine litellm version: {e}")
+            return "unknown"
+
+    def _emit_supportability_metric(self):
+        """
+        Emit New Relic supportability metric for LiteLLM usage.
+
+        Per spec, this metric should be emitted at least once every 27 hours
+        to indicate the library is in use. Format:
+        Supportability/Python/ML/LiteLLM/{version}
+
+        This method updates the global _last_metric_emission_time and should
+        be called within a lock when checking periodic emission.
+        """
+        global _last_metric_emission_time
+
+        try:
+            litellm_version = self._get_litellm_version()
+            metric_name = f"Supportability/Python/ML/LiteLLM/{litellm_version}"
+
+            # Record metric with value of 1 (will be aggregated by New Relic)
+            app = newrelic.agent.application()
+
+            if app and app.enabled:
+                app.record_custom_metric(metric_name, 1)
+
+                # Update last emission time
+                _last_metric_emission_time = time.time()
+
+                verbose_logger.info(
+                    f"Emitted New Relic supportability metric: {metric_name}"
+                )
+            else:
+                verbose_logger.info("New Relic application is not enabled; skipping metric recording.")
+
+
+        except Exception as e:
+            verbose_logger.warning(f"Failed to emit supportability metric: {e}")
+
+    def _check_and_emit_periodic_metric(self):
+        """
+        Check if 23 hours have passed since last metric emission and re-emit if needed.
+
+        Uses a mutex to ensure only one thread emits the metric even if multiple
+        requests are being processed concurrently.
+        """
+        global _last_metric_emission_time
+
+        # Quick check without lock to avoid unnecessary locking
+        current_time = time.time()
+        time_since_last_emission = current_time - _last_metric_emission_time
+
+        # 23 hours in seconds = 82800
+        if time_since_last_emission >= 82800:
+            # Acquire lock to ensure only one thread emits
+            with _metric_lock:
+                # Double-check inside lock in case another thread just emitted
+                current_time = time.time()
+                time_since_last_emission = current_time - _last_metric_emission_time
+
+                if time_since_last_emission >= 82800:
+                    self._emit_supportability_metric()
 
     def _should_record_content(self) -> bool:
         """Check if message content should be recorded."""
@@ -377,7 +460,13 @@ class NewRelicLogger(CustomLogger):
                 if "max_tokens" in request_params:
                     event_data["request.max_tokens"] = request_params["max_tokens"]
 
-            newrelic.agent.record_custom_event("LlmChatCompletionSummary", event_data)
+            app = newrelic.agent.application()
+
+            if app and app.enabled:
+                app.record_custom_event("LlmChatCompletionSummary", event_data)
+            else:
+                verbose_logger.info("New Relic application is not enabled; skipping event recording.")
+
             import pprint
             verbose_logger.info(f"Recorded LlmChatCompletionSummary event: {pprint.pformat(event_data)}")
 
@@ -403,7 +492,7 @@ class NewRelicLogger(CustomLogger):
             messages: List of message dicts to record
         """
         try:
-            import newrelic.agent
+            app = newrelic.agent.application()
 
             for message in messages:
                 sequence = message["sequence"]
@@ -431,7 +520,11 @@ class NewRelicLogger(CustomLogger):
                 if span_id:
                     event_data["span_id"] = span_id
 
-                newrelic.agent.record_custom_event("LlmChatCompletionMessage", event_data)
+
+                if app and app.enabled:
+                    app.record_custom_event("LlmChatCompletionMessage", event_data)
+                else:
+                    verbose_logger.info("New Relic application is not enabled; skipping event recording.")
 
             import pprint
             verbose_logger.info(
@@ -468,6 +561,9 @@ class NewRelicLogger(CustomLogger):
         # Early exit if not enabled
         if not self.enabled:
             return
+
+        # Check and emit periodic supportability metric if 23 hours have passed
+        self._check_and_emit_periodic_metric()
 
         import pprint
         verbose_logger.info(f"newrelic._process_success called, kwargs=\n{pprint.pformat(kwargs)}, \nresponse_obj=\n{pprint.pformat(response_obj)}")
@@ -532,8 +628,6 @@ class NewRelicLogger(CustomLogger):
         """Unused per spec."""
         pass
 
-    @newrelic.agent.background_task()
-    @newrelic.agent.function_trace(name="log_success_event")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Main success path for non-streaming requests.
@@ -547,8 +641,6 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning(f"Error in New Relic log_success_event: {e}")
             self.handle_callback_failure("newrelic")
 
-    @newrelic.agent.background_task()
-    @newrelic.agent.function_trace(name="async_log_success_event")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Main success path for async/streaming requests.
@@ -562,8 +654,6 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning(f"Error in New Relic async_log_success_event: {e}")
             self.handle_callback_failure("newrelic")
 
-    @newrelic.agent.background_task()
-    @newrelic.agent.function_trace(name="log_failure_event")
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         Log error metric for failed LLM calls (sync).
@@ -580,8 +670,6 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning(f"Error in New Relic log_failure_event: {e}")
             self.handle_callback_failure("newrelic")
 
-    @newrelic.agent.background_task()
-    @newrelic.agent.function_trace(name="async_log_failure_event")
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         Log error metric for failed LLM calls (async).
