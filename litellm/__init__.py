@@ -134,6 +134,16 @@ if TYPE_CHECKING:
     from litellm.llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
     from litellm.llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
     from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig
+    from litellm.llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import VertexAILlama3Config
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import VertexAIAi21Config
+    from litellm.llms.bedrock.chat.invoke_handler import AmazonCohereChatConfig
+    from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -1106,26 +1116,11 @@ from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.triton.completion.transformation import TritonGenerateConfig
 from .llms.triton.completion.transformation import TritonInferConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig as AI21Config
-from .llms.anthropic.experimental_pass_through.messages.transformation import (
-    AnthropicMessagesConfig,
-)
-from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeMessagesConfig,
-)
-from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes
 from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
-from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexGeminiConfig,
-    VertexGeminiConfig as VertexAIConfig,
-)
 from .llms.gemini.common_utils import GeminiModelInfo
-from .llms.gemini.chat.transformation import (
-    GoogleAIStudioGeminiConfig,
-    GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
-)
 
 
 from .llms.vertex_ai.vertex_embeddings.transformation import (
@@ -1134,25 +1129,8 @@ from .llms.vertex_ai.vertex_embeddings.transformation import (
 
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
-from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
-    VertexAIAnthropicConfig,
-)
-from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
-    VertexAILlama3Config,
-)
-from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
-    VertexAIAi21Config,
-)
 from .llms.bedrock.chat.invoke_handler import (
-    AmazonCohereChatConfig,
     bedrock_tool_name_mappings,
-)
-
-from .llms.bedrock.common_utils import (
-    AmazonBedrockGlobalConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import (
-    AmazonAI21Config,
 )
 from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
     AmazonInvokeNovaConfig,
@@ -2259,5 +2237,74 @@ def __getattr__(name: str) -> Any:
         from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig as _VertexAIRerankConfig
         globals()["VertexAIRerankConfig"] = _VertexAIRerankConfig
         return _VertexAIRerankConfig
+    
+    # Lazy-load AnthropicMessagesConfig to reduce import-time memory cost
+    if name == "AnthropicMessagesConfig":
+        from .llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig as _AnthropicMessagesConfig
+        globals()["AnthropicMessagesConfig"] = _AnthropicMessagesConfig
+        return _AnthropicMessagesConfig
+    
+    # Lazy-load TogetherAITextCompletionConfig to reduce import-time memory cost
+    if name == "TogetherAITextCompletionConfig":
+        from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig as _TogetherAITextCompletionConfig
+        globals()["TogetherAITextCompletionConfig"] = _TogetherAITextCompletionConfig
+        return _TogetherAITextCompletionConfig
+    
+    # Lazy-load VertexGeminiConfig to reduce import-time memory cost
+    if name == "VertexGeminiConfig":
+        from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
+        globals()["VertexGeminiConfig"] = _VertexGeminiConfig
+        globals()["VertexAIConfig"] = _VertexGeminiConfig  # alias
+        return _VertexGeminiConfig
+    
+    # Lazy-load GoogleAIStudioGeminiConfig to reduce import-time memory cost
+    if name == "GoogleAIStudioGeminiConfig":
+        from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as _GoogleAIStudioGeminiConfig
+        globals()["GoogleAIStudioGeminiConfig"] = _GoogleAIStudioGeminiConfig
+        globals()["GeminiConfig"] = _GoogleAIStudioGeminiConfig  # alias
+        return _GoogleAIStudioGeminiConfig
+    
+    # Lazy-load GeminiConfig alias to reduce import-time memory cost
+    if name == "GeminiConfig":
+        from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as _GoogleAIStudioGeminiConfig
+        globals()["GoogleAIStudioGeminiConfig"] = _GoogleAIStudioGeminiConfig
+        globals()["GeminiConfig"] = _GoogleAIStudioGeminiConfig
+        return _GoogleAIStudioGeminiConfig
+    
+    # Lazy-load VertexAIAnthropicConfig to reduce import-time memory cost
+    if name == "VertexAIAnthropicConfig":
+        from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig as _VertexAIAnthropicConfig
+        globals()["VertexAIAnthropicConfig"] = _VertexAIAnthropicConfig
+        return _VertexAIAnthropicConfig
+    
+    # Lazy-load VertexAILlama3Config to reduce import-time memory cost
+    if name == "VertexAILlama3Config":
+        from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import VertexAILlama3Config as _VertexAILlama3Config
+        globals()["VertexAILlama3Config"] = _VertexAILlama3Config
+        return _VertexAILlama3Config
+    
+    # Lazy-load VertexAIAi21Config to reduce import-time memory cost
+    if name == "VertexAIAi21Config":
+        from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import VertexAIAi21Config as _VertexAIAi21Config
+        globals()["VertexAIAi21Config"] = _VertexAIAi21Config
+        return _VertexAIAi21Config
+    
+    # Lazy-load AmazonCohereChatConfig to reduce import-time memory cost
+    if name == "AmazonCohereChatConfig":
+        from .llms.bedrock.chat.invoke_handler import AmazonCohereChatConfig as _AmazonCohereChatConfig
+        globals()["AmazonCohereChatConfig"] = _AmazonCohereChatConfig
+        return _AmazonCohereChatConfig
+    
+    # Lazy-load AmazonBedrockGlobalConfig to reduce import-time memory cost
+    if name == "AmazonBedrockGlobalConfig":
+        from .llms.bedrock.common_utils import AmazonBedrockGlobalConfig as _AmazonBedrockGlobalConfig
+        globals()["AmazonBedrockGlobalConfig"] = _AmazonBedrockGlobalConfig
+        return _AmazonBedrockGlobalConfig
+    
+    # Lazy-load AmazonAI21Config to reduce import-time memory cost
+    if name == "AmazonAI21Config":
+        from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config as _AmazonAI21Config
+        globals()["AmazonAI21Config"] = _AmazonAI21Config
+        return _AmazonAI21Config
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
