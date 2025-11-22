@@ -1158,10 +1158,8 @@ from .llms.openai.transcriptions.gpt_transformation import (
     OpenAIGPTAudioTranscriptionConfig,
 )
 
-from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
 
-nvidiaNimConfig = NvidiaNimConfig()
 nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
 from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
