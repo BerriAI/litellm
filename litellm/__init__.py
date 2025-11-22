@@ -2353,4 +2353,10 @@ def __getattr__(name: str) -> Any:
         globals()["AzureOpenAIResponsesAPIConfig"] = _AzureOpenAIResponsesAPIConfig
         return _AzureOpenAIResponsesAPIConfig
     
+    # Lazy-load AzureOpenAIOSeriesResponsesAPIConfig to reduce import-time memory cost
+    if name == "AzureOpenAIOSeriesResponsesAPIConfig":
+        from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig as _AzureOpenAIOSeriesResponsesAPIConfig
+        globals()["AzureOpenAIOSeriesResponsesAPIConfig"] = _AzureOpenAIOSeriesResponsesAPIConfig
+        return _AzureOpenAIOSeriesResponsesAPIConfig
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
