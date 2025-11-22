@@ -157,6 +157,7 @@ if TYPE_CHECKING:
     from litellm.llms.gradient_ai.chat.transformation import GradientAIConfig
     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
     from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+    from litellm.llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
