@@ -7,6 +7,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -588,9 +589,14 @@ class OpenTelemetry(CustomLogger):
         )
         ctx, parent_span = self._get_span_context(kwargs)
 
+        if get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN"):
+            primary_span_parent = None
+        else:
+            primary_span_parent = parent_span
+
         # 1. Primary span
         span = self._start_primary_span(
-            kwargs, response_obj, start_time, end_time, ctx, parent_span
+            kwargs, response_obj, start_time, end_time, ctx, primary_span_parent
         )
 
         # 2. Raw‐request sub-span (if enabled)
