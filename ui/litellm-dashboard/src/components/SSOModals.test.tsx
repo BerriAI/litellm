@@ -119,7 +119,7 @@ describe("SSOModals", () => {
       );
     };
 
-    const { getByLabelText, getByText, container } = render(<TestWrapper />);
+    const { getByLabelText, getByText, findByText, container } = render(<TestWrapper />);
 
     // Find and interact with the SSO provider select
     const ssoProviderSelect = container.querySelector("#sso_provider");
@@ -144,10 +144,9 @@ describe("SSOModals", () => {
     const saveButton = getByText("Save");
     fireEvent.click(saveButton);
 
-    // Check for validation error
-    await waitFor(() => {
-      expect(getByText("URL must not end with a trailing slash")).toBeInTheDocument();
-    });
+    // Check for validation error using findByText for async rendering
+    const errorMessage = await findByText("URL must not end with a trailing slash", {}, { timeout: 5000 });
+    expect(errorMessage).toBeInTheDocument();
   });
 
   it("should allow typing https:// without interfering with slashes", async () => {
