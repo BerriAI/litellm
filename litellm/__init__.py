@@ -122,6 +122,7 @@ if TYPE_CHECKING:
     from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
     from litellm.llms.groq.chat.transformation import GroqChatConfig
     from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+    from litellm.llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig
     from litellm.llms.infinity.embedding.transformation import InfinityEmbeddingConfig
     from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
     from litellm.llms.mistral.chat.transformation import MistralConfig
