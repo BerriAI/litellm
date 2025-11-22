@@ -31,8 +31,8 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
-    get_custom_llm_provider_from_request_query,
     get_custom_llm_provider_from_request_headers,
+    get_custom_llm_provider_from_request_query,
 )
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.router import Router
@@ -788,6 +788,7 @@ async def delete_file(
                     param="None",
                     code=500,
                 )
+
             response = await managed_files_obj.afile_delete(
                 file_id=file_id,
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
@@ -828,12 +829,11 @@ async def delete_file(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.retrieve_file(): Exception occured - {}".format(
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.delete_file(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),

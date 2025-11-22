@@ -93,6 +93,11 @@ class CustomOpenAPISpec:
                 schema_properties = actual_schema.get("properties", {})
                 required_fields = actual_schema.get("required", [])
                 
+                # Extract $defs and add them to components/schemas
+                # This fixes Pydantic v2 $defs not being resolvable in Swagger/OpenAPI
+                if "$defs" in actual_schema:
+                    CustomOpenAPISpec._move_defs_to_components(openapi_schema, actual_schema["$defs"])
+                
                 # Create an expanded inline schema instead of just a $ref
                 # This makes Swagger UI show all individual fields in the request body editor
                 expanded_schema = {
@@ -105,6 +110,9 @@ class CustomOpenAPISpec:
                 for field_name, field_def in schema_properties.items():
                     expanded_field = CustomOpenAPISpec._expand_field_definition(field_def)
                     
+                    # Rewrite $defs references to use components/schemas instead
+                    expanded_field = CustomOpenAPISpec._rewrite_defs_refs(expanded_field)
+                    
                     # Add a simple example for the messages field
                     if field_name == "messages":
                         expanded_field["example"] = [
@@ -112,11 +120,6 @@ class CustomOpenAPISpec:
                         ]
                     
                     expanded_schema["properties"][field_name] = expanded_field
-                
-                # Include $defs from the original schema to support complex types like AllMessageValues
-                # This ensures that message types and other complex union types work properly
-                if "$defs" in actual_schema:
-                    expanded_schema["$defs"] = actual_schema["$defs"]
                 
                 # Set the request body with the expanded schema
                 openapi_schema["paths"][path]["post"]["requestBody"] = {
@@ -137,6 +140,66 @@ class CustomOpenAPISpec:
                         if param.get("in") == "path"
                     ]
                     openapi_schema["paths"][path]["post"]["parameters"] = filtered_params
+    
+    @staticmethod
+    def _move_defs_to_components(openapi_schema: Dict[str, Any], defs: Dict[str, Any]) -> None:
+        """
+        Move $defs from Pydantic v2 schema to OpenAPI components/schemas.
+        This makes the definitions resolvable in Swagger/OpenAPI viewers.
+        
+        Args:
+            openapi_schema: The OpenAPI schema dict to modify
+            defs: The $defs dictionary from Pydantic schema
+        """
+        if not defs:
+            return
+        
+        # Ensure components/schemas exists
+        if "components" not in openapi_schema:
+            openapi_schema["components"] = {}
+        if "schemas" not in openapi_schema["components"]:
+            openapi_schema["components"]["schemas"] = {}
+        
+        # Add each definition to components/schemas
+        for def_name, def_schema in defs.items():
+            # Recursively rewrite any nested $defs references within this definition
+            rewritten_def = CustomOpenAPISpec._rewrite_defs_refs(def_schema)
+            openapi_schema["components"]["schemas"][def_name] = rewritten_def
+            
+            # If this definition also has $defs, process them recursively
+            if "$defs" in def_schema:
+                CustomOpenAPISpec._move_defs_to_components(openapi_schema, def_schema["$defs"])
+    
+    @staticmethod
+    def _rewrite_defs_refs(schema: Any) -> Any:
+        """
+        Recursively rewrite $ref values from #/$defs/... to #/components/schemas/...
+        This converts Pydantic v2 references to OpenAPI-compatible references.
+        
+        Args:
+            schema: Schema object to process (can be dict, list, or primitive)
+            
+        Returns:
+            Schema with rewritten references
+        """
+        if isinstance(schema, dict):
+            result = {}
+            for key, value in schema.items():
+                if key == "$ref" and isinstance(value, str) and value.startswith("#/$defs/"):
+                    # Rewrite the reference to use components/schemas
+                    def_name = value.replace("#/$defs/", "")
+                    result[key] = f"#/components/schemas/{def_name}"
+                elif key == "$defs":
+                    # Remove $defs from the schema since they're moved to components
+                    continue
+                else:
+                    # Recursively process nested structures
+                    result[key] = CustomOpenAPISpec._rewrite_defs_refs(value)
+            return result
+        elif isinstance(schema, list):
+            return [CustomOpenAPISpec._rewrite_defs_refs(item) for item in schema]
+        else:
+            return schema
     
     @staticmethod
     def _extract_field_schema(field_def: Dict[str, Any]) -> Dict[str, Any]:

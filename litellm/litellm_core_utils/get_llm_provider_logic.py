@@ -741,6 +741,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "docker_model_runner":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.DockerModelRunnerChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "v0":
         (
             api_base,

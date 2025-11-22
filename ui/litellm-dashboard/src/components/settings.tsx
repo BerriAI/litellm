@@ -53,6 +53,164 @@ interface genericCallbackParams {
 
 const assetsLogoFolder = "../ui/assets/logos/";
 
+interface DynamicParamsFieldsProps {
+  params: string[];
+  callbackConfigs: any[];
+  selectedCallback: string | null;
+}
+
+const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callbackConfigs, selectedCallback }) => {
+  if (!params || params.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
+      {params.map((param) => {
+        const callbackConfig = callbackConfigs.find((config) => config.id === selectedCallback);
+        const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
+        const paramType = paramConfig.type || "text";
+        const fieldLabel = paramConfig.ui_name || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+        const isRequired = paramConfig.required || false;
+
+        return (
+          <FormItem
+            label={<span className="text-sm font-medium text-gray-700">{fieldLabel} </span>}
+            name={param}
+            key={param}
+            className="mb-4"
+            rules={
+              isRequired
+                ? [
+                    {
+                      required: true,
+                      message: `Please enter the ${fieldLabel.toLowerCase()}`,
+                    },
+                  ]
+                : undefined
+            }
+          >
+            {paramType === "password" ? (
+              <Input.Password
+                size="large"
+                placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              />
+            ) : paramType === "number" ? (
+              <Input
+                type="number"
+                size="large"
+                placeholder={`Enter ${fieldLabel.toLowerCase()}`}
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                min={0}
+                max={1}
+                step={0.1}
+              />
+            ) : (
+              <Input
+                size="large"
+                placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              />
+            )}
+          </FormItem>
+        );
+      })}
+    </div>
+  );
+};
+
+// Shared component for rendering callback selector
+interface CallbackSelectorProps {
+  callbackConfigs: any[];
+  selectedCallback: string | null;
+  onCallbackChange: (value: string) => void;
+  disabled?: boolean;
+}
+
+const CallbackSelector: React.FC<CallbackSelectorProps> = ({
+  callbackConfigs,
+  selectedCallback,
+  onCallbackChange,
+  disabled = false,
+}) => {
+  return (
+    <FormItem
+      label="Callback"
+      name="callback"
+      rules={disabled ? undefined : [{ required: true, message: "Please select a callback" }]}
+    >
+      <Select
+        placeholder="Choose a logging callback..."
+        size="large"
+        className="w-full"
+        showSearch
+        disabled={disabled}
+        value={selectedCallback}
+        filterOption={(input, option) => {
+          return (option?.value?.toString() ?? "").toLowerCase().includes(input.toLowerCase());
+        }}
+        onChange={onCallbackChange}
+      >
+        {callbackConfigs.map((callbackConfig) => {
+          const logo = callbackConfig.logo;
+          const logoSrc =
+            logo && (logo.includes("/") || logo.startsWith("data:") || logo.startsWith("http"))
+              ? logo
+              : `${assetsLogoFolder}${logo}`;
+
+          return (
+            <SelectItem key={callbackConfig.id} value={callbackConfig.id}>
+              <div className="flex items-center space-x-3 py-1">
+                <div className="w-6 h-6 flex items-center justify-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={logoSrc}
+                    alt={`${callbackConfig.displayName} logo`}
+                    className="w-6 h-6 rounded object-contain"
+                    onError={(e) => {
+                      e.currentTarget.style.display = "none";
+                    }}
+                  />
+                </div>
+                <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>
+              </div>
+            </SelectItem>
+          );
+        })}
+      </Select>
+    </FormItem>
+  );
+};
+
+// Shared helper function to get dynamic params for a callback
+const getDynamicParamsForCallback = (
+  callbackName: string | null,
+  callbackConfigs: any[],
+  fallbackVariables?: Record<string, any>,
+): string[] => {
+  if (!callbackName) {
+    return fallbackVariables ? Object.keys(fallbackVariables) : [];
+  }
+
+  const callbackConfig = callbackConfigs.find((config) => config.id === callbackName);
+  if (callbackConfig?.dynamic_params) {
+    return Object.keys(callbackConfig.dynamic_params);
+  }
+
+  return fallbackVariables ? Object.keys(fallbackVariables) : [];
+};
+
+// Shared helper function to build callback payload
+const buildCallbackPayload = (formValues: Record<string, any>, callbackName: string) => {
+  return {
+    environment_variables: formValues,
+    litellm_settings: {
+      success_callback: [callbackName],
+    },
+  };
+};
+
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -83,6 +241,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(null);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [callbackToDelete, setCallbackToDelete] = useState<string | null>(null);
+  const [isUpdatingCallback, setIsUpdatingCallback] = useState(false);
+  const [isAddingCallback, setIsAddingCallback] = useState(false);
 
   useEffect(() => {
     if (!accessToken) {
@@ -102,7 +262,10 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       const normalized = Object.fromEntries(
         Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""]),
       );
-      editForm.setFieldsValue(normalized);
+      editForm.setFieldsValue({
+        ...normalized,
+        callback: selectedEditCallback.name,
+      });
     }
   }, [showEditCallback, selectedEditCallback, editForm]);
 
@@ -154,31 +317,36 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     return activeAlerts && activeAlerts.includes(alertName);
   };
 
-  const updateCallbackCall = async (formValues: Record<string, any>) => {
-    if (!accessToken || !selectedEditCallback) {
+  // Shared handler for callback form submission
+  const handleCallbackSubmit = async (formValues: Record<string, any>, callbackName: string, isEdit: boolean) => {
+    if (!accessToken) {
       return;
     }
 
-    let env_vars: Record<string, string> = {};
-    // add all other variables
-    Object.entries(formValues).forEach(([key, value]) => {
-      if (key !== "callback") {
-        env_vars[key] = value;
-      }
-    });
-    let payload = {
-      environment_variables: formValues,
-      litellm_settings: {
-        success_callback: [selectedEditCallback.name],
-      },
-    };
+    if (isEdit) {
+      setIsUpdatingCallback(true);
+    } else {
+      setIsAddingCallback(true);
+    }
+
+    const payload = buildCallbackPayload(formValues, callbackName);
 
     try {
       await setCallbacksCall(accessToken, payload);
-      NotificationsManager.success("Callback updated successfully");
-      setShowEditCallback(false);
-      editForm.resetFields();
-      setSelectedEditCallback(null);
+      NotificationsManager.success(
+        isEdit ? "Callback updated successfully" : `Callback ${callbackName} added successfully`,
+      );
+
+      if (isEdit) {
+        setShowEditCallback(false);
+        editForm.resetFields();
+        setSelectedEditCallback(null);
+      } else {
+        setShowAddCallbacksModal(false);
+        addForm.resetFields();
+        setSelectedCallback(null);
+        setSelectedCallbackParams([]);
+      }
 
       // Refresh the callbacks list
       if (userID && userRole) {
@@ -187,56 +355,34 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       }
     } catch (error) {
       NotificationsManager.fromBackend(error);
+    } finally {
+      if (isEdit) {
+        setIsUpdatingCallback(false);
+      } else {
+        setIsAddingCallback(false);
+      }
     }
   };
 
-  const addNewCallbackCall = async (formValues: Record<string, any>) => {
-    if (!accessToken) {
+  const updateCallbackCall = async (formValues: Record<string, any>) => {
+    if (!selectedEditCallback) {
       return;
     }
-    let new_callback = formValues?.callback;
+    await handleCallbackSubmit(formValues, selectedEditCallback.name, true);
+  };
 
-    let env_vars: Record<string, string> = {};
-    // add all other variables
-    Object.entries(formValues).forEach(([key, value]) => {
-      if (key !== "callback") {
-        env_vars[key] = value;
-      }
-    });
-
-    let payload = {
-      environment_variables: formValues,
-      litellm_settings: {
-        success_callback: [new_callback],
-      },
-    };
-
-    try {
-      await setCallbacksCall(accessToken, payload);
-      NotificationsManager.success(`Callback ${new_callback} added successfully`);
-      setShowAddCallbacksModal(false);
-      addForm.resetFields();
-      setSelectedCallback(null);
-      setSelectedCallbackParams([]);
-
-      // Refresh the callbacks list
-      const updatedData = await getCallbacksCall(accessToken, userID || "", userRole || "");
-      setCallbacks(updatedData.callbacks);
-    } catch (error) {
-      NotificationsManager.fromBackend(error);
+  const addNewCallbackCall = async (formValues: Record<string, any>) => {
+    const new_callback = formValues?.callback;
+    if (!new_callback) {
+      return;
     }
+    await handleCallbackSubmit(formValues, new_callback, false);
   };
 
   const handleSelectedCallbackChange = (callbackName: string) => {
     setSelectedCallback(callbackName);
-
-    const callbackConfig = callbackConfigs.find((config) => config.id === callbackName);
-
-    if (callbackConfig?.dynamic_params) {
-      setSelectedCallbackParams(Object.keys(callbackConfig.dynamic_params));
-    } else {
-      setSelectedCallbackParams([]);
-    }
+    const params = getDynamicParamsForCallback(callbackName, callbackConfigs);
+    setSelectedCallbackParams(params);
   };
 
   const handleSaveAlerts = async () => {
@@ -564,103 +710,17 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <FormItem label="Callback" name="callback" rules={[{ required: true, message: "Please select a callback" }]}>
-            <Select
-              placeholder="Choose a logging callback..."
-              size="large"
-              className="w-full"
-              showSearch
-              filterOption={(input, option) => {
-                return (option?.value?.toString() ?? "").toLowerCase().includes(input.toLowerCase());
-              }}
-              onChange={(value) => {
-                handleSelectedCallbackChange(value);
-              }}
-            >
-              {callbackConfigs.map((callbackConfig) => {
-                const logo = callbackConfig.logo;
-                const logoSrc =
-                  logo && (logo.includes("/") || logo.startsWith("data:") || logo.startsWith("http"))
-                    ? logo
-                    : `${assetsLogoFolder}${logo}`;
+          <CallbackSelector
+            callbackConfigs={callbackConfigs}
+            selectedCallback={selectedCallback}
+            onCallbackChange={handleSelectedCallbackChange}
+          />
 
-                return (
-                  <SelectItem key={callbackConfig.id} value={callbackConfig.id}>
-                    <div className="flex items-center space-x-3 py-1">
-                      <div className="w-6 h-6 flex items-center justify-center">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={logoSrc}
-                          alt={`${callbackConfig.displayName} logo`}
-                          className="w-6 h-6 rounded object-contain"
-                          onError={(e) => {
-                            e.currentTarget.style.display = "none";
-                          }}
-                        />
-                      </div>
-                      <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>
-                    </div>
-                  </SelectItem>
-                );
-              })}
-            </Select>
-          </FormItem>
-
-          {selectedCallbackParams && selectedCallbackParams.length > 0 && (
-            <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
-              {selectedCallbackParams.map((param) => {
-                const callbackConfig = callbackConfigs.find((config) => config.id === selectedCallback);
-                const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
-                const paramType = paramConfig.type || "text";
-                const fieldLabel =
-                  paramConfig.ui_name || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
-                const isRequired = paramConfig.required || false;
-
-                return (
-                  <FormItem
-                    label={<span className="text-sm font-medium text-gray-700">{fieldLabel} </span>}
-                    name={param}
-                    key={param}
-                    className="mb-4"
-                    rules={
-                      isRequired
-                        ? [
-                            {
-                              required: true,
-                              message: `Please enter the ${fieldLabel.toLowerCase()}`,
-                            },
-                          ]
-                        : undefined
-                    }
-                  >
-                    {paramType === "password" ? (
-                      <Input.Password
-                        size="large"
-                        placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                        className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                      />
-                    ) : paramType === "number" ? (
-                      <Input
-                        type="number"
-                        size="large"
-                        placeholder={`Enter ${fieldLabel.toLowerCase()}`}
-                        className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                        min={0}
-                        max={1}
-                        step={0.1}
-                      />
-                    ) : (
-                      <Input
-                        size="large"
-                        placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                        className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                      />
-                    )}
-                  </FormItem>
-                );
-              })}
-            </div>
-          )}
+          <DynamicParamsFields
+            params={selectedCallbackParams}
+            callbackConfigs={callbackConfigs}
+            selectedCallback={selectedCallback}
+          />
 
           <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
             <Button2
@@ -670,21 +730,25 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 setSelectedCallbackParams([]);
                 addForm.resetFields();
               }}
+              disabled={isAddingCallback}
             >
               Cancel
             </Button2>
-            <Button2 htmlType="submit">Add Callback</Button2>
+            <Button2 htmlType="submit" loading={isAddingCallback} disabled={isAddingCallback}>
+              {isAddingCallback ? "Adding..." : "Add Callback"}
+            </Button2>
           </div>
         </Form>
       </Modal>
 
       <Modal
-        visible={showEditCallback}
+        open={showEditCallback}
         width={800}
-        title={`Edit ${selectedEditCallback?.name} Settings`}
+        title={"Edit Callback Settings"}
         onCancel={() => {
           setShowEditCallback(false);
           setSelectedEditCallback(null);
+          editForm.resetFields();
         }}
         footer={null}
       >
@@ -695,35 +759,54 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <>
-            {selectedEditCallback &&
-              selectedEditCallback.variables &&
-              Object.entries(selectedEditCallback.variables).map(([param]) => (
-                <FormItem
-                  label={param}
-                  name={param}
-                  key={param}
-                  rules={[
-                    {
-                      required: true,
-                      message: `Please enter the value for ${param}`,
-                    },
-                  ]}
-                >
-                  <Input.Password />
-                </FormItem>
-              ))}
-          </>
+          {selectedEditCallback && (
+            <>
+              <CallbackSelector
+                callbackConfigs={callbackConfigs}
+                selectedCallback={selectedEditCallback.name}
+                onCallbackChange={() => {}}
+                disabled={true}
+              />
 
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Save</Button2>
+              <DynamicParamsFields
+                params={getDynamicParamsForCallback(
+                  selectedEditCallback.name,
+                  callbackConfigs,
+                  selectedEditCallback.variables,
+                )}
+                callbackConfigs={callbackConfigs}
+                selectedCallback={selectedEditCallback.name}
+              />
+            </>
+          )}
+
+          <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+            <Button2
+              onClick={() => {
+                setShowEditCallback(false);
+                setSelectedEditCallback(null);
+                editForm.resetFields();
+              }}
+              disabled={isUpdatingCallback}
+            >
+              Cancel
+            </Button2>
+            <Button2
+              onClick={() => {
+                editForm.submit();
+              }}
+              loading={isUpdatingCallback}
+              disabled={isUpdatingCallback}
+            >
+              {isUpdatingCallback ? "Saving..." : "Save Changes"}
+            </Button2>
           </div>
         </Form>
       </Modal>
 
       <Modal
         title="Confirm Delete"
-        visible={showDeleteConfirmModal}
+        open={showDeleteConfirmModal}
         onOk={confirmDeleteCallback}
         onCancel={() => {
           setShowDeleteConfirmModal(false);

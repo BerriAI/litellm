@@ -124,6 +124,7 @@ export interface PromptSpec {
   prompt_info: PromptInfo;
   created_at?: string;
   updated_at?: string;
+  version?: number;  // Explicit version number for version history
 }
 
 export interface PromptTemplateBase {
@@ -212,11 +213,13 @@ export interface CredentialsResponse {
 
 let lastErrorTime = 0;
 
-const handleError = async (errorData: string) => {
+const handleError = async (errorData: string | any) => {
   const currentTime = Date.now();
   if (currentTime - lastErrorTime > 60000) {
     // 60000 milliseconds = 60 seconds
-    if (errorData.includes("Authentication Error - Expired Key")) {
+    // Convert errorData to string if it isn't already
+    const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
+    if (errorString.includes("Authentication Error - Expired Key")) {
       NotificationsManager.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
       clearTokenCookies();
@@ -236,7 +239,7 @@ export const getProviderCreateMetadata = async (): Promise<ProviderCreateInfo[]>
    * Fetch provider credential field metadata from the proxy's public endpoint.
    * This is used by the UI to dynamically render provider-specific credential fields.
    */
-  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/public/providers/fields` : `/public/providers/fields`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/providers/fields` : `/public/providers/fields`;
   const response = await fetch(url, {
     method: "GET",
   });
@@ -293,7 +296,7 @@ export const getUiConfig = async () => {
 };
 
 export const getPublicModelHubInfo = async () => {
-  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/public/model_hub/info` : `/public/model_hub/info`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub/info` : `/public/model_hub/info`;
   const response = await fetch(url);
   const jsonData: PublicModelHubInfo = await response.json();
   return jsonData;
@@ -1963,6 +1966,17 @@ export const modelHubPublicModelsCall = async () => {
 
 export const agentHubPublicModelsCall = async () => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/public/agent_hub` : `/public/agent_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
+};
+
+export const mcpHubPublicServersCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/mcp_hub` : `/public/mcp_hub`;
   const response = await fetch(url, {
     method: "GET",
     headers: {
@@ -5225,6 +5239,35 @@ export const getPromptInfo = async (accessToken: string, promptId: string): Prom
   }
 };
 
+export const getPromptVersions = async (accessToken: string, promptId: string): Promise<ListPromptsResponse> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/versions` : `/prompts/${promptId}/versions`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      // Don't throw global error for 404 (no versions found) as we might want to handle it gracefully
+      if (response.status !== 404) {
+        handleError(errorMessage);
+      }
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get prompt versions:", error);
+    throw error;
+  }
+};
+
 export const createPromptCall = async (accessToken: string, promptData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts` : `/prompts`;
@@ -6573,6 +6616,36 @@ export const makeAgentsPublicCall = async (accessToken: string, agentIds: string
       },
       body: JSON.stringify({
         agent_ids: agentIds,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Make agents public response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to make agents public:", error);
+    throw error;
+  }
+};
+
+export const makeMCPPublicCall = async (accessToken: string, mcpServerIds: string[]) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/make_public` : `/v1/mcp/make_public`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        mcp_server_ids: mcpServerIds,
       }),
     });
 

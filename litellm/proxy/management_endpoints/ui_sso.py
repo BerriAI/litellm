@@ -62,7 +62,11 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
     has_admin_ui_access,
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
-from litellm.proxy.management_endpoints.types import CustomOpenID, get_litellm_user_role
+from litellm.proxy.management_endpoints.types import (
+    CustomOpenID,
+    get_litellm_user_role,
+    is_valid_litellm_user_role,
+)
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -554,6 +558,20 @@ async def get_user_info_from_db(
 
     return None
 
+def _should_use_role_from_sso_response(sso_role: Optional[str]) -> bool:
+    """returns true if SSO upsert should use the 'role' defined on the SSO response"""
+    if sso_role is None:
+        return False
+    
+    if not is_valid_litellm_user_role(sso_role):
+        verbose_proxy_logger.debug(
+            f"SSO role '{sso_role}' is not a valid LiteLLM user role. "
+            "Ignoring role from SSO response. See LitellmUserRoles enum for valid roles."
+        )
+        return False
+    return True
+
+
 
 def apply_user_info_values_to_sso_user_defined_values(
     user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]],
@@ -564,12 +582,22 @@ def apply_user_info_values_to_sso_user_defined_values(
     if user_info is not None and user_info.user_id is not None:
         user_defined_values["user_id"] = user_info.user_id
 
-    # Check if user_role already exists in user_defined_values (from JWT/SSO response)
-    if user_defined_values.get("user_role") is None:
+    # SSO role takes precedence - only use DB role if SSO didn't provide one
+    # This ensures SSO is the authoritative source for user roles
+    sso_role = user_defined_values.get("user_role")
+    db_role = user_info.user_role if user_info else None
+    
+    if _should_use_role_from_sso_response(sso_role):
+        # SSO provided a valid role, keep it and log that we're using it
+        verbose_proxy_logger.info(f"Using SSO role: {sso_role} (DB role was: {db_role})")
+    else:
+        # SSO didn't provide a valid role, fall back to DB role or default
         if user_info is None or user_info.user_role is None:
-            user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+            user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+            verbose_proxy_logger.debug("No SSO or DB role found, using default: INTERNAL_USER_VIEW_ONLY")
         else:
             user_defined_values["user_role"] = user_info.user_role
+            verbose_proxy_logger.debug(f"Using DB role: {user_info.user_role}")
 
     # Preserve the user's existing models from the database
     if user_info is not None and hasattr(user_info, "models") and user_info.models:
@@ -1540,7 +1568,15 @@ class SSOAuthenticationHandler:
                     },
                 )
 
-        # generic client id
+        # Extract user_role from result (works for all SSO providers)
+        if result is not None:
+            _user_role = getattr(result, "user_role", None)
+            if _user_role is not None:
+                # Convert enum to string if needed
+                user_role = _user_role.value if isinstance(_user_role, LitellmUserRoles) else _user_role
+                verbose_proxy_logger.debug(f"Extracted user_role from SSO result: {user_role}")
+
+        # generic client id - override with custom attribute name if specified
         if generic_client_id is not None and result is not None:
             generic_user_role_attribute_name = os.getenv(
                 "GENERIC_USER_ROLE_ATTRIBUTE", "role"

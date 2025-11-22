@@ -95,6 +95,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 These go under `optional_params`:
 
 - `detector_params` - dict - Parameters to pass to your detector
+- `extra_headers` - dict - Additional headers to inject into requests to IBM Guardrails, as a key-value dict.
 - `score_threshold` - float - Only count detections above this score (0.0 to 1.0)
 - `block_on_detection` - bool - Block the request when violations found. Default: `true`
 

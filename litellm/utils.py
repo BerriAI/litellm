@@ -6680,7 +6680,13 @@ def _get_base_model_from_metadata(model_call_details=None):
             return _base_model
         metadata = litellm_params.get("metadata", {})
 
-        return _get_base_model_from_litellm_call_metadata(metadata=metadata)
+        base_model_from_metadata = _get_base_model_from_litellm_call_metadata(metadata=metadata)
+        if base_model_from_metadata is not None:
+            return base_model_from_metadata
+
+        # Also check litellm_metadata (used by Responses API and other generic API calls)
+        litellm_metadata = litellm_params.get("litellm_metadata", {})
+        return _get_base_model_from_litellm_call_metadata(metadata=litellm_metadata)
     return None
 
 
@@ -7199,6 +7205,8 @@ class ProviderConfigManager:
             return litellm.DashScopeChatConfig()
         elif litellm.LlmProviders.MOONSHOT == provider:
             return litellm.MoonshotChatConfig()
+        elif litellm.LlmProviders.DOCKER_MODEL_RUNNER == provider:
+            return litellm.DockerModelRunnerChatConfig()
         elif litellm.LlmProviders.V0 == provider:
             return litellm.V0ChatConfig()
         elif litellm.LlmProviders.MORPH == provider:
@@ -7383,6 +7391,8 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            return litellm.GithubCopilotResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
         return None
@@ -7749,6 +7759,12 @@ class ProviderConfigManager:
             )
 
             return LiteLLMProxyImageEditConfig()
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.image_edit import (
+                get_vertex_ai_image_edit_config,
+            )
+
+            return get_vertex_ai_image_edit_config(model)
         return None
 
     @staticmethod

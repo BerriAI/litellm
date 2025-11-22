@@ -33,7 +33,7 @@ describe("Sidebar (leftnav)", () => {
 
     const topLevelLabels = [
       "Virtual Keys",
-      "Test Key",
+      "Playground",
       "Models + Endpoints",
       "Usage",
       "Teams",

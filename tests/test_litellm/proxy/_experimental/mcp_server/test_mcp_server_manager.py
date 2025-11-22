@@ -17,6 +17,8 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
+from mcp import ReadResourceResult, Resource
+from mcp.types import GetPromptResult, Prompt, ResourceTemplate, TextResourceContents
 
 
 class TestMCPServerManager:
@@ -39,7 +41,7 @@ class TestMCPServerManager:
         result = _deserialize_json_dict(invalid_json)
         assert result is None
 
-    def test_add_update_server_stdio(self):
+    async def test_add_update_server_stdio(self):
         """Test adding stdio MCP server"""
         manager = MCPServerManager()
 
@@ -220,6 +222,195 @@ class TestMCPServerManager:
 
         assert len(result) == 1
         assert result[0].name == "github_tool_1"
+
+    @pytest.mark.asyncio
+    async def test_get_prompts_from_server_success(self):
+        """Ensure prompts are fetched and prefixed when requested."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+
+        mock_prompt = Prompt(name="hello", description="Say hi")
+        mock_client = AsyncMock()
+        mock_client.list_prompts = AsyncMock(return_value=[mock_prompt])
+
+        with patch.object(manager, "_create_mcp_client", return_value=mock_client):
+            prompts = await manager.get_prompts_from_server(server, add_prefix=True)
+
+        mock_client.list_prompts.assert_awaited_once()
+        assert len(prompts) == 1
+        assert prompts[0].name == "alias-server-hello"
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_from_server_success(self):
+        """Ensure a single prompt definition is requested via the MCP client."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+
+        mock_result = GetPromptResult(
+            description="Hello world prompt",
+            messages=[],
+        )
+        mock_client = AsyncMock()
+        mock_client.get_prompt = AsyncMock(return_value=mock_result)
+
+        with patch.object(manager, "_create_mcp_client", return_value=mock_client):
+            result = await manager.get_prompt_from_server(
+                server=server,
+                prompt_name="hello",
+                arguments={"tone": "casual"},
+            )
+
+        mock_client.get_prompt.assert_awaited_once()
+        awaited_call = mock_client.get_prompt.await_args
+        called_params = awaited_call.args[0]
+        assert called_params.name == "hello"
+        assert called_params.arguments == {"tone": "casual"}
+        assert result is mock_result
+
+    @pytest.mark.asyncio
+    async def test_get_resources_from_server_success(self):
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            static_headers={"X-Static": "static"},
+        )
+
+        mock_client = AsyncMock()
+        mock_resources = [Resource(name="file", uri="https://example.com/file")]
+        mock_client.list_resources = AsyncMock(return_value=mock_resources)
+        prefixed_resources = [Resource(name="alias-server-file", uri="https://example.com/file")]
+
+        with patch.object(manager, "_create_mcp_client", return_value=mock_client) as mock_create_client, patch.object(
+            manager,
+            "_create_prefixed_resources",
+            return_value=prefixed_resources,
+        ) as mock_prefix:
+            result = await manager.get_resources_from_server(
+                server=server,
+                mcp_auth_header="auth",
+                extra_headers={"X-Test": "1"},
+                add_prefix=True,
+            )
+
+        mock_create_client.assert_called_once()
+        called_kwargs = mock_create_client.call_args.kwargs
+        assert called_kwargs["server"] is server
+        assert called_kwargs["mcp_auth_header"] == "auth"
+        assert called_kwargs["extra_headers"] == {"X-Test": "1", "X-Static": "static"}
+        mock_client.list_resources.assert_awaited_once()
+        mock_prefix.assert_called_once_with(mock_resources, server, add_prefix=True)
+        assert result == prefixed_resources
+
+    @pytest.mark.asyncio
+    async def test_get_resource_templates_from_server_success(self):
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+
+        mock_client = AsyncMock()
+        mock_templates = [
+            ResourceTemplate(
+                name="template",
+                uriTemplate="https://example.com/{id}",
+            )
+        ]
+        mock_client.list_resource_templates = AsyncMock(return_value=mock_templates)
+        prefixed_templates = [
+            ResourceTemplate(
+                name="alias-server-template",
+                uriTemplate="https://example.com/{id}",
+            )
+        ]
+
+        with patch.object(manager, "_create_mcp_client", return_value=mock_client) as mock_create_client, patch.object(
+            manager,
+            "_create_prefixed_resource_templates",
+            return_value=prefixed_templates,
+        ) as mock_prefix:
+            result = await manager.get_resource_templates_from_server(
+                server=server,
+                mcp_auth_header="auth",
+                extra_headers=None,
+                add_prefix=False,
+            )
+
+        mock_create_client.assert_called_once_with(
+            server=server,
+            mcp_auth_header="auth",
+            extra_headers=None,
+        )
+        mock_client.list_resource_templates.assert_awaited_once()
+        mock_prefix.assert_called_once_with(mock_templates, server, add_prefix=False)
+        assert result == prefixed_templates
+
+    @pytest.mark.asyncio
+    async def test_read_resource_from_server_success(self):
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            static_headers={"X-Static": "1"},
+        )
+
+        mock_client = AsyncMock()
+        read_result = ReadResourceResult(
+            contents=[
+                TextResourceContents(
+                    uri="https://example.com/resource",
+                    text="hello",
+                    mimeType="text/plain",
+                )
+            ]
+        )
+        mock_client.read_resource = AsyncMock(return_value=read_result)
+
+        with patch.object(manager, "_create_mcp_client", return_value=mock_client) as mock_create_client:
+            result = await manager.read_resource_from_server(
+                server=server,
+                url="https://example.com/resource",
+                mcp_auth_header="auth",
+                extra_headers={"X-Test": "1"},
+            )
+
+        mock_create_client.assert_called_once()
+        called_kwargs = mock_create_client.call_args.kwargs
+        assert called_kwargs["extra_headers"] == {"X-Test": "1", "X-Static": "1"}
+        mock_client.read_resource.assert_awaited_once_with("https://example.com/resource")
+        assert result is read_result
 
     @pytest.mark.asyncio
     async def test_fetch_oauth_metadata_from_resource_returns_servers_and_scopes(self):
@@ -1044,7 +1235,7 @@ class TestMCPServerManager:
             assert "tool_1" in tool_names
             assert "tool_2" in tool_names
 
-    def test_add_db_mcp_server_to_registry(self):
+    async def test_add_db_mcp_server_to_registry(self):
         """Test that add_db_mcp_server_to_registry adds a MCP server to the registry"""
         manager = MCPServerManager()
         server = LiteLLM_MCPServerTable(

@@ -105,7 +105,7 @@ LITELLM_MASTER_KEY gives claude access to all proxy models, whereas a virtual ke
 Alternatively, use the Anthropic pass-through endpoint:
 
 ```bash
-export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
+export ANTHROPIC_BASE_URL="http://0.0.0.0:4000/anthropic"
 export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 ```
 
@@ -221,7 +221,6 @@ You can also connect MCP servers to Claude Code via LiteLLM Proxy.
 Limitations:
 
 - Currently, only HTTP MCP servers are supported
-- Does not work in Cursor IDE yet.
 
 :::
 

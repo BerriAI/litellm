@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom";
 import { cleanup } from "@testing-library/react";
+import React from "react";
 import { afterEach, vi } from "vitest";
 
 // Global mock for NotificationManager to prevent React rendering issues in tests
@@ -15,6 +16,18 @@ vi.mock("@/components/molecules/notifications_manager", () => ({
     clear: vi.fn(),
   },
 }));
+
+vi.mock("@tremor/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tremor/react")>();
+  return {
+    ...actual,
+    Tooltip: ({ children, ..._props }: { children?: React.ReactNode; [key: string]: unknown }) => {
+      // Return children directly without tooltip functionality to prevent flaky tests
+      // This avoids issues with hover states, positioning, and DOM queries in tests
+      return React.createElement(React.Fragment, null, children);
+    },
+  };
+});
 
 afterEach(() => {
   cleanup();

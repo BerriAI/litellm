@@ -872,3 +872,201 @@ def test_initialize_specialized_endpoints():
     for endpoint in specialized_endpoints:
         assert hasattr(router, endpoint)
         assert callable(getattr(router, endpoint))
+
+
+def test_initialize_vector_store_endpoints():
+    """
+    Test that _initialize_vector_store_endpoints correctly sets up vector store endpoints.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    router._initialize_vector_store_endpoints()
+
+    vector_store_endpoints = [
+        "avector_store_search",
+        "avector_store_create",
+        "vector_store_search",
+        "vector_store_create",
+    ]
+
+    for endpoint in vector_store_endpoints:
+        assert hasattr(router, endpoint)
+        assert callable(getattr(router, endpoint))
+
+
+def test_initialize_vector_store_file_endpoints():
+    """
+    Test that _initialize_vector_store_file_endpoints correctly sets up vector store file endpoints.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    router._initialize_vector_store_file_endpoints()
+
+    vector_store_file_endpoints = [
+        "avector_store_file_create",
+        "vector_store_file_create",
+        "avector_store_file_list",
+        "vector_store_file_list",
+        "avector_store_file_retrieve",
+        "vector_store_file_retrieve",
+        "avector_store_file_content",
+        "vector_store_file_content",
+        "avector_store_file_update",
+        "vector_store_file_update",
+        "avector_store_file_delete",
+        "vector_store_file_delete",
+    ]
+
+    for endpoint in vector_store_file_endpoints:
+        assert hasattr(router, endpoint)
+        assert callable(getattr(router, endpoint))
+
+
+def test_initialize_google_genai_endpoints():
+    """
+    Test that _initialize_google_genai_endpoints correctly sets up Google GenAI endpoints.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    router._initialize_google_genai_endpoints()
+
+    google_genai_endpoints = [
+        "agenerate_content",
+        "generate_content",
+        "agenerate_content_stream",
+        "generate_content_stream",
+    ]
+
+    for endpoint in google_genai_endpoints:
+        assert hasattr(router, endpoint)
+        assert callable(getattr(router, endpoint))
+
+
+def test_initialize_ocr_search_endpoints():
+    """
+    Test that _initialize_ocr_search_endpoints correctly sets up OCR and search endpoints.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    router._initialize_ocr_search_endpoints()
+
+    ocr_search_endpoints = [
+        "aocr",
+        "ocr",
+        "asearch",
+        "search",
+    ]
+
+    for endpoint in ocr_search_endpoints:
+        assert hasattr(router, endpoint)
+        assert callable(getattr(router, endpoint))
+
+
+def test_initialize_video_endpoints():
+    """
+    Test that _initialize_video_endpoints correctly sets up video endpoints.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    router._initialize_video_endpoints()
+
+    video_endpoints = [
+        "avideo_generation",
+        "video_generation",
+        "avideo_list",
+        "video_list",
+        "avideo_status",
+        "video_status",
+        "avideo_content",
+        "video_content",
+        "avideo_remix",
+        "video_remix",
+    ]
+
+    for endpoint in video_endpoints:
+        assert hasattr(router, endpoint)
+        assert callable(getattr(router, endpoint))
+
+
+def test_initialize_container_endpoints():
+    """
+    Test that _initialize_container_endpoints correctly sets up container endpoints.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    router._initialize_container_endpoints()
+
+    container_endpoints = [
+        "acreate_container",
+        "create_container",
+        "alist_containers",
+        "list_containers",
+        "aretrieve_container",
+        "retrieve_container",
+        "adelete_container",
+        "delete_container",
+    ]
+
+    for endpoint in container_endpoints:
+        assert hasattr(router, endpoint)
+        assert callable(getattr(router, endpoint))

@@ -3339,7 +3339,7 @@ jobs:
             python -m build
             twine upload --verbose dist/*
 
-  e2e_ui_testing:
+  ui_build:
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
@@ -3366,6 +3366,48 @@ jobs:
 
             # Now source the build script
             source ./build_ui.sh
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm/proxy/_experimental/out
+
+  ui_unit_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Run UI unit tests (Vitest)
+          command: |
+            # Use Node 20 (several deps require >=20)
+            export NVM_DIR="/opt/circleci/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            nvm install 20
+            nvm use 20
+
+            cd ui/litellm-dashboard
+            npm ci || npm install
+
+            # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
+            CI=true npm run test -- --run --coverage \
+              --coverage.provider=v8 \
+              --coverage.reporter=lcov \
+              --coverage.reporter=html \
+              --coverage.reportsDirectory=coverage/html
+
+  e2e_ui_testing:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - attach_workspace:
+          at: ~/project
       - run:
           name: Upgrade Docker to v24.x (API 1.44+)
           command: |
@@ -3411,24 +3453,6 @@ jobs:
           name: Install Playwright Browsers
           command: |
             npx playwright install
-      - run:
-          name: Run UI unit tests (Vitest)
-          command: |
-            # Use Node 20 (several deps require >=20)
-            export NVM_DIR="/opt/circleci/.nvm"
-            source "$NVM_DIR/nvm.sh"
-            nvm install 20
-            nvm use 20
-
-            cd ui/litellm-dashboard
-            npm ci || npm install
-
-            # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
-            CI=true npm run test -- --run --coverage \
-              --coverage.provider=v8 \
-              --coverage.reporter=lcov \
-              --coverage.reporter=html \
-              --coverage.reportsDirectory=coverage/html
 
       - run:
           name: Build Docker image
@@ -3633,6 +3657,20 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - ui_build:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - ui_unit_tests:
+          requires:
+            - ui_build
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - auth_ui_unit_tests:
           filters:
             branches:
@@ -3640,6 +3678,8 @@ workflows:
                 - main
                 - /litellm_.*/
       - e2e_ui_testing:
+          requires:
+            - ui_build
           filters:
             branches:
               only:

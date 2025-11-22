@@ -894,6 +894,7 @@ class ProxyLogging:
             Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None)
         )
         prompt_id = data.get("prompt_id", None)
+        prompt_version = data.get("prompt_version", None)
 
         ## PROMPT TEMPLATE CHECK ##
         if (
@@ -901,12 +902,28 @@ class ProxyLogging:
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion")
         ):
+            from litellm.proxy.prompts.prompt_endpoints import (
+                construct_versioned_prompt_id,
+                get_latest_version_prompt_id,
+            )
             from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
 
+            # If no version is specified, find the latest version
+            if prompt_version is None:
+                lookup_prompt_id = get_latest_version_prompt_id(
+                    prompt_id=prompt_id,
+                    all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS,
+                )
+            else:
+                # Construct versioned prompt_id if prompt_version is provided
+                lookup_prompt_id = construct_versioned_prompt_id(
+                    prompt_id=prompt_id, version=prompt_version
+                )
+
             custom_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
-                prompt_id
+                lookup_prompt_id
             )
-            prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+            prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(lookup_prompt_id)
             litellm_prompt_id: Optional[str] = None
             if prompt_spec is not None:
                 litellm_prompt_id = prompt_spec.litellm_params.prompt_id
@@ -2184,6 +2201,7 @@ class PrismaClient:
                             t.team_alias AS team_alias,
                             t.metadata AS team_metadata,
                             t.members_with_roles AS team_members_with_roles,
+                            t.object_permission_id AS team_object_permission_id,
                             t.organization_id as org_id,
                             tm.spend AS team_member_spend,
                             m.aliases AS team_model_aliases,
