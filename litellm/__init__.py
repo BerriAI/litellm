@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
     from litellm.llms.openai_like.chat.handler import OpenAILikeChatConfig
     from litellm.llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
+    from litellm.llms.galadriel.chat.transformation import GaladrielChatConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -1052,7 +1053,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 
-from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
 from .llms.compactifai.chat.transformation import CompactifAIChatConfig
 from .llms.empower.chat.transformation import EmpowerChatConfig
@@ -1967,5 +1967,11 @@ def __getattr__(name: str) -> Any:
         from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig as _AiohttpOpenAIChatConfig
         globals()["AiohttpOpenAIChatConfig"] = _AiohttpOpenAIChatConfig
         return _AiohttpOpenAIChatConfig
+    
+    # Lazy-load GaladrielChatConfig to reduce import-time memory cost
+    if name == "GaladrielChatConfig":
+        from .llms.galadriel.chat.transformation import GaladrielChatConfig as _GaladrielChatConfig
+        globals()["GaladrielChatConfig"] = _GaladrielChatConfig
+        return _GaladrielChatConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
