@@ -1938,6 +1938,21 @@ def _lazy_import_ollama_configs(name: str) -> Any:
     raise AttributeError(f"Ollama configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_sagemaker_configs(name: str) -> Any:
+    """Lazy import for Sagemaker config classes - imports only the requested class."""
+    if name == "SagemakerConfig":
+        from .llms.sagemaker.completion.transformation import SagemakerConfig as _SagemakerConfig
+        globals()["SagemakerConfig"] = _SagemakerConfig
+        return _SagemakerConfig
+    
+    if name == "SagemakerChatConfig":
+        from .llms.sagemaker.chat.transformation import SagemakerChatConfig as _SagemakerChatConfig
+        globals()["SagemakerChatConfig"] = _SagemakerChatConfig
+        return _SagemakerChatConfig
+    
+    raise AttributeError(f"Sagemaker configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2147,17 +2162,9 @@ def __getattr__(name: str) -> Any:
     if name in {"OllamaChatConfig", "OllamaConfig"}:
         return _lazy_import_ollama_configs(name)
     
-    # Lazy-load SagemakerConfig to reduce import-time memory cost
-    if name == "SagemakerConfig":
-        from .llms.sagemaker.completion.transformation import SagemakerConfig as _SagemakerConfig
-        globals()["SagemakerConfig"] = _SagemakerConfig
-        return _SagemakerConfig
-    
-    # Lazy-load SagemakerChatConfig to reduce import-time memory cost
-    if name == "SagemakerChatConfig":
-        from .llms.sagemaker.chat.transformation import SagemakerChatConfig as _SagemakerChatConfig
-        globals()["SagemakerChatConfig"] = _SagemakerChatConfig
-        return _SagemakerChatConfig
+    # Lazy-load Sagemaker configs to reduce import-time memory cost
+    if name in {"SagemakerConfig", "SagemakerChatConfig"}:
+        return _lazy_import_sagemaker_configs(name)
     
     # Lazy-load CohereChatConfig to reduce import-time memory cost
     if name == "CohereChatConfig":
