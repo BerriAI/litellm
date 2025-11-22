@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import * as Networking from "./networking";
+import { updateSSOSettings } from "./networking";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
@@ -66,7 +66,7 @@ describe("networking - expired session handling", () => {
     global.fetch = mockFetch as any;
 
     try {
-      await Networking.updateSSOSettings("token", { some: "setting" });
+      await updateSSOSettings("token", { some: "setting" });
     } catch (error) {
       const thrownError = error as any;
       expect(thrownError).toBeInstanceOf(Error);
