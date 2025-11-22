@@ -2211,6 +2211,23 @@ def _lazy_import_openai_gpt_configs(name: str) -> Any:
     raise AttributeError(f"OpenAI GPT configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_nvidia_nim_configs(name: str) -> Any:
+    """Lazy import for NvidiaNim config classes - imports only the requested class."""
+    if name == "NvidiaNimConfig":
+        from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
+        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
+        return _NvidiaNimConfig
+    
+    if name == "nvidiaNimConfig":
+        from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
+        _nvidiaNimConfig = _NvidiaNimConfig()
+        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
+        globals()["nvidiaNimConfig"] = _nvidiaNimConfig
+        return _nvidiaNimConfig
+    
+    raise AttributeError(f"NvidiaNim configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2573,18 +2590,8 @@ def __getattr__(name: str) -> Any:
     if name in _openai_gpt_config_names:
         return _lazy_import_openai_gpt_configs(name)
     
-    # Lazy-load NvidiaNimConfig to reduce import-time memory cost
-    if name == "NvidiaNimConfig":
-        from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
-        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
-        return _NvidiaNimConfig
-    
-    # Lazy-load nvidiaNimConfig instance to reduce import-time memory cost
-    if name == "nvidiaNimConfig":
-        from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
-        _nvidiaNimConfig = _NvidiaNimConfig()
-        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
-        globals()["nvidiaNimConfig"] = _nvidiaNimConfig
-        return _nvidiaNimConfig
+    # Lazy-load NvidiaNim configs to reduce import-time memory cost
+    if name in {"NvidiaNimConfig", "nvidiaNimConfig"}:
+        return _lazy_import_nvidia_nim_configs(name)
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
