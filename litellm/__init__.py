@@ -1736,6 +1736,26 @@ def _lazy_import_secret_managers(name: str) -> Any:
     raise AttributeError(f"Secret managers lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_dotprompt(name: str) -> Any:
+    """Lazy import for dotprompt module - imports only the requested item by name."""
+    if name == "global_prompt_manager":
+        from litellm.integrations.dotprompt import global_prompt_manager as _global_prompt_manager
+        globals()["global_prompt_manager"] = _global_prompt_manager
+        return _global_prompt_manager
+    
+    if name == "global_prompt_directory":
+        from litellm.integrations.dotprompt import global_prompt_directory as _global_prompt_directory
+        globals()["global_prompt_directory"] = _global_prompt_directory
+        return _global_prompt_directory
+    
+    if name == "set_global_prompt_directory":
+        from litellm.integrations.dotprompt import set_global_prompt_directory as _set_global_prompt_directory
+        globals()["set_global_prompt_directory"] = _set_global_prompt_directory
+        return _set_global_prompt_directory
+    
+    raise AttributeError(f"Dotprompt lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -1814,20 +1834,8 @@ def __getattr__(name: str) -> Any:
         return _LoggingCallbackManager
     
     # Lazy-load dotprompt imports to avoid circular imports
-    if name == "global_prompt_manager":
-        from litellm.integrations.dotprompt import global_prompt_manager as _global_prompt_manager
-        globals()["global_prompt_manager"] = _global_prompt_manager
-        return _global_prompt_manager
-    
-    if name == "global_prompt_directory":
-        from litellm.integrations.dotprompt import global_prompt_directory as _global_prompt_directory
-        globals()["global_prompt_directory"] = _global_prompt_directory
-        return _global_prompt_directory
-    
-    if name == "set_global_prompt_directory":
-        from litellm.integrations.dotprompt import set_global_prompt_directory as _set_global_prompt_directory
-        globals()["set_global_prompt_directory"] = _set_global_prompt_directory
-        return _set_global_prompt_directory
+    if name in {"global_prompt_manager", "global_prompt_directory", "set_global_prompt_directory"}:
+        return _lazy_import_dotprompt(name)
     
     # Lazy-load COHERE_EMBEDDING_INPUT_TYPES to reduce import-time memory cost
     if name == "COHERE_EMBEDDING_INPUT_TYPES":
