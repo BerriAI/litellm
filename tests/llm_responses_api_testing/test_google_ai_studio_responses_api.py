@@ -132,15 +132,24 @@ async def test_gemini_3_responses_api_with_thought_signatures():
     )
     
     # Validate response structure
-    assert isinstance(response, dict), "Response should be a dict"
-    assert "output" in response, "Response should have 'output' field"
-    assert isinstance(response["output"], list), "Output should be a list"
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    assert isinstance(response, ResponsesAPIResponse), "Response should be a ResponsesAPIResponse"
+    assert hasattr(response, "output") or "output" in response, "Response should have 'output' field"
+    assert isinstance(response.output, list), "Output should be a list"
     
     # Find function call in output
     function_call_item = None
-    for item in response["output"]:
-        if isinstance(item, dict) and item.get("type") == "function_call":
-            function_call_item = item
+    for item in response.output:
+        # Convert to dict if it's a Pydantic model for easier access
+        if hasattr(item, "model_dump"):
+            item_dict = item.model_dump()
+        elif hasattr(item, "__dict__"):
+            item_dict = dict(item) if not isinstance(item, dict) else item
+        else:
+            item_dict = item if isinstance(item, dict) else {}
+        
+        if isinstance(item_dict, dict) and item_dict.get("type") == "function_call":
+            function_call_item = item_dict
             break
     
     # Verify function call exists

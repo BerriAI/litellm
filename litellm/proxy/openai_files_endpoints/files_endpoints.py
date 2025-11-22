@@ -45,12 +45,9 @@ from litellm.types.llms.openai import (
 
 from .common_utils import (
     _is_base64_encoded_unified_file_id,
-    decode_model_from_file_id,
     encode_file_id_with_model,
     get_credentials_for_model,
-    get_original_file_id,
     handle_model_based_routing,
-    is_model_embedded_id,
     prepare_data_with_credentials,
 )
 

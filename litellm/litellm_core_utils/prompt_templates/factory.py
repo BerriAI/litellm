@@ -911,7 +911,9 @@ def convert_to_anthropic_image_obj(
 
 
 def create_anthropic_image_param(
-    image_url_input: Union[str, dict], format: Optional[str] = None
+    image_url_input: Union[str, dict], 
+    format: Optional[str] = None,
+    is_bedrock_invoke: bool = False
 ) -> AnthropicMessagesImageParam:
     """
     Create an AnthropicMessagesImageParam from an image URL input.
@@ -926,15 +928,31 @@ def create_anthropic_image_param(
         if format is None:
             format = image_url_input.get("format")
     
-    # Check if the image URL is an HTTP/HTTPS URL that should be passed directly
+    # Check if the image URL is an HTTP/HTTPS URL
     if image_url.startswith("http://") or image_url.startswith("https://"):
-        return AnthropicMessagesImageParam(
-            type="image",
-            source=AnthropicContentParamSourceUrl(
-                type="url",
-                url=image_url,
-            ),
-        )
+        # For Bedrock invoke, always convert URLs to base64 (Bedrock invoke doesn't support URLs)
+        if is_bedrock_invoke or image_url.startswith("http://"):
+            base64_url = convert_url_to_base64(url=image_url)
+            image_chunk = convert_to_anthropic_image_obj(
+                openai_image_url=base64_url, format=format
+            )
+            return AnthropicMessagesImageParam(
+                type="image",
+                source=AnthropicContentParamSource(
+                    type="base64",
+                    media_type=image_chunk["media_type"],
+                    data=image_chunk["data"],
+                ),
+            )
+        else:
+            # HTTPS URL - pass directly for regular Anthropic
+            return AnthropicMessagesImageParam(
+                type="image",
+                source=AnthropicContentParamSourceUrl(
+                    type="url",
+                    url=image_url,
+                ),
+            )
     else:
         # Convert to base64 for data URIs or other formats
         image_chunk = convert_to_anthropic_image_obj(
@@ -1895,10 +1913,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
                                     "url": image_url_value["url"],
                                     "format": image_url_value.get("format"),
                                 }
+                            # Bedrock invoke models have format: invoke/...
+                            is_bedrock_invoke = model.lower().startswith("invoke/")
                             _anthropic_content_element = create_anthropic_image_param(
-                                image_url_input, format=format
-                            )
-                            
+                                image_url_input, format=format, is_bedrock_invoke=is_bedrock_invoke
+                            ) 
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
                                 original_content_element=dict(m),

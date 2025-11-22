@@ -361,19 +361,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     if provider_fields:
                         provider_specific_fields = provider_fields if isinstance(provider_fields, dict) else (dict(provider_fields) if hasattr(provider_fields, "__dict__") else {})
                 
-                tool_call_dict = {
+                function_dict: Dict[str, Any] = {
+                    "name": item.name,
+                    "arguments": item.arguments,
+                }
+                
+                if provider_specific_fields:
+                    function_dict["provider_specific_fields"] = provider_specific_fields
+                
+                tool_call_dict: Dict[str, Any] = {
                     "id": item.call_id,
-                    "function": {
-                        "name": item.name,
-                        "arguments": item.arguments,
-                    },
+                    "function": function_dict,
                     "type": "function",
                 }
                 
                 if provider_specific_fields:
                     tool_call_dict["provider_specific_fields"] = provider_specific_fields
-                    # Also add to function's provider_specific_fields for consistency
-                    tool_call_dict["function"]["provider_specific_fields"] = provider_specific_fields
                 
                 msg = Message(
                     content=None,
@@ -717,19 +720,24 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 if provider_specific_fields and not isinstance(provider_specific_fields, dict):
                     provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
                 
+                function_chunk = ChatCompletionToolCallFunctionChunk(
+                    name=output_item.get("name", None),
+                    arguments=parsed_chunk.get("arguments", ""),
+                )
+                
+                if provider_specific_fields:
+                    function_chunk["provider_specific_fields"] = provider_specific_fields
+                
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
                     index=0,
                     type="function",
-                    function=ChatCompletionToolCallFunctionChunk(
-                        name=output_item.get("name", None),
-                        arguments=parsed_chunk.get("arguments", ""),
-                    ),
+                    function=function_chunk,
                 )
                 
                 # Add provider_specific_fields if present
                 if provider_specific_fields:
-                    tool_call_chunk.provider_specific_fields = provider_specific_fields
+                    tool_call_chunk.provider_specific_fields = provider_specific_fields  # type: ignore
                 
                 return GenericStreamingChunk(
                     text="",
@@ -774,19 +782,25 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 if provider_specific_fields and not isinstance(provider_specific_fields, dict):
                     provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
                 
+                function_chunk = ChatCompletionToolCallFunctionChunk(
+                    name=output_item.get("name", None),
+                    arguments="",  # responses API sends everything again, we don't
+                )
+                
+                # Add provider_specific_fields to function if present
+                if provider_specific_fields:
+                    function_chunk["provider_specific_fields"] = provider_specific_fields
+                
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
                     index=0,
                     type="function",
-                    function=ChatCompletionToolCallFunctionChunk(
-                        name=output_item.get("name", None),
-                        arguments="",  # responses API sends everything again, we don't
-                    ),
+                    function=function_chunk,
                 )
                 
                 # Add provider_specific_fields if present
                 if provider_specific_fields:
-                    tool_call_chunk.provider_specific_fields = provider_specific_fields
+                    tool_call_chunk.provider_specific_fields = provider_specific_fields  # type: ignore
                 
                 return GenericStreamingChunk(
                     text="",

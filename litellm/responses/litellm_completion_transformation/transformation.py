@@ -618,17 +618,17 @@ class LiteLLMCompletionResponsesConfig:
         for tool in all_chat_completion_tools:
             if tool.type == "function":
                 function_definition = tool.function
-                provider_specific_fields = None
-                if hasattr(tool, "provider_specific_fields") and tool.provider_specific_fields:
-                    provider_specific_fields = tool.provider_specific_fields
+                provider_specific_fields: Optional[Dict[str, Any]] = None
+                if hasattr(tool, "provider_specific_fields") and getattr(tool, "provider_specific_fields", None):
+                    provider_specific_fields = getattr(tool, "provider_specific_fields")
                     if not isinstance(provider_specific_fields, dict):
                         provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-                elif hasattr(function_definition, "provider_specific_fields") and function_definition.provider_specific_fields:
-                    provider_specific_fields = function_definition.provider_specific_fields
+                elif hasattr(function_definition, "provider_specific_fields") and getattr(function_definition, "provider_specific_fields", None):
+                    provider_specific_fields = getattr(function_definition, "provider_specific_fields")
                     if not isinstance(provider_specific_fields, dict):
                         provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
                 
-                tool_call = OutputFunctionToolCall(
+                output_tool_call: OutputFunctionToolCall = OutputFunctionToolCall(
                     name=function_definition.name or "",
                     arguments=function_definition.get("arguments") or "",
                     call_id=tool.id or "",
@@ -639,9 +639,9 @@ class LiteLLMCompletionResponsesConfig:
                 
                 # Pass through provider_specific_fields as-is if present
                 if provider_specific_fields:
-                    tool_call.provider_specific_fields = provider_specific_fields
+                    setattr(output_tool_call, "provider_specific_fields", provider_specific_fields)  # type: ignore
                 
-                responses_tools.append(tool_call)
+                responses_tools.append(output_tool_call)
         return responses_tools
 
     @staticmethod

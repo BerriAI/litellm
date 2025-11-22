@@ -22,7 +22,6 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
-    convert_b64_uid_to_unified_uid,
     decode_model_from_file_id,
     encode_file_id_with_model,
     get_batch_id_from_unified_batch_id,
@@ -30,7 +29,6 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
-    is_model_embedded_id,
     prepare_data_with_credentials,
 )
 
@@ -570,6 +568,8 @@ async def list_batches(
         # SCENARIO 2 (alternative): target_model_names based routing
         elif target_model_names or data.get("target_model_names", None):
             target_model_names = target_model_names or data.get("target_model_names", None)
+            if target_model_names is None:
+                raise ValueError("target_model_names is required for this routing scenario")
             model = target_model_names.split(",")[0]
             response = await llm_router.alist_batches(
                 model=model,
