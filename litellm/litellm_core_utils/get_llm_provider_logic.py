@@ -22,6 +22,19 @@ def _is_non_openai_azure_model(model: str) -> bool:
     return False
 
 
+def _is_azure_anthropic_model(model: str) -> Optional[str]:
+    try:
+        model_parts = model.split("/", 1)
+        if len(model_parts) > 1:
+            model_name = model_parts[1].lower()
+            # Check if model name contains claude
+            if "claude" in model_name or model_name.startswith("claude"):
+                return model_parts[1]  # Return model name without "azure/" prefix
+    except Exception:
+        pass
+    return None
+
+
 def handle_cohere_chat_model_custom_llm_provider(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> Tuple[str, Optional[str]]:
@@ -123,6 +136,11 @@ def get_llm_provider(  # noqa: PLR0915
         # AZURE AI-Studio Logic - Azure AI Studio supports AZURE/Cohere
         # If User passes azure/command-r-plus -> we should send it to cohere_chat/command-r-plus
         if model.split("/", 1)[0] == "azure":
+            # Check if it's an Azure Anthropic model (claude models)
+            azure_anthropic_model = _is_azure_anthropic_model(model)
+            if azure_anthropic_model:
+                custom_llm_provider = "azure_anthropic"
+                return azure_anthropic_model, custom_llm_provider, dynamic_api_key, api_base
             if _is_non_openai_azure_model(model):
                 custom_llm_provider = "openai"
                 return model, custom_llm_provider, dynamic_api_key, api_base
