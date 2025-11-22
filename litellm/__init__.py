@@ -1047,10 +1047,6 @@ openai_video_generation_models = ["sora-2"]
 from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 # Note: remove_index_from_tool_calls is lazy-loaded via __getattr__ to reduce import-time memory cost
-# Note: get_modified_max_tokens is not exported from __init__.py and is only used
-# internally in utils.py, so we don't need to import it here
-# client must be imported immediately as it's used as a decorator at function definition time
-from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 
@@ -1324,6 +1320,7 @@ from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
 from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
+from .utils import client
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
