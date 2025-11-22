@@ -1856,6 +1856,21 @@ def _lazy_import_data_platform_configs(name: str) -> Any:
     raise AttributeError(f"Data platform configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_huggingface_configs(name: str) -> Any:
+    """Lazy import for HuggingFace config classes - imports only the requested class."""
+    if name == "HuggingFaceChatConfig":
+        from .llms.huggingface.chat.transformation import HuggingFaceChatConfig as _HuggingFaceChatConfig
+        globals()["HuggingFaceChatConfig"] = _HuggingFaceChatConfig
+        return _HuggingFaceChatConfig
+    
+    if name == "HuggingFaceEmbeddingConfig":
+        from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig as _HuggingFaceEmbeddingConfig
+        globals()["HuggingFaceEmbeddingConfig"] = _HuggingFaceEmbeddingConfig
+        return _HuggingFaceEmbeddingConfig
+    
+    raise AttributeError(f"HuggingFace configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -1963,11 +1978,9 @@ def __getattr__(name: str) -> Any:
     if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig"}:
         return _lazy_import_small_provider_chat_configs(name)
     
-    # Lazy-load HuggingFaceChatConfig to reduce import-time memory cost
-    if name == "HuggingFaceChatConfig":
-        from .llms.huggingface.chat.transformation import HuggingFaceChatConfig as _HuggingFaceChatConfig
-        globals()["HuggingFaceChatConfig"] = _HuggingFaceChatConfig
-        return _HuggingFaceChatConfig
+    # Lazy-load HuggingFace configs to reduce import-time memory cost
+    if name in {"HuggingFaceChatConfig", "HuggingFaceEmbeddingConfig"}:
+        return _lazy_import_huggingface_configs(name)
     
     # Lazy-load OpenrouterConfig to reduce import-time memory cost
     if name == "OpenrouterConfig":
@@ -1990,12 +2003,6 @@ def __getattr__(name: str) -> Any:
         from .llms.replicate.chat.transformation import ReplicateConfig as _ReplicateConfig
         globals()["ReplicateConfig"] = _ReplicateConfig
         return _ReplicateConfig
-    
-    # Lazy-load HuggingFaceEmbeddingConfig to reduce import-time memory cost
-    if name == "HuggingFaceEmbeddingConfig":
-        from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig as _HuggingFaceEmbeddingConfig
-        globals()["HuggingFaceEmbeddingConfig"] = _HuggingFaceEmbeddingConfig
-        return _HuggingFaceEmbeddingConfig
     
     # Lazy-load OobaboogaConfig to reduce import-time memory cost
     if name == "OobaboogaConfig":
