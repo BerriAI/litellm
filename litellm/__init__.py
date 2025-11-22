@@ -2380,4 +2380,10 @@ def __getattr__(name: str) -> Any:
         globals()["AzureOpenAIO1Config"] = _AzureOpenAIO1Config
         return _AzureOpenAIO1Config
     
+    # Lazy-load GradientAIConfig to reduce import-time memory cost
+    if name == "GradientAIConfig":
+        from .llms.gradient_ai.chat.transformation import GradientAIConfig as _GradientAIConfig
+        globals()["GradientAIConfig"] = _GradientAIConfig
+        return _GradientAIConfig
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
