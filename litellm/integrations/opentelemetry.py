@@ -812,6 +812,7 @@ class OpenTelemetry(CustomLogger):
         guardrail_information_data = standard_logging_payload.get(
             "guardrail_information"
         )
+
         if not guardrail_information_data:
             return
 

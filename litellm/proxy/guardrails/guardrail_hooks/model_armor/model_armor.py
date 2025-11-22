@@ -34,6 +34,7 @@ from litellm.types.utils import (
     GuardrailStatus,
     ModelResponse,
     ModelResponseStream,
+    StandardLoggingGuardrailInformation,
 )
 
 GUARDRAIL_NAME = "model_armor"
@@ -561,6 +562,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     ):
         """Post-call hook to sanitize model responses."""
         from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_response_to_standard_logging_object,
             add_guardrail_to_applied_guardrails_header,
         )
 
@@ -589,15 +591,31 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
 
             # Attach Model Armor response & status to this request's metadata to prevent race conditions
-            if isinstance(data, dict):
-                metadata = data.setdefault("metadata", {})
-                metadata["_model_armor_response"] = armor_response
-                metadata["_model_armor_status"] = (
-                    "blocked"
-                    if self._should_block_content(
-                        armor_response, allow_sanitization=self.mask_response_content
+            if isinstance(armor_response, dict):
+                model_armor_logged_object = {
+                    "model_armor_response": armor_response,
+                    "model_armor_status": (
+                        "blocked"
+                        if self._should_block_content(
+                            armor_response,
+                            allow_sanitization=self.mask_response_content,
+                        )
+                        else "success"
+                    ),
+                }
+                standard_logging_guardrail_information = (
+                    StandardLoggingGuardrailInformation(
+                        guardrail_name=self.guardrail_name,
+                        guardrail_provider="model_armor",
+                        guardrail_mode=GuardrailEventHooks.post_call,
+                        guardrail_response=model_armor_logged_object,
+                        guardrail_status="success",
+                        start_time=data.get("start_time"),
                     )
-                    else "success"
+                )
+                add_guardrail_response_to_standard_logging_object(
+                    litellm_logging_obj=data.get("litellm_logging_obj"),
+                    guardrail_response=standard_logging_guardrail_information,
                 )
 
             # Check if content should be blocked

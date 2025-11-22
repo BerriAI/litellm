@@ -11,9 +11,7 @@ from litellm.types.guardrails import (
     Mode,
     PiiEntityType,
 )
-from litellm.types.llms.openai import (
-    AllMessageValues,
-)
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     CallTypes,
@@ -467,6 +465,7 @@ class CustomGuardrail(CustomLogger):
         """
         # Convert None to empty dict to satisfy type requirements
         guardrail_response = {} if response is None else response
+
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
             request_data=request_data,
