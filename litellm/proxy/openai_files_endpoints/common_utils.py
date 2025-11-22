@@ -87,13 +87,13 @@ def encode_file_id_with_model(file_id: str, model: str) -> str:
     
     Args:
         file_id: Original file/batch ID from the provider (e.g., "file-abc123", "batch_xyz")
-        model: Model name from model_list (e.g., "gpt-4o-ifood")
+        model: Model name from model_list (e.g., "gpt-4o-litellm")
     
     Returns:
         Encoded ID starting with appropriate prefix and containing routing information
     
     Examples:
-        encode_file_id_with_model("file-abc123", "gpt-4o-ifood")
+        encode_file_id_with_model("file-abc123", "gpt-4o-litellm")
         -> "file-bGl0ZWxsbTpmaWxlLWFiYzEyMzttb2RlbCxncHQtNG8taWZvb2Q"
         
         encode_file_id_with_model("batch_abc123", "gpt-4o-test")

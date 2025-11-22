@@ -5906,14 +5906,14 @@ class Router:
         it tries to find by model_group_name (model_name).
         
         Args:
-            model_id: Model ID or model name from model_list (e.g., "gpt-4o-ifood")
+            model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
         
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
             Returns None if model not found.
         
         Example:
-            credentials = router.get_deployment_credentials_with_provider("gpt-4o-ifood")
+            credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
             # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", ...}
         """
         # Try to get deployment by model_id first

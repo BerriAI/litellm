@@ -32,17 +32,17 @@ Use different OpenAI API keys for files and batches by specifying a `model` para
 
 ```yaml
 model_list:
-  # iFood OpenAI Account
+  # litellm OpenAI Account
   - model_name: "gpt-4o-litellm"
     litellm_params:
       model: openai/gpt-4o
-      api_key: os.environ/OPENAI_IFOOD_KEY
+      api_key: os.environ/OPENAI_LITELLM_API_KEY
   
-  # Prosus OpenAI Account
+  # Free OpenAI Account
   - model_name: "gpt-4o-free"
     litellm_params:
       model: openai/gpt-4o
-      api_key: os.environ/OPENAI_PROSUS_KEY
+      api_key: os.environ/OPENAI_FREE_API_KEY
 ```
 
 ### Usage Example
@@ -55,7 +55,7 @@ client = OpenAI(
     base_url="http://0.0.0.0:4000"
 )
 
-# Create file using iFood account
+# Create file using litellm account
 file_response = client.files.create(
     file=open("batch_data.jsonl", "rb"),
     purpose="batch",
