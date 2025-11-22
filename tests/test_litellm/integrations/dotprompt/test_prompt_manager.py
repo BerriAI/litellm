@@ -567,6 +567,7 @@ async def test_dotprompt_auto_detection_with_model_only():
     try:
         # Mock the HTTP handler to avoid actual API calls
         client = AsyncHTTPHandler()
+        client.api_key = "test-api-key"  # Ensure client has api_key attribute for OpenAI client
         
         # Create a proper mock response
         mock_response = Mock(spec=httpx.Response)
@@ -651,6 +652,7 @@ async def test_dotprompt_with_prompt_version():
     try:
         # Test version 1
         client = AsyncHTTPHandler()
+        client.api_key = "test-api-key"  # Ensure client has api_key attribute for OpenAI client
         
         # Create a proper mock response for version 1
         mock_response_v1 = Mock(spec=httpx.Response)
@@ -708,6 +710,7 @@ async def test_dotprompt_with_prompt_version():
         
         # Test version 2
         client = AsyncHTTPHandler()
+        client.api_key = "test-api-key"  # Ensure client has api_key attribute for OpenAI client
         
         # Create a proper mock response for version 2
         mock_response_v2 = Mock(spec=httpx.Response)
