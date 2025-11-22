@@ -85,13 +85,7 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
       )}
 
       {usage && (
-        <Tooltip
-          title={
-            usage.cost !== undefined
-              ? "Cost"
-              : "Cost tracking is disabled. Set include_cost_in_streaming_usage: true in your proxy config to enable cost tracking."
-          }
-        >
+        <Tooltip title="Cost">
           <div className="flex items-center">
             <DollarOutlined className="mr-1" />
             <span>{usage.cost !== undefined ? `$${usage.cost.toFixed(6)}` : "Not Tracked"}</span>
