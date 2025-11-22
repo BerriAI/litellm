@@ -92,6 +92,9 @@ if TYPE_CHECKING:
     from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
     from litellm.llms.databricks.chat.transformation import DatabricksConfig
+    from litellm.llms.predibase.chat.transformation import PredibaseConfig
+    from litellm.llms.replicate.chat.transformation import ReplicateConfig
+    from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -1072,11 +1075,7 @@ from .llms.triton.completion.transformation import TritonGenerateConfig
 from .llms.triton.completion.transformation import TritonInferConfig
 from .llms.triton.embedding.transformation import TritonEmbeddingConfig
 from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
-from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
-from .llms.predibase.chat.transformation import PredibaseConfig
-from .llms.replicate.chat.transformation import ReplicateConfig
-from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
 from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
 from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
@@ -2016,5 +2015,23 @@ def __getattr__(name: str) -> Any:
         from .llms.databricks.chat.transformation import DatabricksConfig as _DatabricksConfig
         globals()["DatabricksConfig"] = _DatabricksConfig
         return _DatabricksConfig
+    
+    # Lazy-load PredibaseConfig to reduce import-time memory cost
+    if name == "PredibaseConfig":
+        from .llms.predibase.chat.transformation import PredibaseConfig as _PredibaseConfig
+        globals()["PredibaseConfig"] = _PredibaseConfig
+        return _PredibaseConfig
+    
+    # Lazy-load ReplicateConfig to reduce import-time memory cost
+    if name == "ReplicateConfig":
+        from .llms.replicate.chat.transformation import ReplicateConfig as _ReplicateConfig
+        globals()["ReplicateConfig"] = _ReplicateConfig
+        return _ReplicateConfig
+    
+    # Lazy-load SnowflakeConfig to reduce import-time memory cost
+    if name == "SnowflakeConfig":
+        from .llms.snowflake.chat.transformation import SnowflakeConfig as _SnowflakeConfig
+        globals()["SnowflakeConfig"] = _SnowflakeConfig
+        return _SnowflakeConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
