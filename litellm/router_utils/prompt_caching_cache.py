@@ -4,7 +4,7 @@ Wrapper around router cache. Meant to store model id when prompt caching support
 
 import hashlib
 import json
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 from typing_extensions import TypedDict
 
@@ -106,8 +106,10 @@ class PromptCachingCache:
                 content = message.get("content")
                 if isinstance(content, list) and last_cacheable_content_idx is not None:
                     # Create a copy of the message with only cacheable content blocks
-                    message_copy = dict(message)
-                    message_copy["content"] = content[: last_cacheable_content_idx + 1]
+                    message_copy = cast(
+                        AllMessageValues,
+                        {**message, "content": content[: last_cacheable_content_idx + 1]},
+                    )
                     cacheable_prefix.append(message_copy)
                 else:
                     # Content is not a list or cacheable content idx is None, include full message
