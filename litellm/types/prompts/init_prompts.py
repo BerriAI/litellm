@@ -37,6 +37,7 @@ class PromptSpec(BaseModel):
     prompt_info: PromptInfo
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    version: Optional[int] = None  # Version number for version history
 
     def __init__(self, **data):
         if "prompt_info" not in data:

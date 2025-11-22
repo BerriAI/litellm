@@ -35,6 +35,9 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _encode_tool_call_id_with_signature,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -1053,8 +1056,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         pass
                 _content_str += text_content
             elif "inlineData" in part:
-                mime_type = part["inlineData"]["mimeType"]
-                data = part["inlineData"]["data"]
+                inline_data = part.get("inlineData", {})
+                mime_type = inline_data.get("mimeType", "")
+                data = inline_data.get("data", "")
                 # Check if inline data is audio or image - if so, exclude from text content
                 # Images and audio are now handled separately in their respective response fields
                 if mime_type.startswith("audio/") or mime_type.startswith("image/"):
@@ -1098,8 +1102,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         images: List[ImageURLListItem] = []
         for part in parts:
             if "inlineData" in part:
-                mime_type = part["inlineData"]["mimeType"]
-                data = part["inlineData"]["data"]
+                inline_data = part.get("inlineData", {})
+                mime_type = inline_data.get("mimeType", "")
+                data = inline_data.get("data", "")
                 if mime_type.startswith("image/"):
                     # Convert base64 data to data URI format
                     data_uri = f"data:{mime_type};base64,{data}"
@@ -1140,8 +1145,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         pass
 
             elif "inlineData" in part:
-                mime_type = part["inlineData"]["mimeType"]
-                data = part["inlineData"]["data"]
+                inline_data = part.get("inlineData", {})
+                mime_type = inline_data.get("mimeType", "")
+                data = inline_data.get("data", "")
 
                 if mime_type.startswith("audio/"):
                     expires_at = int(time.time()) + (24 * 60 * 60)
@@ -1192,7 +1198,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         "function": _function_chunk,
                         "index": cumulative_tool_call_idx,
                     }
+                    # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
+                        _tool_response_chunk[
+                            "id"
+                        ] = _encode_tool_call_id_with_signature(
+                            _tool_response_chunk["id"] or "", thought_signature
+                        )
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
                         }
@@ -1367,6 +1379,30 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     response_tokens_details.audio_tokens = detail.get("tokenCount", 0)
         #########################################################
 
+        ## CANDIDATES TOKEN DETAILS (e.g., for image generation models) ##
+        if "candidatesTokensDetails" in usage_metadata:
+            if response_tokens_details is None:
+                response_tokens_details = CompletionTokensDetailsWrapper()
+            for detail in usage_metadata["candidatesTokensDetails"]:
+                modality = detail.get("modality")
+                token_count = detail.get("tokenCount", 0)
+                if modality == "TEXT":
+                    response_tokens_details.text_tokens = token_count
+                elif modality == "AUDIO":
+                    response_tokens_details.audio_tokens = token_count
+                elif modality == "IMAGE":
+                    response_tokens_details.image_tokens = token_count
+
+            # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
+            # candidatesTokenCount includes all modalities, so: text = total - (image + audio)
+            if response_tokens_details.text_tokens is None:
+                candidates_token_count = usage_metadata.get("candidatesTokenCount", 0)
+                image_tokens = response_tokens_details.image_tokens or 0
+                audio_tokens_candidate = response_tokens_details.audio_tokens or 0
+                calculated_text_tokens = candidates_token_count - image_tokens - audio_tokens_candidate
+                response_tokens_details.text_tokens = calculated_text_tokens
+        #########################################################
+
         if "promptTokensDetails" in usage_metadata:
             for detail in usage_metadata["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
@@ -1375,6 +1411,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     text_tokens = detail.get("tokenCount", 0)
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
+            # Also add reasoning tokens to response_tokens_details
+            if response_tokens_details is None:
+                response_tokens_details = CompletionTokensDetailsWrapper()
+            response_tokens_details.reasoning_tokens = reasoning_tokens
 
         ## adjust 'text_tokens' to subtract cached tokens
         if (
@@ -1608,6 +1648,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+        reasoning_content: Optional[str] = None
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
@@ -1702,7 +1743,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 # Convert thinking_blocks to reasoning_content for streaming
                 # This ensures reasoning_content is available in streaming responses
-                if isinstance(model_response, ModelResponseStream) and reasoning_content is None:
+                if (
+                    isinstance(model_response, ModelResponseStream)
+                    and reasoning_content is None
+                ):
                     reasoning_content_parts = []
                     for block in thinking_blocks:
                         thinking_text = block.get("thinking")
