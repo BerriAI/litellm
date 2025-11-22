@@ -53,13 +53,13 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 
 ## **Structured Outputs**
 
-LiteLLM supports Anthropic's structured outputs feature for Claude Sonnet 4.5 and Opus 4.1 models. When you use `response_format` with these models, LiteLLM automatically:
+LiteLLM supports Anthropic's [structured outputs feature](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) for Claude Sonnet 4.5 and Opus 4.1 models. When you use `response_format` with these models, LiteLLM automatically:
 - Adds the required `structured-outputs-2025-11-13` beta header
-- Transforms OpenAI's `response_format` to Anthropic's `output_schema` format
+- Transforms OpenAI's `response_format` to Anthropic's `output_format` format
 
 ### Supported Models
-- `claude-sonnet-4-5-*` (all Sonnet 4.5 variants)
-- `claude-opus-4-1-*` (all Opus 4.1 variants)
+- `sonnet-4-5` or `sonnet-4.5` (all Sonnet 4.5 variants)
+- `opus-4-1` or `opus-4.1` (all Opus 4.1 variants)
 
 ### Example Usage
 

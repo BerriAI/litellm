@@ -514,7 +514,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "response_format" and isinstance(value, dict):
-
                 if any(
                     substring in model
                     for substring in {
