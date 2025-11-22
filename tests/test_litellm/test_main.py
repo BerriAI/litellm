@@ -192,8 +192,29 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             json_str = json_str.decode("utf-8")
 
         print(f"type of json_str: {type(json_str)}")
-        assert "png" in json_str
-        assert "jpeg" not in json_str
+        
+        # Bedrock models convert URLs to base64, while direct Anthropic models support URLs
+        # bedrock/invoke models use Anthropic messages API which supports URLs
+        if model.startswith("bedrock/invoke/"):
+            # bedrock/invoke uses Anthropic messages API format, which supports URLs
+            assert "https://upload.wikimedia.org" in json_str
+            # For Anthropic, URL references use "url" type, not base64
+            assert '"type":"url"' in json_str or '"type": "url"' in json_str
+        elif model.startswith("bedrock/"):
+            # Regular Bedrock models should convert URLs to base64 (uses "bytes" field)
+            # URL should NOT be in the JSON (it should be converted to base64)
+            assert "https://upload.wikimedia.org" not in json_str
+            # Should have "bytes" field (Bedrock uses "bytes" not "base64" in the field name)
+            assert '"bytes"' in json_str or '"bytes":' in json_str
+        elif model.startswith("anthropic/"):
+            # Direct Anthropic models should pass URLs directly
+            assert "https://upload.wikimedia.org" in json_str
+            # For Anthropic, URL references use "url" type, not base64
+            assert '"type":"url"' in json_str or '"type": "url"' in json_str
+        else:
+            # For other models, check format parameter is respected
+            assert "png" in json_str
+            assert "jpeg" not in json_str
 
 
 @pytest.mark.parametrize("model", ["gpt-4o-mini"])
