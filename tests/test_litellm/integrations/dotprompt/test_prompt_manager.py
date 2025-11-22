@@ -12,7 +12,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
+
+import httpx
 
 import litellm
 from litellm.integrations.dotprompt.prompt_manager import PromptManager, PromptTemplate
@@ -565,9 +567,36 @@ async def test_dotprompt_auto_detection_with_model_only():
     try:
         # Mock the HTTP handler to avoid actual API calls
         client = AsyncHTTPHandler()
-        with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        
+        # Create a proper mock response
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "id": "chatcmpl-test-123",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Test response",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 10,
+                "total_tokens": 20,
+            },
+        }
+        
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
             # Call with model="gpt-4" (no "dotprompt/" prefix) and prompt_id
-            await litellm.acompletion(
+            response = await litellm.acompletion(
                 model="gpt-4",
                 prompt_id="chat_prompt",
                 prompt_variables={"user_message": "Hello world"},
@@ -593,6 +622,9 @@ async def test_dotprompt_auto_detection_with_model_only():
             # Template is: "User: {{user_message}}" with user_message="Hello world"
             first_message_content = messages[0]["content"]
             assert "Hello world" in first_message_content
+            
+            # Verify response was returned
+            assert response is not None
     
     finally:
         # Restore original callbacks
@@ -618,8 +650,35 @@ async def test_dotprompt_with_prompt_version():
     try:
         # Test version 1
         client = AsyncHTTPHandler()
-        with patch.object(client, "post", return_value=MagicMock()) as mock_post:
-            await litellm.acompletion(
+        
+        # Create a proper mock response for version 1
+        mock_response_v1 = Mock(spec=httpx.Response)
+        mock_response_v1.status_code = 200
+        mock_response_v1.headers = {"content-type": "application/json"}
+        mock_response_v1.json.return_value = {
+            "id": "chatcmpl-test-v1-123",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-3.5-turbo",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Test response v1",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 10,
+                "total_tokens": 20,
+            },
+        }
+        
+        with patch.object(client, "post", return_value=mock_response_v1) as mock_post:
+            response = await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 prompt_id="chat_prompt",
                 prompt_version=1,
@@ -641,11 +700,41 @@ async def test_dotprompt_with_prompt_version():
             first_message_content = messages[0]["content"]
             assert "Version 1:" in first_message_content
             assert "Test v1" in first_message_content
+            
+            # Verify response was returned
+            assert response is not None
         
         # Test version 2
         client = AsyncHTTPHandler()
-        with patch.object(client, "post", return_value=MagicMock()) as mock_post:
-            await litellm.acompletion(
+        
+        # Create a proper mock response for version 2
+        mock_response_v2 = Mock(spec=httpx.Response)
+        mock_response_v2.status_code = 200
+        mock_response_v2.headers = {"content-type": "application/json"}
+        mock_response_v2.json.return_value = {
+            "id": "chatcmpl-test-v2-123",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Test response v2",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 10,
+                "total_tokens": 20,
+            },
+        }
+        
+        with patch.object(client, "post", return_value=mock_response_v2) as mock_post:
+            response = await litellm.acompletion(
                 model="gpt-4",
                 prompt_id="chat_prompt",
                 prompt_version=2,
@@ -667,6 +756,9 @@ async def test_dotprompt_with_prompt_version():
             first_message_content = messages[0]["content"]
             assert "Version 2:" in first_message_content
             assert "Test v2" in first_message_content
+            
+            # Verify response was returned
+            assert response is not None
     
     finally:
         # Restore original callbacks
