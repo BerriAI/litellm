@@ -146,6 +146,7 @@ if TYPE_CHECKING:
     from litellm.llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
     from litellm.llms.deprecated_providers.palm import PalmConfig
+    from litellm.llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
