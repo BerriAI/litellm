@@ -24,8 +24,7 @@ from litellm import completion
 class TestDockerModelRunnerIntegration:
     """Integration test for Docker Model Runner"""
 
-    @pytest.mark.asyncio
-    async def test_completion_hits_correct_url_and_body(self):
+    def test_completion_hits_correct_url_and_body(self):
         """
         Test that litellm.completion with docker_model_runner provider:
         1. Hits the correct URL: {api_base}/v1/chat/completions where api_base includes engine path
@@ -95,8 +94,7 @@ class TestDockerModelRunnerIntegration:
             # Verify response
             assert response.choices[0].message.content == "Hello! How can I help you today?"
 
-    @pytest.mark.asyncio
-    async def test_completion_with_custom_engine_and_host(self):
+    def test_completion_with_custom_engine_and_host(self):
         """
         Test that litellm.completion works with custom engine and host:
         1. Uses model-runner.docker.internal as host
