@@ -416,6 +416,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_request",
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
+        "output_cost_per_image_token",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
