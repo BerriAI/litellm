@@ -24648,10 +24648,52 @@
         "supports_tool_choice": true
     },
     "vertex_ai/gemini-2.5-flash-image": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_audio_token": 1e-06,
+        "input_cost_per_token": 3e-07,
         "litellm_provider": "vertex_ai-language-models",
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "max_pdf_size_mb": 30,
+        "max_video_length": 1,
+        "max_videos_per_prompt": 10,
         "mode": "image_generation",
         "output_cost_per_image": 0.039,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-generation#edit-an-image"
+        "output_cost_per_reasoning_token": 2.5e-06,
+        "output_cost_per_token": 2.5e-06,
+        "rpm": 100000,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-generation#edit-an-image",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_audio_output": false,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_vision": true,
+        "supports_web_search": false,
+        "tpm": 8000000
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
