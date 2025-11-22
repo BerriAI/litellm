@@ -1126,9 +1126,6 @@ from .llms.vertex_ai.vertex_embeddings.transformation import (
 
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
-from .llms.bedrock.chat.invoke_handler import (
-    bedrock_tool_name_mappings,
-)
 from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
