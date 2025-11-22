@@ -2353,4 +2353,25 @@ def __getattr__(name: str) -> Any:
         globals()["AzureOpenAIOSeriesResponsesAPIConfig"] = _AzureOpenAIOSeriesResponsesAPIConfig
         return _AzureOpenAIOSeriesResponsesAPIConfig
     
+    # Lazy-load OpenAIOSeriesConfig to reduce import-time memory cost
+    if name == "OpenAIOSeriesConfig":
+        from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
+        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
+        return _OpenAIOSeriesConfig
+    
+    # Lazy-load OpenAIO1Config alias to reduce import-time memory cost
+    if name == "OpenAIO1Config":
+        from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
+        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
+        globals()["OpenAIO1Config"] = _OpenAIOSeriesConfig  # alias
+        return _OpenAIOSeriesConfig
+    
+    # Lazy-load openaiOSeriesConfig instance to reduce import-time memory cost
+    if name == "openaiOSeriesConfig":
+        from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
+        _openaiOSeriesConfig = _OpenAIOSeriesConfig()
+        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
+        globals()["openaiOSeriesConfig"] = _openaiOSeriesConfig
+        return _openaiOSeriesConfig
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
