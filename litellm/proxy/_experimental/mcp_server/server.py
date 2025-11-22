@@ -6,7 +6,7 @@ LiteLLM MCP Server Routes
 import asyncio
 import contextlib
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
