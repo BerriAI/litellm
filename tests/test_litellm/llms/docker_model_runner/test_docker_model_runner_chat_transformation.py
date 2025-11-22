@@ -15,6 +15,7 @@ sys.path.insert(
 import json
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -24,16 +25,20 @@ from litellm import completion
 class TestDockerModelRunnerIntegration:
     """Integration test for Docker Model Runner"""
 
-    @pytest.mark.asyncio
-    async def test_completion_hits_correct_url_and_body(self):
+    def test_completion_hits_correct_url_and_body(self):
         """
         Test that litellm.completion with docker_model_runner provider:
         1. Hits the correct URL: {api_base}/v1/chat/completions where api_base includes engine path
         2. Sends the correct request body with messages and parameters
         """
-        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
-            # Mock the response
-            mock_response = Mock()
+        # Mock _get_httpx_client to return a mock HTTPHandler
+        with patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client") as mock_get_client:
+            # Create a mock HTTPHandler instance
+            mock_http_handler = Mock()
+            mock_get_client.return_value = mock_http_handler
+            
+            # Create mock response
+            mock_response = Mock(spec=httpx.Response)
             mock_response.json.return_value = {
                 "id": "chatcmpl-123",
                 "object": "chat.completion",
@@ -54,8 +59,16 @@ class TestDockerModelRunnerIntegration:
                 }
             }
             mock_response.status_code = 200
-            mock_response.headers = {"content-type": "application/json"}
-            mock_post.return_value = mock_response
+            mock_response.headers = httpx.Headers({"content-type": "application/json"})
+            mock_response.text = json.dumps(mock_response.json.return_value)
+            
+            # Capture the request
+            captured_kwargs = {}
+            def mock_post(**kwargs):
+                captured_kwargs.update(kwargs)
+                return mock_response
+            
+            mock_http_handler.post.side_effect = mock_post
 
             # Make the completion call with engine in api_base
             response = completion(
@@ -66,21 +79,20 @@ class TestDockerModelRunnerIntegration:
                 max_tokens=100
             )
 
-            # Verify the URL was correct
-            assert mock_post.called
-            call_args = mock_post.call_args
-            url = call_args[1]["url"]
+            # Verify the request was made
+            assert mock_http_handler.post.called
+            url = captured_kwargs.get('url', '')
+            data = captured_kwargs.get('data', '')
             print("URL For request", url)
-            print("request body for request", json.dumps(call_args[1]["data"], indent=4))
+            print("request body for request", data)
             
             # Should hit {api_base}/v1/chat/completions where api_base includes engine
             assert "/engines/llama.cpp/v1/chat/completions" in url
             assert "http://localhost:22088" in url
 
             # Verify the request body
-            request_data = call_args[1]["data"]
-            if isinstance(request_data, str):
-                request_data = json.loads(request_data)
+            request_data = json.loads(data) if isinstance(data, str) else data
+            print("Parsed request data:", json.dumps(request_data, indent=4))
             
             # Check messages
             assert "messages" in request_data
@@ -95,17 +107,21 @@ class TestDockerModelRunnerIntegration:
             # Verify response
             assert response.choices[0].message.content == "Hello! How can I help you today?"
 
-    @pytest.mark.asyncio
-    async def test_completion_with_custom_engine_and_host(self):
+    def test_completion_with_custom_engine_and_host(self):
         """
         Test that litellm.completion works with custom engine and host:
         1. Uses model-runner.docker.internal as host
         2. Specifies a different engine in the api_base
         3. Model name is sent in the request body
         """
-        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
-            # Mock the response
-            mock_response = Mock()
+        # Mock _get_httpx_client to return a mock HTTPHandler
+        with patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client") as mock_get_client:
+            # Create a mock HTTPHandler instance
+            mock_http_handler = Mock()
+            mock_get_client.return_value = mock_http_handler
+            
+            # Create mock response
+            mock_response = Mock(spec=httpx.Response)
             mock_response.json.return_value = {
                 "id": "chatcmpl-456",
                 "object": "chat.completion",
@@ -126,8 +142,16 @@ class TestDockerModelRunnerIntegration:
                 }
             }
             mock_response.status_code = 200
-            mock_response.headers = {"content-type": "application/json"}
-            mock_post.return_value = mock_response
+            mock_response.headers = httpx.Headers({"content-type": "application/json"})
+            mock_response.text = json.dumps(mock_response.json.return_value)
+            
+            # Capture the request
+            captured_kwargs = {}
+            def mock_post(**kwargs):
+                captured_kwargs.update(kwargs)
+                return mock_response
+            
+            mock_http_handler.post.side_effect = mock_post
 
             # Make the completion call with custom engine and host
             response = completion(
@@ -138,21 +162,20 @@ class TestDockerModelRunnerIntegration:
                 max_tokens=200
             )
 
-            # Verify the URL was correct
-            assert mock_post.called
-            call_args = mock_post.call_args
-            url = call_args[1]["url"]
+            # Verify the request was made
+            assert mock_http_handler.post.called
+            url = captured_kwargs.get('url', '')
+            data = captured_kwargs.get('data', '')
             print("URL For request", url)
-            print("request body for request", json.dumps(call_args[1]["data"], indent=4))
+            print("request body for request", data)
             
             # Should hit the custom host and engine
             assert "model-runner.docker.internal" in url
             assert "/engines/custom-engine/v1/chat/completions" in url
 
             # Verify the request body contains the model name
-            request_data = call_args[1]["data"]
-            if isinstance(request_data, str):
-                request_data = json.loads(request_data)
+            request_data = json.loads(data) if isinstance(data, str) else data
+            print("Parsed request data:", json.dumps(request_data, indent=4))
             
             # Check that model name is in the request body
             assert request_data["model"] == "mistral-7b"
