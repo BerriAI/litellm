@@ -2416,4 +2416,18 @@ def __getattr__(name: str) -> Any:
         globals()["openAIGPTAudioConfig"] = _openAIGPTAudioConfig
         return _openAIGPTAudioConfig
     
+    # Lazy-load NvidiaNimConfig to reduce import-time memory cost
+    if name == "NvidiaNimConfig":
+        from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
+        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
+        return _NvidiaNimConfig
+    
+    # Lazy-load nvidiaNimConfig instance to reduce import-time memory cost
+    if name == "nvidiaNimConfig":
+        from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
+        _nvidiaNimConfig = _NvidiaNimConfig()
+        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
+        globals()["nvidiaNimConfig"] = _nvidiaNimConfig
+        return _nvidiaNimConfig
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
