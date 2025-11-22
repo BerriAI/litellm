@@ -196,10 +196,13 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
         # Bedrock models convert URLs to base64, while direct Anthropic models support URLs
         # bedrock/invoke models use Anthropic messages API which supports URLs
         if model.startswith("bedrock/invoke/"):
-            # bedrock/invoke uses Anthropic messages API format, which supports URLs
-            assert "https://upload.wikimedia.org" in json_str
-            # For Anthropic, URL references use "url" type, not base64
-            assert '"type":"url"' in json_str or '"type": "url"' in json_str
+            # bedrock/invoke should convert URLs to base64 (doesn't support URL references)
+            # URL should NOT be in the JSON (it should be converted to base64)
+            assert "https://upload.wikimedia.org" not in json_str
+            # Should have base64 data in the source (type="base64", not type="url")
+            assert '"type":"base64"' in json_str or '"type": "base64"' in json_str
+            # Should have "data" field containing base64 content
+            assert '"data"' in json_str
         elif model.startswith("bedrock/"):
             # Regular Bedrock models should convert URLs to base64 (uses "bytes" field)
             # URL should NOT be in the JSON (it should be converted to base64)
@@ -207,7 +210,8 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             # Should have "bytes" field (Bedrock uses "bytes" not "base64" in the field name)
             assert '"bytes"' in json_str or '"bytes":' in json_str
         elif model.startswith("anthropic/"):
-            # Direct Anthropic models should pass URLs directly
+            # Direct Anthropic models should pass HTTPS URLs directly (HTTP URLs are converted to base64)
+            # Since we're using HTTPS URL, it should be passed as-is
             assert "https://upload.wikimedia.org" in json_str
             # For Anthropic, URL references use "url" type, not base64
             assert '"type":"url"' in json_str or '"type": "url"' in json_str
