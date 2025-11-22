@@ -78,20 +78,13 @@ from litellm.types.secret_managers.main import (
     KeyManagementSystem,
     KeyManagementSettings,
 )
-from litellm.types.proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams,
-    LiteLLM_UpperboundKeyGenerateParams,
-)
-# Types utils imports are lazy-loaded to reduce import-time memory cost
-# They are created on first access via __getattr__
-# However, some are needed at module level for initialization, so import them directly
 from litellm.types.utils import LlmProviders, PriorityReservationSettings
-# Import only for type checking; runtime access is via __getattr__
 if TYPE_CHECKING:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.guardrails import GuardrailItem
-    from litellm.types.utils import CredentialItem, BudgetConfig, PriorityReservationDict, StandardKeyGenerationConfig
+    from litellm.types.utils import CredentialItem, BudgetConfig, PriorityReservationDict, StandardKeyGenerationConfig, LlmProviders, PriorityReservationSettings
+    from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, LiteLLM_UpperboundKeyGenerateParams
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -382,10 +375,10 @@ datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
-upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
+upperbound_key_generate_params: Optional["LiteLLM_UpperboundKeyGenerateParams"] = None
 key_generation_settings: Optional["StandardKeyGenerationConfig"] = None
 default_internal_user_params: Optional[Dict] = None
-default_team_params: Optional[Union[DefaultTeamSSOParams, Dict]] = None
+default_team_params: Optional[Union["DefaultTeamSSOParams", Dict]] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
@@ -413,10 +406,6 @@ public_agent_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
-# PriorityReservationSettings is imported at top level since it's needed for initialization
-priority_reservation_settings: "PriorityReservationSettings" = (
-    PriorityReservationSettings()
-)
 
 
 ######## Networking Settings ########
@@ -927,8 +916,6 @@ model_list = list(
 
 model_list_set = set(model_list)
 
-# LlmProviders is imported at top level since it's needed for initialization
-provider_list: List[Union["LlmProviders", str]] = list(LlmProviders)
 
 
 models_by_provider: dict = {
@@ -1761,8 +1748,6 @@ def _lazy_import_caching(name: str) -> Any:
     raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
 
 
-# Lazy import for types.utils to avoid loading the module at import time
-# This significantly reduces memory usage when importing litellm
 def _lazy_import_types_utils(name: str) -> Any:
     """Lazy import for types.utils module - imports only the requested item by name."""
     if name == "ImageObject":
@@ -1818,6 +1803,21 @@ def _lazy_import_types_utils(name: str) -> Any:
     raise AttributeError(f"Types utils lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_ui_sso(name: str) -> Any:
+    """Lazy import for types.proxy.management_endpoints.ui_sso module - imports only the requested item by name."""
+    if name == "DefaultTeamSSOParams":
+        from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams as _DefaultTeamSSOParams
+        globals()["DefaultTeamSSOParams"] = _DefaultTeamSSOParams
+        return _DefaultTeamSSOParams
+    
+    if name == "LiteLLM_UpperboundKeyGenerateParams":
+        from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams as _LiteLLM_UpperboundKeyGenerateParams
+        globals()["LiteLLM_UpperboundKeyGenerateParams"] = _LiteLLM_UpperboundKeyGenerateParams
+        return _LiteLLM_UpperboundKeyGenerateParams
+    
+    raise AttributeError(f"UI SSO lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -1866,6 +1866,19 @@ def __getattr__(name: str) -> Any:
     }
     if name in _types_utils_names:
         return _lazy_import_types_utils(name)
+    
+    if name in {"DefaultTeamSSOParams", "LiteLLM_UpperboundKeyGenerateParams"}:
+        return _lazy_import_ui_sso(name)
+    
+    if name == "provider_list":
+        provider_list_val = list(LlmProviders)
+        globals()["provider_list"] = provider_list_val
+        return provider_list_val
+    
+    if name == "priority_reservation_settings":
+        prs_val = PriorityReservationSettings()
+        globals()["priority_reservation_settings"] = prs_val
+        return prs_val
     
     # Lazy-load CustomLogger to avoid circular imports
     if name == "CustomLogger":
