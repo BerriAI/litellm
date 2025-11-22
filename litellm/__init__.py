@@ -2374,4 +2374,10 @@ def __getattr__(name: str) -> Any:
         globals()["openaiOSeriesConfig"] = _openaiOSeriesConfig
         return _openaiOSeriesConfig
     
+    # Lazy-load AzureOpenAIO1Config to reduce import-time memory cost
+    if name == "AzureOpenAIO1Config":
+        from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config as _AzureOpenAIO1Config
+        globals()["AzureOpenAIO1Config"] = _AzureOpenAIO1Config
+        return _AzureOpenAIO1Config
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
