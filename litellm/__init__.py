@@ -2023,6 +2023,50 @@ def _lazy_import_rerank_configs(name: str) -> Any:
     raise AttributeError(f"Rerank configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_vertex_ai_configs(name: str) -> Any:
+    """Lazy import for Vertex AI config classes - imports only the requested class."""
+    if name == "VertexGeminiConfig":
+        from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
+        globals()["VertexGeminiConfig"] = _VertexGeminiConfig
+        globals()["VertexAIConfig"] = _VertexGeminiConfig  # alias
+        return _VertexGeminiConfig
+    
+    if name == "VertexAIConfig":
+        from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
+        globals()["VertexGeminiConfig"] = _VertexGeminiConfig
+        globals()["VertexAIConfig"] = _VertexGeminiConfig  # alias
+        return _VertexGeminiConfig
+    
+    if name == "GoogleAIStudioGeminiConfig":
+        from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as _GoogleAIStudioGeminiConfig
+        globals()["GoogleAIStudioGeminiConfig"] = _GoogleAIStudioGeminiConfig
+        globals()["GeminiConfig"] = _GoogleAIStudioGeminiConfig  # alias
+        return _GoogleAIStudioGeminiConfig
+    
+    if name == "GeminiConfig":
+        from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as _GoogleAIStudioGeminiConfig
+        globals()["GoogleAIStudioGeminiConfig"] = _GoogleAIStudioGeminiConfig
+        globals()["GeminiConfig"] = _GoogleAIStudioGeminiConfig  # alias
+        return _GoogleAIStudioGeminiConfig
+    
+    if name == "VertexAIAnthropicConfig":
+        from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig as _VertexAIAnthropicConfig
+        globals()["VertexAIAnthropicConfig"] = _VertexAIAnthropicConfig
+        return _VertexAIAnthropicConfig
+    
+    if name == "VertexAILlama3Config":
+        from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import VertexAILlama3Config as _VertexAILlama3Config
+        globals()["VertexAILlama3Config"] = _VertexAILlama3Config
+        return _VertexAILlama3Config
+    
+    if name == "VertexAIAi21Config":
+        from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import VertexAIAi21Config as _VertexAIAi21Config
+        globals()["VertexAIAi21Config"] = _VertexAIAi21Config
+        return _VertexAIAi21Config
+    
+    raise AttributeError(f"Vertex AI configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2298,44 +2342,14 @@ def __getattr__(name: str) -> Any:
         globals()["TogetherAITextCompletionConfig"] = _TogetherAITextCompletionConfig
         return _TogetherAITextCompletionConfig
     
-    # Lazy-load VertexGeminiConfig to reduce import-time memory cost
-    if name == "VertexGeminiConfig":
-        from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
-        globals()["VertexGeminiConfig"] = _VertexGeminiConfig
-        globals()["VertexAIConfig"] = _VertexGeminiConfig  # alias
-        return _VertexGeminiConfig
-    
-    # Lazy-load GoogleAIStudioGeminiConfig to reduce import-time memory cost
-    if name == "GoogleAIStudioGeminiConfig":
-        from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as _GoogleAIStudioGeminiConfig
-        globals()["GoogleAIStudioGeminiConfig"] = _GoogleAIStudioGeminiConfig
-        globals()["GeminiConfig"] = _GoogleAIStudioGeminiConfig  # alias
-        return _GoogleAIStudioGeminiConfig
-    
-    # Lazy-load GeminiConfig alias to reduce import-time memory cost
-    if name == "GeminiConfig":
-        from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as _GoogleAIStudioGeminiConfig
-        globals()["GoogleAIStudioGeminiConfig"] = _GoogleAIStudioGeminiConfig
-        globals()["GeminiConfig"] = _GoogleAIStudioGeminiConfig
-        return _GoogleAIStudioGeminiConfig
-    
-    # Lazy-load VertexAIAnthropicConfig to reduce import-time memory cost
-    if name == "VertexAIAnthropicConfig":
-        from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig as _VertexAIAnthropicConfig
-        globals()["VertexAIAnthropicConfig"] = _VertexAIAnthropicConfig
-        return _VertexAIAnthropicConfig
-    
-    # Lazy-load VertexAILlama3Config to reduce import-time memory cost
-    if name == "VertexAILlama3Config":
-        from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import VertexAILlama3Config as _VertexAILlama3Config
-        globals()["VertexAILlama3Config"] = _VertexAILlama3Config
-        return _VertexAILlama3Config
-    
-    # Lazy-load VertexAIAi21Config to reduce import-time memory cost
-    if name == "VertexAIAi21Config":
-        from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import VertexAIAi21Config as _VertexAIAi21Config
-        globals()["VertexAIAi21Config"] = _VertexAIAi21Config
-        return _VertexAIAi21Config
+    # Lazy-load Vertex AI configs to reduce import-time memory cost
+    _vertex_ai_config_names = {
+        "VertexGeminiConfig", "VertexAIConfig", "GoogleAIStudioGeminiConfig",
+        "GeminiConfig", "VertexAIAnthropicConfig", "VertexAILlama3Config",
+        "VertexAIAi21Config",
+    }
+    if name in _vertex_ai_config_names:
+        return _lazy_import_vertex_ai_configs(name)
     
     # Lazy-load AmazonCohereChatConfig to reduce import-time memory cost
     if name == "AmazonCohereChatConfig":
