@@ -117,10 +117,14 @@ class ArizeLogger(OpenTelemetry):
         try:
             config = self.get_arize_config()
 
-            if not config.space_id or not config.space_key:
+            # Prefer ARIZE_SPACE_KEY, but fall back to ARIZE_SPACE_ID for backwards compatibility
+            effective_space_key = config.space_key or config.space_id
+
+            if not effective_space_key:
                 return {
                     "status": "unhealthy",
-                    "error_message": "ARIZE_SPACE_ID environment variable not set",
+                    # Tests (and users) expect the error message to reference ARIZE_SPACE_KEY
+                    "error_message": "ARIZE_SPACE_KEY environment variable not set",
                 }
 
             if not config.api_key:
