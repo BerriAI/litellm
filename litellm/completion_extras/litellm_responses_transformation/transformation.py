@@ -286,7 +286,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return request_data
 
-    def transform_response(
+    def transform_response(  # noqa: PLR0915
         self,
         model: str,
         raw_response: "BaseModel",
