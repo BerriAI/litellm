@@ -398,41 +398,17 @@ class ProxyLogging:
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
         for callback in litellm.callbacks:
             if isinstance(callback, str):
+
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                     cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
+
                 if callback is None:
                     continue
-            if callback not in litellm.input_callback:
-                litellm.input_callback.append(callback)  # type: ignore
-            if callback not in litellm.success_callback:
-                litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
-            if callback not in litellm.failure_callback:
-                litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
-            if callback not in litellm._async_success_callback:
-                litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
-            if callback not in litellm._async_failure_callback:
-                litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
-            if callback not in litellm.service_callback:
-                litellm.service_callback.append(callback)  # type: ignore
 
-        if (
-            len(litellm.input_callback) > 0
-            or len(litellm.success_callback) > 0
-            or len(litellm.failure_callback) > 0
-        ):
-            callback_list = list(
-                set(
-                    litellm.input_callback
-                    + litellm.success_callback
-                    + litellm.failure_callback
-                )
-            )
-            litellm.litellm_core_utils.litellm_logging.set_callbacks(
-                callback_list=callback_list
-            )
+            litellm.logging_callback_manager.add_litellm_callback(callback)
 
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
@@ -1495,6 +1471,7 @@ class ProxyLogging:
 
             ############ Handle CustomLogger ###############################
             #################################################################
+
             for callback in other_callbacks:
                 await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response

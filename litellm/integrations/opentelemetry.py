@@ -12,6 +12,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     CostBreakdown,
     Function,
+    LLMResponseTypes,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
     from opentelemetry.trace import Tracer as _Tracer
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
     from litellm.proxy._types import (
         ManagementEndpointLoggingPayload as _ManagementEndpointLoggingPayload,
     )
@@ -487,6 +489,24 @@ class OpenTelemetry(CustomLogger):
             # End Parent OTEL Sspan
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: LLMResponseTypes,
+    ):
+        litellm_logging_obj = data.get("litellm_logging_object")
+
+        if litellm_logging_obj is not None and isinstance(
+            litellm_logging_obj, LiteLLMLogging
+        ):
+            kwargs = litellm_logging_obj.model_call_details
+            ctx, _ = self._get_span_context(kwargs)
+
+            # 3. Guardrail span
+            self._create_guardrail_span(kwargs=kwargs, context=ctx)
+        return response
+
     #########################################################
     # Team/Key Based Logging Control Flow
     #########################################################
@@ -515,9 +535,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
 
         if not standard_callback_dynamic_params:
             return None
@@ -1078,7 +1098,9 @@ class OpenTelemetry(CustomLogger):
                     span=span, key="hidden_params", value=safe_dumps(hidden_params)
                 )
             # Cost breakdown tracking
-            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get("cost_breakdown")
+            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get(
+                "cost_breakdown"
+            )
             if cost_breakdown:
                 for key, value in cost_breakdown.items():
                     if value is not None:
