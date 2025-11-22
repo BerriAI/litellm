@@ -206,6 +206,7 @@ async def create_file(
     provider: Optional[str] = None,
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
+    litellm_metadata: Optional[str] = Form(default=None),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -264,6 +265,10 @@ async def create_file(
         purpose = cast(OpenAIFilesPurpose, purpose)
 
         data = {}
+        
+        # Add litellm_metadata to data if provided (from form field)
+        if litellm_metadata is not None:
+            data["litellm_metadata"] = litellm_metadata
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
