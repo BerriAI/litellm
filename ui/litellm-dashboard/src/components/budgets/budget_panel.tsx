@@ -168,7 +168,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
       </Card>
       <DeleteResourceModal
         isOpen={isDeleteModalVisible}
-        title="Delete Budget"
+        title="Delete Budget?"
         message="Are you sure you want to delete this budget? This action cannot be undone."
         resourceInformationTitle="Budget Information"
         resourceInformation={[
