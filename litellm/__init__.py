@@ -124,6 +124,16 @@ if TYPE_CHECKING:
     from litellm.llms.infinity.embedding.transformation import InfinityEmbeddingConfig
     from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
     from litellm.llms.mistral.chat.transformation import MistralConfig
+    from litellm.llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
+    from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
+    from litellm.llms.cohere.rerank_v2.transformation import CohereRerankV2Config
+    from litellm.llms.azure_ai.rerank.transformation import AzureAIRerankConfig
+    from litellm.llms.infinity.rerank.transformation import InfinityRerankConfig
+    from litellm.llms.jina_ai.rerank.transformation import JinaAIRerankConfig
+    from litellm.llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
+    from litellm.llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
+    from litellm.llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
+    from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
