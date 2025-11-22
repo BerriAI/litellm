@@ -2343,4 +2343,10 @@ def __getattr__(name: str) -> Any:
         globals()["OpenAITextCompletionConfig"] = _OpenAITextCompletionConfig
         return _OpenAITextCompletionConfig
     
+    # Lazy-load VoyageContextualEmbeddingConfig to reduce import-time memory cost
+    if name == "VoyageContextualEmbeddingConfig":
+        from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as _VoyageContextualEmbeddingConfig
+        globals()["VoyageContextualEmbeddingConfig"] = _VoyageContextualEmbeddingConfig
+        return _VoyageContextualEmbeddingConfig
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
