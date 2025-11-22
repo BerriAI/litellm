@@ -1736,6 +1736,21 @@ def _lazy_import_secret_managers(name: str) -> Any:
     raise AttributeError(f"Secret managers lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_logging_integrations(name: str) -> Any:
+    """Lazy import for logging-related integrations - imports only the requested item by name."""
+    if name == "CustomLogger":
+        from litellm.integrations.custom_logger import CustomLogger as _CustomLogger
+        globals()["CustomLogger"] = _CustomLogger
+        return _CustomLogger
+    
+    if name == "LoggingCallbackManager":
+        from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager as _LoggingCallbackManager
+        globals()["LoggingCallbackManager"] = _LoggingCallbackManager
+        return _LoggingCallbackManager
+    
+    raise AttributeError(f"Logging integrations lazy import: unknown attribute {name!r}")
+
+
 def _lazy_import_dotprompt(name: str) -> Any:
     """Lazy import for dotprompt module - imports only the requested item by name."""
     if name == "global_prompt_manager":
@@ -1821,17 +1836,9 @@ def __getattr__(name: str) -> Any:
         globals()["priority_reservation_settings"] = prs_val
         return prs_val
     
-    # Lazy-load CustomLogger to avoid circular imports
-    if name == "CustomLogger":
-        from litellm.integrations.custom_logger import CustomLogger as _CustomLogger
-        globals()["CustomLogger"] = _CustomLogger
-        return _CustomLogger
-    
-    # Lazy-load LoggingCallbackManager to avoid circular imports
-    if name == "LoggingCallbackManager":
-        from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager as _LoggingCallbackManager
-        globals()["LoggingCallbackManager"] = _LoggingCallbackManager
-        return _LoggingCallbackManager
+    # Lazy-load logging integrations to avoid circular imports
+    if name in {"CustomLogger", "LoggingCallbackManager"}:
+        return _lazy_import_logging_integrations(name)
     
     # Lazy-load dotprompt imports to avoid circular imports
     if name in {"global_prompt_manager", "global_prompt_directory", "set_global_prompt_directory"}:
