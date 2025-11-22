@@ -1112,7 +1112,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 
-from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.triton.completion.transformation import TritonGenerateConfig
 from .llms.triton.completion.transformation import TritonInferConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig as AI21Config
