@@ -2382,4 +2382,18 @@ def __getattr__(name: str) -> Any:
         globals()["GradientAIConfig"] = _GradientAIConfig
         return _GradientAIConfig
     
+    # Lazy-load OpenAIGPTConfig to reduce import-time memory cost
+    if name == "OpenAIGPTConfig":
+        from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as _OpenAIGPTConfig
+        globals()["OpenAIGPTConfig"] = _OpenAIGPTConfig
+        return _OpenAIGPTConfig
+    
+    # Lazy-load openAIGPTConfig instance to reduce import-time memory cost
+    if name == "openAIGPTConfig":
+        from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as _OpenAIGPTConfig
+        _openAIGPTConfig = _OpenAIGPTConfig()
+        globals()["OpenAIGPTConfig"] = _OpenAIGPTConfig
+        globals()["openAIGPTConfig"] = _openAIGPTConfig
+        return _openAIGPTConfig
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
