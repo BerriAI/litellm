@@ -96,6 +96,34 @@ if TYPE_CHECKING:
     from litellm.llms.replicate.chat.transformation import ReplicateConfig
     from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
     from litellm.llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
+    from litellm.llms.oobabooga.chat.transformation import OobaboogaConfig
+    from litellm.llms.maritalk import MaritalkConfig
+    from litellm.llms.datarobot.chat.transformation import DataRobotConfig
+    from litellm.llms.groq.stt.transformation import GroqSTTConfig
+    from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
+    from litellm.llms.triton.completion.transformation import TritonConfig
+    from litellm.llms.triton.embedding.transformation import TritonEmbeddingConfig
+    from litellm.llms.clarifai.chat.transformation import ClarifaiConfig
+    from litellm.llms.ai21.chat.transformation import AI21ChatConfig
+    from litellm.llms.meta_llama.chat.transformation import LlamaAPIConfig
+    from litellm.llms.together_ai.chat import TogetherAIConfig
+    from litellm.llms.cloudflare.chat.transformation import CloudflareChatConfig
+    from litellm.llms.novita.chat.transformation import NovitaConfig
+    from litellm.llms.nlp_cloud.chat.handler import NLPCloudConfig
+    from litellm.llms.petals.completion.transformation import PetalsConfig
+    from litellm.llms.ollama.chat.transformation import OllamaChatConfig
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
+    from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
+    from litellm.llms.cohere.chat.transformation import CohereChatConfig
+    from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
+    from litellm.llms.openai.openai import OpenAIConfig
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+    from litellm.llms.groq.chat.transformation import GroqChatConfig
+    from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+    from litellm.llms.infinity.embedding.transformation import InfinityEmbeddingConfig
+    from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+    from litellm.llms.mistral.chat.transformation import MistralConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -1064,16 +1092,9 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 
-from .llms.oobabooga.chat.transformation import OobaboogaConfig
-from .llms.maritalk import MaritalkConfig
-from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.groq.stt.transformation import GroqSTTConfig
-from .llms.anthropic.completion.transformation import AnthropicTextConfig
-from .llms.triton.completion.transformation import TritonConfig
 from .llms.triton.completion.transformation import TritonGenerateConfig
 from .llms.triton.completion.transformation import TritonInferConfig
-from .llms.triton.embedding.transformation import TritonEmbeddingConfig
 from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
 from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
@@ -1084,24 +1105,17 @@ from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
 from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
 from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
-from .llms.clarifai.chat.transformation import ClarifaiConfig
-from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
-from .llms.meta_llama.chat.transformation import LlamaAPIConfig
+from .llms.ai21.chat.transformation import AI21ChatConfig as AI21Config
 from .llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
-from .llms.together_ai.chat import TogetherAIConfig
 from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
-from .llms.cloudflare.chat.transformation import CloudflareChatConfig
-from .llms.novita.chat.transformation import NovitaConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes
-from .llms.nlp_cloud.chat.handler import NLPCloudConfig
-from .llms.petals.completion.transformation import PetalsConfig
 from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
 from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -1129,10 +1143,6 @@ from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
 from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
     VertexAIAi21Config,
 )
-from .llms.ollama.chat.transformation import OllamaChatConfig
-from .llms.ollama.completion.transformation import OllamaConfig
-from .llms.sagemaker.completion.transformation import SagemakerConfig
-from .llms.sagemaker.chat.transformation import SagemakerChatConfig
 from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     bedrock_tool_name_mappings,
@@ -1185,29 +1195,21 @@ from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
 from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
-from .llms.cohere.chat.transformation import CohereChatConfig
-from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
 )
-from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
+from .llms.openai.openai import MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
-from .llms.deepinfra.chat.transformation import DeepInfraConfig
 from .llms.deepgram.audio_transcription.transformation import (
     DeepgramAudioTranscriptionConfig,
 )
 from .llms.topaz.common_utils import TopazModelInfo
 from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
-from .llms.groq.chat.transformation import GroqChatConfig
-from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.voyage.embedding.transformation_contextual import (
     VoyageContextualEmbeddingConfig,
 )
-from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
-from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
-from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from .llms.azure.responses.o_series_transformation import (
@@ -2038,5 +2040,173 @@ def __getattr__(name: str) -> Any:
         from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig as _HuggingFaceEmbeddingConfig
         globals()["HuggingFaceEmbeddingConfig"] = _HuggingFaceEmbeddingConfig
         return _HuggingFaceEmbeddingConfig
+    
+    # Lazy-load OobaboogaConfig to reduce import-time memory cost
+    if name == "OobaboogaConfig":
+        from .llms.oobabooga.chat.transformation import OobaboogaConfig as _OobaboogaConfig
+        globals()["OobaboogaConfig"] = _OobaboogaConfig
+        return _OobaboogaConfig
+    
+    # Lazy-load MaritalkConfig to reduce import-time memory cost
+    if name == "MaritalkConfig":
+        from .llms.maritalk import MaritalkConfig as _MaritalkConfig
+        globals()["MaritalkConfig"] = _MaritalkConfig
+        return _MaritalkConfig
+    
+    # Lazy-load DataRobotConfig to reduce import-time memory cost
+    if name == "DataRobotConfig":
+        from .llms.datarobot.chat.transformation import DataRobotConfig as _DataRobotConfig
+        globals()["DataRobotConfig"] = _DataRobotConfig
+        return _DataRobotConfig
+    
+    # Lazy-load GroqSTTConfig to reduce import-time memory cost
+    if name == "GroqSTTConfig":
+        from .llms.groq.stt.transformation import GroqSTTConfig as _GroqSTTConfig
+        globals()["GroqSTTConfig"] = _GroqSTTConfig
+        return _GroqSTTConfig
+    
+    # Lazy-load AnthropicTextConfig to reduce import-time memory cost
+    if name == "AnthropicTextConfig":
+        from .llms.anthropic.completion.transformation import AnthropicTextConfig as _AnthropicTextConfig
+        globals()["AnthropicTextConfig"] = _AnthropicTextConfig
+        return _AnthropicTextConfig
+    
+    # Lazy-load TritonConfig to reduce import-time memory cost
+    if name == "TritonConfig":
+        from .llms.triton.completion.transformation import TritonConfig as _TritonConfig
+        globals()["TritonConfig"] = _TritonConfig
+        return _TritonConfig
+    
+    # Lazy-load TritonEmbeddingConfig to reduce import-time memory cost
+    if name == "TritonEmbeddingConfig":
+        from .llms.triton.embedding.transformation import TritonEmbeddingConfig as _TritonEmbeddingConfig
+        globals()["TritonEmbeddingConfig"] = _TritonEmbeddingConfig
+        return _TritonEmbeddingConfig
+    
+    # Lazy-load ClarifaiConfig to reduce import-time memory cost
+    if name == "ClarifaiConfig":
+        from .llms.clarifai.chat.transformation import ClarifaiConfig as _ClarifaiConfig
+        globals()["ClarifaiConfig"] = _ClarifaiConfig
+        return _ClarifaiConfig
+    
+    # Lazy-load AI21ChatConfig to reduce import-time memory cost
+    if name == "AI21ChatConfig":
+        from .llms.ai21.chat.transformation import AI21ChatConfig as _AI21ChatConfig
+        globals()["AI21ChatConfig"] = _AI21ChatConfig
+        return _AI21ChatConfig
+    
+    # Lazy-load LlamaAPIConfig to reduce import-time memory cost
+    if name == "LlamaAPIConfig":
+        from .llms.meta_llama.chat.transformation import LlamaAPIConfig as _LlamaAPIConfig
+        globals()["LlamaAPIConfig"] = _LlamaAPIConfig
+        return _LlamaAPIConfig
+    
+    # Lazy-load TogetherAIConfig to reduce import-time memory cost
+    if name == "TogetherAIConfig":
+        from .llms.together_ai.chat import TogetherAIConfig as _TogetherAIConfig
+        globals()["TogetherAIConfig"] = _TogetherAIConfig
+        return _TogetherAIConfig
+    
+    # Lazy-load CloudflareChatConfig to reduce import-time memory cost
+    if name == "CloudflareChatConfig":
+        from .llms.cloudflare.chat.transformation import CloudflareChatConfig as _CloudflareChatConfig
+        globals()["CloudflareChatConfig"] = _CloudflareChatConfig
+        return _CloudflareChatConfig
+    
+    # Lazy-load NovitaConfig to reduce import-time memory cost
+    if name == "NovitaConfig":
+        from .llms.novita.chat.transformation import NovitaConfig as _NovitaConfig
+        globals()["NovitaConfig"] = _NovitaConfig
+        return _NovitaConfig
+    
+    # Lazy-load NLPCloudConfig to reduce import-time memory cost
+    if name == "NLPCloudConfig":
+        from .llms.nlp_cloud.chat.handler import NLPCloudConfig as _NLPCloudConfig
+        globals()["NLPCloudConfig"] = _NLPCloudConfig
+        return _NLPCloudConfig
+    
+    # Lazy-load PetalsConfig to reduce import-time memory cost
+    if name == "PetalsConfig":
+        from .llms.petals.completion.transformation import PetalsConfig as _PetalsConfig
+        globals()["PetalsConfig"] = _PetalsConfig
+        return _PetalsConfig
+    
+    # Lazy-load OllamaChatConfig to reduce import-time memory cost
+    if name == "OllamaChatConfig":
+        from .llms.ollama.chat.transformation import OllamaChatConfig as _OllamaChatConfig
+        globals()["OllamaChatConfig"] = _OllamaChatConfig
+        return _OllamaChatConfig
+    
+    # Lazy-load OllamaConfig to reduce import-time memory cost
+    if name == "OllamaConfig":
+        from .llms.ollama.completion.transformation import OllamaConfig as _OllamaConfig
+        globals()["OllamaConfig"] = _OllamaConfig
+        return _OllamaConfig
+    
+    # Lazy-load SagemakerConfig to reduce import-time memory cost
+    if name == "SagemakerConfig":
+        from .llms.sagemaker.completion.transformation import SagemakerConfig as _SagemakerConfig
+        globals()["SagemakerConfig"] = _SagemakerConfig
+        return _SagemakerConfig
+    
+    # Lazy-load SagemakerChatConfig to reduce import-time memory cost
+    if name == "SagemakerChatConfig":
+        from .llms.sagemaker.chat.transformation import SagemakerChatConfig as _SagemakerChatConfig
+        globals()["SagemakerChatConfig"] = _SagemakerChatConfig
+        return _SagemakerChatConfig
+    
+    # Lazy-load CohereChatConfig to reduce import-time memory cost
+    if name == "CohereChatConfig":
+        from .llms.cohere.chat.transformation import CohereChatConfig as _CohereChatConfig
+        globals()["CohereChatConfig"] = _CohereChatConfig
+        return _CohereChatConfig
+    
+    # Lazy-load CohereV2ChatConfig to reduce import-time memory cost
+    if name == "CohereV2ChatConfig":
+        from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig as _CohereV2ChatConfig
+        globals()["CohereV2ChatConfig"] = _CohereV2ChatConfig
+        return _CohereV2ChatConfig
+    
+    # Lazy-load OpenAIConfig to reduce import-time memory cost
+    if name == "OpenAIConfig":
+        from .llms.openai.openai import OpenAIConfig as _OpenAIConfig
+        globals()["OpenAIConfig"] = _OpenAIConfig
+        return _OpenAIConfig
+    
+    # Lazy-load DeepInfraConfig to reduce import-time memory cost
+    if name == "DeepInfraConfig":
+        from .llms.deepinfra.chat.transformation import DeepInfraConfig as _DeepInfraConfig
+        globals()["DeepInfraConfig"] = _DeepInfraConfig
+        return _DeepInfraConfig
+    
+    # Lazy-load GroqChatConfig to reduce import-time memory cost
+    if name == "GroqChatConfig":
+        from .llms.groq.chat.transformation import GroqChatConfig as _GroqChatConfig
+        globals()["GroqChatConfig"] = _GroqChatConfig
+        return _GroqChatConfig
+    
+    # Lazy-load VoyageEmbeddingConfig to reduce import-time memory cost
+    if name == "VoyageEmbeddingConfig":
+        from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as _VoyageEmbeddingConfig
+        globals()["VoyageEmbeddingConfig"] = _VoyageEmbeddingConfig
+        return _VoyageEmbeddingConfig
+    
+    # Lazy-load InfinityEmbeddingConfig to reduce import-time memory cost
+    if name == "InfinityEmbeddingConfig":
+        from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as _InfinityEmbeddingConfig
+        globals()["InfinityEmbeddingConfig"] = _InfinityEmbeddingConfig
+        return _InfinityEmbeddingConfig
+    
+    # Lazy-load AzureAIStudioConfig to reduce import-time memory cost
+    if name == "AzureAIStudioConfig":
+        from .llms.azure_ai.chat.transformation import AzureAIStudioConfig as _AzureAIStudioConfig
+        globals()["AzureAIStudioConfig"] = _AzureAIStudioConfig
+        return _AzureAIStudioConfig
+    
+    # Lazy-load MistralConfig to reduce import-time memory cost
+    if name == "MistralConfig":
+        from .llms.mistral.chat.transformation import MistralConfig as _MistralConfig
+        globals()["MistralConfig"] = _MistralConfig
+        return _MistralConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
