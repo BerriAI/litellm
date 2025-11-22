@@ -2324,4 +2324,10 @@ def __getattr__(name: str) -> Any:
         globals()["AlephAlphaConfig"] = _AlephAlphaConfig
         return _AlephAlphaConfig
     
+    # Lazy-load bedrock_tool_name_mappings to reduce import-time memory cost
+    if name == "bedrock_tool_name_mappings":
+        from .llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings as _bedrock_tool_name_mappings
+        globals()["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
+        return _bedrock_tool_name_mappings
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
