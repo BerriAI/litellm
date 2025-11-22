@@ -1953,6 +1953,21 @@ def _lazy_import_sagemaker_configs(name: str) -> Any:
     raise AttributeError(f"Sagemaker configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_cohere_chat_configs(name: str) -> Any:
+    """Lazy import for Cohere chat config classes - imports only the requested class."""
+    if name == "CohereChatConfig":
+        from .llms.cohere.chat.transformation import CohereChatConfig as _CohereChatConfig
+        globals()["CohereChatConfig"] = _CohereChatConfig
+        return _CohereChatConfig
+    
+    if name == "CohereV2ChatConfig":
+        from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig as _CohereV2ChatConfig
+        globals()["CohereV2ChatConfig"] = _CohereV2ChatConfig
+        return _CohereV2ChatConfig
+    
+    raise AttributeError(f"Cohere chat configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2166,17 +2181,9 @@ def __getattr__(name: str) -> Any:
     if name in {"SagemakerConfig", "SagemakerChatConfig"}:
         return _lazy_import_sagemaker_configs(name)
     
-    # Lazy-load CohereChatConfig to reduce import-time memory cost
-    if name == "CohereChatConfig":
-        from .llms.cohere.chat.transformation import CohereChatConfig as _CohereChatConfig
-        globals()["CohereChatConfig"] = _CohereChatConfig
-        return _CohereChatConfig
-    
-    # Lazy-load CohereV2ChatConfig to reduce import-time memory cost
-    if name == "CohereV2ChatConfig":
-        from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig as _CohereV2ChatConfig
-        globals()["CohereV2ChatConfig"] = _CohereV2ChatConfig
-        return _CohereV2ChatConfig
+    # Lazy-load Cohere chat configs to reduce import-time memory cost
+    if name in {"CohereChatConfig", "CohereV2ChatConfig"}:
+        return _lazy_import_cohere_chat_configs(name)
     
     # Lazy-load OpenAIConfig to reduce import-time memory cost
     if name == "OpenAIConfig":
