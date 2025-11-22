@@ -32,6 +32,12 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIStreamEvents,
 )
+from litellm.types.utils import (
+    Delta,
+    GenericStreamingChunk,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -46,7 +52,6 @@ if TYPE_CHECKING:
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
     )
-    from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -606,11 +611,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ResponsesAPIOptionalRequestParams.__annotations__.keys()
         )
         # Also include params we handle specially
-        supported_responses_api_params.update({
-            "previous_response_id",
-            "reasoning_effort",  # We map this to "reasoning"
-        })
-        
+        supported_responses_api_params.update(
+            {
+                "previous_response_id",
+                "reasoning_effort",  # We map this to "reasoning"
+            }
+        )
+
         # Extract supported params from extra_body and merge into optional_params
         extra_body_copy = extra_body.copy()
         for key, value in extra_body_copy.items():
@@ -620,14 +627,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def _map_reasoning_effort(self, reasoning_effort: Union[str, Dict[str, Any]]) -> Optional[Reasoning]:
+    def _map_reasoning_effort(
+        self, reasoning_effort: Union[str, Dict[str, Any]]
+    ) -> Optional[Reasoning]:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
             return Reasoning(**reasoning_effort)  # type: ignore[typeddict-item]
 
         # If string is passed, map without summary (default)
         if reasoning_effort == "none":
-            return Reasoning(effort="none") # type: ignore
+            return Reasoning(effort="none")  # type: ignore
         elif reasoning_effort == "high":
             return Reasoning(effort="high")
         elif reasoning_effort == "medium":
@@ -746,12 +755,6 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     finish_reason="",
                     usage=None,
                 )
-            elif output_item.get("type") == "message":
-                pass
-            elif output_item.get("type") == "reasoning":
-                pass
-            else:
-                raise ValueError(f"Chat provider: Invalid output_item  {output_item}")
         elif event_type == "response.function_call_arguments.delta":
             content_part: Optional[str] = parsed_chunk.get("delta", None)
             if content_part:
@@ -813,10 +816,6 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 return GenericStreamingChunk(
                     finish_reason="stop", is_finished=True, usage=None, text=""
                 )
-            elif output_item.get("type") == "reasoning":
-                pass
-            else:
-                raise ValueError(f"Chat provider: Invalid output_item  {output_item}")
 
         elif event_type == "response.output_text.delta":
             # Content part added to output
