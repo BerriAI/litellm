@@ -16,9 +16,18 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from httpx import HTTPStatusError
-from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
+from mcp import ReadResourceResult, Resource
+from mcp.types import (
+    CallToolRequestParams as MCPCallToolRequestParams,
+    GetPromptRequestParams,
+    GetPromptResult,
+    Prompt,
+    ResourceTemplate,
+)
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
+
+from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,11 +38,11 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
-    add_server_prefix_to_tool_name,
-    get_server_name_prefix_tool_mcp,
+    add_server_prefix_to_name,
     get_server_prefix,
     is_tool_name_prefixed,
     normalize_server_name,
+    split_server_prefix_from_name,
     validate_mcp_server_name,
 )
 from litellm.proxy._types import (
@@ -357,7 +366,7 @@ class MCPServerManager:
                     base_tool_name = operation_id.replace(" ", "_").lower()
 
                     # Add server prefix to tool name
-                    prefixed_tool_name = add_server_prefix_to_tool_name(
+                    prefixed_tool_name = add_server_prefix_to_name(
                         base_tool_name, server_prefix
                     )
 
@@ -716,6 +725,190 @@ class MCPServerManager:
             )
             return []
 
+    async def get_prompts_from_server(
+        self,
+        server: MCPServer,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        add_prefix: bool = True,
+    ) -> List[Prompt]:
+        """
+        Helper method to get prompts from a single MCP server with prefixed names.
+
+        Args:
+            server (MCPServer): The server to query prompts from
+            mcp_auth_header: Optional auth header for MCP server
+
+        Returns:
+            List[Prompt]: List of prompts available on the server with prefixed names
+        """
+
+        verbose_logger.debug(f"Connecting to url: {server.url}")
+        verbose_logger.info(f"get_prompts_from_server for {server.name}...")
+
+        client = None
+
+        try:
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
+
+            client = self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+            )
+
+            prompts = await client.list_prompts()
+
+            prefixed_or_original_prompts = self._create_prefixed_prompts(
+                prompts, server, add_prefix=add_prefix
+            )
+
+            return prefixed_or_original_prompts
+
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get prompts from server {server.name}: {str(e)}"
+            )
+            return []
+
+    async def get_resources_from_server(
+        self,
+        server: MCPServer,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        add_prefix: bool = True,
+    ) -> List[Resource]:
+        """Fetch available resources from a single MCP server."""
+
+        verbose_logger.debug(f"Connecting to url: {server.url}")
+        verbose_logger.info(f"get_resources_from_server for {server.name}...")
+
+        client = None
+
+        try:
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
+
+            client = self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+            )
+
+            resources = await client.list_resources()
+
+            prefixed_resources = self._create_prefixed_resources(
+                resources, server, add_prefix=add_prefix
+            )
+
+            return prefixed_resources
+
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get resources from server {server.name}: {str(e)}"
+            )
+            return []
+
+    async def get_resource_templates_from_server(
+        self,
+        server: MCPServer,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        add_prefix: bool = True,
+    ) -> List[ResourceTemplate]:
+        """Fetch available resource templates from a single MCP server."""
+
+        verbose_logger.debug(f"Connecting to url: {server.url}")
+        verbose_logger.info(f"get_resource_templates_from_server for {server.name}...")
+
+        client = None
+
+        try:
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
+
+            client = self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+            )
+
+            resource_templates = await client.list_resource_templates()
+
+            prefixed_templates = self._create_prefixed_resource_templates(
+                resource_templates, server, add_prefix=add_prefix
+            )
+
+            return prefixed_templates
+
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get resource templates from server {server.name}: {str(e)}"
+            )
+            return []
+
+    async def read_resource_from_server(
+        self,
+        server: MCPServer,
+        url: AnyUrl,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> ReadResourceResult:
+        """Read resource contents from a specific MCP server."""
+
+        verbose_logger.debug(f"Connecting to url: {server.url}")
+        verbose_logger.info(f"read_resource_from_server for {server.name}...")
+
+        if server.static_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(server.static_headers)
+
+        client = self._create_mcp_client(
+            server=server,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=extra_headers,
+        )
+
+        return await client.read_resource(url)
+
+    async def get_prompt_from_server(
+        self,
+        server: MCPServer,
+        prompt_name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> GetPromptResult:
+        """Fetch a specific prompt definition from a single MCP server."""
+
+        verbose_logger.debug(f"Connecting to url: {server.url}")
+        verbose_logger.info(f"get_prompt_from_server for {server.name}...")
+
+        if server.static_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(server.static_headers)
+
+        client = self._create_mcp_client(
+            server=server,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=extra_headers,
+        )
+
+        get_prompt_request_params = GetPromptRequestParams(
+            name=prompt_name,
+            arguments=arguments,
+        )
+        return await client.get_prompt(get_prompt_request_params)
+
     async def _descovery_metadata(
         self,
         server_url: str,
@@ -1026,7 +1219,7 @@ class MCPServerManager:
         prefix = get_server_prefix(server)
 
         for tool in tools:
-            prefixed_name = add_server_prefix_to_tool_name(tool.name, prefix)
+            prefixed_name = add_server_prefix_to_name(tool.name, prefix)
 
             name_to_use = prefixed_name if add_prefix else tool.name
 
@@ -1045,6 +1238,82 @@ class MCPServerManager:
             f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}"
         )
         return prefixed_tools
+
+    def _create_prefixed_prompts(
+        self, prompts: List[Prompt], server: MCPServer, add_prefix: bool = True
+    ) -> List[Prompt]:
+        """
+        Create prefixed prompts and update prompt mapping.
+
+        Args:
+            prompts: List of original prompts from server
+            server: Server instance
+
+        Returns:
+            List of prompts with prefixed names
+        """
+        prefixed_prompts = []
+        prefix = get_server_prefix(server)
+
+        for prompt in prompts:
+            prefixed_name = add_server_prefix_to_name(prompt.name, prefix)
+
+            name_to_use = prefixed_name if add_prefix else prompt.name
+
+            prompt.name = name_to_use
+            prefixed_prompts.append(prompt)
+
+        verbose_logger.info(
+            f"Successfully fetched {len(prefixed_prompts)} prompts from server {server.name}"
+        )
+        return prefixed_prompts
+
+    def _create_prefixed_resources(
+        self, resources: List[Resource], server: MCPServer, add_prefix: bool = True
+    ) -> List[Resource]:
+        """Prefix resource names and track origin server for read requests."""
+
+        prefixed_resources: List[Resource] = []
+        prefix = get_server_prefix(server)
+
+        for resource in resources:
+            name_to_use = (
+                add_server_prefix_to_name(resource.name, prefix)
+                if add_prefix
+                else resource.name
+            )
+            resource.name = name_to_use
+            prefixed_resources.append(resource)
+
+        verbose_logger.info(
+            f"Successfully fetched {len(prefixed_resources)} resources from server {server.name}"
+        )
+        return prefixed_resources
+
+    def _create_prefixed_resource_templates(
+        self,
+        resource_templates: List[ResourceTemplate],
+        server: MCPServer,
+        add_prefix: bool = True,
+    ) -> List[ResourceTemplate]:
+        """Prefix resource template names for multi-server scenarios."""
+
+        prefixed_templates: List[ResourceTemplate] = []
+        prefix = get_server_prefix(server)
+
+        for resource_template in resource_templates:
+            name_to_use = (
+                add_server_prefix_to_name(resource_template.name, prefix)
+                if add_prefix
+                else resource_template.name
+            )
+            resource_template.name = name_to_use
+            prefixed_templates.append(resource_template)
+
+        verbose_logger.info(
+            f"Successfully fetched {len(prefixed_templates)} resource templates from server {server.name}"
+        )
+        return prefixed_templates
 
     def check_allowed_or_banned_tools(self, tool_name: str, server: MCPServer) -> bool:
         """
@@ -1080,7 +1349,7 @@ class MCPServerManager:
             HTTPException: If allowed_params is configured for this tool but arguments contain disallowed params
         """
         from litellm.proxy._experimental.mcp_server.utils import (
-            get_server_name_prefix_tool_mcp,
+            split_server_prefix_from_name,
         )
 
         # If no allowed_params configured, return all arguments
@@ -1088,7 +1357,7 @@ class MCPServerManager:
             return
 
         # Get the unprefixed tool name to match against config
-        unprefixed_tool_name, _ = get_server_name_prefix_tool_mcp(tool_name)
+        unprefixed_tool_name, _ = split_server_prefix_from_name(tool_name)
 
         # Check both prefixed and unprefixed tool names
         allowed_params_list = server.allowed_params.get(
@@ -1489,7 +1758,7 @@ class MCPServerManager:
         start_time = datetime.datetime.now()
 
         # Get the MCP server
-        prefixed_tool_name = add_server_prefix_to_tool_name(name, server_name)
+        prefixed_tool_name = add_server_prefix_to_name(name, server_name)
         mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
@@ -1595,7 +1864,7 @@ class MCPServerManager:
             for tool in tools:
                 # The tool.name here is already prefixed from _get_tools_from_server
                 # Extract original name for mapping
-                original_name, _ = get_server_name_prefix_tool_mcp(tool.name)
+                original_name, _ = split_server_prefix_from_name(tool.name)
                 self.tool_name_to_mcp_server_name_mapping[original_name] = server.name
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
@@ -1623,7 +1892,7 @@ class MCPServerManager:
             (
                 original_tool_name,
                 server_name_from_prefix,
-            ) = get_server_name_prefix_tool_mcp(tool_name)
+            ) = split_server_prefix_from_name(tool_name)
             if original_tool_name in self.tool_name_to_mcp_server_name_mapping:
                 for server in self.get_registry().values():
                     if normalize_server_name(server.name) == normalize_server_name(
@@ -1658,6 +1927,14 @@ class MCPServerManager:
         verbose_logger.debug(
             f"Registry now contains {len(self.get_registry())} servers"
         )
+
+    def get_mcp_servers_from_ids(self, server_ids: List[str]) -> List[MCPServer]:
+        servers = []
+        registry = self.get_registry()
+        for server in registry.values():
+            if server.server_id in server_ids:
+                servers.append(server)
+        return servers
 
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
         """

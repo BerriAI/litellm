@@ -29,6 +29,18 @@ response = completion(
 )
 ```
 
+:::info Metadata passthrough (preview)
+When `litellm.enable_preview_features = True`, LiteLLM forwards only the values inside `metadata` to OpenAI.
+
+```python
+completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "hi"}],
+    metadata= {"custom_meta_key": "value"},
+)
+```
+:::
+
 ### Usage - LiteLLM Proxy Server
 
 Here's how to call OpenAI models with the LiteLLM Proxy Server
@@ -240,7 +252,7 @@ response = completion(
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                                 }
                             }
                         ]

@@ -6,7 +6,7 @@ fastapi==0.120.1 # server dep
 starlette==0.49.1 # starlette fastapi dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
-uvicorn==0.29.0 # server dep
+uvicorn==0.31.1 # server dep
 gunicorn==23.0.0 # server dep
 fastuuid==0.13.5 # for uuid4
 uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
@@ -19,7 +19,7 @@ google-cloud-aiplatform==1.47.0 # for vertex ai calls
 google-cloud-iam==2.19.1 # for GCP IAM Redis authentication
 google-genai==1.22.0
 anthropic[vertex]==0.54.0
-mcp==1.10.1    # for MCP server
+mcp==1.21.2 ; python_version >= "3.10"    # for MCP server
 google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
@@ -29,11 +29,11 @@ orjson==3.11.2 # fast /embedding responses
 polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
 fastapi-sso==0.16.0 # admin UI, SSO
-pyjwt[crypto]==2.9.0
+pyjwt[crypto]==2.10.1 ; python_version >= "3.9"
 python-multipart==0.0.18 # admin UI
 Pillow==11.0.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
-azure-identity==1.16.1 # for azure content safety
+azure-identity==1.16.1 ; python_version >= "3.9" # for azure content safety
 azure-keyvault==4.2.0 # for azure KMS integration
 azure-storage-file-datalake==12.20.0 # for azure buck storage logging
 opentelemetry-api==1.25.0
@@ -55,7 +55,7 @@ jinja2==3.1.6 # for prompt templates
 aiohttp==3.12.14 # for network calls
 aioboto3==13.4.0 # for async sagemaker calls
 tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
-pydantic==2.10.2 # proxy + openai req.
+pydantic>=2.11,<3 # proxy + openai req. + mcp
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
 soundfile==0.12.1 # for audio file processing
