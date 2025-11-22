@@ -84,11 +84,11 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
         </Tooltip>
       )}
 
-      {usage && (
+      {usage?.cost !== undefined && (
         <Tooltip title="Cost">
           <div className="flex items-center">
             <DollarOutlined className="mr-1" />
-            <span>{usage.cost !== undefined ? `$${usage.cost.toFixed(6)}` : "Not Tracked"}</span>
+            <span>${usage.cost.toFixed(6)}</span>
           </div>
         </Tooltip>
       )}
