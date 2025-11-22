@@ -1871,6 +1871,26 @@ def _lazy_import_huggingface_configs(name: str) -> Any:
     raise AttributeError(f"HuggingFace configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_anthropic_configs(name: str) -> Any:
+    """Lazy import for Anthropic config classes - imports only the requested class."""
+    if name == "AnthropicConfig":
+        from .llms.anthropic.chat.transformation import AnthropicConfig as _AnthropicConfig
+        globals()["AnthropicConfig"] = _AnthropicConfig
+        return _AnthropicConfig
+    
+    if name == "AnthropicTextConfig":
+        from .llms.anthropic.completion.transformation import AnthropicTextConfig as _AnthropicTextConfig
+        globals()["AnthropicTextConfig"] = _AnthropicTextConfig
+        return _AnthropicTextConfig
+    
+    if name == "AnthropicMessagesConfig":
+        from .llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig as _AnthropicMessagesConfig
+        globals()["AnthropicMessagesConfig"] = _AnthropicMessagesConfig
+        return _AnthropicMessagesConfig
+    
+    raise AttributeError(f"Anthropic configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -1988,11 +2008,9 @@ def __getattr__(name: str) -> Any:
         globals()["OpenrouterConfig"] = _OpenrouterConfig
         return _OpenrouterConfig
     
-    # Lazy-load AnthropicConfig to reduce import-time memory cost
-    if name == "AnthropicConfig":
-        from .llms.anthropic.chat.transformation import AnthropicConfig as _AnthropicConfig
-        globals()["AnthropicConfig"] = _AnthropicConfig
-        return _AnthropicConfig
+    # Lazy-load Anthropic configs to reduce import-time memory cost
+    if name in {"AnthropicConfig", "AnthropicTextConfig", "AnthropicMessagesConfig"}:
+        return _lazy_import_anthropic_configs(name)
     
     # Lazy-load data platform configs to reduce import-time memory cost
     if name in {"DatabricksConfig", "PredibaseConfig", "SnowflakeConfig"}:
@@ -2027,12 +2045,6 @@ def __getattr__(name: str) -> Any:
         from .llms.groq.stt.transformation import GroqSTTConfig as _GroqSTTConfig
         globals()["GroqSTTConfig"] = _GroqSTTConfig
         return _GroqSTTConfig
-    
-    # Lazy-load AnthropicTextConfig to reduce import-time memory cost
-    if name == "AnthropicTextConfig":
-        from .llms.anthropic.completion.transformation import AnthropicTextConfig as _AnthropicTextConfig
-        globals()["AnthropicTextConfig"] = _AnthropicTextConfig
-        return _AnthropicTextConfig
     
     # Lazy-load TritonConfig to reduce import-time memory cost
     if name == "TritonConfig":
@@ -2230,12 +2242,6 @@ def __getattr__(name: str) -> Any:
         from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig as _VertexAIRerankConfig
         globals()["VertexAIRerankConfig"] = _VertexAIRerankConfig
         return _VertexAIRerankConfig
-    
-    # Lazy-load AnthropicMessagesConfig to reduce import-time memory cost
-    if name == "AnthropicMessagesConfig":
-        from .llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig as _AnthropicMessagesConfig
-        globals()["AnthropicMessagesConfig"] = _AnthropicMessagesConfig
-        return _AnthropicMessagesConfig
     
     # Lazy-load TogetherAITextCompletionConfig to reduce import-time memory cost
     if name == "TogetherAITextCompletionConfig":
