@@ -1,6 +1,6 @@
 ---
 slug: gemini_3
-title: DAY 0 Support: Gemini 3 on LiteLLM
+title: "DAY 0 Support: Gemini 3 on LiteLLM"
 date: 2025-11-19T10:00:00
 authors:
   - name: Sameer Kankute
@@ -8,11 +8,11 @@ authors:
     url: https://www.linkedin.com/in/sameer-kankute/
     image_url: https://media.licdn.com/dms/image/v2/D4D03AQHB_loQYd5gjg/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1719137160975?e=1765411200&v=beta&t=c8396f--_lH6Fb_pVvx_jGholPfcl0bvwmNynbNdnII
   - name: Krrish Dholakia
-    title: CEO, LiteLLM
+    title: "CEO, LiteLLM"
     url: https://www.linkedin.com/in/krish-d/
     image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
   - name: Ishaan Jaff
-    title: CTO, LiteLLM
+    title: "CTO, LiteLLM"
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
 tags: [gemini, day 0 support, llms]

@@ -2692,7 +2692,10 @@ class ProxyConfig:
                     AWSSecretsManagerV2,
                 )
 
-                AWSSecretsManagerV2.load_aws_secret_manager(use_aws_secret_manager=True)
+                AWSSecretsManagerV2.load_aws_secret_manager(
+                    use_aws_secret_manager=True,
+                    key_management_settings=litellm._key_management_settings,
+                )
             elif key_management_system == KeyManagementSystem.AWS_KMS.value:
                 load_aws_kms(use_aws_kms=True)
             elif (
@@ -7066,7 +7069,9 @@ async def model_info_v2(
         _model["model_info"] = model_info
         # don't return the api key / vertex credentials
         # don't return the llm credentials
-        _model = remove_sensitive_info_from_deployment(_model)
+        _model = remove_sensitive_info_from_deployment(
+            _model, excluded_keys={"litellm_credential_name"}
+        )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
@@ -7533,7 +7538,9 @@ def _get_proxy_model_info(model: dict) -> dict:
             model_info[k] = v
     model["model_info"] = model_info
     # don't return the llm credentials
-    model = remove_sensitive_info_from_deployment(deployment_dict=model)
+    model = remove_sensitive_info_from_deployment(
+        deployment_dict=model, excluded_keys={"litellm_credential_name"}
+    )
 
     return model
 
@@ -7601,7 +7608,8 @@ async def model_info_v1(  # noqa: PLR0915
         )
         _deployment_info_dict = _deployment_info.model_dump()
         _deployment_info_dict = remove_sensitive_info_from_deployment(
-            deployment_dict=_deployment_info_dict
+            deployment_dict=_deployment_info_dict,
+            excluded_keys={"litellm_credential_name"},
         )
         return {"data": _deployment_info_dict}
 

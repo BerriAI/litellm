@@ -4,7 +4,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from fastapi import HTTPException
+
 from litellm.proxy._types import UserAPIKeyAuth
+from mcp import ReadResourceResult, Resource
+from mcp.types import Prompt, ResourceTemplate, TextResourceContents
 
 
 @pytest.mark.asyncio
@@ -68,6 +72,315 @@ async def test_mcp_server_tool_call_body_contains_request_data():
     body = captured_data["proxy_server_request"]["body"]
     assert body["name"] == tool_name
     assert body["arguments"] == tool_arguments
+
+
+@pytest.mark.asyncio
+async def test_get_prompts_from_mcp_servers_success():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_prompts_from_mcp_servers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    server_a = MagicMock(name="server_a_obj")
+    server_a.name = "server_a"
+    server_a.alias = "server_a"
+    server_a.server_name = "server_a"
+    server_a.server_id = "a"
+    server_a.auth_type = None
+    server_a.extra_headers = None
+
+    server_b = MagicMock(name="server_b_obj")
+    server_b.name = "server_b"
+    server_b.alias = "server_b"
+    server_b.server_name = "server_b"
+    server_b.server_id = "b"
+    server_b.auth_type = None
+    server_b.extra_headers = None
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        AsyncMock(return_value=[server_a, server_b]),
+    ) as mock_allowed, patch(
+        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+        return_value=(None, None),
+    ) as mock_headers, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager:
+        mock_manager.get_prompts_from_server = AsyncMock(
+            side_effect=[
+                [Prompt(name="hello", description="hi")],
+                [Prompt(name="howdy", description="hey")],
+            ]
+        )
+
+        prompts = await _get_prompts_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    mock_allowed.assert_awaited_once()
+    assert mock_headers.call_count == 2
+    assert mock_manager.get_prompts_from_server.await_count == 2
+    assert {prompt.name for prompt in prompts} == {"hello", "howdy"}
+
+
+@pytest.mark.asyncio
+async def test_get_resources_from_mcp_servers_success():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_resources_from_mcp_servers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="user")
+
+    server_a = MagicMock(name="server_a_obj")
+    server_a.name = "server_a"
+    server_a.alias = "server_a"
+    server_a.server_name = "server_a"
+    server_a.server_id = "a"
+    server_a.auth_type = None
+    server_a.extra_headers = None
+
+    server_b = MagicMock(name="server_b_obj")
+    server_b.name = "server_b"
+    server_b.alias = "server_b"
+    server_b.server_name = "server_b"
+    server_b.server_id = "b"
+    server_b.auth_type = None
+    server_b.extra_headers = None
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        AsyncMock(return_value=[server_a, server_b]),
+    ) as mock_allowed, patch(
+        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+        return_value=(None, None),
+    ) as mock_headers, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager:
+        mock_manager.get_resources_from_server = AsyncMock(
+            side_effect=[
+                [
+                    Resource(
+                        name="resource_a",
+                        uri="https://example.com/a",
+                    )
+                ],
+                [
+                    Resource(
+                        name="resource_b",
+                        uri="https://example.com/b",
+                    )
+                ],
+            ]
+        )
+
+        resources = await _get_resources_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    mock_allowed.assert_awaited_once()
+    assert mock_headers.call_count == 2
+    assert mock_manager.get_resources_from_server.await_count == 2
+    assert {resource.name for resource in resources} == {
+        "resource_a",
+        "resource_b",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_resource_templates_from_mcp_servers_success():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_resource_templates_from_mcp_servers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="user")
+
+    server = MagicMock(name="server_obj")
+    server.name = "server"
+    server.alias = "server"
+    server.server_name = "server"
+    server.server_id = "server-id"
+    server.auth_type = None
+    server.extra_headers = None
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        AsyncMock(return_value=[server]),
+    ) as mock_allowed, patch(
+        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+        return_value=(None, None),
+    ) as mock_headers, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager:
+        mock_manager.get_resource_templates_from_server = AsyncMock(
+            return_value=[
+                ResourceTemplate(
+                    name="template",
+                    description="desc",
+                    uriTemplate="https://example.com/resource/{id}",
+                )
+            ]
+        )
+
+        templates = await _get_resource_templates_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    mock_allowed.assert_awaited_once()
+    mock_headers.assert_called_once()
+    mock_manager.get_resource_templates_from_server.assert_awaited_once()
+    assert [template.name for template in templates] == ["template"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_prompt_success():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import mcp_get_prompt
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    server = MagicMock()
+    server.name = "server_a"
+
+    prompt_result = MagicMock(name="prompt_result")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        AsyncMock(return_value=[server]),
+    ) as mock_allowed, patch(
+        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+        return_value=({"Authorization": "token"}, {"X-Test": "1"}),
+    ) as mock_headers, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager:
+        mock_manager.get_prompt_from_server = AsyncMock(return_value=prompt_result)
+
+        result = await mcp_get_prompt(
+            name="hello",
+            arguments={"foo": "bar"},
+            user_api_key_auth=user_api_key_auth,
+        )
+
+    mock_allowed.assert_awaited_once()
+    mock_headers.assert_called_once_with(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers=None,
+        raw_headers=None,
+    )
+    mock_manager.get_prompt_from_server.assert_awaited_once_with(
+        server=server,
+        prompt_name="hello",
+        arguments={"foo": "bar"},
+        mcp_auth_header={"Authorization": "token"},
+        extra_headers={"X-Test": "1"},
+    )
+    assert result is prompt_result
+
+
+@pytest.mark.asyncio
+async def test_mcp_read_resource_success():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import mcp_read_resource
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="key", user_id="user")
+
+    server = MagicMock()
+    server.name = "server"
+
+    read_result = ReadResourceResult(
+        contents=[
+            TextResourceContents(
+                uri="https://example.com/resource",
+                text="hello world",
+                mimeType="text/plain",
+            )
+        ]
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        AsyncMock(return_value=[server]),
+    ) as mock_allowed, patch(
+        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+        return_value=({"Authorization": "token"}, {"X-Test": "1"}),
+    ) as mock_headers, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager:
+        mock_manager.read_resource_from_server = AsyncMock(return_value=read_result)
+
+        result = await mcp_read_resource(
+            url="https://example.com/resource",
+            user_api_key_auth=user_api_key_auth,
+        )
+
+    mock_allowed.assert_awaited_once()
+    mock_headers.assert_called_once_with(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers=None,
+        raw_headers=None,
+    )
+    mock_manager.read_resource_from_server.assert_awaited_once_with(
+        server=server,
+        url="https://example.com/resource",
+        mcp_auth_header={"Authorization": "token"},
+        extra_headers={"X-Test": "1"},
+    )
+    assert result is read_result
+
+
+@pytest.mark.asyncio
+async def test_mcp_read_resource_multiple_servers_error():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import mcp_read_resource
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="key", user_id="user")
+
+    server_a = MagicMock()
+    server_b = MagicMock()
+    server_a.name = "server_a"
+    server_b.name = "server_b"
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        AsyncMock(return_value=[server_a, server_b]),
+    ) as mock_allowed:
+        with pytest.raises(HTTPException) as exc_info:
+            await mcp_read_resource(
+                url="https://example.com/resource",
+                user_api_key_auth=user_api_key_auth,
+            )
+
+    mock_allowed.assert_awaited_once()
+    assert exc_info.value.status_code == 400
+    assert "Multiple MCP servers" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

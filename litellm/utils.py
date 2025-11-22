@@ -5025,6 +5025,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_video_per_second", None
                 ),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
+                output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get(
                     "citation_cost_per_token", None
@@ -7205,6 +7206,8 @@ class ProviderConfigManager:
             return litellm.DashScopeChatConfig()
         elif litellm.LlmProviders.MOONSHOT == provider:
             return litellm.MoonshotChatConfig()
+        elif litellm.LlmProviders.DOCKER_MODEL_RUNNER == provider:
+            return litellm.DockerModelRunnerChatConfig()
         elif litellm.LlmProviders.V0 == provider:
             return litellm.V0ChatConfig()
         elif litellm.LlmProviders.MORPH == provider:
@@ -7758,7 +7761,9 @@ class ProviderConfigManager:
 
             return LiteLLMProxyImageEditConfig()
         elif LlmProviders.VERTEX_AI == provider:
-            from litellm.llms.vertex_ai.image_edit import get_vertex_ai_image_edit_config
+            from litellm.llms.vertex_ai.image_edit import (
+                get_vertex_ai_image_edit_config,
+            )
 
             return get_vertex_ai_image_edit_config(model)
         return None

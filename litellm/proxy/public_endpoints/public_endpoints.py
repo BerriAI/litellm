@@ -9,7 +9,6 @@ from litellm.proxy.public_endpoints.provider_create_metadata import (
 )
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )

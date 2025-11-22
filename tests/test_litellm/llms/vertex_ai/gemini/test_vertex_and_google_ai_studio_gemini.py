@@ -477,6 +477,86 @@ def test_vertex_ai_usage_metadata_response_token_count():
     assert result.completion_tokens_details.text_tokens == 74
 
 
+def test_vertex_ai_usage_metadata_with_image_tokens():
+    """Test candidatesTokensDetails with IMAGE modality (e.g., Imagen models)
+
+    This test simulates the case where candidatesTokenCount is EXCLUSIVE of thoughtsTokenCount.
+    Gemini API returns: totalTokenCount = promptTokenCount + candidatesTokenCount + thoughtsTokenCount
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 14,
+        "candidatesTokenCount": 1442,  # Does NOT include thoughtsTokenCount
+        "totalTokenCount": 1614,  # 14 + 1442 + 158
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 14}],
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1120},
+            {"modality": "TEXT", "tokenCount": 322}  # 1442 - 1120 = 322
+        ],
+        "thoughtsTokenCount": 158
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    print("result", result)
+
+    # Verify basic token counts
+    assert result.prompt_tokens == 14
+    # completion_tokens = candidatesTokenCount + thoughtsTokenCount (when exclusive)
+    assert result.completion_tokens == 1600  # 1442 + 158
+    assert result.total_tokens == 1614
+
+    # Verify detailed token breakdown
+    assert result.completion_tokens_details.image_tokens == 1120
+    assert result.completion_tokens_details.text_tokens == 322
+    assert result.completion_tokens_details.reasoning_tokens == 158
+
+    # Verify the math: completion_tokens = image + text + reasoning
+    # 1600 = 1120 (image) + 322 (text) + 158 (reasoning)
+    assert (
+        result.completion_tokens_details.image_tokens
+        + result.completion_tokens_details.text_tokens
+        + result.completion_tokens_details.reasoning_tokens
+        == result.completion_tokens
+    )
+
+
+def test_vertex_ai_usage_metadata_with_image_tokens_auto_calculated_text():
+    """Test that text_tokens is auto-calculated when only IMAGE modality is provided
+
+    This test verifies the auto-calculation logic at line 1367-1372 in vertex_and_google_ai_studio_gemini.py
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 14,
+        "candidatesTokenCount": 1442,
+        "totalTokenCount": 1614,  # 14 + 1442 + 158 (exclusive)
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 14}],
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1120}
+            # TEXT modality omitted - should be auto-calculated
+        ],
+        "thoughtsTokenCount": 158
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    print("result", result)
+
+    # Verify basic token counts
+    assert result.prompt_tokens == 14
+    assert result.completion_tokens == 1600  # 1442 + 158
+    assert result.total_tokens == 1614
+
+    # Verify image_tokens is set
+    assert result.completion_tokens_details.image_tokens == 1120
+
+    # Verify text_tokens is auto-calculated: candidatesTokenCount - image_tokens
+    # Note: reasoning_tokens is NOT subtracted here because candidatesTokenCount is exclusive
+    # 1442 - 1120 = 322
+    expected_text_tokens = 1442 - 1120
+    assert result.completion_tokens_details.text_tokens == expected_text_tokens
+    assert result.completion_tokens_details.reasoning_tokens == 158
+
+
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     """
     If budget_tokens is 0, do not set includeThoughts to True
