@@ -137,6 +137,15 @@ model_list:
     litellm_params:
       model: gpt-4o
       api_key: os.environ/OPENAI_API_KEY
+  # Test models for model-based routing tests (files/batches endpoints)
+  - model_name: gpt-4o-test-account-1
+    litellm_params:
+      model: gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4o-test-account-2
+    litellm_params:
+      model: gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
 
 
 litellm_settings:
