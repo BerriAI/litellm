@@ -28,14 +28,6 @@ from litellm.types.integrations.datadog import DatadogInitParams
 # Caching classes are lazy-loaded to reduce import-time memory cost
 # from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 
-from litellm.types.utils import (
-    ImageObject,
-    BudgetConfig,
-    all_litellm_params,
-    all_litellm_params as _litellm_completion_params,
-    CredentialItem,
-    PriorityReservationDict,
-)  # maintain backwards compatibility for root param.
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -90,17 +82,16 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
-from litellm.types.utils import (
-    StandardKeyGenerationConfig,
-    LlmProviders,
-    SearchProviders,
-)
-from litellm.types.utils import PriorityReservationSettings
+# Types utils imports are lazy-loaded to reduce import-time memory cost
+# They are created on first access via __getattr__
+# However, some are needed at module level for initialization, so import them directly
+from litellm.types.utils import LlmProviders, PriorityReservationSettings
 # Import only for type checking; runtime access is via __getattr__
 if TYPE_CHECKING:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.guardrails import GuardrailItem
+    from litellm.types.utils import CredentialItem, BudgetConfig, PriorityReservationDict, StandardKeyGenerationConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -317,7 +308,7 @@ WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
 COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: "COHERE_EMBEDDING_INPUT_TYPES" = "search_document"
 ### CREDENTIALS ###
-credential_list: List[CredentialItem] = []
+credential_list: List["CredentialItem"] = []
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -392,7 +383,7 @@ aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
 upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
-key_generation_settings: Optional[StandardKeyGenerationConfig] = None
+key_generation_settings: Optional["StandardKeyGenerationConfig"] = None
 default_internal_user_params: Optional[Dict] = None
 default_team_params: Optional[Union[DefaultTeamSSOParams, Dict]] = None
 default_team_settings: Optional[List] = None
@@ -401,7 +392,7 @@ default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
 max_ui_session_budget: Optional[float] = 10  # $10 USD budgets for UI Chat sessions
 internal_user_budget_duration: Optional[str] = None
-tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
+tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
 disable_end_user_cost_tracking: Optional[bool] = None
@@ -421,7 +412,8 @@ public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #######
-priority_reservation: Optional[Dict[str, Union[float, PriorityReservationDict]]] = None
+priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
+# PriorityReservationSettings is imported at top level since it's needed for initialization
 priority_reservation_settings: "PriorityReservationSettings" = (
     PriorityReservationSettings()
 )
@@ -935,7 +927,8 @@ model_list = list(
 
 model_list_set = set(model_list)
 
-provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
+# LlmProviders is imported at top level since it's needed for initialization
+provider_list: List[Union["LlmProviders", str]] = list(LlmProviders)
 
 
 models_by_provider: dict = {
@@ -1768,6 +1761,63 @@ def _lazy_import_caching(name: str) -> Any:
     raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
 
 
+# Lazy import for types.utils to avoid loading the module at import time
+# This significantly reduces memory usage when importing litellm
+def _lazy_import_types_utils(name: str) -> Any:
+    """Lazy import for types.utils module - imports only the requested item by name."""
+    if name == "ImageObject":
+        from litellm.types.utils import ImageObject as _ImageObject
+        globals()["ImageObject"] = _ImageObject
+        return _ImageObject
+    
+    if name == "BudgetConfig":
+        from litellm.types.utils import BudgetConfig as _BudgetConfig
+        globals()["BudgetConfig"] = _BudgetConfig
+        return _BudgetConfig
+    
+    if name == "all_litellm_params":
+        from litellm.types.utils import all_litellm_params as _all_litellm_params
+        globals()["all_litellm_params"] = _all_litellm_params
+        return _all_litellm_params
+    
+    if name == "_litellm_completion_params":
+        from litellm.types.utils import all_litellm_params as _all_litellm_params
+        globals()["_litellm_completion_params"] = _all_litellm_params
+        return _all_litellm_params
+    
+    if name == "CredentialItem":
+        from litellm.types.utils import CredentialItem as _CredentialItem
+        globals()["CredentialItem"] = _CredentialItem
+        return _CredentialItem
+    
+    if name == "PriorityReservationDict":
+        from litellm.types.utils import PriorityReservationDict as _PriorityReservationDict
+        globals()["PriorityReservationDict"] = _PriorityReservationDict
+        return _PriorityReservationDict
+    
+    if name == "StandardKeyGenerationConfig":
+        from litellm.types.utils import StandardKeyGenerationConfig as _StandardKeyGenerationConfig
+        globals()["StandardKeyGenerationConfig"] = _StandardKeyGenerationConfig
+        return _StandardKeyGenerationConfig
+    
+    if name == "LlmProviders":
+        from litellm.types.utils import LlmProviders as _LlmProviders
+        globals()["LlmProviders"] = _LlmProviders
+        return _LlmProviders
+    
+    if name == "SearchProviders":
+        from litellm.types.utils import SearchProviders as _SearchProviders
+        globals()["SearchProviders"] = _SearchProviders
+        return _SearchProviders
+    
+    if name == "PriorityReservationSettings":
+        from litellm.types.utils import PriorityReservationSettings as _PriorityReservationSettings
+        globals()["PriorityReservationSettings"] = _PriorityReservationSettings
+        return _PriorityReservationSettings
+    
+    raise AttributeError(f"Types utils lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -1807,6 +1857,15 @@ def __getattr__(name: str) -> Any:
     # Lazy-load caching classes to reduce import-time memory cost
     if name in {"Cache", "DualCache", "RedisCache", "InMemoryCache", "LLMClientCache"}:
         return _lazy_import_caching(name)
+    
+    # Lazy-load types.utils to reduce import-time memory cost
+    _types_utils_names = {
+        "ImageObject", "BudgetConfig", "all_litellm_params", "_litellm_completion_params",
+        "CredentialItem", "PriorityReservationDict", "StandardKeyGenerationConfig",
+        "LlmProviders", "SearchProviders", "PriorityReservationSettings",
+    }
+    if name in _types_utils_names:
+        return _lazy_import_types_utils(name)
     
     # Lazy-load CustomLogger to avoid circular imports
     if name == "CustomLogger":
