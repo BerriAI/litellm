@@ -5516,6 +5516,7 @@ def transcription(
     atranscription = kwargs.pop("atranscription", False)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     extra_headers = kwargs.get("extra_headers", None)
+    shared_session = kwargs.get("shared_session", None)
     kwargs.pop("tags", [])
     non_default_params = get_non_default_transcription_params(kwargs)
 
@@ -5653,6 +5654,7 @@ def transcription(
             api_key=api_key,
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
+            shared_session=shared_session,
         )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
@@ -5679,6 +5681,7 @@ def transcription(
             custom_llm_provider=custom_llm_provider,
             headers={},
             provider_config=provider_config,
+            shared_session=shared_session,
         )
 
     # Calculate and add duration if response is missing it
