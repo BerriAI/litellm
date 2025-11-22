@@ -5760,7 +5760,9 @@ def speech(  # noqa: PLR0915
     custom_llm_provider: Optional[str] = None,
     aspeech: Optional[bool] = None,
     **kwargs,
-) -> HttpxBinaryResponseContent:
+) -> Union[
+    HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
+]:
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -5820,7 +5822,11 @@ def speech(  # noqa: PLR0915
         },
         custom_llm_provider=custom_llm_provider,
     )
-    response: Optional[HttpxBinaryResponseContent] = None
+    response: Union[
+        HttpxBinaryResponseContent,
+        Coroutine[Any, Any, HttpxBinaryResponseContent],
+        None,
+    ] = None
     if (
         custom_llm_provider == "openai"
         or custom_llm_provider in litellm.openai_compatible_providers
@@ -5958,6 +5964,58 @@ def speech(  # noqa: PLR0915
                 aspeech=aspeech,
                 litellm_params=litellm_params_dict,
             )
+    elif custom_llm_provider == "elevenlabs":
+        from litellm.llms.elevenlabs.text_to_speech.transformation import (
+            ElevenLabsTextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = ElevenLabsTextToSpeechConfig()
+
+        elevenlabs_config = cast(
+            ElevenLabsTextToSpeechConfig, text_to_speech_provider_config
+        )
+
+        voice_id = voice if isinstance(voice, str) else None
+        if voice_id is None or not voice_id.strip():
+            raise litellm.BadRequestError(
+                message="'voice' must resolve to an ElevenLabs voice id for ElevenLabs TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+        voice_id = voice_id.strip()
+
+        query_params = kwargs.pop(
+            ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY, None
+        )
+        if isinstance(query_params, dict):
+            litellm_params_dict[
+                ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY
+            ] = query_params
+
+        litellm_params_dict[
+            ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY
+        ] = voice_id
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice_id,
+            text_to_speech_provider_config=elevenlabs_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         generic_optional_params = GenericLiteLLMParams(**kwargs)
 
