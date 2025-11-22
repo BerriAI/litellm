@@ -144,6 +144,7 @@ if TYPE_CHECKING:
     from litellm.llms.bedrock.chat.invoke_handler import AmazonCohereChatConfig
     from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
     from litellm.llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config
+    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
     from litellm.llms.deprecated_providers.palm import PalmConfig
     from litellm.llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
