@@ -54,6 +54,17 @@ pip install litellm==1.80.5
 
 ---
 
+## New Providers and Endpoints
+
+### New Providers
+
+| Provider | Supported Endpoints | Description |
+| -------- | ------------------- | ----------- |
+| **[Docker Model Runner](../../docs/providers/docker_model_runner)** | `/v1/chat/completions` | Run LLM models in Docker containers |
+| **[Snowflake](../../docs/providers/snowflake)** | `/v1/chat/completions`, `/v1/embeddings` | Snowflake Cortex LLM support with embeddings |
+
+---
+
 ## New Models / Updated Models
 
 #### New Model Support
@@ -120,6 +131,8 @@ pip install litellm==1.80.5
 
 - **[Vertex AI](../../docs/providers/vertex)**
     - Add Vertex AI Image Edit Support - [PR #16828](https://github.com/BerriAI/litellm/pull/16828)
+    - Update veo 3 pricing and add prod models - [PR #16781](https://github.com/BerriAI/litellm/pull/16781)
+    - Fix Video download for veo3 - [PR #16875](https://github.com/BerriAI/litellm/pull/16875)
 
 - **[Snowflake](../../docs/providers/snowflake)**
     - Snowflake provider support: added embeddings, PAT, account_id - [PR #15727](https://github.com/BerriAI/litellm/pull/15727)
@@ -136,11 +149,6 @@ pip install litellm==1.80.5
 - **[Cerebras](../../docs/providers/cerebras)**
     - Fix Cerebras GPT-OSS-120B model name - [PR #16939](https://github.com/BerriAI/litellm/pull/16939)
 
-- **[Google Veo](../../docs/video_generation)**
-    - Update veo 3 pricing and add prod models - [PR #16781](https://github.com/BerriAI/litellm/pull/16781)
-    - Fix Tag Based Routing for Video Generation - [PR #16770](https://github.com/BerriAI/litellm/pull/16770)
-    - Fix Video download for veo3 - [PR #16875](https://github.com/BerriAI/litellm/pull/16875)
-
 ### Bug Fixes
 
 - **[OpenAI](../../docs/providers/openai)**
@@ -151,11 +159,6 @@ pip install litellm==1.80.5
     - Get custom_llm_provider from query param - [PR #16731](https://github.com/BerriAI/litellm/pull/16731)
     - Fix optional param mapping - [PR #16852](https://github.com/BerriAI/litellm/pull/16852)
     - Add None check for litellm_params - [PR #16754](https://github.com/BerriAI/litellm/pull/16754)
-
-#### New Provider Support
-
-- **[Docker Model Runner](../../docs/providers/docker_model_runner)**
-    - New LLM Provider - Docker Model Runner - [PR #16948](https://github.com/BerriAI/litellm/pull/16948)
 
 ---
 
@@ -183,6 +186,9 @@ pip install litellm==1.80.5
 - **[Audio Transcription](../../docs/audio_transcription)**
     - Fix audio transcription cost tracking - [PR #16478](https://github.com/BerriAI/litellm/pull/16478)
     - Add missing shared_sessions to audio/transcriptions - [PR #16858](https://github.com/BerriAI/litellm/pull/16858)
+
+- **[Video Generation API](../../docs/video_generation)**
+    - Fix videos tagging - [PR #16770](https://github.com/BerriAI/litellm/pull/16770)
 
 #### Bugs
 
@@ -236,6 +242,7 @@ pip install litellm==1.80.5
 #### Bugs
 
 - **UI Fixes**
+    - Fix flaky tests due to antd Notification Manager - [PR #16740](https://github.com/BerriAI/litellm/pull/16740)
     - Fix UI MCP Tool Test Regression - [PR #16695](https://github.com/BerriAI/litellm/pull/16695)
     - Fix edit logging settings not appearing - [PR #16798](https://github.com/BerriAI/litellm/pull/16798)
     - Add css to truncate long request ids in request viewer - [PR #16665](https://github.com/BerriAI/litellm/pull/16665)
@@ -243,6 +250,9 @@ pip install litellm==1.80.5
     - Remove UI Session Token from user/info return - [PR #16851](https://github.com/BerriAI/litellm/pull/16851)
     - Remove console logs and errors from model tab - [PR #16455](https://github.com/BerriAI/litellm/pull/16455)
     - Change Bulk Invite User Roles to Match Backend - [PR #16906](https://github.com/BerriAI/litellm/pull/16906)
+    - Mock Tremor's Tooltip to Fix Flaky UI Tests - [PR #16786](https://github.com/BerriAI/litellm/pull/16786)
+    - Fix e2e ui playwright test - [PR #16799](https://github.com/BerriAI/litellm/pull/16799)
+    - Fix Tests in CI/CD - [PR #16972](https://github.com/BerriAI/litellm/pull/16972)
 
 - **SSO**
     - Ensure `role` from SSO provider is used when a user is inserted onto LiteLLM - [PR #16794](https://github.com/BerriAI/litellm/pull/16794)
@@ -257,15 +267,22 @@ pip install litellm==1.80.5
 
 ---
 
-## Logging / Guardrail / Prompt Management Integrations
+## AI Integrations
 
-#### Features
+### Logging
 
 - **[Arize Phoenix](../../docs/observability/arize_phoenix)**
     - Fix arize phoenix logging - [PR #16301](https://github.com/BerriAI/litellm/pull/16301)
     - Arize Phoenix - root span logging - [PR #16949](https://github.com/BerriAI/litellm/pull/16949)
 
-#### Guardrails
+- **[Langfuse](../../docs/proxy/logging#langfuse)**
+    - Filter secret fields form Langfuse - [PR #16842](https://github.com/BerriAI/litellm/pull/16842)
+
+- **General**
+    - Exclude litellm_credential_name from Sensitive Data Masker (Updated) - [PR #16958](https://github.com/BerriAI/litellm/pull/16958)
+    - Allow admins to disable, dynamic callback controls - [PR #16750](https://github.com/BerriAI/litellm/pull/16750)
+
+### Guardrails
 
 - **[IBM Guardrails](../../docs/proxy/guardrails)**
     - Fix IBM Guardrails optional params, add extra_headers field - [PR #16771](https://github.com/BerriAI/litellm/pull/16771)
@@ -280,7 +297,7 @@ pip install litellm==1.80.5
 - **General Guardrails**
     - Fix prompt injection not working - [PR #16701](https://github.com/BerriAI/litellm/pull/16701)
 
-#### Prompt Management
+### Prompt Management
 
 - **[Prompt Management](../../docs/proxy/prompt_management)**
     - Allow specifying just prompt_id in a request to a model - [PR #16834](https://github.com/BerriAI/litellm/pull/16834)
@@ -293,19 +310,10 @@ pip install litellm==1.80.5
     - UI, allow seeing model, prompt id for Prompt - [PR #16932](https://github.com/BerriAI/litellm/pull/16932)
     - Show "get code" section for prompt management + minor polish of showing version history - [PR #16941](https://github.com/BerriAI/litellm/pull/16941)
 
-#### Logging
+### Secret Managers
 
-- **[Langfuse](../../docs/proxy/logging#langfuse)**
-    - Filter secret fields form Langfuse - [PR #16842](https://github.com/BerriAI/litellm/pull/16842)
-
-- **General**
-    - Exclude litellm_credential_name from Sensitive Data Masker (Updated) - [PR #16958](https://github.com/BerriAI/litellm/pull/16958)
-
----
-
-## Spend Tracking, Budgets and Rate Limiting
-
-- **AI Gateway** - Allow admins to disable, dynamic callback controls - [PR #16750](https://github.com/BerriAI/litellm/pull/16750)
+- **[AWS Secrets Manager](../../docs/secret_managers)**
+    - Adds IAM role assumption support for AWS Secret Manager - [PR #16887](https://github.com/BerriAI/litellm/pull/16887)
 
 ---
 
@@ -335,7 +343,6 @@ pip install litellm==1.80.5
 - **Router Cache** - Fix routing for requests with same cacheable prefix but different user messages - [PR #16951](https://github.com/BerriAI/litellm/pull/16951)
 - **Redis Event Loop** - Fix redis event loop closed at first call - [PR #16913](https://github.com/BerriAI/litellm/pull/16913)
 - **Dependency Management** - Upgrade pydantic to version 2.11.0 - [PR #16909](https://github.com/BerriAI/litellm/pull/16909)
-- **AWS Secret Manager** - Adds IAM role assumption support for AWS Secret Manager - [PR #16887](https://github.com/BerriAI/litellm/pull/16887)
 
 ---
 
@@ -352,6 +359,47 @@ pip install litellm==1.80.5
 
 - **General Documentation**
     - Add mini-swe-agent to Projects built on LiteLLM - [PR #16971](https://github.com/BerriAI/litellm/pull/16971)
+
+---
+
+## Infrastructure / CI/CD
+
+- **UI Testing**
+    - Break e2e_ui_testing into build, unit, and e2e steps - [PR #16783](https://github.com/BerriAI/litellm/pull/16783)
+    - Building UI for Testing - [PR #16968](https://github.com/BerriAI/litellm/pull/16968)
+    - CI/CD Fixes - [PR #16937](https://github.com/BerriAI/litellm/pull/16937)
+
+- **Dependency Management**
+    - Bump js-yaml from 3.14.1 to 3.14.2 in /tests/proxy_admin_ui_tests/ui_unit_tests - [PR #16755](https://github.com/BerriAI/litellm/pull/16755)
+    - Bump js-yaml from 3.14.1 to 3.14.2 - [PR #16802](https://github.com/BerriAI/litellm/pull/16802)
+
+- **Migration**
+    - Migration job labels - [PR #16831](https://github.com/BerriAI/litellm/pull/16831)
+
+- **Config**
+    - This yaml actually works - [PR #16757](https://github.com/BerriAI/litellm/pull/16757)
+
+- **Release Notes**
+    - Add perf improvements on embeddings to release notes - [PR #16697](https://github.com/BerriAI/litellm/pull/16697)
+    - Docs - v1.80.0 - [PR #16694](https://github.com/BerriAI/litellm/pull/16694)
+
+- **Investigation**
+    - Investigate issue root cause - [PR #16859](https://github.com/BerriAI/litellm/pull/16859)
+
+---
+
+## Model Compare UI
+
+New side-by-side model comparison interface for testing multiple models simultaneously.
+
+**Features:**
+- Compare responses from multiple models in real-time
+- Side-by-side view with synchronized scrolling
+- Support for all LiteLLM-supported models
+- Cost tracking per model
+- Response time comparison
+
+[Get Started with Model Compare](../../docs/proxy/model_compare_ui) - [PR #16855](https://github.com/BerriAI/litellm/pull/16855)
 
 ---
 
@@ -382,6 +430,3 @@ pip install litellm==1.80.5
 ## Full Changelog
 
 **[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.80.0-nightly...v1.80.5.rc.1)**
-
-
-
