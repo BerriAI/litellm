@@ -1808,7 +1808,7 @@ class OpenTelemetry(CustomLogger):
         """
         Create a span for the received proxy server request.
         """
-        # don't create proxy parent spans for arize phoenix
+        # don't create proxy parent spans for arize phoenix - [TODO]: figure out a better way to handle this
         if self.callback_name == "arize_phoenix":
             return None
 

@@ -3533,7 +3533,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             )
 
             os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
-                f"space_id={arize_config.space_key},api_key={arize_config.api_key}"
+                f"space_id={arize_config.space_key or arize_config.space_id},api_key={arize_config.api_key}"
             )
             for callback in _in_memory_loggers:
                 if (
@@ -3557,6 +3557,17 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 endpoint=arize_phoenix_config.endpoint,
                 headers=arize_phoenix_config.otlp_auth_headers,
             )
+            if arize_phoenix_config.project_name:
+                existing_attrs = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
+                # Add openinference.project.name attribute
+                if existing_attrs:
+                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
+                        f"{existing_attrs},openinference.project.name={arize_phoenix_config.project_name}"
+                    )
+                else:
+                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
+                        f"openinference.project.name={arize_phoenix_config.project_name}"
+                    )
 
             # Set Phoenix project name from environment variable
             phoenix_project_name = os.environ.get("PHOENIX_PROJECT_NAME", None)
@@ -3969,8 +3980,6 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, OpenTelemetry):
                     return callback
         elif logging_integration == "arize":
-            if "ARIZE_SPACE_KEY" not in os.environ:
-                raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
             if "ARIZE_API_KEY" not in os.environ:
                 raise ValueError("ARIZE_API_KEY not found in environment variables")
             for callback in _in_memory_loggers:
