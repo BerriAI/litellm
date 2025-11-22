@@ -389,7 +389,7 @@ pip install litellm==1.80.5
 
 ## Model Compare UI
 
-New side-by-side model comparison interface for testing multiple models simultaneously.
+New interactive playground UI enables side-by-side comparison of multiple LLM models, making it easy to evaluate and compare model responses.
 
 **Features:**
 - Compare responses from multiple models in real-time
@@ -397,6 +397,22 @@ New side-by-side model comparison interface for testing multiple models simultan
 - Support for all LiteLLM-supported models
 - Cost tracking per model
 - Response time comparison
+- Pre-configured prompts for quick and easy testing
+
+**Details:**
+
+- **Parameterization**: Configure API keys, endpoints, models, and model parameters, as well as interaction types (chat completions, embeddings, etc.)
+
+- **Model Comparison**: Compare up to 3 different models simultaneously with side-by-side response views
+
+- **Comparison Metrics**: View detailed comparison information including:
+
+  - Time To First Token
+  - Input / Output / Reasoning Tokens
+  - Total Latency
+  - Cost (if enabled in config)
+
+- **Safety Filters**: Configure and test guardrails (safety filters) directly in the playground interface
 
 [Get Started with Model Compare](../../docs/proxy/model_compare_ui) - [PR #16855](https://github.com/BerriAI/litellm/pull/16855)
 
