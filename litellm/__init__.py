@@ -2170,6 +2170,47 @@ def _lazy_import_openai_o_series_configs(name: str) -> Any:
     raise AttributeError(f"OpenAI O-Series configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_openai_gpt_configs(name: str) -> Any:
+    """Lazy import for OpenAI GPT config classes - imports only the requested class."""
+    if name == "OpenAIGPTConfig":
+        from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as _OpenAIGPTConfig
+        globals()["OpenAIGPTConfig"] = _OpenAIGPTConfig
+        return _OpenAIGPTConfig
+    
+    if name == "openAIGPTConfig":
+        from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as _OpenAIGPTConfig
+        _openAIGPTConfig = _OpenAIGPTConfig()
+        globals()["OpenAIGPTConfig"] = _OpenAIGPTConfig
+        globals()["openAIGPTConfig"] = _openAIGPTConfig
+        return _openAIGPTConfig
+    
+    if name == "OpenAIGPT5Config":
+        from .llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config as _OpenAIGPT5Config
+        globals()["OpenAIGPT5Config"] = _OpenAIGPT5Config
+        return _OpenAIGPT5Config
+    
+    if name == "openAIGPT5Config":
+        from .llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config as _OpenAIGPT5Config
+        _openAIGPT5Config = _OpenAIGPT5Config()
+        globals()["OpenAIGPT5Config"] = _OpenAIGPT5Config
+        globals()["openAIGPT5Config"] = _openAIGPT5Config
+        return _openAIGPT5Config
+    
+    if name == "OpenAIGPTAudioConfig":
+        from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as _OpenAIGPTAudioConfig
+        globals()["OpenAIGPTAudioConfig"] = _OpenAIGPTAudioConfig
+        return _OpenAIGPTAudioConfig
+    
+    if name == "openAIGPTAudioConfig":
+        from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as _OpenAIGPTAudioConfig
+        _openAIGPTAudioConfig = _OpenAIGPTAudioConfig()
+        globals()["OpenAIGPTAudioConfig"] = _OpenAIGPTAudioConfig
+        globals()["openAIGPTAudioConfig"] = _openAIGPTAudioConfig
+        return _openAIGPTAudioConfig
+    
+    raise AttributeError(f"OpenAI GPT configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2524,47 +2565,13 @@ def __getattr__(name: str) -> Any:
         globals()["GradientAIConfig"] = _GradientAIConfig
         return _GradientAIConfig
     
-    # Lazy-load OpenAIGPTConfig to reduce import-time memory cost
-    if name == "OpenAIGPTConfig":
-        from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as _OpenAIGPTConfig
-        globals()["OpenAIGPTConfig"] = _OpenAIGPTConfig
-        return _OpenAIGPTConfig
-    
-    # Lazy-load openAIGPTConfig instance to reduce import-time memory cost
-    if name == "openAIGPTConfig":
-        from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as _OpenAIGPTConfig
-        _openAIGPTConfig = _OpenAIGPTConfig()
-        globals()["OpenAIGPTConfig"] = _OpenAIGPTConfig
-        globals()["openAIGPTConfig"] = _openAIGPTConfig
-        return _openAIGPTConfig
-    
-    # Lazy-load OpenAIGPT5Config to reduce import-time memory cost
-    if name == "OpenAIGPT5Config":
-        from .llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config as _OpenAIGPT5Config
-        globals()["OpenAIGPT5Config"] = _OpenAIGPT5Config
-        return _OpenAIGPT5Config
-    
-    # Lazy-load openAIGPT5Config instance to reduce import-time memory cost
-    if name == "openAIGPT5Config":
-        from .llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config as _OpenAIGPT5Config
-        _openAIGPT5Config = _OpenAIGPT5Config()
-        globals()["OpenAIGPT5Config"] = _OpenAIGPT5Config
-        globals()["openAIGPT5Config"] = _openAIGPT5Config
-        return _openAIGPT5Config
-    
-    # Lazy-load OpenAIGPTAudioConfig to reduce import-time memory cost
-    if name == "OpenAIGPTAudioConfig":
-        from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as _OpenAIGPTAudioConfig
-        globals()["OpenAIGPTAudioConfig"] = _OpenAIGPTAudioConfig
-        return _OpenAIGPTAudioConfig
-    
-    # Lazy-load openAIGPTAudioConfig instance to reduce import-time memory cost
-    if name == "openAIGPTAudioConfig":
-        from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as _OpenAIGPTAudioConfig
-        _openAIGPTAudioConfig = _OpenAIGPTAudioConfig()
-        globals()["OpenAIGPTAudioConfig"] = _OpenAIGPTAudioConfig
-        globals()["openAIGPTAudioConfig"] = _openAIGPTAudioConfig
-        return _openAIGPTAudioConfig
+    # Lazy-load OpenAI GPT configs to reduce import-time memory cost
+    _openai_gpt_config_names = {
+        "OpenAIGPTConfig", "openAIGPTConfig", "OpenAIGPT5Config",
+        "openAIGPT5Config", "OpenAIGPTAudioConfig", "openAIGPTAudioConfig",
+    }
+    if name in _openai_gpt_config_names:
+        return _lazy_import_openai_gpt_configs(name)
     
     # Lazy-load NvidiaNimConfig to reduce import-time memory cost
     if name == "NvidiaNimConfig":
