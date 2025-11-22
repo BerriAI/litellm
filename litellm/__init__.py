@@ -2067,6 +2067,56 @@ def _lazy_import_vertex_ai_configs(name: str) -> Any:
     raise AttributeError(f"Vertex AI configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_amazon_bedrock_configs(name: str) -> Any:
+    """Lazy import for Amazon Bedrock config classes - imports only the requested class."""
+    if name == "AmazonCohereChatConfig":
+        from .llms.bedrock.chat.invoke_handler import AmazonCohereChatConfig as _AmazonCohereChatConfig
+        globals()["AmazonCohereChatConfig"] = _AmazonCohereChatConfig
+        return _AmazonCohereChatConfig
+    
+    if name == "AmazonBedrockGlobalConfig":
+        from .llms.bedrock.common_utils import AmazonBedrockGlobalConfig as _AmazonBedrockGlobalConfig
+        globals()["AmazonBedrockGlobalConfig"] = _AmazonBedrockGlobalConfig
+        return _AmazonBedrockGlobalConfig
+    
+    if name == "AmazonAI21Config":
+        from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config as _AmazonAI21Config
+        globals()["AmazonAI21Config"] = _AmazonAI21Config
+        return _AmazonAI21Config
+    
+    if name == "AmazonAnthropicConfig":
+        from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import AmazonAnthropicConfig as _AmazonAnthropicConfig
+        globals()["AmazonAnthropicConfig"] = _AmazonAnthropicConfig
+        return _AmazonAnthropicConfig
+    
+    if name == "AmazonAnthropicClaudeConfig":
+        from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig as _AmazonAnthropicClaudeConfig
+        globals()["AmazonAnthropicClaudeConfig"] = _AmazonAnthropicClaudeConfig
+        return _AmazonAnthropicClaudeConfig
+    
+    if name == "AmazonTitanG1Config":
+        from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config as _AmazonTitanG1Config
+        globals()["AmazonTitanG1Config"] = _AmazonTitanG1Config
+        return _AmazonTitanG1Config
+    
+    if name == "AmazonTitanMultimodalEmbeddingG1Config":
+        from .llms.bedrock.embed.amazon_titan_multimodal_transformation import AmazonTitanMultimodalEmbeddingG1Config as _AmazonTitanMultimodalEmbeddingG1Config
+        globals()["AmazonTitanMultimodalEmbeddingG1Config"] = _AmazonTitanMultimodalEmbeddingG1Config
+        return _AmazonTitanMultimodalEmbeddingG1Config
+    
+    if name == "AmazonTitanV2Config":
+        from .llms.bedrock.embed.amazon_titan_v2_transformation import AmazonTitanV2Config as _AmazonTitanV2Config
+        globals()["AmazonTitanV2Config"] = _AmazonTitanV2Config
+        return _AmazonTitanV2Config
+    
+    if name == "BedrockCohereEmbeddingConfig":
+        from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig as _BedrockCohereEmbeddingConfig
+        globals()["BedrockCohereEmbeddingConfig"] = _BedrockCohereEmbeddingConfig
+        return _BedrockCohereEmbeddingConfig
+    
+    raise AttributeError(f"Amazon Bedrock configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2351,59 +2401,15 @@ def __getattr__(name: str) -> Any:
     if name in _vertex_ai_config_names:
         return _lazy_import_vertex_ai_configs(name)
     
-    # Lazy-load AmazonCohereChatConfig to reduce import-time memory cost
-    if name == "AmazonCohereChatConfig":
-        from .llms.bedrock.chat.invoke_handler import AmazonCohereChatConfig as _AmazonCohereChatConfig
-        globals()["AmazonCohereChatConfig"] = _AmazonCohereChatConfig
-        return _AmazonCohereChatConfig
-    
-    # Lazy-load AmazonBedrockGlobalConfig to reduce import-time memory cost
-    if name == "AmazonBedrockGlobalConfig":
-        from .llms.bedrock.common_utils import AmazonBedrockGlobalConfig as _AmazonBedrockGlobalConfig
-        globals()["AmazonBedrockGlobalConfig"] = _AmazonBedrockGlobalConfig
-        return _AmazonBedrockGlobalConfig
-    
-    # Lazy-load AmazonAI21Config to reduce import-time memory cost
-    if name == "AmazonAI21Config":
-        from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config as _AmazonAI21Config
-        globals()["AmazonAI21Config"] = _AmazonAI21Config
-        return _AmazonAI21Config
-    
-    # Lazy-load AmazonAnthropicConfig to reduce import-time memory cost
-    if name == "AmazonAnthropicConfig":
-        from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import AmazonAnthropicConfig as _AmazonAnthropicConfig
-        globals()["AmazonAnthropicConfig"] = _AmazonAnthropicConfig
-        return _AmazonAnthropicConfig
-    
-    # Lazy-load AmazonAnthropicClaudeConfig to reduce import-time memory cost
-    if name == "AmazonAnthropicClaudeConfig":
-        from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig as _AmazonAnthropicClaudeConfig
-        globals()["AmazonAnthropicClaudeConfig"] = _AmazonAnthropicClaudeConfig
-        return _AmazonAnthropicClaudeConfig
-    
-    # Lazy-load AmazonTitanG1Config to reduce import-time memory cost
-    if name == "AmazonTitanG1Config":
-        from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config as _AmazonTitanG1Config
-        globals()["AmazonTitanG1Config"] = _AmazonTitanG1Config
-        return _AmazonTitanG1Config
-    
-    # Lazy-load AmazonTitanMultimodalEmbeddingG1Config to reduce import-time memory cost
-    if name == "AmazonTitanMultimodalEmbeddingG1Config":
-        from .llms.bedrock.embed.amazon_titan_multimodal_transformation import AmazonTitanMultimodalEmbeddingG1Config as _AmazonTitanMultimodalEmbeddingG1Config
-        globals()["AmazonTitanMultimodalEmbeddingG1Config"] = _AmazonTitanMultimodalEmbeddingG1Config
-        return _AmazonTitanMultimodalEmbeddingG1Config
-    
-    # Lazy-load AmazonTitanV2Config to reduce import-time memory cost
-    if name == "AmazonTitanV2Config":
-        from .llms.bedrock.embed.amazon_titan_v2_transformation import AmazonTitanV2Config as _AmazonTitanV2Config
-        globals()["AmazonTitanV2Config"] = _AmazonTitanV2Config
-        return _AmazonTitanV2Config
-    
-    # Lazy-load BedrockCohereEmbeddingConfig to reduce import-time memory cost
-    if name == "BedrockCohereEmbeddingConfig":
-        from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig as _BedrockCohereEmbeddingConfig
-        globals()["BedrockCohereEmbeddingConfig"] = _BedrockCohereEmbeddingConfig
-        return _BedrockCohereEmbeddingConfig
+    # Lazy-load Amazon Bedrock configs to reduce import-time memory cost
+    _amazon_bedrock_config_names = {
+        "AmazonCohereChatConfig", "AmazonBedrockGlobalConfig", "AmazonAI21Config",
+        "AmazonAnthropicConfig", "AmazonAnthropicClaudeConfig", "AmazonTitanG1Config",
+        "AmazonTitanMultimodalEmbeddingG1Config", "AmazonTitanV2Config",
+        "BedrockCohereEmbeddingConfig",
+    }
+    if name in _amazon_bedrock_config_names:
+        return _lazy_import_amazon_bedrock_configs(name)
     
     # Lazy-load AnthropicModelInfo to reduce import-time memory cost
     if name == "AnthropicModelInfo":
