@@ -85,6 +85,9 @@ if TYPE_CHECKING:
     from litellm.llms.openai_like.chat.handler import OpenAILikeChatConfig
     from litellm.llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
     from litellm.llms.galadriel.chat.transformation import GaladrielChatConfig
+    from litellm.llms.github.chat.transformation import GithubChatConfig
+    from litellm.llms.compactifai.chat.transformation import CompactifAIChatConfig
+    from litellm.llms.empower.chat.transformation import EmpowerChatConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -1053,9 +1056,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 
-from .llms.github.chat.transformation import GithubChatConfig
-from .llms.compactifai.chat.transformation import CompactifAIChatConfig
-from .llms.empower.chat.transformation import EmpowerChatConfig
 from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
 from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
 from .llms.oobabooga.chat.transformation import OobaboogaConfig
@@ -1973,5 +1973,23 @@ def __getattr__(name: str) -> Any:
         from .llms.galadriel.chat.transformation import GaladrielChatConfig as _GaladrielChatConfig
         globals()["GaladrielChatConfig"] = _GaladrielChatConfig
         return _GaladrielChatConfig
+    
+    # Lazy-load GithubChatConfig to reduce import-time memory cost
+    if name == "GithubChatConfig":
+        from .llms.github.chat.transformation import GithubChatConfig as _GithubChatConfig
+        globals()["GithubChatConfig"] = _GithubChatConfig
+        return _GithubChatConfig
+    
+    # Lazy-load CompactifAIChatConfig to reduce import-time memory cost
+    if name == "CompactifAIChatConfig":
+        from .llms.compactifai.chat.transformation import CompactifAIChatConfig as _CompactifAIChatConfig
+        globals()["CompactifAIChatConfig"] = _CompactifAIChatConfig
+        return _CompactifAIChatConfig
+    
+    # Lazy-load EmpowerChatConfig to reduce import-time memory cost
+    if name == "EmpowerChatConfig":
+        from .llms.empower.chat.transformation import EmpowerChatConfig as _EmpowerChatConfig
+        globals()["EmpowerChatConfig"] = _EmpowerChatConfig
+        return _EmpowerChatConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
