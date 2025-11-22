@@ -215,6 +215,20 @@ def get_ssl_configuration(
     return ssl_verify
 
 
+_shared_realtime_ssl_context: Optional[Union[bool, str, ssl.SSLContext]] = None
+
+
+def get_shared_realtime_ssl_context() -> Union[bool, str, ssl.SSLContext]:
+    """
+    Lazily create the SSL context reused by realtime websocket clients so we avoid
+    import-order cycles during startup while keeping a single shared configuration.
+    """
+    global _shared_realtime_ssl_context
+    if _shared_realtime_ssl_context is None:
+        _shared_realtime_ssl_context = get_ssl_configuration()
+    return _shared_realtime_ssl_context
+
+
 def mask_sensitive_info(error_message):
     # Find the start of the key parameter
     if isinstance(error_message, str):
