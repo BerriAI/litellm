@@ -4798,7 +4798,18 @@ async def chat_completion(  # noqa: PLR0915
             version=version,
         )
         if isinstance(result, BaseModel):
-            return result.model_dump(exclude_none=True, exclude_unset=True)
+            # Check general_settings for response filtering configuration
+            # Default to True for backward compatibility
+            exclude_none_from_response = general_settings.get(
+                "completion_exclude_none", True
+            )
+            exclude_unset_from_response = general_settings.get(
+                "completion_exclude_unset", True
+            )
+            return result.model_dump(
+                exclude_none=exclude_none_from_response,
+                exclude_unset=exclude_unset_from_response,
+            )
         else:
             return result
     except RejectedRequestError as e:

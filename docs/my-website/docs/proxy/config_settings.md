@@ -94,6 +94,8 @@ callback_settings:
 
 general_settings:
   completion_model: string
+  completion_exclude_none: boolean  # if false, includes None values in chat completion responses (default: true)
+  completion_exclude_unset: boolean  # if false, includes unset fields in chat completion responses (default: true)
   store_prompts_in_spend_logs: boolean
   forward_client_headers_to_llm_api: boolean
   disable_spend_logs: boolean  # turn off writing each transaction to the db
@@ -192,6 +194,8 @@ router_settings:
 | Name | Type | Description |
 |------|------|-------------|
 | completion_model | string | The default model to use for completions when `model` is not specified in the request |
+| completion_exclude_none | boolean | If false, includes fields with `None` values in chat completion responses. If true (default), excludes `None` values. Useful for OpenAI SDK strict compatibility or debugging when you need to see all response fields including null values. |
+| completion_exclude_unset | boolean | If false, includes all fields (even unset ones) in chat completion responses. If true (default), excludes unset fields. Set to false along with `completion_exclude_none: false` for full field visibility in responses. |
 | disable_spend_logs | boolean | If true, turns off writing each transaction to the database |
 | disable_spend_updates | boolean | If true, turns off all spend updates to the DB. Including key/user/team spend updates. |
 | disable_master_key_return | boolean | If true, turns off returning master key on UI. (checked on '/user/info' endpoint) |
