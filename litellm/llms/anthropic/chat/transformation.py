@@ -528,18 +528,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     )
                     if _output_format is not None:
                         optional_params["output_format"] = _output_format
-                _tool = self.map_response_format_to_anthropic_tool(
-                    value, optional_params, is_thinking_enabled
-                )
-                if _tool is None:
-                    continue
-                if not is_thinking_enabled:
-                    _tool_choice = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
-                    optional_params["tool_choice"] = _tool_choice
+                else:
+                    _tool = self.map_response_format_to_anthropic_tool(
+                        value, optional_params, is_thinking_enabled
+                    )
+                    if _tool is None:
+                        continue
+                    if not is_thinking_enabled:
+                        _tool_choice = {
+                            "name": RESPONSE_FORMAT_TOOL_NAME,
+                            "type": "tool",
+                        }
+                        optional_params["tool_choice"] = _tool_choice
+
+                    optional_params = self._add_tools_to_optional_params(
+                        optional_params=optional_params, tools=[_tool]
+                    )
                 optional_params["json_mode"] = True
-                optional_params = self._add_tools_to_optional_params(
-                    optional_params=optional_params, tools=[_tool]
-                )
             if (
                 param == "user"
                 and value is not None
