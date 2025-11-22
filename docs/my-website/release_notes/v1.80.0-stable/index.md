@@ -51,8 +51,6 @@ pip install litellm==1.80.0
 - **Prometheus OSS** - Prometheus metrics now available in open-source version
 - **Vector Store Files API** - Complete OpenAI-compatible Vector Store Files API with full CRUD operations
 - **Embeddings Performance** - O(1) lookup optimization for router embeddings with shared sessions
-- **Model Compare Playground UI** - New interactive UI lets users easily compare responses from multiple models side-by-side.
-- **Organization Usage Filters** - Users can now filter usage statistics by organization, just like they can by team.
 
 ---
 
@@ -164,39 +162,6 @@ curl --location 'http://localhost:4000/v1/vector_stores/vs_123/files' \
 ```
 
 [Get Started with Vector Stores](../../docs/vector_store_files)
-
----
-
-### Model Compare Playground UI
-
-New interactive playground UI enables side-by-side comparison of multiple LLM models, making it easy to evaluate and compare model responses.
-
-**Details:**
-
-- **Parameterization**: Configure API keys, endpoints, models, and model parameters, as well as interaction types (chat completions, embeddings, etc.)
-
-- **Model Comparison**: Compare up to 3 different models simultaneously with side-by-side response views
-
-- **Comparison Metrics**: View detailed comparison information including:
-
-  - Time To First Token
-  - Input / Output / Reasoning Tokens
-  - Total Latency
-  - Cost ( if enabled in config)
-
-- **Safety Filters**: Configure and test guardrails (safety filters) directly in the playground interface
-
----
-
-### Organization Usage Filters
-
-Users can now filter usage statistics by organization, providing the same granular filtering capabilities available for teams.
-
-**Details:**
-
-- Filter usage analytics, spend logs, and activity metrics by organization ID
-- View organization-level breakdowns alongside existing team and user-level filters
-- Consistent filtering experience across all usage and analytics views
 
 ---
 
