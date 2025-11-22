@@ -12,6 +12,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     CostBreakdown,
     Function,
+    LLMResponseTypes,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
@@ -487,6 +488,28 @@ class OpenTelemetry(CustomLogger):
             # End Parent OTEL Sspan
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: LLMResponseTypes,
+    ):
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+        litellm_logging_obj = data.get("litellm_logging_obj")
+
+        if litellm_logging_obj is not None and isinstance(
+            litellm_logging_obj, LiteLLMLogging
+        ):
+            kwargs = litellm_logging_obj.model_call_details
+            parent_span = user_api_key_dict.parent_otel_span
+
+            ctx, _ = self._get_span_context(kwargs, default_span=parent_span)
+
+            # 3. Guardrail span
+            self._create_guardrail_span(kwargs=kwargs, context=ctx)
+        return response
+
     #########################################################
     # Team/Key Based Logging Control Flow
     #########################################################
@@ -566,7 +589,9 @@ class OpenTelemetry(CustomLogger):
         ctx, parent_span = self._get_span_context(kwargs)
 
         # 1. Primary span
-        span = self._start_primary_span(kwargs, response_obj, start_time, end_time, ctx)
+        span = self._start_primary_span(
+            kwargs, response_obj, start_time, end_time, ctx, parent_span
+        )
 
         # 2. Raw‐request sub-span (if enabled)
         self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
@@ -585,11 +610,19 @@ class OpenTelemetry(CustomLogger):
         if parent_span is not None:
             parent_span.end(end_time=self._to_ns(datetime.now()))
 
-    def _start_primary_span(self, kwargs, response_obj, start_time, end_time, context):
+    def _start_primary_span(
+        self,
+        kwargs,
+        response_obj,
+        start_time,
+        end_time,
+        context,
+        parent_span: Optional[Span] = None,
+    ):
         from opentelemetry.trace import Status, StatusCode
 
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
-        span = otel_tracer.start_span(
+        span = parent_span or otel_tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=context,
@@ -1372,7 +1405,7 @@ class OpenTelemetry(CustomLogger):
 
         return _parent_context
 
-    def _get_span_context(self, kwargs):
+    def _get_span_context(self, kwargs, default_span: Optional[Span] = None):
         from opentelemetry import context, trace
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
