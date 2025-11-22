@@ -5,13 +5,18 @@ import CodeBlock from "./components/CodeBlock";
 import DocLink from "@/app/(dashboard)/api-reference/components/DocLink";
 
 interface ApiRefProps {
-  proxySettings: any;
+  proxySettings: {
+    PROXY_BASE_URL?: string;
+    LITELLM_UI_API_DOC_BASE_URL?: string | null;
+  };
 }
 
 const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
   let base_url = "<your_proxy_base_url>";
-
-  if (proxySettings?.PROXY_BASE_URL !== undefined && proxySettings?.PROXY_BASE_URL) {
+  const customDocBaseUrl = proxySettings?.LITELLM_UI_API_DOC_BASE_URL;
+  if (customDocBaseUrl && customDocBaseUrl.trim()) {
+    base_url = customDocBaseUrl;
+  } else if (proxySettings?.PROXY_BASE_URL) {
     base_url = proxySettings.PROXY_BASE_URL;
   }
 

@@ -105,7 +105,7 @@ from litellm.utils import (
     ProviderConfigManager,
     Usage,
     _get_model_info_helper,
-    add_openai_metadata,
+    get_requester_metadata,
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
@@ -2086,10 +2086,12 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            if litellm.enable_preview_features:
-                metadata_payload = add_openai_metadata(metadata)
-                if metadata_payload is not None:
-                    optional_params["metadata"] = metadata_payload
+            if (
+                litellm.enable_preview_features and metadata is not None
+            ):  # [PREVIEW] allow metadata to be passed to OPENAI
+                openai_metadata = get_requester_metadata(metadata)
+                if openai_metadata is not None:
+                    optional_params["metadata"] = openai_metadata
 
             ## LOAD CONFIG - if set
             config = litellm.OpenAIConfig.get_config()
@@ -4822,6 +4824,22 @@ def embedding(  # noqa: PLR0915
                 print_verbose=print_verbose,
                 litellm_params=litellm_params_dict,
             )
+        elif custom_llm_provider == "snowflake":
+            api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
+            )
         else:
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider
@@ -5500,6 +5518,7 @@ def transcription(
     atranscription = kwargs.pop("atranscription", False)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     extra_headers = kwargs.get("extra_headers", None)
+    shared_session = kwargs.get("shared_session", None)
     kwargs.pop("tags", [])
     non_default_params = get_non_default_transcription_params(kwargs)
 
@@ -5637,6 +5656,7 @@ def transcription(
             api_key=api_key,
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
+            shared_session=shared_session,
         )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
@@ -5663,6 +5683,7 @@ def transcription(
             custom_llm_provider=custom_llm_provider,
             headers={},
             provider_config=provider_config,
+            shared_session=shared_session,
         )
 
     # Calculate and add duration if response is missing it

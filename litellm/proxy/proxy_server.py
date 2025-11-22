@@ -15,6 +15,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Dict,
     List,
     Literal,
     Optional,
@@ -50,6 +51,7 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 from litellm.utils import load_credentials_from_list
+from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -61,6 +63,12 @@ if TYPE_CHECKING:
 else:
     Span = Any
     OpenTelemetry = Any
+
+REALTIME_REQUEST_SCOPE_TEMPLATE: Dict[str, Any] = {
+    "type": "http",
+    "method": "POST",
+    "path": "/v1/realtime",
+}
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -133,6 +141,7 @@ def generate_feedback_box():
 
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from functools import lru_cache
 
 import litellm
 from litellm import Router
@@ -153,6 +162,7 @@ from litellm.constants import (
     PROXY_BATCH_WRITE_AT,
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
+    _REALTIME_BODY_CACHE_SIZE,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -275,7 +285,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -329,7 +341,9 @@ from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -419,7 +433,9 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+)
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -1913,7 +1929,9 @@ class ProxyConfig:
                 raise Exception("Unable to load config from given source.")
         else:
             # default to file
+
             config = await self._get_config_from_file(config_file_path=config_file_path)
+
         ## UPDATE CONFIG WITH DB
         if prisma_client is not None and store_model_in_db is True:
             config = await self._update_config_from_db(
@@ -1929,6 +1947,7 @@ class ProxyConfig:
         config = self._check_for_os_environ_vars(config=config)
 
         self.update_config_state(config=config)
+
         return config
 
     def update_config_state(self, config: dict):
@@ -2685,7 +2704,10 @@ class ProxyConfig:
                     AWSSecretsManagerV2,
                 )
 
-                AWSSecretsManagerV2.load_aws_secret_manager(use_aws_secret_manager=True)
+                AWSSecretsManagerV2.load_aws_secret_manager(
+                    use_aws_secret_manager=True,
+                    key_management_settings=litellm._key_management_settings,
+                )
             elif key_management_system == KeyManagementSystem.AWS_KMS.value:
                 load_aws_kms(use_aws_kms=True)
             elif (
@@ -3575,14 +3597,32 @@ class ProxyConfig:
             verbose_proxy_logger.exception(
                 f"Error in _check_and_reload_model_cost_map: {str(e)}"
             )
+    def _get_prompt_spec_for_db_prompt(self, db_prompt):
+        """
+        Convert a DB prompt object to a PromptSpec object.
+
+        Handles the versioning of the prompt, if the DB prompt has a version, it will be used to create the versioned prompt_id.
+
+        Args:
+            db_prompt: The DB prompt object
+
+        Returns:
+            The PromptSpec object
+        """
+        from litellm.proxy.prompts.prompt_endpoints import create_versioned_prompt_spec
+        
+        return create_versioned_prompt_spec(db_prompt=db_prompt)
 
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+        from litellm.types.prompts.init_prompts import PromptSpec
 
         try:
             prompts_in_db = await prisma_client.db.litellm_prompttable.find_many()
             for prompt in prompts_in_db:
-                IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=prompt)
+                # Convert DB object to dict and create versioned prompt_id
+                prompt_spec = self._get_prompt_spec_for_db_prompt(db_prompt=prompt)
+                IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=prompt_spec)
         except Exception as e:
             verbose_proxy_logger.debug(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - {}".format(
@@ -5552,12 +5592,24 @@ async def vertex_ai_live_passthrough_endpoint(
 #                          /v1/realtime Endpoints
 
 ######################################################################
-from litellm import _arealtime
+
+@lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
+def _realtime_query_params_template(
+    model: str, intent: Optional[str]
+) -> Tuple[Tuple[str, str], ...]:
+    """
+    Build a hashable representation of the realtime query params so we can cache
+    the repetitive model/intent combinations.
+    """
+    params: List[Tuple[str, str]] = [("model", model)]
+    if intent is not None:
+        params.append(("intent", intent))
+    return tuple(params)
 
 
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
-async def websocket_endpoint(
+async def realtime_websocket_endpoint(
     websocket: WebSocket,
     model: str,
     intent: str = fastapi.Query(
@@ -5565,14 +5617,13 @@ async def websocket_endpoint(
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
-    import websockets
 
     await websocket.accept()
 
     # Only use explicit parameters, not all query params
-    query_params: RealtimeQueryParams = {"model": model}
-    if intent is not None:
-        query_params["intent"] = intent
+    query_params = cast(
+        RealtimeQueryParams, dict(_realtime_query_params_template(model, intent))
+    )
 
     data = {
         "model": model,
@@ -5580,24 +5631,19 @@ async def websocket_endpoint(
         "query_params": query_params,  # Only explicit params
     }
 
-    headers = dict(websocket.headers.items())  # Convert headers to dict first
+    # Use raw ASGI headers (already lowercase bytes) to avoid extra work
+    headers_list = list(websocket.scope.get("headers") or [])
 
-    request = Request(
-        scope={
-            "type": "http",
-            "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
-            "method": "POST",
-            "path": "/v1/realtime",
-        }
-    )
+    scope = REALTIME_REQUEST_SCOPE_TEMPLATE.copy()
+    scope["headers"] = headers_list
+
+    request = Request(scope=scope)
 
     request._url = websocket.url
-
+    
     async def return_body():
-        return_string = f'{{"model": "{model}"}}'
-        # return string as bytes
-        return return_string.encode()
-
+        return _realtime_request_body(model)
+    
     request.body = return_body  # type: ignore
 
     ### ROUTE THE REQUEST ###
@@ -7047,7 +7093,9 @@ async def model_info_v2(
         _model["model_info"] = model_info
         # don't return the api key / vertex credentials
         # don't return the llm credentials
-        _model = remove_sensitive_info_from_deployment(_model)
+        _model = remove_sensitive_info_from_deployment(
+            _model, excluded_keys={"litellm_credential_name"}
+        )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
@@ -7514,7 +7562,9 @@ def _get_proxy_model_info(model: dict) -> dict:
             model_info[k] = v
     model["model_info"] = model_info
     # don't return the llm credentials
-    model = remove_sensitive_info_from_deployment(deployment_dict=model)
+    model = remove_sensitive_info_from_deployment(
+        deployment_dict=model, excluded_keys={"litellm_credential_name"}
+    )
 
     return model
 
@@ -7582,7 +7632,8 @@ async def model_info_v1(  # noqa: PLR0915
         )
         _deployment_info_dict = _deployment_info.model_dump()
         _deployment_info_dict = remove_sensitive_info_from_deployment(
-            deployment_dict=_deployment_info_dict
+            deployment_dict=_deployment_info_dict,
+            excluded_keys={"litellm_credential_name"},
         )
         return {"data": _deployment_info_dict}
 

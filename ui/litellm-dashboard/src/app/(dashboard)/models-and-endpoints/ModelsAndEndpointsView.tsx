@@ -155,16 +155,14 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
     setProviderModels(_providerModels);
-    console.log(`providerModels: ${_providerModels}`);
   };
 
   const fetchCredentials = async (accessToken: string) => {
     try {
       const response: CredentialsResponse = await credentialListCall(accessToken);
-      console.log(`credentials: ${JSON.stringify(response)}`);
       setCredentialsList(response.credentials);
     } catch (error) {
-      console.error("Error fetching credentials:", error);
+      NotificationsManager.fromBackend("Error fetching credentials");
     }
   };
 
@@ -188,9 +186,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
         reader.onload = (e) => {
           if (e.target) {
             const jsonStr = e.target.result as string;
-            console.log(`Resetting vertex_credentials to JSON; jsonStr: ${jsonStr}`);
             addModelForm.setFieldsValue({ vertex_credentials: jsonStr });
-            console.log("Form values right after setting:", addModelForm.getFieldsValue());
           }
         };
         reader.readAsText(file);
@@ -199,12 +195,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       return false;
     },
     onChange(info) {
-      console.log("Upload onChange triggered with values:", info);
-      console.log("Current form values:", addModelForm.getFieldsValue());
-
-      if (info.file.status !== "uploading") {
-        console.log(info.file, info.fileList);
-      }
       if (info.file.status === "done") {
         NotificationsManager.success(`${info.file.name} file uploaded successfully`);
       } else if (info.file.status === "error") {
@@ -221,7 +211,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
   const handleSaveRetrySettings = async () => {
     if (!accessToken) {
-      console.error("Access token is missing");
       return;
     }
 
@@ -232,14 +221,11 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
       if (selectedModelGroup === "global") {
         // Only update global retry policy
-        console.log("Saving global retry policy:", globalRetryPolicy);
         if (globalRetryPolicy) {
           payload.router_settings.retry_policy = globalRetryPolicy;
         }
         NotificationsManager.success("Global retry settings saved successfully");
       } else {
-        // Only update model group retry policy
-        console.log("Saving model group retry policy for", selectedModelGroup, ":", modelGroupRetryPolicy);
         if (modelGroupRetryPolicy) {
           payload.router_settings.model_group_retry_policy = modelGroupRetryPolicy;
         }
@@ -248,7 +234,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
       await setCallbacksCall(accessToken, payload);
     } catch (error) {
-      console.error("Failed to save retry settings:", error);
       NotificationsManager.fromBackend("Failed to save retry settings");
     }
   };
@@ -261,7 +246,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       try {
         // Replace with your actual API call for model data
         const modelDataResponse = await modelInfoCall(accessToken, userID, userRole);
-        console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
         const _providerSettings = await modelSettingsCall(accessToken);
         if (_providerSettings) {
@@ -274,7 +258,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           const model = modelDataResponse.data[i];
           all_model_groups.add(model.model_name);
         }
-        console.log("all_model_groups:", all_model_groups);
         let _array_model_groups = Array.from(all_model_groups);
         // sort _array_model_groups alphabetically
         _array_model_groups = _array_model_groups.sort();
@@ -297,16 +280,10 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
         setAvailableModelAccessGroups(Array.from(all_model_access_groups));
 
-        console.log("array_model_groups:", _array_model_groups);
         let _initial_model_group = "all";
         if (_array_model_groups.length > 0) {
-          // set selectedModelGroup to the last model group
           _initial_model_group = _array_model_groups[_array_model_groups.length - 1];
-          console.log("_initial_model_group:", _initial_model_group);
-          //setSelectedModelGroup(_initial_model_group);
         }
-
-        console.log("selectedModelGroup:", selectedModelGroup);
 
         const modelMetricsResponse = await modelMetricsCall(
           accessToken,
@@ -318,9 +295,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           selectedAPIKey?.token,
           selectedCustomer,
         );
-
-        console.log("Model metrics response:", modelMetricsResponse);
-        // Sort by latency (avg_latency_per_token)
 
         setModelMetrics(modelMetricsResponse.data);
         setModelMetricsCategories(modelMetricsResponse.all_api_bases);
@@ -346,7 +320,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           selectedAPIKey?.token,
           selectedCustomer,
         );
-        console.log("Model exceptions response:", modelExceptionsResponse);
         setModelExceptions(modelExceptionsResponse.data);
         setAllExceptions(modelExceptionsResponse.exception_types);
 
@@ -378,30 +351,15 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
         );
 
         setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
-
-        console.log("dailyExceptions:", dailyExceptions);
-
-        console.log("dailyExceptionsPerDeplyment:", dailyExceptionsPerDeplyment);
-
-        console.log("slowResponses:", slowResponses);
-
         setSlowResponsesData(slowResponses);
-
         let all_end_users_data = await allEndUsersCall(accessToken);
-
         setAllEndUsers(all_end_users_data?.map((u: any) => u.user_id));
-
         const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
-
         let router_settings = routerSettingsInfo.router_settings;
 
-        console.log("routerSettingsInfo:", router_settings);
-        ``;
         let model_group_retry_policy = router_settings.model_group_retry_policy;
         let default_retries = router_settings.num_retries;
 
-        console.log("model_group_retry_policy:", model_group_retry_policy);
-        console.log("default_retries:", default_retries);
         setModelGroupRetryPolicy(model_group_retry_policy);
         setGlobalRetryPolicy(router_settings.retry_policy);
         setDefaultRetry(default_retries);
@@ -410,7 +368,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
         const model_group_alias = router_settings.model_group_alias || {};
         setModelGroupAlias(model_group_alias);
       } catch (error) {
-        console.error("There was an error fetching the model data", error);
+        NotificationsManager.fromBackend("Error fetching model data: " + error);
       }
     };
 
@@ -420,7 +378,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
     const fetchModelMap = async () => {
       const data = await modelCostMap(accessToken);
-      console.log(`received model cost map data: ${Object.keys(data)}`);
       setModelMap(data);
     };
     if (modelMap == null) {
@@ -461,7 +418,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
        * - check if model in model map
        * - return it's litellm_provider, if so
        */
-      console.log(`GET PROVIDER CALLED! - ${modelMap}`);
       if (modelMap !== null && modelMap !== undefined) {
         if (typeof modelMap == "object" && model in modelMap) {
           return modelMap[model]["litellm_provider"];
@@ -522,8 +478,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
 
     all_models_on_proxy.push(curr_model.model_name);
-
-    console.log(modelData.data[i]);
   }
   // when users click request access show pop up to allow them to request access
 
@@ -578,18 +532,12 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   };
 
   const handleOk = () => {
-    console.log("🚀 handleOk called from model dashboard!");
-    console.log("Current form values:", addModelForm.getFieldsValue());
-
     addModelForm
       .validateFields()
       .then((values: any) => {
-        console.log("✅ Validation passed, submitting:", values);
         handleAddModelSubmit(values, accessToken, addModelForm, handleRefreshClick);
       })
       .catch((error: any) => {
-        console.error("❌ Validation failed:", error);
-        console.error("Form errors:", error.errorFields);
         const errorMessages =
           error.errorFields
             ?.map((field: any) => {
@@ -600,8 +548,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       });
   };
 
-  console.log(`selectedProvider: ${selectedProvider}`);
-  console.log(`providerModels.length: ${providerModels.length}`);
   Object.keys(Providers).find((key) => (Providers as { [index: string]: any })[key] === selectedProvider);
   // If a team is selected, render TeamInfoView in full page layout
   if (selectedTeamId) {

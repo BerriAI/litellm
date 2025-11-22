@@ -438,6 +438,8 @@ def test_select_azure_base_url_called(setup_mocks):
             "allm_passthrough_route",
             "llm_passthrough_route",
             "asearch",
+            "avector_store_create",
+            "avector_store_search",
         ]
     ],
 )

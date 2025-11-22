@@ -894,6 +894,22 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             data["metadata"]
         )
 
+    # Parse litellm_metadata if it's a string (e.g., from multipart/form-data or extra_body)
+    if "litellm_metadata" in data and data["litellm_metadata"] is not None:
+        if isinstance(data["litellm_metadata"], str):
+            parsed_litellm_metadata = safe_json_loads(data["litellm_metadata"])
+            if not isinstance(parsed_litellm_metadata, dict):
+                verbose_proxy_logger.warning(
+                    f"Failed to parse 'litellm_metadata' as JSON dict. Received value: {data['litellm_metadata']}"
+                )
+            else:
+                data["litellm_metadata"] = parsed_litellm_metadata
+        # Merge litellm_metadata into the metadata variable (preserving existing values)
+        if isinstance(data["litellm_metadata"], dict):
+            for key, value in data["litellm_metadata"].items():
+                if key not in data[_metadata_variable_name]:
+                    data[_metadata_variable_name][key] = value
+
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
         user_api_key_dict=user_api_key_dict,
@@ -1053,6 +1069,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
     )
 
+    # Key Model Aliases
+    _update_model_if_key_alias_exists(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     verbose_proxy_logger.debug(
         "[PROXY] returned data from litellm_pre_call_utils: %s", data
     )
@@ -1105,6 +1127,33 @@ def _update_model_if_team_alias_exists(
         and _model in user_api_key_dict.team_model_aliases
     ):
         data["model"] = user_api_key_dict.team_model_aliases[_model]
+    return
+
+
+def _update_model_if_key_alias_exists(
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Update the model if the key alias exists
+
+    If an alias map has been set on a key, then we want to make the request with the model the key alias is pointing to
+
+    eg.
+        - user calls `modelAlias`
+        - key.aliases = {
+            "modelAlias": "xai/grok-4-fast-non-reasoning"
+        }
+        - requested_model = "xai/grok-4-fast-non-reasoning"
+    """
+    _model = data.get("model")
+    if (
+        _model
+        and user_api_key_dict.aliases
+        and isinstance(user_api_key_dict.aliases, dict)
+        and _model in user_api_key_dict.aliases
+    ):
+        data["model"] = user_api_key_dict.aliases[_model]
     return
 
 

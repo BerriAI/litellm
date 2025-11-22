@@ -28,6 +28,7 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
 
   const [showCustomInput, setShowCustomInput] = useState(isCustomInterval);
   const [customInterval, setCustomInterval] = useState(isCustomInterval ? rotationInterval : "");
+  const [durationValue, setDurationValue] = useState<string>(form?.getFieldValue?.("duration") || "");
 
   const handleIntervalChange = (value: string) => {
     if (value === "custom") {
@@ -45,6 +46,15 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
     setCustomInterval(value);
     onRotationIntervalChange(value);
   };
+
+  const handleDurationChange = (value: string) => {
+    setDurationValue(value);
+    if (form && typeof form.setFieldValue === "function") {
+      form.setFieldValue("duration", value);
+    } else if (form && typeof form.setFieldsValue === "function") {
+      form.setFieldsValue({ duration: value });
+    }
+  };
   return (
     <div className="space-y-6">
       {/* Key Expiry Section */}
@@ -58,7 +68,13 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
               <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
             </Tooltip>
           </label>
-          <TextInput name="duration" placeholder="e.g., 30d" className="w-full" />
+          <TextInput
+            name="duration"
+            placeholder="e.g., 30d"
+            className="w-full"
+            value={durationValue}
+            onValueChange={handleDurationChange}
+          />
         </div>
       </div>
 

@@ -15,17 +15,16 @@ from litellm.images.utils import ImageEditRequestUtils
 import litellm
 from litellm.types.llms.gemini import GeminiLongRunningOperationResponse, GeminiVideoGenerationInstance, GeminiVideoGenerationParameters, GeminiVideoGenerationRequest
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-    from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    BaseVideoConfig = _BaseVideoConfig
     BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    BaseVideoConfig = Any
     BaseLLMException = Any
 
 

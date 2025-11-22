@@ -25,6 +25,7 @@ AnthropicInputSchema = TypedDict(
         "additionalProperties": Optional[bool],
         "required": Optional[List[str]],
         "$defs": Optional[Dict],
+        "strict": Optional[bool],
     },
     total=False,
 )
@@ -165,7 +166,11 @@ class AnthropicMessagesContainerUploadParam(TypedDict, total=False):
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
     source: Required[
-        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+        Union[
+            AnthropicContentParamSource,
+            AnthropicContentParamSourceFileId,
+            AnthropicContentParamSourceUrl,
+        ]
     ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
@@ -457,6 +462,10 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     id: str
     name: str
     input: dict
+    provider_specific_fields: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        extra = "allow"  # Allow provider_specific_fields
 
 
 class AnthropicResponseContentBlockThinking(BaseModel):
