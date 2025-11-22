@@ -2321,4 +2321,10 @@ def __getattr__(name: str) -> Any:
         globals()["PalmConfig"] = _PalmConfig
         return _PalmConfig
     
+    # Lazy-load AlephAlphaConfig to reduce import-time memory cost (deprecated provider)
+    if name == "AlephAlphaConfig":
+        from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig as _AlephAlphaConfig
+        globals()["AlephAlphaConfig"] = _AlephAlphaConfig
+        return _AlephAlphaConfig
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
