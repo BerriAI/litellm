@@ -170,11 +170,6 @@ class LoggingWorker:
         Handle queue full condition by either starting an aggressive clear
         or scheduling a delayed retry.
         """
-        try:
-            loop = asyncio.get_running_loop()
-            time_since_last_clear = loop.time() - self._last_aggressive_clear_time
-        except RuntimeError:
-            time_since_last_clear = 0.0
         
         if self._should_start_aggressive_clear():
             self._mark_aggressive_clear_started()
