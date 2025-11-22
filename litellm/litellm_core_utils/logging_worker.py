@@ -131,6 +131,7 @@ class LoggingWorker:
             self._queue.put_nowait(task)
         except asyncio.QueueFull:
             # Queue is full - handle it appropriately
+            verbose_logger.exception("LoggingWorker queue is full")
             self._handle_queue_full(task)
 
     def _should_start_aggressive_clear(self) -> bool:
