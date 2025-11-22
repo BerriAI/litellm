@@ -1928,6 +1928,14 @@ class MCPServerManager:
             f"Registry now contains {len(self.get_registry())} servers"
         )
 
+    def get_mcp_servers_from_ids(self, server_ids: List[str]) -> List[MCPServer]:
+        servers = []
+        registry = self.get_registry()
+        for server in registry.values():
+            if server.server_id in server_ids:
+                servers.append(server)
+        return servers
+
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
         """
         Get the MCP Server from the server id
