@@ -469,6 +469,7 @@ def test_anthropic_chat_transform_request_includes_context_management():
 
 def test_transform_parsed_response_includes_context_management_metadata():
     import httpx
+
     from litellm.types.utils import ModelResponse
 
     config = AnthropicConfig()
@@ -513,4 +514,45 @@ def test_transform_parsed_response_includes_context_management_metadata():
 
     assert result.__dict__.get("context_management") == context_management_payload
     provider_fields = result.choices[0].message.provider_specific_fields
-    assert provider_fields and provider_fields["context_management"] == context_management_payload
+    assert (
+        provider_fields
+        and provider_fields["context_management"] == context_management_payload
+    )
+
+
+def test_anthropic_structured_output_beta_header():
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+
+    response = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "final_output",
+                    "strict": True,
+                    "schema": {
+                        "description": 'Progress report for the thinking process\n\nThis model represents a snapshot of the agent\'s current progress during\nthe thinking process, providing a brief description of the current activity.\n\nAttributes:\n    agent_doing: Brief description of what the agent is currently doing.\n                Should be kept under 10 words. Example: "Learning about home automation"',
+                        "properties": {
+                            "agent_doing": {"title": "Agent Doing", "type": "string"}
+                        },
+                        "required": ["agent_doing"],
+                        "title": "ThinkingStep",
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        },
+    )
+
+    assert response is not None
+    print(f"response: {response}")
+    print(f"raw_request_headers: {response['raw_request_headers']}")
+    assert (
+        "structured-outputs-2025-11-13"
+        in response["raw_request_headers"]["anthropic-beta"]
+    )

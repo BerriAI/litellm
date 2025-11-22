@@ -89,6 +89,11 @@ class ArizePhoenixLogger:
                 "PHOENIX_API_KEY must be set when using Phoenix Cloud (app.phoenix.arize.com)."
             )
 
+        project_name = os.environ.get("PHOENIX_PROJECT_NAME", "litellm-project")
+
         return ArizePhoenixConfig(
-            otlp_auth_headers=otlp_auth_headers, protocol=protocol, endpoint=endpoint
+            otlp_auth_headers=otlp_auth_headers,
+            protocol=protocol,
+            endpoint=endpoint,
+            project_name=project_name,
         )
