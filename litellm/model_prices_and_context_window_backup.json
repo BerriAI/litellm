@@ -22235,6 +22235,16 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 1536
     },
+    "text-embedding-ada-002-v2": {
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_batches": 5e-08,
+        "litellm_provider": "openai",
+        "max_input_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_cost_per_token_batches": 0.0
+    },
     "text-embedding-large-exp-03-07": {
         "input_cost_per_character": 2.5e-08,
         "input_cost_per_token": 1e-07,
