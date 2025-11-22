@@ -1923,6 +1923,21 @@ def _lazy_import_ai21_configs(name: str) -> Any:
     raise AttributeError(f"AI21 configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_ollama_configs(name: str) -> Any:
+    """Lazy import for Ollama config classes - imports only the requested class."""
+    if name == "OllamaChatConfig":
+        from .llms.ollama.chat.transformation import OllamaChatConfig as _OllamaChatConfig
+        globals()["OllamaChatConfig"] = _OllamaChatConfig
+        return _OllamaChatConfig
+    
+    if name == "OllamaConfig":
+        from .llms.ollama.completion.transformation import OllamaConfig as _OllamaConfig
+        globals()["OllamaConfig"] = _OllamaConfig
+        return _OllamaConfig
+    
+    raise AttributeError(f"Ollama configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2128,17 +2143,9 @@ def __getattr__(name: str) -> Any:
         globals()["PetalsConfig"] = _PetalsConfig
         return _PetalsConfig
     
-    # Lazy-load OllamaChatConfig to reduce import-time memory cost
-    if name == "OllamaChatConfig":
-        from .llms.ollama.chat.transformation import OllamaChatConfig as _OllamaChatConfig
-        globals()["OllamaChatConfig"] = _OllamaChatConfig
-        return _OllamaChatConfig
-    
-    # Lazy-load OllamaConfig to reduce import-time memory cost
-    if name == "OllamaConfig":
-        from .llms.ollama.completion.transformation import OllamaConfig as _OllamaConfig
-        globals()["OllamaConfig"] = _OllamaConfig
-        return _OllamaConfig
+    # Lazy-load Ollama configs to reduce import-time memory cost
+    if name in {"OllamaChatConfig", "OllamaConfig"}:
+        return _lazy_import_ollama_configs(name)
     
     # Lazy-load SagemakerConfig to reduce import-time memory cost
     if name == "SagemakerConfig":
