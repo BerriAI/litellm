@@ -1786,6 +1786,31 @@ def _lazy_import_type_items(name: str) -> Any:
     raise AttributeError(f"Type items lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_core_helpers(name: str) -> Any:
+    """Lazy import for core helper functions - imports only the requested item by name."""
+    if name == "remove_index_from_tool_calls":
+        from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls as _remove_index_from_tool_calls
+        globals()["remove_index_from_tool_calls"] = _remove_index_from_tool_calls
+        return _remove_index_from_tool_calls
+    
+    raise AttributeError(f"Core helpers lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_openai_like_configs(name: str) -> Any:
+    """Lazy import for OpenAI-like config classes - imports only the requested class."""
+    if name == "OpenAILikeChatConfig":
+        from .llms.openai_like.chat.handler import OpenAILikeChatConfig as _OpenAILikeChatConfig
+        globals()["OpenAILikeChatConfig"] = _OpenAILikeChatConfig
+        return _OpenAILikeChatConfig
+    
+    if name == "AiohttpOpenAIChatConfig":
+        from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig as _AiohttpOpenAIChatConfig
+        globals()["AiohttpOpenAIChatConfig"] = _AiohttpOpenAIChatConfig
+        return _AiohttpOpenAIChatConfig
+    
+    raise AttributeError(f"OpenAI-like configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -1863,11 +1888,9 @@ def __getattr__(name: str) -> Any:
     if name in {"COHERE_EMBEDDING_INPUT_TYPES", "GuardrailItem"}:
         return _lazy_import_type_items(name)
     
-    # Lazy-load remove_index_from_tool_calls to reduce import-time memory cost
+    # Lazy-load core helpers to reduce import-time memory cost
     if name == "remove_index_from_tool_calls":
-        from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls as _remove_index_from_tool_calls
-        globals()["remove_index_from_tool_calls"] = _remove_index_from_tool_calls
-        return _remove_index_from_tool_calls
+        return _lazy_import_core_helpers(name)
     
     # Lazy-load BytezChatConfig to reduce import-time memory cost
     if name == "BytezChatConfig":
@@ -1887,17 +1910,9 @@ def __getattr__(name: str) -> Any:
         globals()["AmazonConverseConfig"] = _AmazonConverseConfig
         return _AmazonConverseConfig
     
-    # Lazy-load OpenAILikeChatConfig to reduce import-time memory cost
-    if name == "OpenAILikeChatConfig":
-        from .llms.openai_like.chat.handler import OpenAILikeChatConfig as _OpenAILikeChatConfig
-        globals()["OpenAILikeChatConfig"] = _OpenAILikeChatConfig
-        return _OpenAILikeChatConfig
-    
-    # Lazy-load AiohttpOpenAIChatConfig to reduce import-time memory cost
-    if name == "AiohttpOpenAIChatConfig":
-        from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig as _AiohttpOpenAIChatConfig
-        globals()["AiohttpOpenAIChatConfig"] = _AiohttpOpenAIChatConfig
-        return _AiohttpOpenAIChatConfig
+    # Lazy-load OpenAI-like configs to reduce import-time memory cost
+    if name in {"OpenAILikeChatConfig", "AiohttpOpenAIChatConfig"}:
+        return _lazy_import_openai_like_configs(name)
     
     # Lazy-load GaladrielChatConfig to reduce import-time memory cost
     if name == "GaladrielChatConfig":
