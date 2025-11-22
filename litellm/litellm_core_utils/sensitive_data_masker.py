@@ -59,17 +59,22 @@ class SensitiveDataMasker:
         data: Dict[str, Any],
         depth: int = 0,
         max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+        excluded_keys: Optional[Set[str]] = None,
     ) -> Dict[str, Any]:
         if depth >= max_depth:
             return data
 
+        excluded_keys = excluded_keys or set()
         masked_data: Dict[str, Any] = {}
         for k, v in data.items():
             try:
                 if isinstance(v, dict):
-                    masked_data[k] = self.mask_dict(v, depth + 1)
+                    masked_data[k] = self.mask_dict(v, depth + 1, max_depth, excluded_keys)
                 elif hasattr(v, "__dict__") and not isinstance(v, type):
-                    masked_data[k] = self.mask_dict(vars(v), depth + 1)
+                    masked_data[k] = self.mask_dict(vars(v), depth + 1, max_depth, excluded_keys)
+                elif k in excluded_keys:
+                    # Don't mask keys that are explicitly excluded
+                    masked_data[k] = v
                 elif self.is_sensitive_key(k):
                     str_value = str(v) if v is not None else ""
                     masked_data[k] = self._mask_value(str_value)
