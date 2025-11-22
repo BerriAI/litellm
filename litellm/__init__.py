@@ -1140,9 +1140,6 @@ from .llms.deepgram.audio_transcription.transformation import (
 from .llms.topaz.common_utils import TopazModelInfo
 from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from .llms.azure.responses.o_series_transformation import (
-    AzureOpenAIOSeriesResponsesAPIConfig,
-)
 from .llms.xai.responses.transformation import XAIResponsesAPIConfig
 from .llms.litellm_proxy.responses.transformation import (
     LiteLLMProxyResponsesAPIConfig,
