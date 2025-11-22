@@ -1906,6 +1906,23 @@ def _lazy_import_triton_configs(name: str) -> Any:
     raise AttributeError(f"Triton configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_ai21_configs(name: str) -> Any:
+    """Lazy import for AI21 config classes - imports only the requested class."""
+    if name == "AI21ChatConfig":
+        from .llms.ai21.chat.transformation import AI21ChatConfig as _AI21ChatConfig
+        globals()["AI21ChatConfig"] = _AI21ChatConfig
+        globals()["AI21Config"] = _AI21ChatConfig  # alias
+        return _AI21ChatConfig
+    
+    if name == "AI21Config":
+        from .llms.ai21.chat.transformation import AI21ChatConfig as _AI21ChatConfig
+        globals()["AI21ChatConfig"] = _AI21ChatConfig
+        globals()["AI21Config"] = _AI21ChatConfig  # alias
+        return _AI21ChatConfig
+    
+    raise AttributeError(f"AI21 configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2071,19 +2088,9 @@ def __getattr__(name: str) -> Any:
         globals()["ClarifaiConfig"] = _ClarifaiConfig
         return _ClarifaiConfig
     
-    # Lazy-load AI21ChatConfig to reduce import-time memory cost
-    if name == "AI21ChatConfig":
-        from .llms.ai21.chat.transformation import AI21ChatConfig as _AI21ChatConfig
-        globals()["AI21ChatConfig"] = _AI21ChatConfig
-        globals()["AI21Config"] = _AI21ChatConfig  # alias
-        return _AI21ChatConfig
-    
-    # Lazy-load AI21Config alias to reduce import-time memory cost
-    if name == "AI21Config":
-        from .llms.ai21.chat.transformation import AI21ChatConfig as _AI21ChatConfig
-        globals()["AI21ChatConfig"] = _AI21ChatConfig
-        globals()["AI21Config"] = _AI21ChatConfig
-        return _AI21ChatConfig
+    # Lazy-load AI21 configs to reduce import-time memory cost
+    if name in {"AI21ChatConfig", "AI21Config"}:
+        return _lazy_import_ai21_configs(name)
     
     # Lazy-load LlamaAPIConfig to reduce import-time memory cost
     if name == "LlamaAPIConfig":
