@@ -2228,6 +2228,41 @@ def _lazy_import_nvidia_nim_configs(name: str) -> Any:
     raise AttributeError(f"NvidiaNim configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_misc_transformation_configs(name: str) -> Any:
+    """Lazy import for miscellaneous transformation config classes - imports only the requested class."""
+    if name == "DeepInfraConfig":
+        from .llms.deepinfra.chat.transformation import DeepInfraConfig as _DeepInfraConfig
+        globals()["DeepInfraConfig"] = _DeepInfraConfig
+        return _DeepInfraConfig
+    
+    if name == "GroqChatConfig":
+        from .llms.groq.chat.transformation import GroqChatConfig as _GroqChatConfig
+        globals()["GroqChatConfig"] = _GroqChatConfig
+        return _GroqChatConfig
+    
+    if name == "VoyageEmbeddingConfig":
+        from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as _VoyageEmbeddingConfig
+        globals()["VoyageEmbeddingConfig"] = _VoyageEmbeddingConfig
+        return _VoyageEmbeddingConfig
+    
+    if name == "InfinityEmbeddingConfig":
+        from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as _InfinityEmbeddingConfig
+        globals()["InfinityEmbeddingConfig"] = _InfinityEmbeddingConfig
+        return _InfinityEmbeddingConfig
+    
+    if name == "AzureAIStudioConfig":
+        from .llms.azure_ai.chat.transformation import AzureAIStudioConfig as _AzureAIStudioConfig
+        globals()["AzureAIStudioConfig"] = _AzureAIStudioConfig
+        return _AzureAIStudioConfig
+    
+    if name == "MistralConfig":
+        from .llms.mistral.chat.transformation import MistralConfig as _MistralConfig
+        globals()["MistralConfig"] = _MistralConfig
+        return _MistralConfig
+    
+    raise AttributeError(f"Misc transformation configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2451,41 +2486,13 @@ def __getattr__(name: str) -> Any:
         globals()["OpenAIConfig"] = _OpenAIConfig
         return _OpenAIConfig
     
-    # Lazy-load DeepInfraConfig to reduce import-time memory cost
-    if name == "DeepInfraConfig":
-        from .llms.deepinfra.chat.transformation import DeepInfraConfig as _DeepInfraConfig
-        globals()["DeepInfraConfig"] = _DeepInfraConfig
-        return _DeepInfraConfig
-    
-    # Lazy-load GroqChatConfig to reduce import-time memory cost
-    if name == "GroqChatConfig":
-        from .llms.groq.chat.transformation import GroqChatConfig as _GroqChatConfig
-        globals()["GroqChatConfig"] = _GroqChatConfig
-        return _GroqChatConfig
-    
-    # Lazy-load VoyageEmbeddingConfig to reduce import-time memory cost
-    if name == "VoyageEmbeddingConfig":
-        from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as _VoyageEmbeddingConfig
-        globals()["VoyageEmbeddingConfig"] = _VoyageEmbeddingConfig
-        return _VoyageEmbeddingConfig
-    
-    # Lazy-load InfinityEmbeddingConfig to reduce import-time memory cost
-    if name == "InfinityEmbeddingConfig":
-        from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as _InfinityEmbeddingConfig
-        globals()["InfinityEmbeddingConfig"] = _InfinityEmbeddingConfig
-        return _InfinityEmbeddingConfig
-    
-    # Lazy-load AzureAIStudioConfig to reduce import-time memory cost
-    if name == "AzureAIStudioConfig":
-        from .llms.azure_ai.chat.transformation import AzureAIStudioConfig as _AzureAIStudioConfig
-        globals()["AzureAIStudioConfig"] = _AzureAIStudioConfig
-        return _AzureAIStudioConfig
-    
-    # Lazy-load MistralConfig to reduce import-time memory cost
-    if name == "MistralConfig":
-        from .llms.mistral.chat.transformation import MistralConfig as _MistralConfig
-        globals()["MistralConfig"] = _MistralConfig
-        return _MistralConfig
+    # Lazy-load miscellaneous transformation configs to reduce import-time memory cost
+    _misc_transformation_config_names = {
+        "DeepInfraConfig", "GroqChatConfig", "VoyageEmbeddingConfig",
+        "InfinityEmbeddingConfig", "AzureAIStudioConfig", "MistralConfig",
+    }
+    if name in _misc_transformation_config_names:
+        return _lazy_import_misc_transformation_configs(name)
     
     # Lazy-load rerank configs to reduce import-time memory cost
     _rerank_config_names = {
