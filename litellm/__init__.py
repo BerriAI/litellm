@@ -1891,6 +1891,21 @@ def _lazy_import_anthropic_configs(name: str) -> Any:
     raise AttributeError(f"Anthropic configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_triton_configs(name: str) -> Any:
+    """Lazy import for Triton config classes - imports only the requested class."""
+    if name == "TritonConfig":
+        from .llms.triton.completion.transformation import TritonConfig as _TritonConfig
+        globals()["TritonConfig"] = _TritonConfig
+        return _TritonConfig
+    
+    if name == "TritonEmbeddingConfig":
+        from .llms.triton.embedding.transformation import TritonEmbeddingConfig as _TritonEmbeddingConfig
+        globals()["TritonEmbeddingConfig"] = _TritonEmbeddingConfig
+        return _TritonEmbeddingConfig
+    
+    raise AttributeError(f"Triton configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2046,17 +2061,9 @@ def __getattr__(name: str) -> Any:
         globals()["GroqSTTConfig"] = _GroqSTTConfig
         return _GroqSTTConfig
     
-    # Lazy-load TritonConfig to reduce import-time memory cost
-    if name == "TritonConfig":
-        from .llms.triton.completion.transformation import TritonConfig as _TritonConfig
-        globals()["TritonConfig"] = _TritonConfig
-        return _TritonConfig
-    
-    # Lazy-load TritonEmbeddingConfig to reduce import-time memory cost
-    if name == "TritonEmbeddingConfig":
-        from .llms.triton.embedding.transformation import TritonEmbeddingConfig as _TritonEmbeddingConfig
-        globals()["TritonEmbeddingConfig"] = _TritonEmbeddingConfig
-        return _TritonEmbeddingConfig
+    # Lazy-load Triton configs to reduce import-time memory cost
+    if name in {"TritonConfig", "TritonEmbeddingConfig"}:
+        return _lazy_import_triton_configs(name)
     
     # Lazy-load ClarifaiConfig to reduce import-time memory cost
     if name == "ClarifaiConfig":
