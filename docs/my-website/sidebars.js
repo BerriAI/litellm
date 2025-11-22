@@ -151,6 +151,7 @@ const sidebars = {
             "proxy/custom_root_ui",
             "proxy/custom_sso",
             "proxy/ai_hub",
+            "proxy/model_compare_ui",
             "proxy/public_teams",
             "proxy/self_serve",
             "proxy/ui/bulk_edit_users",

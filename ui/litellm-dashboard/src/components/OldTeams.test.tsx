@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { teamCreateCall } from "./networking";
 import OldTeams from "./OldTeams";
@@ -265,8 +265,7 @@ describe("OldTeams - handleCreate organization handling", () => {
     act(() => {
       fireEvent.click(deleteTeamButton);
     });
-    expect(getByRole("heading", { name: "Delete Team" })).toBeInTheDocument();
-    expect(getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.getByText("Delete Team?")).toBeInTheDocument();
   });
 });
 

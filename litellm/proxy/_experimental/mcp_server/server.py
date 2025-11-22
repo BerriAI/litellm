@@ -5,17 +5,9 @@ LiteLLM MCP Server Routes
 import asyncio
 import contextlib
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from fastapi import FastAPI, HTTPException
-from mcp import ReadResourceResult, Resource
-from mcp.server.lowlevel.helper_types import ReadResourceContents
-from mcp.types import (
-    BlobResourceContents,
-    GetPromptResult,
-    ResourceTemplate,
-    TextResourceContents,
-)
 from pydantic import AnyUrl, ConfigDict
 from starlette.types import Receive, Scope, Send
 
@@ -41,10 +33,29 @@ from litellm.utils import client
 # TODO: Make this a util function for litellm client usage
 MCP_AVAILABLE: bool = True
 try:
+    from mcp import ReadResourceResult, Resource
     from mcp.server import Server
+    from mcp.server.lowlevel.helper_types import ReadResourceContents
+    from mcp.types import (
+        BlobResourceContents,
+        GetPromptResult,
+        ResourceTemplate,
+        TextResourceContents,
+    )
 except ImportError as e:
     verbose_logger.debug(f"MCP module not found: {e}")
     MCP_AVAILABLE = False
+    # For type checking only - these will never be accessed at runtime when MCP is unavailable
+    # because all code using them is guarded by `if MCP_AVAILABLE:`
+    if TYPE_CHECKING:
+        from typing import Any as BlobResourceContents  # type: ignore
+        from typing import Any as GetPromptResult
+        from typing import Any as ReadResourceContents
+        from typing import Any as ReadResourceResult
+        from typing import Any as Resource
+        from typing import Any as ResourceTemplate
+        from typing import Any as Server
+        from typing import Any as TextResourceContents
 
 
 # Global variables to track initialization
@@ -60,9 +71,8 @@ if MCP_AVAILABLE:
         auth_context_var,
     )
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from mcp.types import EmbeddedResource, ImageContent, TextContent
+    from mcp.types import EmbeddedResource, ImageContent, Prompt, TextContent
     from mcp.types import Tool as MCPTool
-    from mcp.types import Prompt
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
@@ -498,16 +508,18 @@ if MCP_AVAILABLE:
         normalized_contents: List[ReadResourceContents] = []
         for content in read_resource_result.contents:
             if isinstance(content, TextResourceContents):
+                text_content: TextResourceContents = content
                 normalized_contents.append(
                     ReadResourceContents(
-                        content=content.text,
-                        mime_type=content.mimeType,
+                        content=text_content.text,
+                        mime_type=text_content.mimeType,
                     )
                 )
             elif isinstance(content, BlobResourceContents):
+                blob_content: BlobResourceContents = content
                 normalized_contents.append(
                     ReadResourceContents(
-                        content=content.blob,
+                        content=blob_content.blob,
                         mime_type=None,
                     )
                 )
@@ -647,9 +659,13 @@ if MCP_AVAILABLE:
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
-            allowed_mcp_server_ids
-        )
+        allowed_mcp_servers: List[MCPServer] = []
+        for allowed_mcp_server_id in allowed_mcp_server_ids:
+            mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+                allowed_mcp_server_id
+            )
+            if mcp_server is not None:
+                allowed_mcp_servers.append(mcp_server)
 
         if mcp_servers is not None:
             allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
@@ -1173,9 +1189,13 @@ if MCP_AVAILABLE:
             )
         )
 
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
-            allowed_mcp_server_ids
-        )
+        allowed_mcp_servers: List[MCPServer] = []
+        for allowed_mcp_server_id in allowed_mcp_server_ids:
+            mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+                allowed_mcp_server_id
+            )
+            if mcp_server is not None:
+                allowed_mcp_servers.append(mcp_server)
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,

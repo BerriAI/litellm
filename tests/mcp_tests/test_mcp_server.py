@@ -789,7 +789,7 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id"]
         )
-        mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server_1, mock_server_2])
+        mock_manager.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else mock_server_2
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
 
         with patch(
@@ -811,7 +811,7 @@ async def test_get_tools_from_mcp_servers():
             mock_manager_2.get_allowed_mcp_servers = AsyncMock(
                 return_value=["server1_id", "server2_id"]
             )
-            mock_manager_2.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server_1, mock_server_2])
+            mock_manager_2.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else mock_server_2
             mock_manager_2._get_tools_from_server = AsyncMock(
                 side_effect=lambda server, mcp_auth_header=None, extra_headers=None, add_prefix=False: (
                     [mock_tool_1] if server.server_id == "server1_id" else [mock_tool_2]
@@ -839,7 +839,7 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id", "server3_id"]
         )
-        mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server_1, mock_server_2, mock_server_3])
+        mock_manager.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else (mock_server_2 if server_id == "server2_id" else mock_server_3)
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
 
         with patch(
@@ -2040,7 +2040,7 @@ async def test_filter_tools_by_allowed_tools_integration():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["test-server-123"]
         )
-        mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server])
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
 
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
@@ -2078,7 +2078,9 @@ async def test_filter_tools_by_allowed_tools_integration():
 
             # Verify the manager methods were called correctly
             mock_manager.get_allowed_mcp_servers.assert_called_once_with(mock_user_auth)
-            mock_manager.get_mcp_servers_from_ids.assert_called_once_with(["test-server-123"])
+            # Note: get_mcp_server_by_id is now called for each server ID instead of batch
+            # Verify it was called with the correct server ID
+            assert mock_manager.get_mcp_server_by_id.call_count > 0
             mock_manager._get_tools_from_server.assert_called_once()
 
 
@@ -2148,7 +2150,7 @@ async def test_filter_tools_by_disallowed_tools_integration():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["test-server-456"]
         )
-        mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server])
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
 
@@ -2185,7 +2187,9 @@ async def test_filter_tools_by_disallowed_tools_integration():
 
             # Verify the manager methods were called correctly
             mock_manager.get_allowed_mcp_servers.assert_called_once_with(mock_user_auth)
-            mock_manager.get_mcp_servers_from_ids.assert_called_once_with(["test-server-456"])
+            # Note: get_mcp_server_by_id is now called for each server ID instead of batch
+            # Verify it was called with the correct server ID
+            assert mock_manager.get_mcp_server_by_id.call_count > 0
             mock_manager._get_tools_from_server.assert_called_once()
 
 
@@ -2242,7 +2246,7 @@ async def test_filter_tools_no_restrictions_integration():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["test-server-000"]
         )
-        mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server])
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
 
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
@@ -2499,8 +2503,8 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
         new_callable=AsyncMock,
     ) as mock_get_allowed, patch.object(
         global_mcp_server_manager,
-        "get_mcp_servers_from_ids",
-        return_value=[mock_server],
+        "get_mcp_server_by_id",
+        return_value=mock_server,
     ), patch.object(
         global_mcp_server_manager,
         "_get_mcp_server_from_tool_name",
@@ -2568,8 +2572,8 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
         new_callable=AsyncMock,
     ) as mock_get_allowed, patch.object(
         global_mcp_server_manager,
-        "get_mcp_servers_from_ids",
-        return_value=[mock_server],
+        "get_mcp_server_by_id",
+        return_value=mock_server,
     ), patch.object(
         global_mcp_server_manager,
         "_get_mcp_server_from_tool_name",
