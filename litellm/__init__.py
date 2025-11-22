@@ -150,6 +150,7 @@ if TYPE_CHECKING:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
     from litellm.llms.deprecated_providers.palm import PalmConfig
     from litellm.llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
+    from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -1139,7 +1140,6 @@ from .llms.deepgram.audio_transcription.transformation import (
 from .llms.topaz.common_utils import TopazModelInfo
 from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from .llms.azure.responses.o_series_transformation import (
     AzureOpenAIOSeriesResponsesAPIConfig,
 )
@@ -2348,5 +2348,11 @@ def __getattr__(name: str) -> Any:
         from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as _VoyageContextualEmbeddingConfig
         globals()["VoyageContextualEmbeddingConfig"] = _VoyageContextualEmbeddingConfig
         return _VoyageContextualEmbeddingConfig
+    
+    # Lazy-load AzureOpenAIResponsesAPIConfig to reduce import-time memory cost
+    if name == "AzureOpenAIResponsesAPIConfig":
+        from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig as _AzureOpenAIResponsesAPIConfig
+        globals()["AzureOpenAIResponsesAPIConfig"] = _AzureOpenAIResponsesAPIConfig
+        return _AzureOpenAIResponsesAPIConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
