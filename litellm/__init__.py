@@ -1156,11 +1156,6 @@ from .llms.openai.transcriptions.whisper_transformation import (
 from .llms.openai.transcriptions.gpt_transformation import (
     OpenAIGPTAudioTranscriptionConfig,
 )
-from .llms.openai.chat.gpt_audio_transformation import (
-    OpenAIGPTAudioConfig,
-)
-
-openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
 from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
@@ -2406,5 +2401,19 @@ def __getattr__(name: str) -> Any:
         globals()["OpenAIGPT5Config"] = _OpenAIGPT5Config
         globals()["openAIGPT5Config"] = _openAIGPT5Config
         return _openAIGPT5Config
+    
+    # Lazy-load OpenAIGPTAudioConfig to reduce import-time memory cost
+    if name == "OpenAIGPTAudioConfig":
+        from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as _OpenAIGPTAudioConfig
+        globals()["OpenAIGPTAudioConfig"] = _OpenAIGPTAudioConfig
+        return _OpenAIGPTAudioConfig
+    
+    # Lazy-load openAIGPTAudioConfig instance to reduce import-time memory cost
+    if name == "openAIGPTAudioConfig":
+        from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as _OpenAIGPTAudioConfig
+        _openAIGPTAudioConfig = _OpenAIGPTAudioConfig()
+        globals()["OpenAIGPTAudioConfig"] = _OpenAIGPTAudioConfig
+        globals()["openAIGPTAudioConfig"] = _openAIGPTAudioConfig
+        return _openAIGPTAudioConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
