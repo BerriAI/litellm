@@ -1,9 +1,9 @@
+import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
+import * as useTeamsModule from "@/app/(dashboard)/hooks/useTeams";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, beforeAll, vi, beforeEach } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import AllModelsTab from "./AllModelsTab";
-import * as useTeamsModule from "@/app/(dashboard)/hooks/useTeams";
-import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
 
 // Mock window.matchMedia for Ant Design components
 beforeAll(() => {
@@ -247,5 +247,63 @@ describe("AllModelsTab", () => {
     await waitFor(() => {
       expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
     });
+  });
+
+  it("should show disabled delete icon for config models", async () => {
+    // Mock useTeams hook
+    vi.spyOn(useTeamsModule, "default").mockReturnValue({
+      teams: [],
+      setTeams: vi.fn(),
+    });
+
+    const modelData = {
+      data: [
+        {
+          model_name: "gpt-4-config",
+          litellm_model_name: "gpt-4-config",
+          provider: "openai",
+          model_info: {
+            id: "model-config-1",
+            db_model: false, // Config model (no db_model)
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
+        },
+        {
+          model_name: "gpt-4-db",
+          litellm_model_name: "gpt-4-db",
+          provider: "openai",
+          model_info: {
+            id: "model-db-1",
+            db_model: true, // DB model
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
+        },
+      ],
+    };
+
+    const { container } = render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Showing \d+ - \d+ of 2 results/)).toBeInTheDocument();
+    });
+
+    const disabledIcons = container.querySelectorAll(".opacity-50.cursor-not-allowed");
+    expect(disabledIcons.length).toBeGreaterThan(0);
+
+    const configModelIcon = Array.from(disabledIcons).find((icon) => {
+      const parent = icon.closest('[class*="actions"], [class*="flex items-center justify-end"]');
+      return parent !== null;
+    });
+    expect(configModelIcon).toBeTruthy();
   });
 });

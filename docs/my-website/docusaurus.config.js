@@ -101,6 +101,21 @@ const config = {
         include: ['**/*.{md,mdx}'],
       },
     ],
+    [
+      '@docusaurus/plugin-content-blog',
+      {
+        id: 'blog',
+        path: './blog',
+        routeBasePath: 'blog',
+        blogTitle: 'Blog',
+        blogSidebarTitle: 'All Posts',
+        blogSidebarCount: 'ALL',
+        postsPerPage: 10,
+        showReadingTime: false,
+        sortPosts: 'descending',
+        include: ['**/index.{md,mdx}'],
+      },
+    ],
 
     () => ({
       name: 'cripchat',
@@ -129,6 +144,7 @@ const config = {
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
         },
+        blog: false, // Disable the default blog plugin from preset-classic
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
         },
@@ -177,6 +193,7 @@ const config = {
             to: "docs/enterprise"
           },
           { to: '/release_notes', label: 'Release Notes', position: 'left' },
+          { to: '/blog', label: 'Blog', position: 'left' },
           {
             href: 'https://models.litellm.ai/',
             label: '💸 LLM Model Cost Map',
