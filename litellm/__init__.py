@@ -151,6 +151,7 @@ if TYPE_CHECKING:
     from litellm.llms.deprecated_providers.palm import PalmConfig
     from litellm.llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
     from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+    from litellm.llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
