@@ -1132,48 +1132,9 @@ vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 from .llms.bedrock.chat.invoke_handler import (
     bedrock_tool_name_mappings,
 )
-from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
-    AmazonInvokeNovaConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
-    AmazonQwen3Config,
-)
-from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
-    AmazonAnthropicConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
-    AmazonCohereConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import (
-    AmazonLlamaConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import (
-    AmazonDeepSeekR1Config,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import (
-    AmazonMistralConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import (
-    AmazonTitanConfig,
-)
 from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-
-from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
-from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
-from .llms.bedrock.image.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
-from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
-from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
-    AmazonTitanMultimodalEmbeddingG1Config,
-)
-from .llms.bedrock.embed.amazon_titan_v2_transformation import (
-    AmazonTitanV2Config,
-)
-from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
 )
@@ -2306,5 +2267,41 @@ def __getattr__(name: str) -> Any:
         from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config as _AmazonAI21Config
         globals()["AmazonAI21Config"] = _AmazonAI21Config
         return _AmazonAI21Config
+    
+    # Lazy-load AmazonAnthropicConfig to reduce import-time memory cost
+    if name == "AmazonAnthropicConfig":
+        from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import AmazonAnthropicConfig as _AmazonAnthropicConfig
+        globals()["AmazonAnthropicConfig"] = _AmazonAnthropicConfig
+        return _AmazonAnthropicConfig
+    
+    # Lazy-load AmazonAnthropicClaudeConfig to reduce import-time memory cost
+    if name == "AmazonAnthropicClaudeConfig":
+        from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig as _AmazonAnthropicClaudeConfig
+        globals()["AmazonAnthropicClaudeConfig"] = _AmazonAnthropicClaudeConfig
+        return _AmazonAnthropicClaudeConfig
+    
+    # Lazy-load AmazonTitanG1Config to reduce import-time memory cost
+    if name == "AmazonTitanG1Config":
+        from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config as _AmazonTitanG1Config
+        globals()["AmazonTitanG1Config"] = _AmazonTitanG1Config
+        return _AmazonTitanG1Config
+    
+    # Lazy-load AmazonTitanMultimodalEmbeddingG1Config to reduce import-time memory cost
+    if name == "AmazonTitanMultimodalEmbeddingG1Config":
+        from .llms.bedrock.embed.amazon_titan_multimodal_transformation import AmazonTitanMultimodalEmbeddingG1Config as _AmazonTitanMultimodalEmbeddingG1Config
+        globals()["AmazonTitanMultimodalEmbeddingG1Config"] = _AmazonTitanMultimodalEmbeddingG1Config
+        return _AmazonTitanMultimodalEmbeddingG1Config
+    
+    # Lazy-load AmazonTitanV2Config to reduce import-time memory cost
+    if name == "AmazonTitanV2Config":
+        from .llms.bedrock.embed.amazon_titan_v2_transformation import AmazonTitanV2Config as _AmazonTitanV2Config
+        globals()["AmazonTitanV2Config"] = _AmazonTitanV2Config
+        return _AmazonTitanV2Config
+    
+    # Lazy-load BedrockCohereEmbeddingConfig to reduce import-time memory cost
+    if name == "BedrockCohereEmbeddingConfig":
+        from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig as _BedrockCohereEmbeddingConfig
+        globals()["BedrockCohereEmbeddingConfig"] = _BedrockCohereEmbeddingConfig
+        return _BedrockCohereEmbeddingConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
