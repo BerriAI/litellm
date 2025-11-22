@@ -789,6 +789,7 @@ const sidebars = {
           },
           items: [
             "projects/smolagents",
+            "projects/mini-swe-agent",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",
