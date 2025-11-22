@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm-enterprise"
-version = "0.1.21"
+version = "0.1.22"
 description = "Package for LiteLLM Enterprise features"
 authors = ["BerriAI"]
 readme = "README.md"
@@ -22,7 +22,7 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "0.1.21"
+version = "0.1.22"
 version_files = [
     "pyproject.toml:version",
     "../requirements.txt:litellm-enterprise==",

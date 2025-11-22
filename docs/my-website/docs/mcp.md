@@ -657,7 +657,7 @@ LiteLLM Proxy provides two methods for controlling access to specific MCP server
 
 ### Method 1: URL-based Namespacing
 
-LiteLLM Proxy supports URL-based namespacing for MCP servers using the format `/mcp/<servers or access groups>`. This allows you to:
+LiteLLM Proxy supports URL-based namespacing for MCP servers using the format `/<servers or access groups>/mcp`. This allows you to:
 
 - **Direct URL Access**: Point MCP clients directly to specific servers or access groups via URL
 - **Simplified Configuration**: Use URLs instead of headers for server selection
@@ -666,14 +666,14 @@ LiteLLM Proxy supports URL-based namespacing for MCP servers using the format `/
 #### URL Format
 
 ```
-<your-litellm-proxy-base-url>/mcp/<server_alias_or_access_group>
+<your-litellm-proxy-base-url>/<server_alias_or_access_group>/mcp
 ```
 
 **Examples:**
-- `/mcp/github` - Access tools from the "github" MCP server
-- `/mcp/zapier` - Access tools from the "zapier" MCP server  
-- `/mcp/dev_group` - Access tools from all servers in the "dev_group" access group
-- `/mcp/github,zapier` - Access tools from multiple specific servers
+- `/github_mcp/mcp` - Access tools from the "github_mcp" MCP server
+- `/zapier/mcp` - Access tools from the "zapier" MCP server  
+- `/dev_group/mcp` - Access tools from all servers in the "dev_group" access group
+- `/github_mcp,zapier/mcp` - Access tools from multiple specific servers
 
 #### Usage Examples
 
@@ -690,7 +690,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp/github",
+            "server_url": "<your-litellm-proxy-base-url>/github_mcp/mcp",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -718,7 +718,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp/dev_group",
+            "server_url": "<your-litellm-proxy-base-url>/dev_group/mcp",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -740,7 +740,7 @@ This example uses URL namespacing to access all servers in the "dev_group" acces
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp/github,zapier",
+      "url": "<your-litellm-proxy-base-url>/github_mcp,zapier/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
       }
@@ -862,8 +862,8 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 
 | Feature | Header Namespacing | URL Namespacing |
 |---------|-------------------|-----------------|
-| **Method** | Uses `x-mcp-servers` header | Uses URL path `/mcp/<servers>` |
-| **Endpoint** | Standard `litellm_proxy` endpoint | Custom `/mcp/<servers>` endpoint |
+| **Method** | Uses `x-mcp-servers` header | Uses URL path `/<servers>/mcp` |
+| **Endpoint** | Standard `litellm_proxy` endpoint | Custom `/<servers>/mcp` endpoint |
 | **Configuration** | Requires additional header | Self-contained in URL |
 | **Multiple Servers** | Comma-separated in header | Comma-separated in URL path |
 | **Access Groups** | Supported via header | Supported via URL path |
@@ -1221,7 +1221,6 @@ curl --location 'http://localhost:4000/github_mcp/mcp' \
 
 LiteLLM v 1.77.6 added support for OAuth 2.0 Client Credentials for MCP servers.
 
-
 This configuration is currently available on the config.yaml, with UI support coming soon.
 
 ```yaml
@@ -1234,6 +1233,71 @@ mcp_servers:
 ```
 
 [**See Claude Code Tutorial**](./tutorials/claude_responses_api#connecting-mcp-servers)
+
+### How It Works
+
+```mermaid
+sequenceDiagram
+    participant Browser as User-Agent (Browser)
+    participant Client as Client
+    participant LiteLLM as LiteLLM Proxy
+    participant MCP as MCP Server (Resource Server)
+    participant Auth as Authorization Server
+
+    Note over Client,LiteLLM: Step 1 – Resource discovery
+    Client->>LiteLLM: GET /.well-known/oauth-protected-resource/{mcp_server_name}/mcp
+    LiteLLM->>Client: Return resource metadata
+
+    Note over Client,LiteLLM: Step 2 – Authorization server discovery
+    Client->>LiteLLM: GET /.well-known/oauth-authorization-server/{mcp_server_name}
+    LiteLLM->>Client: Return authorization server metadata
+
+    Note over Client,Auth: Step 3 – Dynamic client registration
+    Client->>LiteLLM: POST /{mcp_server_name}/register
+    LiteLLM->>Auth: Forward registration request
+    Auth->>LiteLLM: Issue client credentials
+    LiteLLM->>Client: Return client credentials
+
+    Note over Client,Browser: Step 4 – User authorization (PKCE)
+    Client->>Browser: Open authorization URL + code_challenge + resource
+    Browser->>Auth: Authorization request
+    Note over Auth: User authorizes
+    Auth->>Browser: Redirect with authorization code
+    Browser->>LiteLLM: Callback to LiteLLM with code
+    LiteLLM->>Browser: Redirect back with authorization code
+    Browser->>Client: Callback with authorization code
+
+    Note over Client,Auth: Step 5 – Token exchange
+    Client->>LiteLLM: Token request + code_verifier + resource
+    LiteLLM->>Auth: Forward token request
+    Auth->>LiteLLM: Access (and refresh) token
+    LiteLLM->>Client: Return tokens
+
+    Note over Client,MCP: Step 6 – Authenticated MCP call
+    Client->>LiteLLM: MCP request with access token + LiteLLM API key
+    LiteLLM->>MCP: MCP request with Bearer token
+    MCP-->>LiteLLM: MCP response
+    LiteLLM-->>Client: Return MCP response
+```
+
+**Participants**
+
+- **Client** – The MCP-capable AI agent (e.g., Claude Code, Cursor, or another IDE/agent) that initiates OAuth discovery, authorization, and tool invocations on behalf of the user.
+- **LiteLLM Proxy** – Mediates all OAuth discovery, registration, token exchange, and MCP traffic while protecting stored credentials.
+- **Authorization Server** – Issues OAuth 2.0 tokens via dynamic client registration, PKCE authorization, and token endpoints.
+- **MCP Server (Resource Server)** – The protected MCP endpoint that receives LiteLLM’s authenticated JSON-RPC requests.
+- **User-Agent (Browser)** – Temporarily involved so the end user can grant consent during the authorization step.
+
+**Flow Steps**
+
+1. **Resource Discovery**: The client fetches MCP resource metadata from LiteLLM’s `.well-known/oauth-protected-resource` endpoint to understand scopes and capabilities.
+2. **Authorization Server Discovery**: The client retrieves the OAuth server metadata (token endpoint, authorization endpoint, supported PKCE methods) through LiteLLM’s `.well-known/oauth-authorization-server` endpoint.
+3. **Dynamic Client Registration**: The client registers through LiteLLM, which forwards the request to the authorization server (RFC 7591). If the provider doesn’t support dynamic registration, you can pre-store `client_id`/`client_secret` in LiteLLM (e.g., GitHub MCP) and the flow proceeds the same way.
+4. **User Authorization**: The client launches a browser session (with code challenge and resource hints). The user approves access, the authorization server sends the code through LiteLLM back to the client.
+5. **Token Exchange**: The client calls LiteLLM with the authorization code, code verifier, and resource. LiteLLM exchanges them with the authorization server and returns the issued access/refresh tokens.
+6. **MCP Invocation**: With a valid token, the client sends the MCP JSON-RPC request (plus LiteLLM API key) to LiteLLM, which forwards it to the MCP server and relays the tool response.
+
+See the official [MCP Authorization Flow](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-flow-steps) for additional reference.
 
 ## Using your MCP with client side credentials
 

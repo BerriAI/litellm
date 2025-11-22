@@ -21,7 +21,7 @@ Available via the `litellm[proxy]` package or any `litellm` docker image.
 | Proxy | ✅ |  |
 | SDK | ❌ | Requires postgres DB for storing file ids. |
 | Available across all providers | ✅ |  |
-| Supported endpoints | `/chat/completions`, `/batch`, `/fine_tuning` |  |
+| Supported endpoints | `/chat/completions`, `/batch`, `/fine_tuning`, `/responses` |  |
 
 ## Usage
 
@@ -424,4 +424,4 @@ No, as of `v1.71.2` users can only view/edit/delete files they have created.
 ## See Also
 
 - [Managed Files w/ Finetuning APIs](../../docs/proxy/managed_finetuning)
-- [Managed Files w/ Batch APIs](../../docs/proxy/managed_batch)
+- [Managed Files w/ Batch APIs](../../docs/proxy/managed_batches)

@@ -1,5 +1,5 @@
 ---
-title: "v1.80.0-stable - RunwayML Provider Support"
+title: "[Preview] v1.80.0-stable - Agent Hub Support"
 slug: "v1-80-0"
 date: 2025-11-15T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.0.rc.1
+ghcr.io/berriai/litellm:v1.80.0.rc.2
 ```
 
 </TabItem>
@@ -45,11 +45,52 @@ pip install litellm==1.80.0
 
 ## Key Highlights
 
-- **🆕 RunwayML Provider** - Complete video generation, image generation, and text-to-speech support
+- **🆕 Agent Hub Support** - Register and make agents public for your organization
+- **RunwayML Provider** - Complete video generation, image generation, and text-to-speech support
 - **GPT-5.1 Family Support** - Day-0 support for OpenAI's latest GPT-5.1 and GPT-5.1-Codex models
 - **Prometheus OSS** - Prometheus metrics now available in open-source version
 - **Vector Store Files API** - Complete OpenAI-compatible Vector Store Files API with full CRUD operations
 - **Embeddings Performance** - O(1) lookup optimization for router embeddings with shared sessions
+
+---
+
+### Agent Hub 
+
+<Image img={require('../../img/agent_hub_clean.png')} />  
+
+This release adds support for registering and making agents public for your organization. This is great for **Proxy Admins** who want a central place to make agents built in their organization, discoverable to their users. 
+
+Here's the flow: 
+1. Add agent to litellm. 
+2. Make it public. 
+3. Allow anyone to discover it on the public AI Hub page.
+
+[**Get Started with Agent Hub**](../../docs/proxy/ai_hub)
+
+
+### Performance – `/embeddings` 13× Lower p95 Latency
+
+This update significantly improves `/embeddings` latency by routing it through the same optimized pipeline as `/chat/completions`, benefiting from all previously applied networking optimizations.
+
+### Results
+
+| Metric | Before | After | Improvement |
+| --- | --- | --- | --- |
+| p95 latency | 5,700 ms | **430 ms** | −92% (~13× faster)** |
+| p99 latency | 7,200 ms | **780 ms** | −89% |
+| Average latency | 844 ms | **262 ms** | −69% |
+| Median latency | 290 ms | **230 ms** | −21% |
+| RPS | 1,216.7 | **1,219.7** | **+0.25%** |
+
+### Test Setup
+
+| Category | Specification |
+| --- | --- |
+| **Load Testing** | Locust: 1,000 concurrent users, 500 ramp-up |
+| **System** | 4 vCPUs, 8 GB RAM, 4 workers, 4 instances |
+| **Database** | PostgreSQL (Redis unused) |
+| **Configuration** | [config.yaml](https://gist.github.com/AlexsanderHamir/550791675fd752befcac6a9e44024652) |
+| **Load Script** | [no_cache_hits.py](https://gist.github.com/AlexsanderHamir/99d673bf74cdd81fd39f59fa9048f2e8) |
 
 ---
 
@@ -97,7 +138,7 @@ litellm_settings:
 
 ---
 
-### Vector Store Files API - Stable Release
+### Vector Store Files API
 
 Complete OpenAI-compatible Vector Store Files API now stable, enabling full file lifecycle management within vector stores.
 
@@ -120,7 +161,28 @@ curl --location 'http://localhost:4000/v1/vector_stores/vs_123/files' \
 }'
 ```
 
-[Get Started with Vector Stores](../../docs/vector_stores)
+[Get Started with Vector Stores](../../docs/vector_store_files)
+
+---
+
+## New Providers and Endpoints
+
+### New Providers
+
+| Provider | Supported Endpoints | Description |
+| -------- | ------------------- | ----------- |
+| **[RunwayML](../../docs/providers/runwayml/videos)** | `/v1/videos`, `/v1/images/generations`, `/v1/audio/speech` | Gen-4 video generation, image generation, and text-to-speech |
+
+### New LLM API Endpoints
+
+| Endpoint | Method | Description | Documentation |
+| -------- | ------ | ----------- | ------------- |
+| `/v1/vector_stores/{vector_store_id}/files` | POST | Create vector store file | [Docs](../../docs/vector_store_files) |
+| `/v1/vector_stores/{vector_store_id}/files` | GET | List vector store files | [Docs](../../docs/vector_store_files) |
+| `/v1/vector_stores/{vector_store_id}/files/{file_id}` | GET | Retrieve vector store file | [Docs](../../docs/vector_store_files) |
+| `/v1/vector_stores/{vector_store_id}/files/{file_id}/content` | GET | Retrieve file content | [Docs](../../docs/vector_store_files) |
+| `/v1/vector_stores/{vector_store_id}/files/{file_id}` | DELETE | Delete vector store file | [Docs](../../docs/vector_store_files) |
+| `/v1/vector_stores/{vector_store_id}` | DELETE | Delete vector store | [Docs](../../docs/vector_store_files) |
 
 ---
 

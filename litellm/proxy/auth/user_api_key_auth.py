@@ -54,6 +54,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
 )
+from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
@@ -157,14 +158,8 @@ def _apply_budget_limits_to_end_user_params(
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
-    request = Request(
-        scope={
-            "type": "http",
-            "headers": [
-                (k.lower().encode(), v.encode()) for k, v in websocket.headers.items()
-            ],
-        }
-    )
+    scope_headers = list(websocket.scope.get("headers") or [])
+    request = Request(scope={"type": "http", "headers": scope_headers})
 
     request._url = websocket.url
 
@@ -172,12 +167,12 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 
     model = query_params.get("model")
 
+    
     async def return_body():
-        return_string = f'{{"model": "{model}"}}'
-        # return string as bytes
-        return return_string.encode()
-
+        return _realtime_request_body(model)
+    
     request.body = return_body  # type: ignore
+
 
     authorization = websocket.headers.get("authorization")
     # If no Authorization header, try the api-key header
@@ -584,6 +579,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         if team_membership is not None
                         else None
                     ),
+                    team_metadata=team_object.metadata if team_object is not None else None,
                 )
                 # run through common checks
                 _ = await common_checks(
@@ -1076,6 +1072,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     blocked=valid_token.team_blocked,
                     models=valid_token.team_models,
                     metadata=valid_token.team_metadata,
+                    object_permission_id=valid_token.team_object_permission_id,
                 )
             else:
                 _team_obj = None

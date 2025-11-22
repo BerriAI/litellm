@@ -1353,6 +1353,57 @@ class ExperimentalUIJWTToken:
         return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
 
     @staticmethod
+    def get_cli_jwt_auth_token(
+        user_info: LiteLLM_UserTable, team_id: Optional[str] = None
+    ) -> str:
+        """
+        Generate a JWT token for CLI authentication with 24-hour expiration.
+        
+        Args:
+            user_info: User information from the database
+            team_id: Team ID for the user (optional, uses user's team if available)
+            
+        Returns:
+            Encrypted JWT token string
+        """
+        from datetime import timedelta
+
+        from litellm.constants import CLI_JWT_TOKEN_NAME
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
+
+        if user_info.user_role is None:
+            raise Exception("User role is required for CLI JWT login")
+
+        # Calculate expiration time (24 hours from now - matching old CLI key behavior)
+        expiration_time = get_utc_datetime() + timedelta(hours=24)
+
+        # Format the expiration time as ISO 8601 string
+        expires = expiration_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
+
+        # Use provided team_id, or fall back to user's teams if available
+        _team_id = team_id
+        if _team_id is None and hasattr(user_info, "teams") and user_info.teams:
+            # Use first team if user has teams
+            _team_id = user_info.teams[0] if len(user_info.teams) > 0 else None
+
+        valid_token = UserAPIKeyAuth(
+            token=CLI_JWT_TOKEN_NAME,
+            key_name=CLI_JWT_TOKEN_NAME,
+            key_alias=CLI_JWT_TOKEN_NAME,
+            max_budget=litellm.max_ui_session_budget,
+            expires=expires,
+            user_id=user_info.user_id,
+            team_id=_team_id,
+            models=user_info.models,
+            max_parallel_requests=None,
+            user_role=LitellmUserRoles(user_info.user_role),
+        )
+
+        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
+
+    @staticmethod
     def get_key_object_from_ui_hash_key(
         hashed_token: str,
     ) -> Optional[UserAPIKeyAuth]:

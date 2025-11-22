@@ -38,6 +38,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from .http_handler import get_shared_realtime_ssl_context
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -1140,6 +1141,7 @@ class BaseLLMHTTPHandler:
         atranscription: bool = False,
         headers: Optional[Dict[str, Any]] = None,
         provider_config: Optional[BaseAudioTranscriptionConfig] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
         if provider_config is None:
             raise ValueError(
@@ -1162,6 +1164,7 @@ class BaseLLMHTTPHandler:
                 client=client,
                 headers=headers,
                 provider_config=provider_config,
+                shared_session=shared_session,
             )
 
         # Prepare the request
@@ -1226,6 +1229,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         headers: Optional[Dict[str, Any]] = None,
         provider_config: Optional[BaseAudioTranscriptionConfig] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> TranscriptionResponse:
         if provider_config is None:
             raise ValueError(
@@ -1254,6 +1258,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                shared_session=shared_session,
             )
         else:
             async_httpx_client = client
@@ -3608,10 +3613,12 @@ class BaseLLMHTTPHandler:
         )
 
         try:
+            ssl_context = get_shared_realtime_ssl_context()
             async with websockets.connect(  # type: ignore
                 url,
                 extra_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=ssl_context,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket,
@@ -4107,7 +4114,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = video_generation_provider_config.validate_environment(
-            api_key=api_key,
+            api_key=api_key or litellm_params.get("api_key", None),
             headers=video_generation_optional_request_params.get("extra_headers", {})
             or {},
             model=model,
@@ -4207,7 +4214,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = video_generation_provider_config.validate_environment(
-            api_key=api_key,
+            api_key=api_key or litellm_params.get("api_key", None),
             headers=video_generation_optional_request_params.get("extra_headers", {})
             or {},
             model=model,

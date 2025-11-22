@@ -1036,6 +1036,22 @@
         "rerank": false
       }
     },
+    "docker_model_runner": {
+      "display_name": "Docker Model Runner (`docker_model_runner`)",
+      "url": "https://docs.litellm.ai/docs/providers/docker_model_runner",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "morph": {
       "display_name": "Morph (`morph`)",
       "url": "https://docs.litellm.ai/docs/providers/morph",

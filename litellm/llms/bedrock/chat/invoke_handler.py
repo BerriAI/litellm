@@ -51,7 +51,11 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Delta
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    Delta,
+)
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
     ModelResponse,
@@ -493,9 +497,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params["original_response"] = (
-                            outputText  # allow user to access raw anthropic tool calling response
-                        )
+                        model_response._hidden_params[
+                            "original_response"
+                        ] = outputText  # allow user to access raw anthropic tool calling response
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -793,9 +797,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params["stream"] = (
-                        True  # cohere requires stream = True in inference params
-                    )
+                    inference_params[
+                        "stream"
+                    ] = True  # cohere requires stream = True in inference params
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
@@ -1184,6 +1188,7 @@ class AWSEventStreamDecoder:
         self.parser = EventStreamJSONParser()
         self.content_blocks: List[ContentBlockDeltaEvent] = []
         self.tool_calls_index: Optional[int] = None
+        self.response_id: Optional[str] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1245,8 +1250,169 @@ class AWSEventStreamDecoder:
             thinking_blocks_list.append(_thinking_block)
         return thinking_blocks_list
 
+    def _initialize_converse_response_id(self, chunk_data: dict):
+        """Initialize response_id from chunk data if not already set."""
+        if self.response_id is None:
+            if "messageStart" in chunk_data:
+                conversation_id = chunk_data["messageStart"].get("conversationId")
+                if conversation_id:
+                    self.response_id = f"chatcmpl-{conversation_id}"
+            else:
+                # Fallback to generating a UUID if the first chunk is not messageStart
+                self.response_id = f"chatcmpl-{uuid.uuid4()}"
+
+    def _handle_converse_start_event(
+        self,
+        start_obj: ContentBlockStartEvent,
+    ) -> Tuple[
+        Optional[ChatCompletionToolCallChunk],
+        dict,
+        Optional[
+            List[
+                Union[
+                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
+                ]
+            ]
+        ],
+    ]:
+        """Handle 'start' event in converse chunk parsing."""
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        provider_specific_fields: dict = {}
+        thinking_blocks: Optional[
+            List[
+                Union[
+                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
+                ]
+            ]
+        ] = None
+
+        self.content_blocks = []  # reset
+        if start_obj is not None:
+            if "toolUse" in start_obj and start_obj["toolUse"] is not None:
+                ## check tool name was formatted by litellm
+                _response_tool_name = start_obj["toolUse"]["name"]
+                response_tool_name = get_bedrock_tool_name(
+                    response_tool_name=_response_tool_name
+                )
+                self.tool_calls_index = (
+                    0
+                    if self.tool_calls_index is None
+                    else self.tool_calls_index + 1
+                )
+                tool_use = {
+                    "id": start_obj["toolUse"]["toolUseId"],
+                    "type": "function",
+                    "function": {
+                        "name": response_tool_name,
+                        "arguments": "",
+                    },
+                    "index": self.tool_calls_index,
+                }
+            elif (
+                "reasoningContent" in start_obj
+                and start_obj["reasoningContent"] is not None
+            ):  # redacted thinking can be in start object
+                thinking_blocks = self.translate_thinking_blocks(
+                    start_obj["reasoningContent"]
+                )
+                provider_specific_fields = {
+                    "reasoningContent": start_obj["reasoningContent"],
+                }
+        return tool_use, provider_specific_fields, thinking_blocks
+
+    def _handle_converse_delta_event(
+        self,
+        delta_obj: ContentBlockDeltaEvent,
+        index: int,
+    ) -> Tuple[
+        str,
+        Optional[ChatCompletionToolCallChunk],
+        dict,
+        Optional[str],
+        Optional[
+            List[
+                Union[
+                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
+                ]
+            ]
+        ],
+    ]:
+        """Handle 'delta' event in converse chunk parsing."""
+        text = ""
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        provider_specific_fields: dict = {}
+        reasoning_content: Optional[str] = None
+        thinking_blocks: Optional[
+            List[
+                Union[
+                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
+                ]
+            ]
+        ] = None
+
+        self.content_blocks.append(delta_obj)
+        if "text" in delta_obj:
+            text = delta_obj["text"]
+        elif "toolUse" in delta_obj:
+            tool_use = {
+                "id": None,
+                "type": "function",
+                "function": {
+                    "name": None,
+                    "arguments": delta_obj["toolUse"]["input"],
+                },
+                "index": (
+                    self.tool_calls_index
+                    if self.tool_calls_index is not None
+                    else index
+                ),
+            }
+        elif "reasoningContent" in delta_obj:
+            provider_specific_fields = {
+                "reasoningContent": delta_obj["reasoningContent"],
+            }
+            reasoning_content = self.extract_reasoning_content_str(
+                delta_obj["reasoningContent"]
+            )
+            thinking_blocks = self.translate_thinking_blocks(
+                delta_obj["reasoningContent"]
+            )
+            if (
+                thinking_blocks
+                and len(thinking_blocks) > 0
+                and reasoning_content is None
+            ):
+                reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
+        return text, tool_use, provider_specific_fields, reasoning_content, thinking_blocks
+
+    def _handle_converse_stop_event(
+        self, index: int
+    ) -> Optional[ChatCompletionToolCallChunk]:
+        """Handle stop/contentBlockIndex event in converse chunk parsing."""
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        is_empty = self.check_empty_tool_call_args()
+        if is_empty:
+            tool_use = {
+                "id": None,
+                "type": "function",
+                "function": {
+                    "name": None,
+                    "arguments": "{}",
+                },
+                "index": (
+                    self.tool_calls_index
+                    if self.tool_calls_index is not None
+                    else index
+                ),
+            }
+        return tool_use
+
     def converse_chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         try:
+            # Capture the conversationId from the first messageStart event
+            # and use it as the consistent ID for all subsequent chunks.
+            self._initialize_converse_response_id(chunk_data)
+
             verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
@@ -1265,91 +1431,22 @@ class AWSEventStreamDecoder:
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
                 start_obj = ContentBlockStartEvent(**chunk_data["start"])
-                self.content_blocks = []  # reset
-                if start_obj is not None:
-                    if "toolUse" in start_obj and start_obj["toolUse"] is not None:
-                        ## check tool name was formatted by litellm
-                        _response_tool_name = start_obj["toolUse"]["name"]
-                        response_tool_name = get_bedrock_tool_name(
-                            response_tool_name=_response_tool_name
-                        )
-                        self.tool_calls_index = (
-                            0
-                            if self.tool_calls_index is None
-                            else self.tool_calls_index + 1
-                        )
-                        tool_use = {
-                            "id": start_obj["toolUse"]["toolUseId"],
-                            "type": "function",
-                            "function": {
-                                "name": response_tool_name,
-                                "arguments": "",
-                            },
-                            "index": self.tool_calls_index,
-                        }
-                    elif (
-                        "reasoningContent" in start_obj
-                        and start_obj["reasoningContent"] is not None
-                    ):  # redacted thinking can be in start object
-                        thinking_blocks = self.translate_thinking_blocks(
-                            start_obj["reasoningContent"]
-                        )
-                        provider_specific_fields = {
-                            "reasoningContent": start_obj["reasoningContent"],
-                        }
+                tool_use, provider_specific_fields, thinking_blocks = (
+                    self._handle_converse_start_event(start_obj)
+                )
             elif "delta" in chunk_data:
                 delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
-                self.content_blocks.append(delta_obj)
-                if "text" in delta_obj:
-                    text = delta_obj["text"]
-                elif "toolUse" in delta_obj:
-                    tool_use = {
-                        "id": None,
-                        "type": "function",
-                        "function": {
-                            "name": None,
-                            "arguments": delta_obj["toolUse"]["input"],
-                        },
-                        "index": (
-                            self.tool_calls_index
-                            if self.tool_calls_index is not None
-                            else index
-                        ),
-                    }
-                elif "reasoningContent" in delta_obj:
-                    provider_specific_fields = {
-                        "reasoningContent": delta_obj["reasoningContent"],
-                    }
-                    reasoning_content = self.extract_reasoning_content_str(
-                        delta_obj["reasoningContent"]
-                    )
-                    thinking_blocks = self.translate_thinking_blocks(
-                        delta_obj["reasoningContent"]
-                    )
-                    if (
-                        thinking_blocks
-                        and len(thinking_blocks) > 0
-                        and reasoning_content is None
-                    ):
-                        reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
+                (
+                    text,
+                    tool_use,
+                    provider_specific_fields,
+                    reasoning_content,
+                    thinking_blocks,
+                ) = self._handle_converse_delta_event(delta_obj, index)
             elif (
                 "contentBlockIndex" in chunk_data
             ):  # stop block, no 'start' or 'delta' object
-                is_empty = self.check_empty_tool_call_args()
-                if is_empty:
-                    tool_use = {
-                        "id": None,
-                        "type": "function",
-                        "function": {
-                            "name": None,
-                            "arguments": "{}",
-                        },
-                        "index": (
-                            self.tool_calls_index
-                            if self.tool_calls_index is not None
-                            else index
-                        ),
-                    }
+                tool_use = self._handle_converse_stop_event(index)
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
             elif "usage" in chunk_data:
@@ -1378,6 +1475,7 @@ class AWSEventStreamDecoder:
                         ),
                     )
                 ],
+                id=self.response_id,
                 usage=usage,
                 provider_specific_fields=model_response_provider_specific_fields,
             )

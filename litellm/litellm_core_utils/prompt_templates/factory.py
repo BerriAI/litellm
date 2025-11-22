@@ -1,3 +1,4 @@
+import base64
 import copy
 import hashlib
 import json
@@ -5,7 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, List, Optional, Tuple, cast, overload
+from typing import Any, List, Optional, Tuple, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -56,6 +57,10 @@ def prompt_injection_detection_default_pt():
 
 
 BAD_MESSAGE_ERROR_STR = "Invalid Message "
+
+# Separator used to embed Gemini thought signatures in tool call IDs
+# See: https://ai.google.dev/gemini-api/docs/thought-signatures
+THOUGHT_SIGNATURE_SEPARATOR = "__thought__"
 
 # used to interweave user messages, to ensure user/assistant alternating
 DEFAULT_USER_CONTINUE_MESSAGE = {
@@ -905,6 +910,64 @@ def convert_to_anthropic_image_obj(
         )
 
 
+def create_anthropic_image_param(
+    image_url_input: Union[str, dict], 
+    format: Optional[str] = None,
+    is_bedrock_invoke: bool = False
+) -> AnthropicMessagesImageParam:
+    """
+    Create an AnthropicMessagesImageParam from an image URL input.
+    
+    Supports both URL references (for HTTP/HTTPS URLs) and base64 encoding.
+    """
+    # Extract URL and format from input
+    if isinstance(image_url_input, str):
+        image_url = image_url_input
+    else:
+        image_url = image_url_input.get("url", "")
+        if format is None:
+            format = image_url_input.get("format")
+    
+    # Check if the image URL is an HTTP/HTTPS URL
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        # For Bedrock invoke, always convert URLs to base64 (Bedrock invoke doesn't support URLs)
+        if is_bedrock_invoke or image_url.startswith("http://"):
+            base64_url = convert_url_to_base64(url=image_url)
+            image_chunk = convert_to_anthropic_image_obj(
+                openai_image_url=base64_url, format=format
+            )
+            return AnthropicMessagesImageParam(
+                type="image",
+                source=AnthropicContentParamSource(
+                    type="base64",
+                    media_type=image_chunk["media_type"],
+                    data=image_chunk["data"],
+                ),
+            )
+        else:
+            # HTTPS URL - pass directly for regular Anthropic
+            return AnthropicMessagesImageParam(
+                type="image",
+                source=AnthropicContentParamSourceUrl(
+                    type="url",
+                    url=image_url,
+                ),
+            )
+    else:
+        # Convert to base64 for data URIs or other formats
+        image_chunk = convert_to_anthropic_image_obj(
+            openai_image_url=image_url, format=format
+        )
+        return AnthropicMessagesImageParam(
+            type="image",
+            source=AnthropicContentParamSource(
+                type="base64",
+                media_type=image_chunk["media_type"],
+                data=image_chunk["data"],
+            ),
+        )
+
+
 # The following XML functions will be deprecated once JSON schema support is available on Bedrock and Vertex
 # ------------------------------------------------------------------------------
 def convert_to_anthropic_tool_result_xml(message: dict) -> str:
@@ -1007,15 +1070,35 @@ def anthropic_messages_pt_xml(messages: list):
             if isinstance(messages[msg_i]["content"], list):
                 for m in messages[msg_i]["content"]:
                     if m.get("type", "") == "image_url":
-                        format = m["image_url"].get("format")
-                        user_content.append(
-                            {
-                                "type": "image",
-                                "source": convert_to_anthropic_image_obj(
-                                    m["image_url"]["url"], format=format
-                                ),
-                            }
-                        )
+                        format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
+                        image_param = create_anthropic_image_param(m["image_url"], format=format)
+                        # Convert to dict format for XML version
+                        source = image_param["source"]
+                        if isinstance(source, dict) and source.get("type") == "url":
+                            # Type narrowing for URL source
+                            url_source = cast(AnthropicContentParamSourceUrl, source)
+                            user_content.append(
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "url",
+                                        "url": url_source["url"],
+                                    },
+                                }
+                            )
+                        else:
+                            # Type narrowing for base64 source
+                            base64_source = cast(AnthropicContentParamSource, source)
+                            user_content.append(
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": base64_source["media_type"],
+                                        "data": base64_source["data"],
+                                    },
+                                }
+                            )
                     elif m.get("type", "") == "text":
                         user_content.append({"type": "text", "text": m["text"]})
             else:
@@ -1161,8 +1244,94 @@ def _gemini_tool_call_invoke_helper(
     return function_call
 
 
+def _encode_tool_call_id_with_signature(
+    tool_call_id: str, thought_signature: Optional[str]
+) -> str:
+    """
+    Embed thought signature into tool call ID for OpenAI client compatibility.
+
+    Args:
+        tool_call_id: The tool call ID (e.g., "call_abc123...")
+        thought_signature: Base64-encoded signature from Gemini response
+
+    Returns:
+        Tool call ID with embedded signature if present, otherwise original ID
+        Format: call_<uuid>__thought__<base64_signature>
+
+    See: https://ai.google.dev/gemini-api/docs/thought-signatures
+    """
+    if thought_signature:
+        return f"{tool_call_id}{THOUGHT_SIGNATURE_SEPARATOR}{thought_signature}"
+    return tool_call_id
+
+
+def _get_thought_signature_from_tool(
+    tool: dict, model: Optional[str] = None
+) -> Optional[str]:
+    """Extract thought signature from tool call's provider_specific_fields.
+
+    If not provided try to extract thought signature from tool call id
+
+    Checks both tool.provider_specific_fields and tool.function.provider_specific_fields.
+    If no signature is found and model is gemini-3, returns a dummy signature.
+    """
+    # First check tool's provider_specific_fields
+    provider_fields = tool.get("provider_specific_fields") or {}
+    if isinstance(provider_fields, dict):
+        signature = provider_fields.get("thought_signature")
+        if signature:
+            return signature
+
+    # Then check function's provider_specific_fields
+    function = tool.get("function")
+    if function:
+        if isinstance(function, dict):
+            func_provider_fields = function.get("provider_specific_fields") or {}
+            if isinstance(func_provider_fields, dict):
+                signature = func_provider_fields.get("thought_signature")
+                if signature:
+                    return signature
+        elif (
+            hasattr(function, "provider_specific_fields")
+            and function.provider_specific_fields
+        ):
+            if isinstance(function.provider_specific_fields, dict):
+                signature = function.provider_specific_fields.get("thought_signature")
+                if signature:
+                    return signature
+    # Check if thought signature is embedded in tool call ID
+    tool_call_id = tool.get("id")
+    if tool_call_id and THOUGHT_SIGNATURE_SEPARATOR in tool_call_id:
+        parts = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+        if len(parts) == 2:
+            _, signature = parts
+            return signature
+    # If no signature found and model is gemini-3, return dummy signature
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
+        return _get_dummy_thought_signature()
+    return None
+
+
+def _get_dummy_thought_signature() -> str:
+    """Generate a dummy thought signature for models that require it.
+
+    This is used when transferring conversation history from older models
+    (like gemini-2.5-flash) to gemini-3, which requires thought_signature
+    for strict validation.
+    """
+    # Return a base64-encoded dummy signature string
+    # Below dummy signature is recommended by google - https://ai.google.dev/gemini-api/docs/thought-signatures#faqs
+    dummy_data = b"skip_thought_signature_validator"
+    return base64.b64encode(dummy_data).decode("utf-8")
+
+
 def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
+    model: Optional[str] = None,
 ) -> List[VertexPartType]:
     """
     OpenAI tool invokes:
@@ -1207,18 +1376,26 @@ def convert_to_gemini_tool_call_invoke(
         _parts_list: List[VertexPartType] = []
         tool_calls = message.get("tool_calls", None)
         function_call = message.get("function_call", None)
+
         if tool_calls is not None:
-            for tool in tool_calls:
+            for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
-                    gemini_function_call: Optional[VertexFunctionCall] = (
-                        _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
-                        )
+                    gemini_function_call: Optional[
+                        VertexFunctionCall
+                    ] = _gemini_tool_call_invoke_helper(
+                        function_call_params=tool["function"]
                     )
                     if gemini_function_call is not None:
-                        _parts_list.append(
-                            VertexPartType(function_call=gemini_function_call)
+                        part_dict: VertexPartType = {
+                            "function_call": gemini_function_call
+                        }
+                        thought_signature = _get_thought_signature_from_tool(
+                            dict(tool), model=model
                         )
+                        if thought_signature:
+                            part_dict["thoughtSignature"] = thought_signature
+
+                        _parts_list.append(part_dict)
                     else:  # don't silently drop params. Make it clear to user what's happening.
                         raise Exception(
                             "function_call missing. Received tool call with 'type': 'function'. No function call in argument - {}".format(
@@ -1230,7 +1407,36 @@ def convert_to_gemini_tool_call_invoke(
                 function_call_params=function_call
             )
             if gemini_function_call is not None:
-                _parts_list.append(VertexPartType(function_call=gemini_function_call))
+                part_dict_function: VertexPartType = {
+                    "function_call": gemini_function_call
+                }
+
+                # Extract thought signature from function_call's provider_specific_fields
+                thought_signature = None
+                provider_fields = (
+                    function_call.get("provider_specific_fields")
+                    if isinstance(function_call, dict)
+                    else {}
+                )
+                if isinstance(provider_fields, dict):
+                    thought_signature = provider_fields.get("thought_signature")
+
+                # If no signature found and model is gemini-3, use dummy signature
+                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+                    VertexGeminiConfig,
+                )
+
+                if (
+                    not thought_signature
+                    and model
+                    and VertexGeminiConfig._is_gemini_3_or_newer(model)
+                ):
+                    thought_signature = _get_dummy_thought_signature()
+
+                if thought_signature:
+                    part_dict_function["thoughtSignature"] = thought_signature
+
+                _parts_list.append(part_dict_function)
             else:  # don't silently drop params. Make it clear to user what's happening.
                 raise Exception(
                     "function_call missing. Received tool call with 'type': 'function'. No function call in argument - {}".format(
@@ -1363,24 +1569,9 @@ def convert_to_anthropic_tool_result(
                     )
                 )
             elif content["type"] == "image_url":
-                if isinstance(content["image_url"], str):
-                    image_chunk = convert_to_anthropic_image_obj(
-                        content["image_url"], format=None
-                    )
-                else:
-                    format = content["image_url"].get("format")
-                    image_chunk = convert_to_anthropic_image_obj(
-                        content["image_url"]["url"], format=format
-                    )
+                format = content["image_url"].get("format") if isinstance(content["image_url"], dict) else None
                 anthropic_content_list.append(
-                    AnthropicMessagesImageParam(
-                        type="image",
-                        source=AnthropicContentParamSource(
-                            type="base64",
-                            media_type=image_chunk["media_type"],
-                            data=image_chunk["data"],
-                        ),
-                    )
+                    create_anthropic_image_param(content["image_url"], format=format)
                 )
 
         anthropic_content = anthropic_content_list
@@ -1711,30 +1902,31 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
-                            format: Optional[str] = None
-                            if isinstance(m["image_url"], str):
-                                image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=m["image_url"], format=None
-                                )
+                            format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
+                            # Convert ChatCompletionImageUrlObject to dict if needed
+                            image_url_value = m["image_url"]
+                            if isinstance(image_url_value, str):
+                                image_url_input: Union[str, dict[str, Any]] = image_url_value
                             else:
-                                format = m["image_url"].get("format")
-                                image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=m["image_url"]["url"],
-                                    format=format,
-                                )
-
-                            _anthropic_content_element = (
-                                _anthropic_content_element_factory(image_chunk)
-                            )
+                                # ChatCompletionImageUrlObject or dict case - convert to dict
+                                image_url_input = {
+                                    "url": image_url_value["url"],
+                                    "format": image_url_value.get("format"),
+                                }
+                            # Bedrock invoke models have format: invoke/...
+                            is_bedrock_invoke = model.lower().startswith("invoke/")
+                            _anthropic_content_element = create_anthropic_image_param(
+                                image_url_input, format=format, is_bedrock_invoke=is_bedrock_invoke
+                            ) 
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
                                 original_content_element=dict(m),
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element["cache_control"] = (
-                                    _content_element["cache_control"]
-                                )
+                                _anthropic_content_element[
+                                    "cache_control"
+                                ] = _content_element["cache_control"]
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1772,9 +1964,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_content_text_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2496,7 +2688,6 @@ def stringify_json_tool_call_content(messages: List) -> List:
 
 ###### AMAZON BEDROCK #######
 
-import base64
 from email.message import Message
 
 import httpx
@@ -2541,17 +2732,19 @@ class BedrockImageProcessor:
     """Handles both sync and async image processing for Bedrock conversations."""
 
     @staticmethod
-    def _post_call_image_processing(response: httpx.Response, image_url: str = "") -> Tuple[str, str]:
+    def _post_call_image_processing(
+        response: httpx.Response, image_url: str = ""
+    ) -> Tuple[str, str]:
         # Check the response's content type to ensure it is an image
         content_type = response.headers.get("content-type")
-        
+
         # Use helper function to infer content type with fallback logic
         content_type = infer_content_type_from_url_and_content(
             url=image_url,
             content=response.content,
             current_content_type=content_type,
         )
-        
+
         content_type = _parse_content_type(content_type)
 
         # Convert the image content to base64 bytes
@@ -2570,7 +2763,9 @@ class BedrockImageProcessor:
             response = await client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response, image_url)
+            return BedrockImageProcessor._post_call_image_processing(
+                response, image_url
+            )
 
         except Exception as e:
             raise e
@@ -2583,7 +2778,9 @@ class BedrockImageProcessor:
             response = client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response, image_url)
+            return BedrockImageProcessor._post_call_image_processing(
+                response, image_url
+            )
 
         except Exception as e:
             raise e
@@ -2914,21 +3111,33 @@ def _convert_to_bedrock_tool_call_result(
     """
     - 
     """
-    content_str: str = ""
+    tool_result_content_blocks:List[BedrockToolResultContentBlock] = []
     if isinstance(message["content"], str):
-        content_str = message["content"]
+        tool_result_content_blocks.append(BedrockToolResultContentBlock(text=message["content"]))
     elif isinstance(message["content"], List):
         content_list = message["content"]
         for content in content_list:
             if content["type"] == "text":
-                content_str += content["text"]
+                tool_result_content_blocks.append(BedrockToolResultContentBlock(text=content["text"]))
+            elif content["type"] == "image_url":
+                format: Optional[str] = None
+                if isinstance(content["image_url"], dict):
+                    image_url = content["image_url"]["url"]
+                    format = content["image_url"].get("format")
+                else:
+                    image_url = content["image_url"]
+                _block:BedrockContentBlock = BedrockImageProcessor.process_image_sync(
+                    image_url=image_url,
+                    format=format,
+                )
+                if "image" in _block:
+                    tool_result_content_blocks.append(BedrockToolResultContentBlock(image=_block["image"]))
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
 
-    tool_result_content_block = BedrockToolResultContentBlock(text=content_str)
     tool_result = BedrockToolResultBlock(
-        content=[tool_result_content_block],
+        content=tool_result_content_blocks,
         toolUseId=id,
     )
 
@@ -3840,7 +4049,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             )
                         elif element["type"] == "text":
                             # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
-                            text_content = element["text"] if element["text"].strip() else "."
+                            text_content = (
+                                element["text"] if element["text"].strip() else "."
+                            )
                             assistants_part = BedrockContentBlock(text=text_content)
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":

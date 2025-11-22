@@ -521,6 +521,9 @@ export function KeyEditView({
           rotationInterval={rotationInterval}
           onRotationIntervalChange={setRotationInterval}
         />
+        <Form.Item name="duration" hidden initialValue="">
+          <Input />
+        </Form.Item>
       </div>
 
       {/* Hidden form field for token */}

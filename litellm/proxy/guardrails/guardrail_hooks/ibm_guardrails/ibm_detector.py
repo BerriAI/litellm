@@ -39,6 +39,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         detector_id: Optional[str] = None,
         is_detector_server: bool = True,
         detector_params: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
         score_threshold: Optional[float] = None,
         block_on_detection: bool = True,
         verify_ssl: bool = True,
@@ -70,6 +71,7 @@ class IBMGuardrailDetector(CustomGuardrail):
 
         self.is_detector_server = is_detector_server
         self.detector_params = detector_params or {}
+        self.extra_headers = extra_headers or {}
         self.score_threshold = score_threshold
         self.block_on_detection = block_on_detection
         self.verify_ssl = verify_ssl
@@ -128,6 +130,10 @@ class IBMGuardrailDetector(CustomGuardrail):
             "content-type": "application/json",
             "detector-id": self.detector_id,
         }
+
+        # Add any extra headers to the request
+        for header, value in self.extra_headers.items():
+            headers[header] = value
 
         verbose_proxy_logger.debug(
             "IBM Detector Server request to %s with payload: %s",
@@ -216,6 +222,10 @@ class IBMGuardrailDetector(CustomGuardrail):
             "Authorization": f"Bearer {self.auth_token}",
             "content-type": "application/json",
         }
+
+        # Add any extra headers to the request
+        for header, value in self.extra_headers.items():
+            headers[header] = value
 
         verbose_proxy_logger.debug(
             "IBM Orchestrator request to %s with payload: %s",
