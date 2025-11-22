@@ -5573,6 +5573,20 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": {
+        "input_cost_per_token": 3.3e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.65e-05,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
         "litellm_provider": "bedrock",
@@ -5694,6 +5708,20 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": {
+        "input_cost_per_token": 3.3e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.65e-05,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_response_schema": true,
