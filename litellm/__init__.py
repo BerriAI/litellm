@@ -1130,7 +1130,6 @@ vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
 )
-from .llms.openai.openai import MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
 from .llms.deepgram.audio_transcription.transformation import (
     DeepgramAudioTranscriptionConfig,
@@ -2333,5 +2332,11 @@ def __getattr__(name: str) -> Any:
         from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig as _AmazonInvokeConfig
         globals()["AmazonInvokeConfig"] = _AmazonInvokeConfig
         return _AmazonInvokeConfig
+    
+    # Lazy-load MistralEmbeddingConfig to reduce import-time memory cost
+    if name == "MistralEmbeddingConfig":
+        from .llms.openai.openai import MistralEmbeddingConfig as _MistralEmbeddingConfig
+        globals()["MistralEmbeddingConfig"] = _MistralEmbeddingConfig
+        return _MistralEmbeddingConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
