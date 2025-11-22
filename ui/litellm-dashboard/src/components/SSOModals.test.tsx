@@ -219,7 +219,7 @@ describe("SSOModals", () => {
       );
     };
 
-    const { getByLabelText, getByText, queryByText, container } = render(<TestWrapper />);
+    const { getByLabelText, getByText, queryByText, container, findByText } = render(<TestWrapper />);
 
     // Find and interact with the SSO provider select
     const ssoProviderSelect = container.querySelector("#sso_provider");
@@ -244,10 +244,9 @@ describe("SSOModals", () => {
     const saveButton = getByText("Save");
     fireEvent.click(saveButton);
 
-    // Check that only the URL format error appears
-    await waitFor(() => {
-      expect(getByText("URL must start with http:// or https://")).toBeInTheDocument();
-    });
+    // Check that only the URL format error appears (use findByText for async rendering)
+    const errorMessage = await findByText("URL must start with http:// or https://", {}, { timeout: 3000 });
+    expect(errorMessage).toBeInTheDocument();
 
     // Verify the trailing slash error does NOT appear
     expect(queryByText("URL must not end with a trailing slash")).not.toBeInTheDocument();

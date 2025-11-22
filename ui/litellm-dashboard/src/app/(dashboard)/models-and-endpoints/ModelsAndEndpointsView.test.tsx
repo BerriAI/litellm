@@ -57,15 +57,16 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
 }));
 
 describe("ModelsAndEndpointsView", () => {
-  it("should render the models and endpoints view", () => {
+  it("should render the models and endpoints view", async () => {
     // JSDOM polyfill for libraries expecting ResizeObserver (e.g., recharts)
+    // Note: ResizeObserver is now globally mocked in setupTests.ts, but keeping this for backwards compatibility
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).ResizeObserver = class {
       observe() {}
       unobserve() {}
       disconnect() {}
     };
-    const { getByText } = render(
+    const { findByText } = render(
       <ModelsAndEndpointsView
         accessToken="123"
         token="123"
@@ -78,6 +79,6 @@ describe("ModelsAndEndpointsView", () => {
         teams={[]}
       />,
     );
-    expect(getByText("Model Management")).toBeInTheDocument();
+    expect(await findByText("Model Management", {}, { timeout: 10000 })).toBeInTheDocument();
   });
 });

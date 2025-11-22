@@ -32,7 +32,7 @@ vi.mock("../networking", async () => {
 });
 
 describe("Add Model Tab", () => {
-  it("should render", () => {
+  it("should render", async () => {
     // Create a form instance using renderHook
     const { result } = renderHook(() => Form.useForm());
     const [form] = result.current;
@@ -85,7 +85,7 @@ describe("Add Model Tab", () => {
     const userRole = "Admin";
     const premiumUser = true;
 
-    const { getByRole } = render(
+    const { findByRole } = render(
       <AddModelTab
         form={form}
         handleOk={handleOk}
@@ -104,7 +104,7 @@ describe("Add Model Tab", () => {
         premiumUser={premiumUser}
       />,
     );
-    // Check for the heading specifically
-    expect(getByRole("heading", { name: "Add Model" })).toBeInTheDocument();
+    // Check for the heading specifically (use findByRole for async rendering)
+    expect(await findByRole("heading", { name: "Add Model" }, { timeout: 10000 })).toBeInTheDocument();
   });
 });
