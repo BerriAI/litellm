@@ -29,6 +29,7 @@ from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
+    CallTypesLiteral,
     Choices,
     GuardrailStatus,
     ModelResponse,
@@ -63,7 +64,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 GuardrailEventHooks.during_call,
                 GuardrailEventHooks.post_call,
             ]
-        
+
         # Initialize parent classes first
         super().__init__(**kwargs)
         VertexBase.__init__(self)
@@ -293,9 +294,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         filters = (
             list(filter_results.values())
             if isinstance(filter_results, dict)
-            else filter_results
-            if isinstance(filter_results, list)
-            else []
+            else filter_results if isinstance(filter_results, list) else []
         )
 
         # Prefer sanitized text from deidentifyResult if present
@@ -360,18 +359,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         """Pre-call hook to sanitize user prompts."""
         verbose_proxy_logger.debug("Inside Model Armor Pre-Call Hook")
@@ -475,16 +463,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         """During-call hook to sanitize user prompts in parallel with LLM call."""
         verbose_proxy_logger.debug("Inside Model Armor Moderation Hook")
@@ -657,6 +636,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
+
+        return response
 
     async def async_post_call_streaming_iterator_hook(
         self,
