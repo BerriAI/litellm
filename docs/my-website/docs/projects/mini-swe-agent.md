@@ -7,7 +7,7 @@ Key features:
 - Uses bash only (no custom tools) for maximum flexibility
 - Built on LiteLLM for model flexibility
 - Comes with CLI and Python bindings
-- Deployable anywhere: local, docker, podman, singularity
+- Deployable anywhere: local, docker, podman, apptainer
 
 Perfect for researchers, developers who want readable tools, and engineers who need easy deployment.
 
