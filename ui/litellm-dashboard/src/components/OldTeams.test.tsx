@@ -236,7 +236,7 @@ describe("OldTeams - handleCreate organization handling", () => {
   });
 
   it("should clear the delete modal when the cancel button is clicked", async () => {
-    const { getByRole, getByTestId } = render(
+    const { getByTestId } = render(
       <OldTeams
         teams={[
           {
