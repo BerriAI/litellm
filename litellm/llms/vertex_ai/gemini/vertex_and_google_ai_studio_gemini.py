@@ -35,6 +35,9 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _encode_tool_call_id_with_signature,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -80,9 +83,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     TopLogprob,
     Usage,
-)
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    _encode_tool_call_id_with_signature,
 )
 from litellm.utils import (
     CustomStreamWrapper,
@@ -1056,8 +1056,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         pass
                 _content_str += text_content
             elif "inlineData" in part:
-                mime_type = part["inlineData"]["mimeType"]
-                data = part["inlineData"]["data"]
+                inline_data = part.get("inlineData", {})
+                mime_type = inline_data.get("mimeType", "")
+                data = inline_data.get("data", "")
                 # Check if inline data is audio or image - if so, exclude from text content
                 # Images and audio are now handled separately in their respective response fields
                 if mime_type.startswith("audio/") or mime_type.startswith("image/"):
@@ -1101,8 +1102,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         images: List[ImageURLListItem] = []
         for part in parts:
             if "inlineData" in part:
-                mime_type = part["inlineData"]["mimeType"]
-                data = part["inlineData"]["data"]
+                inline_data = part.get("inlineData", {})
+                mime_type = inline_data.get("mimeType", "")
+                data = inline_data.get("data", "")
                 if mime_type.startswith("image/"):
                     # Convert base64 data to data URI format
                     data_uri = f"data:{mime_type};base64,{data}"
@@ -1143,8 +1145,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         pass
 
             elif "inlineData" in part:
-                mime_type = part["inlineData"]["mimeType"]
-                data = part["inlineData"]["data"]
+                inline_data = part.get("inlineData", {})
+                mime_type = inline_data.get("mimeType", "")
+                data = inline_data.get("data", "")
 
                 if mime_type.startswith("audio/"):
                     expires_at = int(time.time()) + (24 * 60 * 60)
@@ -1200,7 +1203,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         _tool_response_chunk[
                             "id"
                         ] = _encode_tool_call_id_with_signature(
-                            _tool_response_chunk["id"], thought_signature
+                            _tool_response_chunk["id"] or "", thought_signature
                         )
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
@@ -1617,6 +1620,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+        reasoning_content: Optional[str] = None
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
