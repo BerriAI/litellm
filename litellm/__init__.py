@@ -2315,4 +2315,10 @@ def __getattr__(name: str) -> Any:
         globals()["AnthropicModelInfo"] = _AnthropicModelInfo
         return _AnthropicModelInfo
     
+    # Lazy-load PalmConfig to reduce import-time memory cost (deprecated provider)
+    if name == "PalmConfig":
+        from .llms.deprecated_providers.palm import PalmConfig as _PalmConfig
+        globals()["PalmConfig"] = _PalmConfig
+        return _PalmConfig
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
