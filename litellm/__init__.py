@@ -2393,4 +2393,18 @@ def __getattr__(name: str) -> Any:
         globals()["openAIGPTConfig"] = _openAIGPTConfig
         return _openAIGPTConfig
     
+    # Lazy-load OpenAIGPT5Config to reduce import-time memory cost
+    if name == "OpenAIGPT5Config":
+        from .llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config as _OpenAIGPT5Config
+        globals()["OpenAIGPT5Config"] = _OpenAIGPT5Config
+        return _OpenAIGPT5Config
+    
+    # Lazy-load openAIGPT5Config instance to reduce import-time memory cost
+    if name == "openAIGPT5Config":
+        from .llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config as _OpenAIGPT5Config
+        _openAIGPT5Config = _OpenAIGPT5Config()
+        globals()["OpenAIGPT5Config"] = _OpenAIGPT5Config
+        globals()["openAIGPT5Config"] = _openAIGPT5Config
+        return _openAIGPT5Config
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
