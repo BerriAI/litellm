@@ -812,6 +812,7 @@ class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
+    disable_global_guardrails: Optional[bool] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
@@ -1419,6 +1420,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    disable_global_guardrails: Optional[bool] = None
     team_member_budget: Optional[float] = None
     team_member_rpm_limit: Optional[int] = None
     team_member_tpm_limit: Optional[int] = None
