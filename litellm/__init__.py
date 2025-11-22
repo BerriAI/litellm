@@ -2117,6 +2117,21 @@ def _lazy_import_amazon_bedrock_configs(name: str) -> Any:
     raise AttributeError(f"Amazon Bedrock configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_deprecated_provider_configs(name: str) -> Any:
+    """Lazy import for deprecated provider config classes - imports only the requested class."""
+    if name == "PalmConfig":
+        from .llms.deprecated_providers.palm import PalmConfig as _PalmConfig
+        globals()["PalmConfig"] = _PalmConfig
+        return _PalmConfig
+    
+    if name == "AlephAlphaConfig":
+        from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig as _AlephAlphaConfig
+        globals()["AlephAlphaConfig"] = _AlephAlphaConfig
+        return _AlephAlphaConfig
+    
+    raise AttributeError(f"Deprecated provider configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2417,17 +2432,9 @@ def __getattr__(name: str) -> Any:
         globals()["AnthropicModelInfo"] = _AnthropicModelInfo
         return _AnthropicModelInfo
     
-    # Lazy-load PalmConfig to reduce import-time memory cost (deprecated provider)
-    if name == "PalmConfig":
-        from .llms.deprecated_providers.palm import PalmConfig as _PalmConfig
-        globals()["PalmConfig"] = _PalmConfig
-        return _PalmConfig
-    
-    # Lazy-load AlephAlphaConfig to reduce import-time memory cost (deprecated provider)
-    if name == "AlephAlphaConfig":
-        from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig as _AlephAlphaConfig
-        globals()["AlephAlphaConfig"] = _AlephAlphaConfig
-        return _AlephAlphaConfig
+    # Lazy-load deprecated provider configs to reduce import-time memory cost
+    if name in {"PalmConfig", "AlephAlphaConfig"}:
+        return _lazy_import_deprecated_provider_configs(name)
     
     # Lazy-load bedrock_tool_name_mappings to reduce import-time memory cost
     if name == "bedrock_tool_name_mappings":
