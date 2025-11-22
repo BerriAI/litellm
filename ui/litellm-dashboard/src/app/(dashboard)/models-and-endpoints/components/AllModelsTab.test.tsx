@@ -1,7 +1,6 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
 import * as useTeamsModule from "@/app/(dashboard)/hooks/useTeams";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import AllModelsTab from "./AllModelsTab";
 
