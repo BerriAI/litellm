@@ -22,11 +22,13 @@ ENV LITELLM_NON_ROOT=true
 # Build Admin UI
 RUN mkdir -p /tmp/litellm_ui && \
   npm install -g npm@latest && \
+  npm cache clean --force && \
   cd ui/litellm-dashboard && \
   if [ -f "../../enterprise/enterprise_ui/enterprise_colors.json" ]; then \
     cp ../../enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
   fi && \
-  npm install && \
+  rm -f package-lock.json && \
+  npm install --legacy-peer-deps && \
   npm run build && \
   cp -r ./out/* /tmp/litellm_ui/ && \
   cd /tmp/litellm_ui && \
