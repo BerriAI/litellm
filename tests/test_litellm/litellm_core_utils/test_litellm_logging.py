@@ -568,10 +568,11 @@ async def test_e2e_generate_cold_storage_object_key_successful():
     start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
     response_id = "chatcmpl-test-12345"
     team_alias = "test-team"
-    
-    with patch("litellm.cold_storage_custom_logger", return_value="s3"), \
-         patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
-        
+
+    with patch("litellm.cold_storage_custom_logger", return_value="s3"), patch(
+        "litellm.integrations.s3.get_s3_object_key"
+    ) as mock_get_s3_key:
+
         # Mock the S3 object key generation to return a predictable result
         mock_get_s3_key.return_value = (
             "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
@@ -613,11 +614,13 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
     # Create mock custom logger with s3_path
     mock_custom_logger = MagicMock()
     mock_custom_logger.s3_path = "storage"
-    
-    with patch("litellm.cold_storage_custom_logger", "s3_v2"), \
-         patch("litellm.logging_callback_manager.get_active_custom_logger_for_callback_name") as mock_get_logger, \
-         patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
-        
+
+    with patch("litellm.cold_storage_custom_logger", "s3_v2"), patch(
+        "litellm.logging_callback_manager.get_active_custom_logger_for_callback_name"
+    ) as mock_get_logger, patch(
+        "litellm.integrations.s3.get_s3_object_key"
+    ) as mock_get_s3_key:
+
         # Setup mocks
         mock_get_logger.return_value = mock_custom_logger
         mock_get_s3_key.return_value = (
@@ -663,11 +666,13 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
     # Create mock custom logger without s3_path
     mock_custom_logger = MagicMock()
     mock_custom_logger.s3_path = None  # or could be missing attribute
-    
-    with patch("litellm.cold_storage_custom_logger", "s3_v2"), \
-         patch("litellm.logging_callback_manager.get_active_custom_logger_for_callback_name") as mock_get_logger, \
-         patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
-        
+
+    with patch("litellm.cold_storage_custom_logger", "s3_v2"), patch(
+        "litellm.logging_callback_manager.get_active_custom_logger_for_callback_name"
+    ) as mock_get_logger, patch(
+        "litellm.integrations.s3.get_s3_object_key"
+    ) as mock_get_s3_key:
+
         # Setup mocks
         mock_get_logger.return_value = mock_custom_logger
         mock_get_s3_key.return_value = (
@@ -708,7 +713,7 @@ async def test_e2e_generate_cold_storage_object_key_not_configured():
     team_alias = "another-team"
 
     # Use patch to ensure test isolation
-    with patch.object(litellm, 'cold_storage_custom_logger', None):
+    with patch.object(litellm, "cold_storage_custom_logger", None):
         # Call the function
         result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
             start_time=start_time, response_id=response_id, team_alias=team_alias
@@ -716,3 +721,41 @@ async def test_e2e_generate_cold_storage_object_key_not_configured():
 
     # Verify the result is None when cold storage is not configured
     assert result is None
+
+
+def test_get_final_response_obj_with_empty_response_obj_and_list_init():
+    """
+    Test get_final_response_obj when response_obj is empty dict and init_response_obj is a list.
+
+    When response_obj is empty (falsy), the method should return init_response_obj if it's a list.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create test objects
+    class TestObject1:
+        def __init__(self):
+            self.name = "Object1"
+
+    class TestObject2:
+        def __init__(self):
+            self.name = "Object2"
+
+    obj1 = TestObject1()
+    obj2 = TestObject2()
+
+    # Test case: empty response_obj, list init_response_obj
+    response_obj = {}
+    init_response_obj = [obj1, obj2]
+    kwargs = {}
+
+    # Call the method
+    result = StandardLoggingPayloadSetup.get_final_response_obj(
+        response_obj=response_obj, init_response_obj=init_response_obj, kwargs=kwargs
+    )
+
+    # Verify the result
+    assert result == [obj1, obj2]
+    assert result is init_response_obj  # Should be the exact same list object
+    assert len(result) == 2
+    assert result[0].name == "Object1"
+    assert result[1].name == "Object2"
