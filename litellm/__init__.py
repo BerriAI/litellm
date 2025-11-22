@@ -1095,16 +1095,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.triton.completion.transformation import TritonGenerateConfig
 from .llms.triton.completion.transformation import TritonInferConfig
-from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
-from .llms.cohere.rerank.transformation import CohereRerankConfig
-from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
-from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
-from .llms.infinity.rerank.transformation import InfinityRerankConfig
-from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
-from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
-from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
-from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
-from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig as AI21Config
 from .llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -2208,5 +2198,56 @@ def __getattr__(name: str) -> Any:
         from .llms.mistral.chat.transformation import MistralConfig as _MistralConfig
         globals()["MistralConfig"] = _MistralConfig
         return _MistralConfig
+    
+    # Lazy-load rerank configs to reduce import-time memory cost
+    if name == "HuggingFaceRerankConfig":
+        from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig as _HuggingFaceRerankConfig
+        globals()["HuggingFaceRerankConfig"] = _HuggingFaceRerankConfig
+        return _HuggingFaceRerankConfig
+    
+    if name == "CohereRerankConfig":
+        from .llms.cohere.rerank.transformation import CohereRerankConfig as _CohereRerankConfig
+        globals()["CohereRerankConfig"] = _CohereRerankConfig
+        return _CohereRerankConfig
+    
+    if name == "CohereRerankV2Config":
+        from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config as _CohereRerankV2Config
+        globals()["CohereRerankV2Config"] = _CohereRerankV2Config
+        return _CohereRerankV2Config
+    
+    if name == "AzureAIRerankConfig":
+        from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig as _AzureAIRerankConfig
+        globals()["AzureAIRerankConfig"] = _AzureAIRerankConfig
+        return _AzureAIRerankConfig
+    
+    if name == "InfinityRerankConfig":
+        from .llms.infinity.rerank.transformation import InfinityRerankConfig as _InfinityRerankConfig
+        globals()["InfinityRerankConfig"] = _InfinityRerankConfig
+        return _InfinityRerankConfig
+    
+    if name == "JinaAIRerankConfig":
+        from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig as _JinaAIRerankConfig
+        globals()["JinaAIRerankConfig"] = _JinaAIRerankConfig
+        return _JinaAIRerankConfig
+    
+    if name == "DeepinfraRerankConfig":
+        from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig as _DeepinfraRerankConfig
+        globals()["DeepinfraRerankConfig"] = _DeepinfraRerankConfig
+        return _DeepinfraRerankConfig
+    
+    if name == "HostedVLLMRerankConfig":
+        from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig as _HostedVLLMRerankConfig
+        globals()["HostedVLLMRerankConfig"] = _HostedVLLMRerankConfig
+        return _HostedVLLMRerankConfig
+    
+    if name == "NvidiaNimRerankConfig":
+        from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig as _NvidiaNimRerankConfig
+        globals()["NvidiaNimRerankConfig"] = _NvidiaNimRerankConfig
+        return _NvidiaNimRerankConfig
+    
+    if name == "VertexAIRerankConfig":
+        from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig as _VertexAIRerankConfig
+        globals()["VertexAIRerankConfig"] = _VertexAIRerankConfig
+        return _VertexAIRerankConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
