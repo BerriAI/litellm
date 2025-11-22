@@ -75,6 +75,11 @@ class ArizePhoenixLogger:
                 f"Authorization={urllib.parse.quote(f'Bearer {api_key}')}"
             )
 
+        project_name = os.environ.get("PHOENIX_PROJECT_NAME", "litellm-project")
+
         return ArizePhoenixConfig(
-            otlp_auth_headers=otlp_auth_headers, protocol=protocol, endpoint=endpoint
+            otlp_auth_headers=otlp_auth_headers,
+            protocol=protocol,
+            endpoint=endpoint,
+            project_name=project_name,
         )
