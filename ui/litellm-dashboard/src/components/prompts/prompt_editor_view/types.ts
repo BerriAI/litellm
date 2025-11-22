@@ -26,5 +26,6 @@ export interface PromptEditorViewProps {
   onClose: () => void;
   onSuccess: () => void;
   accessToken: string | null;
+  initialPromptData?: any;
 }
 

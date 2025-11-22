@@ -705,6 +705,7 @@ def _process_keys_for_user_info(
     keys: Optional[List[LiteLLM_VerificationToken]],
     all_teams: Optional[Union[List[LiteLLM_TeamTable], List[TeamListResponseObject]]],
 ):
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
     from litellm.proxy.proxy_server import general_settings, litellm_master_key_hash
 
     returned_keys = []
@@ -724,6 +725,11 @@ def _process_keys_for_user_info(
             except Exception:
                 # if using pydantic v1
                 _key = key.dict()
+            
+            # Filter out UI session tokens (team_id="litellm-dashboard")
+            if _key.get("team_id") == UI_SESSION_TOKEN_TEAM_ID:
+                continue
+            
             if (
                 "team_id" in _key
                 and _key["team_id"] is not None
