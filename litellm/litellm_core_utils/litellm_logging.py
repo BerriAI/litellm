@@ -3545,6 +3545,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_arize_otel_logger)
             return _arize_otel_logger  # type: ignore
         elif logging_integration == "arize_phoenix":
+
             from litellm.integrations.opentelemetry import (
                 OpenTelemetry,
                 OpenTelemetryConfig,
@@ -3574,9 +3575,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 existing_attrs = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
                 # Add openinference.project.name attribute
                 if existing_attrs:
-                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = f"{existing_attrs},openinference.project.name={phoenix_project_name}"
+                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
+                        f"{existing_attrs},openinference.project.name={phoenix_project_name}"
+                    )
                 else:
-                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = f"openinference.project.name={phoenix_project_name}"
+                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
+                        f"openinference.project.name={phoenix_project_name}"
+                    )
 
             # auth can be disabled on local deployments of arize phoenix
             if arize_phoenix_config.otlp_auth_headers is not None:
