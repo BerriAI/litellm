@@ -1811,6 +1811,31 @@ def _lazy_import_openai_like_configs(name: str) -> Any:
     raise AttributeError(f"OpenAI-like configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_small_provider_chat_configs(name: str) -> Any:
+    """Lazy import for smaller provider chat config classes - imports only the requested class."""
+    if name == "GaladrielChatConfig":
+        from .llms.galadriel.chat.transformation import GaladrielChatConfig as _GaladrielChatConfig
+        globals()["GaladrielChatConfig"] = _GaladrielChatConfig
+        return _GaladrielChatConfig
+    
+    if name == "GithubChatConfig":
+        from .llms.github.chat.transformation import GithubChatConfig as _GithubChatConfig
+        globals()["GithubChatConfig"] = _GithubChatConfig
+        return _GithubChatConfig
+    
+    if name == "CompactifAIChatConfig":
+        from .llms.compactifai.chat.transformation import CompactifAIChatConfig as _CompactifAIChatConfig
+        globals()["CompactifAIChatConfig"] = _CompactifAIChatConfig
+        return _CompactifAIChatConfig
+    
+    if name == "EmpowerChatConfig":
+        from .llms.empower.chat.transformation import EmpowerChatConfig as _EmpowerChatConfig
+        globals()["EmpowerChatConfig"] = _EmpowerChatConfig
+        return _EmpowerChatConfig
+    
+    raise AttributeError(f"Small provider chat configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -1914,29 +1939,9 @@ def __getattr__(name: str) -> Any:
     if name in {"OpenAILikeChatConfig", "AiohttpOpenAIChatConfig"}:
         return _lazy_import_openai_like_configs(name)
     
-    # Lazy-load GaladrielChatConfig to reduce import-time memory cost
-    if name == "GaladrielChatConfig":
-        from .llms.galadriel.chat.transformation import GaladrielChatConfig as _GaladrielChatConfig
-        globals()["GaladrielChatConfig"] = _GaladrielChatConfig
-        return _GaladrielChatConfig
-    
-    # Lazy-load GithubChatConfig to reduce import-time memory cost
-    if name == "GithubChatConfig":
-        from .llms.github.chat.transformation import GithubChatConfig as _GithubChatConfig
-        globals()["GithubChatConfig"] = _GithubChatConfig
-        return _GithubChatConfig
-    
-    # Lazy-load CompactifAIChatConfig to reduce import-time memory cost
-    if name == "CompactifAIChatConfig":
-        from .llms.compactifai.chat.transformation import CompactifAIChatConfig as _CompactifAIChatConfig
-        globals()["CompactifAIChatConfig"] = _CompactifAIChatConfig
-        return _CompactifAIChatConfig
-    
-    # Lazy-load EmpowerChatConfig to reduce import-time memory cost
-    if name == "EmpowerChatConfig":
-        from .llms.empower.chat.transformation import EmpowerChatConfig as _EmpowerChatConfig
-        globals()["EmpowerChatConfig"] = _EmpowerChatConfig
-        return _EmpowerChatConfig
+    # Lazy-load small provider chat configs to reduce import-time memory cost
+    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig"}:
+        return _lazy_import_small_provider_chat_configs(name)
     
     # Lazy-load HuggingFaceChatConfig to reduce import-time memory cost
     if name == "HuggingFaceChatConfig":
