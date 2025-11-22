@@ -144,6 +144,7 @@ if TYPE_CHECKING:
     from litellm.llms.bedrock.chat.invoke_handler import AmazonCohereChatConfig
     from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
     from litellm.llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -2302,5 +2303,11 @@ def __getattr__(name: str) -> Any:
         from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig as _BedrockCohereEmbeddingConfig
         globals()["BedrockCohereEmbeddingConfig"] = _BedrockCohereEmbeddingConfig
         return _BedrockCohereEmbeddingConfig
+    
+    # Lazy-load AnthropicModelInfo to reduce import-time memory cost
+    if name == "AnthropicModelInfo":
+        from .llms.anthropic.common_utils import AnthropicModelInfo as _AnthropicModelInfo
+        globals()["AnthropicModelInfo"] = _AnthropicModelInfo
+        return _AnthropicModelInfo
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
