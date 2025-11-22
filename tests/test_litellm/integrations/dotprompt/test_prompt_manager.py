@@ -553,6 +553,7 @@ async def test_dotprompt_auto_detection_with_model_only():
     without needing to specify model="dotprompt/gpt-4".
     """
     from litellm.integrations.dotprompt import DotpromptManager
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     prompt_dir = Path(__file__).parent
     dotprompt_manager = DotpromptManager(prompt_directory=str(prompt_dir))
@@ -563,48 +564,25 @@ async def test_dotprompt_auto_detection_with_model_only():
     
     try:
         # Mock the HTTP handler to avoid actual API calls
-        with patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post") as mock_post:
-            mock_response_data = litellm.ModelResponse(
-                choices=[
-                    litellm.Choices(
-                        message=litellm.Message(content="Hello!"),
-                        index=0,
-                        finish_reason="stop",
-                    )
-                ]
-            ).model_dump()
-            
-            # Create a proper mock response
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.text = json.dumps(mock_response_data)
-            mock_response.headers = {"Content-Type": "application/json"}
-            mock_response.json.return_value = mock_response_data
-            
-            mock_post.return_value = mock_response
-            
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=MagicMock()) as mock_post:
             # Call with model="gpt-4" (no "dotprompt/" prefix) and prompt_id
             await litellm.acompletion(
                 model="gpt-4",
                 prompt_id="chat_prompt",
                 prompt_variables={"user_message": "Hello world"},
                 messages=[{"role": "user", "content": "This will be ignored"}],
+                client=client,
             )
             
             mock_post.assert_called_once()
             
-            # Get request body from the call (it's passed as 'data' parameter as JSON string)
-            data_str = mock_post.call_args.kwargs.get("data", "{}")
-            request_body = json.loads(data_str)
-            
-            print(f"Request body: {json.dumps(request_body, indent=2)}")
+            # Get request body from the call
+            request_body = mock_post.call_args.kwargs.get("json") or json.loads(mock_post.call_args.kwargs.get("data", "{}"))
             
             # Verify the prompt was auto-detected and used
             # The chat_prompt.prompt has metadata: model: gpt-4, temperature: 0.7, max_tokens: 150
             assert request_body["model"] == "gpt-4"
-            
-            # Note: OpenAI API might strip out temperature/max_tokens if they're not in the request
-            # The key test is that the messages were transformed
             
             # Verify the messages were transformed using the prompt template
             # chat_prompt template: "User: {{user_message}}"
@@ -614,7 +592,6 @@ async def test_dotprompt_auto_detection_with_model_only():
             # The first message should be from the prompt template with the variable substituted
             # Template is: "User: {{user_message}}" with user_message="Hello world"
             first_message_content = messages[0]["content"]
-            print(f"First message content: {first_message_content}")
             assert "Hello world" in first_message_content
     
     finally:
@@ -639,41 +616,20 @@ async def test_dotprompt_with_prompt_version():
     litellm.callbacks = [dotprompt_manager]
     
     try:
-        # Mock the HTTP handler to avoid actual API calls
-        with patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post") as mock_post:
-            mock_response_data = litellm.ModelResponse(
-                choices=[
-                    litellm.Choices(
-                        message=litellm.Message(content="Hello!"),
-                        index=0,
-                        finish_reason="stop",
-                    )
-                ]
-            ).model_dump()
-            
-            # Create a proper mock response
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.text = json.dumps(mock_response_data)
-            mock_response.headers = {"Content-Type": "application/json"}
-            mock_response.json.return_value = mock_response_data
-            
-            mock_post.return_value = mock_response
-        
-            # Test version 1
+        # Test version 1
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=MagicMock()) as mock_post:
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 prompt_id="chat_prompt",
                 prompt_version=1,
                 prompt_variables={"user_message": "Test v1"},
                 messages=[],
+                client=client,
             )
             
-            assert mock_post.call_count >= 1
-            data_str = mock_post.call_args.kwargs.get("data", "{}")
-            request_body = json.loads(data_str)
-            
-            print(f"Version 1 request body: {json.dumps(request_body, indent=2)}")
+            mock_post.assert_called_once()
+            request_body = mock_post.call_args.kwargs.get("json") or json.loads(mock_post.call_args.kwargs.get("data", "{}"))
             
             # Verify version 1 prompt was used
             # chat_prompt.v1.prompt has: model: gpt-3.5-turbo, temperature: 0.5, max_tokens: 100
@@ -683,47 +639,23 @@ async def test_dotprompt_with_prompt_version():
             messages = request_body["messages"]
             assert len(messages) >= 1
             first_message_content = messages[0]["content"]
-            print(f"Version 1 message: {first_message_content}")
             assert "Version 1:" in first_message_content
             assert "Test v1" in first_message_content
-            
-            # Reset mock for version 2 test
-            mock_post.reset_mock()
         
         # Test version 2
-        with patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post") as mock_post:
-            mock_response_data = litellm.ModelResponse(
-                choices=[
-                    litellm.Choices(
-                        message=litellm.Message(content="Hello!"),
-                        index=0,
-                        finish_reason="stop",
-                    )
-                ]
-            ).model_dump()
-            
-            # Create a proper mock response
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.text = json.dumps(mock_response_data)
-            mock_response.headers = {"Content-Type": "application/json"}
-            mock_response.json.return_value = mock_response_data
-            
-            mock_post.return_value = mock_response
-            
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=MagicMock()) as mock_post:
             await litellm.acompletion(
                 model="gpt-4",
                 prompt_id="chat_prompt",
                 prompt_version=2,
                 prompt_variables={"user_message": "Test v2"},
                 messages=[],
+                client=client,
             )
             
             mock_post.assert_called_once()
-            data_str = mock_post.call_args.kwargs.get("data", "{}")
-            request_body = json.loads(data_str)
-            
-            print(f"Version 2 request body: {json.dumps(request_body, indent=2)}")
+            request_body = mock_post.call_args.kwargs.get("json") or json.loads(mock_post.call_args.kwargs.get("data", "{}"))
             
             # Verify version 2 prompt was used
             # chat_prompt.v2.prompt has: model: gpt-4, temperature: 0.9, max_tokens: 200
@@ -733,7 +665,6 @@ async def test_dotprompt_with_prompt_version():
             messages = request_body["messages"]
             assert len(messages) >= 1
             first_message_content = messages[0]["content"]
-            print(f"Version 2 message: {first_message_content}")
             assert "Version 2:" in first_message_content
             assert "Test v2" in first_message_content
     
