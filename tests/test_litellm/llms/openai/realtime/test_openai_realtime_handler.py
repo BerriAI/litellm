@@ -168,6 +168,7 @@ async def test_async_realtime_url_contains_model():
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
+    shared_context = get_shared_realtime_ssl_context()
     with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
          patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
         
