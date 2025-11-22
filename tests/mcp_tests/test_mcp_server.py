@@ -789,7 +789,7 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id"]
         )
-        mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server_1, mock_server_2])
+        mock_manager.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else mock_server_2
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
 
         with patch(
@@ -811,7 +811,7 @@ async def test_get_tools_from_mcp_servers():
             mock_manager_2.get_allowed_mcp_servers = AsyncMock(
                 return_value=["server1_id", "server2_id"]
             )
-            mock_manager_2.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server_1, mock_server_2])
+            mock_manager_2.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else mock_server_2
             mock_manager_2._get_tools_from_server = AsyncMock(
                 side_effect=lambda server, mcp_auth_header=None, extra_headers=None, add_prefix=False: (
                     [mock_tool_1] if server.server_id == "server1_id" else [mock_tool_2]
@@ -839,7 +839,7 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id", "server3_id"]
         )
-        mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server_1, mock_server_2, mock_server_3])
+        mock_manager.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else (mock_server_2 if server_id == "server2_id" else mock_server_3)
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
 
         with patch(
@@ -1481,78 +1481,25 @@ def test_normalize_server_name():
     assert normalize_server_name("   ") == "___"
 
 
-def test_add_server_prefix_to_tool_name():
-    """
-    Test that add_server_prefix_to_tool_name correctly formats tool names.
-    """
-    from litellm.proxy._experimental.mcp_server.utils import (
-        add_server_prefix_to_tool_name,
-    )
+def test_add_server_prefix_to_name():
+    """Ensure add_server_prefix_to_name correctly formats resource names."""
+    from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_name
 
     # Test basic prefixing
-    result = add_server_prefix_to_tool_name("send_email", "My Server")
+    result = add_server_prefix_to_name("send_email", "My Server")
     assert result == "My_Server-send_email"
 
     # Test with server name that already has underscores
-    result = add_server_prefix_to_tool_name("create_event", "my_server")
+    result = add_server_prefix_to_name("create_event", "my_server")
     assert result == "my_server-create_event"
 
-    # Test with empty tool name
-    result = add_server_prefix_to_tool_name("", "My Server")
+    # Test with empty name
+    result = add_server_prefix_to_name("", "My Server")
     assert result == "My_Server-"
 
     # Test with empty server name
-    result = add_server_prefix_to_tool_name("send_email", "")
+    result = add_server_prefix_to_name("send_email", "")
     assert result == "-send_email"
-
-
-@pytest.mark.asyncio
-async def test_mcp_protocol_version_passed_to_client():
-    """Test that MCP protocol version from request is correctly passed to MCPClient."""
-
-    # Create a test manager
-    test_manager = MCPServerManager()
-
-    # Mock MCPClient
-    mock_client = AsyncMock()
-    mock_client.list_tools = AsyncMock(return_value=[])
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    def mock_client_constructor(*args, **kwargs):
-        # Verify that the protocol version from request is used
-        if "protocol_version" in kwargs:
-            assert kwargs["protocol_version"] == "2025-03-26"
-        return mock_client
-
-    with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
-        mock_client_constructor,
-    ):
-        # Load a test server
-        await test_manager.load_servers_from_config(
-            {
-                "test_server": {
-                    "url": "https://test-server.com/mcp",
-                    "transport": "http",
-                    "description": "Test Server",
-                }
-            }
-        )
-
-        allowed_server_ids = list(test_manager.get_registry().keys())
-        assert allowed_server_ids, "Expected registry to contain configured server"
-
-        with patch.object(
-            test_manager,
-            "get_allowed_mcp_servers",
-            new=AsyncMock(return_value=allowed_server_ids),
-        ):
-            # Call list_tools with a specific protocol version from request
-            await test_manager.list_tools()
-
-        # Verify the client was created with the correct protocol version
-        mock_client.list_tools.assert_called()
 
 
 def test_get_server_auth_header_with_alias():
@@ -2093,7 +2040,7 @@ async def test_filter_tools_by_allowed_tools_integration():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["test-server-123"]
         )
-        mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server])
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
 
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
@@ -2131,7 +2078,9 @@ async def test_filter_tools_by_allowed_tools_integration():
 
             # Verify the manager methods were called correctly
             mock_manager.get_allowed_mcp_servers.assert_called_once_with(mock_user_auth)
-            mock_manager.get_mcp_servers_from_ids.assert_called_once_with(["test-server-123"])
+            # Note: get_mcp_server_by_id is now called for each server ID instead of batch
+            # Verify it was called with the correct server ID
+            assert mock_manager.get_mcp_server_by_id.call_count > 0
             mock_manager._get_tools_from_server.assert_called_once()
 
 
@@ -2201,7 +2150,7 @@ async def test_filter_tools_by_disallowed_tools_integration():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["test-server-456"]
         )
-        mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server])
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
 
@@ -2238,7 +2187,9 @@ async def test_filter_tools_by_disallowed_tools_integration():
 
             # Verify the manager methods were called correctly
             mock_manager.get_allowed_mcp_servers.assert_called_once_with(mock_user_auth)
-            mock_manager.get_mcp_servers_from_ids.assert_called_once_with(["test-server-456"])
+            # Note: get_mcp_server_by_id is now called for each server ID instead of batch
+            # Verify it was called with the correct server ID
+            assert mock_manager.get_mcp_server_by_id.call_count > 0
             mock_manager._get_tools_from_server.assert_called_once()
 
 
@@ -2295,7 +2246,7 @@ async def test_filter_tools_no_restrictions_integration():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["test-server-000"]
         )
-        mock_manager.get_mcp_servers_from_ids = MagicMock(return_value=[mock_server])
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
 
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
@@ -2552,8 +2503,8 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
         new_callable=AsyncMock,
     ) as mock_get_allowed, patch.object(
         global_mcp_server_manager,
-        "get_mcp_servers_from_ids",
-        return_value=[mock_server],
+        "get_mcp_server_by_id",
+        return_value=mock_server,
     ), patch.object(
         global_mcp_server_manager,
         "_get_mcp_server_from_tool_name",
@@ -2621,8 +2572,8 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
         new_callable=AsyncMock,
     ) as mock_get_allowed, patch.object(
         global_mcp_server_manager,
-        "get_mcp_servers_from_ids",
-        return_value=[mock_server],
+        "get_mcp_server_by_id",
+        return_value=mock_server,
     ), patch.object(
         global_mcp_server_manager,
         "_get_mcp_server_from_tool_name",

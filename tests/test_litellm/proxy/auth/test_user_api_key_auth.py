@@ -13,8 +13,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from litellm.proxy.auth.user_api_key_auth import get_api_key
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.user_api_key_auth import get_api_key
 
 
 def test_get_api_key():
@@ -57,6 +57,53 @@ def test_get_api_key_with_custom_litellm_key_header(
         route="",
         request=MagicMock(),
     ) == (api_key, passed_in_key)
+
+
+def test_team_metadata_with_tags_flows_through_jwt_auth():
+    """
+    Test that team_metadata (specifically tags) flows through JWT authentication.
+    
+    This is a regression test for the issue where JWT auth was not populating
+    team_metadata, causing team-level tags to be missing in litellm_pre_call_utils.py
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+
+    # Create a team object with metadata containing tags
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team-id",
+        team_alias="test-team-alias",
+        metadata={"tags": ["production", "high-priority"], "department": "engineering"},
+        tpm_limit=1000,
+        rpm_limit=100,
+        models=["gpt-4", "gpt-3.5-turbo"],
+    )
+    
+    # Simulate constructing UserAPIKeyAuth like we do in JWT auth
+    # This is the pattern from user_api_key_auth.py lines 552-587
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key=None,
+        team_id=team_object.team_id,
+        team_tpm_limit=team_object.tpm_limit if team_object is not None else None,
+        team_rpm_limit=team_object.rpm_limit if team_object is not None else None,
+        team_models=team_object.models if team_object is not None else [],
+        team_metadata=team_object.metadata if team_object is not None else None,
+        user_role="internal_user",
+        user_id="test-user",
+    )
+    
+    # Verify team_metadata is set
+    assert user_api_key_auth.team_metadata is not None, "team_metadata should be populated"
+    assert user_api_key_auth.team_metadata == team_object.metadata, (
+        f"team_metadata not correctly mapped. "
+        f"Expected: {team_object.metadata}, Got: {user_api_key_auth.team_metadata}"
+    )
+    
+    # Specifically verify tags are present
+    assert "tags" in user_api_key_auth.team_metadata, "tags should be in team_metadata"
+    assert user_api_key_auth.team_metadata["tags"] == ["production", "high-priority"], (
+        f"tags not correctly mapped. "
+        f"Expected: ['production', 'high-priority'], Got: {user_api_key_auth.team_metadata.get('tags')}"
+    )
 
 
 def test_route_checks_is_llm_api_route():
