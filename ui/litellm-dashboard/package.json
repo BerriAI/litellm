@@ -78,7 +78,7 @@
     "webpack-dev-server": ">=5.2.1",
     "mermaid": ">=11.10.0",
     "js-yaml": ">=4.1.1",
-    "glob": ">=10.5.0"
+    "glob": ">=11.1.0"
   },
   "engines": {
     "node": ">=18.17.0",

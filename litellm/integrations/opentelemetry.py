@@ -515,9 +515,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
 
         if not standard_callback_dynamic_params:
             return None
@@ -1078,7 +1078,9 @@ class OpenTelemetry(CustomLogger):
                     span=span, key="hidden_params", value=safe_dumps(hidden_params)
                 )
             # Cost breakdown tracking
-            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get("cost_breakdown")
+            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get(
+                "cost_breakdown"
+            )
             if cost_breakdown:
                 for key, value in cost_breakdown.items():
                     if value is not None:
@@ -1773,7 +1775,7 @@ class OpenTelemetry(CustomLogger):
         """
         Create a span for the received proxy server request.
         """
-        # don't create proxy parent spans for arize phoenix
+        # don't create proxy parent spans for arize phoenix - [TODO]: figure out a better way to handle this
         if self.callback_name == "arize_phoenix":
             return None
 
