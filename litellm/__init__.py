@@ -153,6 +153,7 @@ if TYPE_CHECKING:
     from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
     from litellm.llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
     from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
+    from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -1214,7 +1215,6 @@ from .llms.lm_studio.chat.transformation import LMStudioChatConfig
 from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
 from .llms.nscale.chat.transformation import NscaleConfig
 from .llms.perplexity.chat.transformation import PerplexityChatConfig
-from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
