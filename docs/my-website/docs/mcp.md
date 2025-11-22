@@ -657,7 +657,7 @@ LiteLLM Proxy provides two methods for controlling access to specific MCP server
 
 ### Method 1: URL-based Namespacing
 
-LiteLLM Proxy supports URL-based namespacing for MCP servers using the format `/mcp/<servers or access groups>`. This allows you to:
+LiteLLM Proxy supports URL-based namespacing for MCP servers using the format `/<servers or access groups>/mcp`. This allows you to:
 
 - **Direct URL Access**: Point MCP clients directly to specific servers or access groups via URL
 - **Simplified Configuration**: Use URLs instead of headers for server selection
@@ -666,14 +666,14 @@ LiteLLM Proxy supports URL-based namespacing for MCP servers using the format `/
 #### URL Format
 
 ```
-<your-litellm-proxy-base-url>/mcp/<server_alias_or_access_group>
+<your-litellm-proxy-base-url>/<server_alias_or_access_group>/mcp
 ```
 
 **Examples:**
-- `/mcp/github` - Access tools from the "github" MCP server
-- `/mcp/zapier` - Access tools from the "zapier" MCP server  
-- `/mcp/dev_group` - Access tools from all servers in the "dev_group" access group
-- `/mcp/github,zapier` - Access tools from multiple specific servers
+- `/github_mcp/mcp` - Access tools from the "github_mcp" MCP server
+- `/zapier/mcp` - Access tools from the "zapier" MCP server  
+- `/dev_group/mcp` - Access tools from all servers in the "dev_group" access group
+- `/github_mcp,zapier/mcp` - Access tools from multiple specific servers
 
 #### Usage Examples
 
@@ -690,7 +690,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp/github",
+            "server_url": "<your-litellm-proxy-base-url>/github_mcp/mcp",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -718,7 +718,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp/dev_group",
+            "server_url": "<your-litellm-proxy-base-url>/dev_group/mcp",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -740,7 +740,7 @@ This example uses URL namespacing to access all servers in the "dev_group" acces
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp/github,zapier",
+      "url": "<your-litellm-proxy-base-url>/github_mcp,zapier/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
       }
@@ -862,8 +862,8 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 
 | Feature | Header Namespacing | URL Namespacing |
 |---------|-------------------|-----------------|
-| **Method** | Uses `x-mcp-servers` header | Uses URL path `/mcp/<servers>` |
-| **Endpoint** | Standard `litellm_proxy` endpoint | Custom `/mcp/<servers>` endpoint |
+| **Method** | Uses `x-mcp-servers` header | Uses URL path `/<servers>/mcp` |
+| **Endpoint** | Standard `litellm_proxy` endpoint | Custom `/<servers>/mcp` endpoint |
 | **Configuration** | Requires additional header | Self-contained in URL |
 | **Multiple Servers** | Comma-separated in header | Comma-separated in URL path |
 | **Access Groups** | Supported via header | Supported via URL path |

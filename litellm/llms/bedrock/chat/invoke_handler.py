@@ -51,7 +51,11 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Delta
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    Delta,
+)
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
     ModelResponse,
@@ -1260,7 +1264,7 @@ class AWSEventStreamDecoder:
     def _handle_converse_start_event(
         self,
         start_obj: ContentBlockStartEvent,
-    ) -> tuple[
+    ) -> Tuple[
         Optional[ChatCompletionToolCallChunk],
         dict,
         Optional[
@@ -1320,7 +1324,7 @@ class AWSEventStreamDecoder:
         self,
         delta_obj: ContentBlockDeltaEvent,
         index: int,
-    ) -> tuple[
+    ) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         dict,

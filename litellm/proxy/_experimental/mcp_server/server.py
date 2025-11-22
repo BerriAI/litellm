@@ -1,6 +1,7 @@
 """
 LiteLLM MCP Server Routes
 """
+# pyright: reportInvalidTypeForm=false, reportArgumentType=false, reportOptionalCall=false
 
 import asyncio
 import contextlib
@@ -8,14 +9,6 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from fastapi import FastAPI, HTTPException
-from mcp import ReadResourceResult, Resource
-from mcp.server.lowlevel.helper_types import ReadResourceContents
-from mcp.types import (
-    BlobResourceContents,
-    GetPromptResult,
-    ResourceTemplate,
-    TextResourceContents,
-)
 from pydantic import AnyUrl, ConfigDict
 from starlette.types import Receive, Scope, Send
 
@@ -41,10 +34,29 @@ from litellm.utils import client
 # TODO: Make this a util function for litellm client usage
 MCP_AVAILABLE: bool = True
 try:
+    from mcp import ReadResourceResult, Resource
     from mcp.server import Server
+    from mcp.server.lowlevel.helper_types import ReadResourceContents
+    from mcp.types import (
+        BlobResourceContents,
+        GetPromptResult,
+        ResourceTemplate,
+        TextResourceContents,
+    )
 except ImportError as e:
     verbose_logger.debug(f"MCP module not found: {e}")
     MCP_AVAILABLE = False
+    # When MCP is not available, we set these to None at module level
+    # All code using these types is inside `if MCP_AVAILABLE:` blocks
+    # so they will never be accessed at runtime
+    BlobResourceContents = None  # type: ignore
+    GetPromptResult = None  # type: ignore
+    ReadResourceContents = None  # type: ignore
+    ReadResourceResult = None  # type: ignore
+    Resource = None  # type: ignore
+    ResourceTemplate = None  # type: ignore
+    Server = None  # type: ignore
+    TextResourceContents = None  # type: ignore
 
 
 # Global variables to track initialization
@@ -497,16 +509,18 @@ if MCP_AVAILABLE:
         normalized_contents: List[ReadResourceContents] = []
         for content in read_resource_result.contents:
             if isinstance(content, TextResourceContents):
+                text_content: TextResourceContents = content
                 normalized_contents.append(
                     ReadResourceContents(
-                        content=content.text,
-                        mime_type=content.mimeType,
+                        content=text_content.text,
+                        mime_type=text_content.mimeType,
                     )
                 )
             elif isinstance(content, BlobResourceContents):
+                blob_content: BlobResourceContents = content
                 normalized_contents.append(
                     ReadResourceContents(
-                        content=content.blob,
+                        content=blob_content.blob,
                         mime_type=None,
                     )
                 )
@@ -1178,11 +1192,11 @@ if MCP_AVAILABLE:
 
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
-            mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+            allowed_server = global_mcp_server_manager.get_mcp_server_by_id(
                 allowed_mcp_server_id
             )
-            if mcp_server is not None:
-                allowed_mcp_servers.append(mcp_server)
+            if allowed_server is not None:
+                allowed_mcp_servers.append(allowed_server)
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
