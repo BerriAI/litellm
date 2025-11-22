@@ -155,6 +155,7 @@ if TYPE_CHECKING:
     from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
     from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
     from litellm.llms.gradient_ai.chat.transformation import GradientAIConfig
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
