@@ -15,6 +15,7 @@ sys.path.insert(
 import json
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -32,7 +33,7 @@ class TestDockerModelRunnerIntegration:
         """
         with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
             # Mock the response
-            mock_response = Mock()
+            mock_response = Mock(spec=httpx.Response)
             mock_response.json.return_value = {
                 "id": "chatcmpl-123",
                 "object": "chat.completion",
@@ -53,7 +54,7 @@ class TestDockerModelRunnerIntegration:
                 }
             }
             mock_response.status_code = 200
-            mock_response.headers = {"content-type": "application/json"}
+            mock_response.headers = httpx.Headers({"content-type": "application/json"})
             mock_post.return_value = mock_response
 
             # Make the completion call with engine in api_base
@@ -103,7 +104,7 @@ class TestDockerModelRunnerIntegration:
         """
         with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
             # Mock the response
-            mock_response = Mock()
+            mock_response = Mock(spec=httpx.Response)
             mock_response.json.return_value = {
                 "id": "chatcmpl-456",
                 "object": "chat.completion",
@@ -124,7 +125,7 @@ class TestDockerModelRunnerIntegration:
                 }
             }
             mock_response.status_code = 200
-            mock_response.headers = {"content-type": "application/json"}
+            mock_response.headers = httpx.Headers({"content-type": "application/json"})
             mock_post.return_value = mock_response
 
             # Make the completion call with custom engine and host
