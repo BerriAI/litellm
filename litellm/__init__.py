@@ -95,6 +95,7 @@ if TYPE_CHECKING:
     from litellm.llms.predibase.chat.transformation import PredibaseConfig
     from litellm.llms.replicate.chat.transformation import ReplicateConfig
     from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
+    from litellm.llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -1063,7 +1064,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 
-from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
 from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.datarobot.chat.transformation import DataRobotConfig
@@ -2032,5 +2032,11 @@ def __getattr__(name: str) -> Any:
         from .llms.snowflake.chat.transformation import SnowflakeConfig as _SnowflakeConfig
         globals()["SnowflakeConfig"] = _SnowflakeConfig
         return _SnowflakeConfig
+    
+    # Lazy-load HuggingFaceEmbeddingConfig to reduce import-time memory cost
+    if name == "HuggingFaceEmbeddingConfig":
+        from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig as _HuggingFaceEmbeddingConfig
+        globals()["HuggingFaceEmbeddingConfig"] = _HuggingFaceEmbeddingConfig
+        return _HuggingFaceEmbeddingConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
