@@ -1,4 +1,4 @@
-import { Button as Button2, Form, Input, Modal, Select as Select2, Tooltip } from "antd";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip } from "antd";
 import { Accordion, AccordionBody, AccordionHeader, Text, TextInput } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import {
@@ -450,6 +450,25 @@ const CreateTeamModal = ({
                     value: name,
                     label: name,
                   }))}
+                />
+              </Form.Item>
+              <Form.Item
+                label={
+                  <span>
+                    Disable Global Guardrails{" "}
+                    <Tooltip title="When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="disable_global_guardrails"
+                className="mt-4"
+                valuePropName="checked"
+                help="Bypass global guardrails for this team"
+              >
+                <Switch 
+                  checkedChildren="Yes"
+                  unCheckedChildren="No"
                 />
               </Form.Item>
               <Form.Item
