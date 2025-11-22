@@ -61,7 +61,6 @@ pip install litellm==1.80.5
 | Provider | Supported Endpoints | Description |
 | -------- | ------------------- | ----------- |
 | **[Docker Model Runner](../../docs/providers/docker_model_runner)** | `/v1/chat/completions` | Run LLM models in Docker containers |
-| **[Snowflake](../../docs/providers/snowflake)** | `/v1/chat/completions`, `/v1/embeddings` | Snowflake Cortex LLM support with embeddings |
 
 ---
 
