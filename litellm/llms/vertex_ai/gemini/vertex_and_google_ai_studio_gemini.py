@@ -1347,7 +1347,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
 
     @staticmethod
-    def _calculate_usage(
+    def _calculate_usage(  # noqa: PLR0915
         completion_response: Union[
             GenerateContentResponseBody, BidiGenerateContentServerMessage
         ],

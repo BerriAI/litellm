@@ -678,7 +678,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
         return self.chunk_parser(json.loads(str_line))
 
-    def chunk_parser(
+    def chunk_parser(  # noqa: PLR0915
         self, chunk: dict
     ) -> Union["GenericStreamingChunk", "ModelResponseStream"]:
         # Transform responses API streaming chunk to chat completion format
