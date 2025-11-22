@@ -83,6 +83,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, LiteLLM_UpperboundKeyGenerateParams
     from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
     from litellm.llms.openai_like.chat.handler import OpenAILikeChatConfig
+    from litellm.llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -1051,7 +1052,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 
-from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
 from .llms.compactifai.chat.transformation import CompactifAIChatConfig
@@ -1961,5 +1961,11 @@ def __getattr__(name: str) -> Any:
         from .llms.openai_like.chat.handler import OpenAILikeChatConfig as _OpenAILikeChatConfig
         globals()["OpenAILikeChatConfig"] = _OpenAILikeChatConfig
         return _OpenAILikeChatConfig
+    
+    # Lazy-load AiohttpOpenAIChatConfig to reduce import-time memory cost
+    if name == "AiohttpOpenAIChatConfig":
+        from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig as _AiohttpOpenAIChatConfig
+        globals()["AiohttpOpenAIChatConfig"] = _AiohttpOpenAIChatConfig
+        return _AiohttpOpenAIChatConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
