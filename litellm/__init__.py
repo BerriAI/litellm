@@ -1136,7 +1136,6 @@ from .llms.deepgram.audio_transcription.transformation import (
 )
 from .llms.topaz.common_utils import TopazModelInfo
 from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
-from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.voyage.embedding.transformation_contextual import (
     VoyageContextualEmbeddingConfig,
 )
