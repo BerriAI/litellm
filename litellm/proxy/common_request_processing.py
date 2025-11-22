@@ -340,6 +340,7 @@ class ProxyBaseLLMRequestProcessing:
         user_max_tokens: Optional[int] = None,
         user_api_base: Optional[str] = None,
         model: Optional[str] = None,
+        llm_router: Optional[Router] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
 
@@ -377,6 +378,20 @@ class ProxyBaseLLMRequestProcessing:
             and self.data["model"] in litellm.model_alias_map
         ):
             self.data["model"] = litellm.model_alias_map[self.data["model"]]
+
+        # Inject model_id into metadata if available
+        # This ensures model_id is available in logging_obj for failed requests
+        if llm_router and self.data.get("model"):
+            try:
+                model_ids = llm_router.get_model_ids(self.data["model"])
+                if model_ids:
+                    if "metadata" not in self.data:
+                        self.data["metadata"] = {}
+                    if "model_info" not in self.data["metadata"]:
+                        self.data["metadata"]["model_info"] = {}
+                    self.data["metadata"]["model_info"]["id"] = model_ids[0]
+            except Exception as e:
+                verbose_proxy_logger.error(f"Error getting model ID from router for model: {self.data['model']}: {e}")
 
         # Check key-specific aliases
         if (
@@ -490,6 +505,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_base=user_api_base,
             model=model,
             route_type=route_type,
+            llm_router=llm_router,
         )
 
         tasks = []
@@ -748,11 +764,32 @@ class ProxyBaseLLMRequestProcessing:
         _litellm_logging_obj: Optional[LiteLLMLoggingObj] = self.data.get(
             "litellm_logging_obj", None
         )
+
+        # Attempt to get model_id from logging object
+        model_id = None
+        if _litellm_logging_obj:
+            # 1. Try getting from litellm_params (updated during call)
+            if (
+                hasattr(_litellm_logging_obj, "litellm_params")
+                and _litellm_logging_obj.litellm_params
+            ):
+                metadata = _litellm_logging_obj.litellm_params.get("metadata") or {}
+                model_info = metadata.get("model_info") or {}
+                model_id = model_info.get("id", None)
+
+            # 2. Fallback to kwargs (initial)
+            if not model_id and _litellm_logging_obj.kwargs:
+                litellm_params = _litellm_logging_obj.kwargs.get("litellm_params", {})
+                metadata = litellm_params.get("metadata") or {}
+                model_info = metadata.get("model_info") or {}
+                model_id = model_info.get("id", None)
+
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=(
                 _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else None
             ),
+            model_id=model_id,
             version=version,
             response_cost=0,
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),

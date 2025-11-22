@@ -85,6 +85,20 @@ async def anthropic_response(  # noqa: PLR0915
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
+        # Inject model_id into metadata if available
+        # This ensures model_id is available in logging_obj for failed requests
+        if llm_router and data.get("model"):
+            try:
+                model_ids = llm_router.get_model_ids(data["model"])
+                if model_ids:
+                    if "metadata" not in data:
+                        data["metadata"] = {}
+                    if "model_info" not in data["metadata"]:
+                        data["metadata"]["model_info"] = {}
+                    data["metadata"]["model_info"]["id"] = model_ids[0]
+            except Exception as e:
+                verbose_proxy_logger.error(f"Error getting model ID from router for model: {data['model']}: {e}")
+
         ### CALL HOOKS ### - modify incoming data before calling the model
         data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=data, call_type=CallTypes.anthropic_messages.value
@@ -217,11 +231,21 @@ async def anthropic_response(  # noqa: PLR0915
             )
         )
         error_msg = f"{str(e)}"
+
+        # Get headers with model_id if available
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            model_id=data.get("metadata", {}).get("model_info", {}).get("id", None),
+            version=version,
+            request_data=data
+        )
+
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
+            headers=headers
         )
 
 
