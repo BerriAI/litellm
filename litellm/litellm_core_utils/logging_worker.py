@@ -385,6 +385,24 @@ class LoggingWorker:
             except asyncio.QueueEmpty:
                 break
 
+    def _safe_log(self, level: str, message: str) -> None:
+        """
+        Safely log a message during shutdown, suppressing errors if logging is closed.
+        """
+        try:
+            if level == "debug":
+                verbose_logger.debug(message)
+            elif level == "info":
+                verbose_logger.info(message)
+            elif level == "warning":
+                verbose_logger.warning(message)
+            elif level == "error":
+                verbose_logger.error(message)
+        except (ValueError, OSError, AttributeError):
+            # Logging handlers may be closed during shutdown
+            # Silently ignore logging errors to prevent breaking shutdown
+            pass
+
     def _flush_on_exit(self):
         """
         Flush remaining events synchronously before process exit.
@@ -392,17 +410,20 @@ class LoggingWorker:
 
         This ensures callbacks queued by async completions are processed
         even when the script exits before the worker loop can handle them.
+        
+        Note: All logging in this method is wrapped to handle cases where
+        logging handlers are closed during shutdown.
         """
         if self._queue is None:
-            verbose_logger.debug("[LoggingWorker] atexit: No queue initialized")
+            self._safe_log("debug", "[LoggingWorker] atexit: No queue initialized")
             return
 
         if self._queue.empty():
-            verbose_logger.debug("[LoggingWorker] atexit: Queue is empty")
+            self._safe_log("debug", "[LoggingWorker] atexit: Queue is empty")
             return
 
         queue_size = self._queue.qsize()
-        verbose_logger.info(f"[LoggingWorker] atexit: Flushing {queue_size} remaining events...")
+        self._safe_log("info", f"[LoggingWorker] atexit: Flushing {queue_size} remaining events...")
 
         # Create a new event loop since the original is closed
         loop = asyncio.new_event_loop()
@@ -415,7 +436,8 @@ class LoggingWorker:
 
             while not self._queue.empty() and processed < MAX_ITERATIONS_TO_CLEAR_QUEUE:
                 if loop.time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE:
-                    verbose_logger.warning(
+                    self._safe_log(
+                        "warning",
                         f"[LoggingWorker] atexit: Reached time limit ({MAX_TIME_TO_CLEAR_QUEUE}s), stopping flush"
                     )
                     break
@@ -431,11 +453,11 @@ class LoggingWorker:
                 try:
                     loop.run_until_complete(task["coroutine"])
                     processed += 1
-                except Exception as e:
+                except Exception:
                     # Silent failure to not break user's program
-                    verbose_logger.debug(f"[LoggingWorker] atexit: Error flushing callback: {e}")
+                    pass
 
-            verbose_logger.info(f"[LoggingWorker] atexit: Successfully flushed {processed} events!")
+            self._safe_log("info", f"[LoggingWorker] atexit: Successfully flushed {processed} events!")
 
         finally:
             loop.close()
