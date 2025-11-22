@@ -57,7 +57,7 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
     {
       key: "3",
       page: "llm-playground",
-      label: "Test Key",
+      label: "Playground",
       icon: <PlayCircleOutlined style={{ fontSize: "18px" }} />,
       roles: rolesWithWriteAccess,
     },
@@ -148,11 +148,11 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
           roles: all_admin_roles,
         },
         {
-          "key": "29",
-          "page": "agents",
-          "label": "Agents",
-          "icon": <RobotOutlined style={{ fontSize: "18px" }} />,
-          "roles": rolesWithWriteAccess,
+          key: "29",
+          page: "agents",
+          label: "Agents",
+          icon: <RobotOutlined style={{ fontSize: "18px" }} />,
+          roles: rolesWithWriteAccess,
         },
         {
           key: "25",
@@ -258,7 +258,7 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
   });
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
+    <Layout>
       <Sider
         theme="light"
         width={220}

@@ -23,6 +23,11 @@ class PromptLiteLLMParams(BaseModel):
     prompt_id: str
     prompt_integration: str
 
+    dotprompt_content: Optional[str] = None
+    """
+    allows saving the dotprompt file content
+    """
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
@@ -32,6 +37,7 @@ class PromptSpec(BaseModel):
     prompt_info: PromptInfo
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    version: Optional[int] = None  # Version number for version history
 
     def __init__(self, **data):
         if "prompt_info" not in data:

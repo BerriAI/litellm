@@ -26,10 +26,10 @@ search_tools:
     litellm_params:
       search_provider: perplexity
       api_key: os.environ/PERPLEXITYAI_API_KEY
-  - search_tool_name: exa-search
+  - search_tool_name: firecrawl-search
     litellm_params:
-      search_provider: exa_ai
-      api_key: os.environ/EXA_API_KEY
+      search_provider: firecrawl
+      api_key: os.environ/FIRECRAWL_API_KEY
   
 
 litellm_settings:

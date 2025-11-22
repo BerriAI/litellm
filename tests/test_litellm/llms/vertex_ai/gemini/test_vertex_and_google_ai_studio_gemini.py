@@ -390,6 +390,58 @@ def test_streaming_chunk_includes_reasoning_content():
     )
 
 
+def test_streaming_chunk_with_tool_calls_includes_reasoning_content():
+    """
+    Test for issue #16805: Ensure that when Gemini returns a streaming chunk with
+    tool calls AND thoughtSignature, the reasoning_content is included in the delta.
+
+    Previously, thinking_blocks were only added to non-streaming responses, causing
+    reasoning_content to be missing in streaming mode when tools were enabled.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    litellm_logging = MagicMock()
+
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_current_time",
+                                "args": {"timezone": "America/New_York"},
+                            },
+                            "thoughtSignature": "EsEDCr4DAdHtim...",  # Base64 signature
+                        }
+                    ]
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 68,
+            "candidatesTokenCount": 120,
+            "totalTokenCount": 188,
+        },
+    }
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    # Verify that reasoning_content is present in the streaming delta
+    assert streaming_chunk.choices[0].delta.reasoning_content is not None
+
+    # Verify tool calls are also present
+    assert streaming_chunk.choices[0].delta.tool_calls is not None
+    assert len(streaming_chunk.choices[0].delta.tool_calls) == 1
+    assert streaming_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_time"
+
+
 def test_check_finish_reason():
     finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
     for k, v in finish_reason_mappings.items():
@@ -1455,7 +1507,7 @@ def test_is_gemini_3_or_newer():
 
 
 def test_reasoning_effort_maps_to_thinking_level_gemini_3():
-    """Test that reasoning_effort maps to thinking_level for Gemini 3+ models"""
+    """Test that reasoning_effort maps to thinking_level AND includeThoughts for Gemini 3+ models"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
@@ -1464,7 +1516,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     model = "gemini-3-pro-preview"
     optional_params = {}
 
-    # Test minimal -> low
+    # Test minimal -> low + includeThoughts=True
     non_default_params = {"reasoning_effort": "minimal"}
     result = v.map_openai_params(
         non_default_params=non_default_params,
@@ -1473,8 +1525,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test low -> low
+    # Test low -> low + includeThoughts=True
     optional_params = {}
     non_default_params = {"reasoning_effort": "low"}
     result = v.map_openai_params(
@@ -1484,8 +1537,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test medium -> high (medium not available yet)
+    # Test medium -> high + includeThoughts=True (medium not available yet)
     optional_params = {}
     non_default_params = {"reasoning_effort": "medium"}
     result = v.map_openai_params(
@@ -1495,8 +1549,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test high -> high
+    # Test high -> high + includeThoughts=True
     optional_params = {}
     non_default_params = {"reasoning_effort": "high"}
     result = v.map_openai_params(
@@ -1506,8 +1561,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test disable -> low (cannot fully disable in Gemini 3)
+    # Test disable -> low + includeThoughts=False (cannot fully disable in Gemini 3)
     optional_params = {}
     non_default_params = {"reasoning_effort": "disable"}
     result = v.map_openai_params(
@@ -1517,8 +1573,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is False
 
-    # Test none -> low (cannot fully disable in Gemini 3)
+    # Test none -> low + includeThoughts=False (cannot fully disable in Gemini 3)
     optional_params = {}
     non_default_params = {"reasoning_effort": "none"}
     result = v.map_openai_params(
@@ -1528,6 +1585,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is False
 
 
 def test_temperature_default_for_gemini_3():
