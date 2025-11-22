@@ -1137,9 +1137,6 @@ from .llms.deepgram.audio_transcription.transformation import (
 )
 from .llms.topaz.common_utils import TopazModelInfo
 from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
-from .llms.voyage.embedding.transformation_contextual import (
-    VoyageContextualEmbeddingConfig,
-)
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from .llms.azure.responses.o_series_transformation import (
