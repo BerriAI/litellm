@@ -234,6 +234,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return False
 
     def _supports_penalty_parameters(self, model: str) -> bool:
+        # Gemini 3 models do not support penalty parameters
+        if VertexGeminiConfig._is_gemini_3_or_newer(model):
+            return False
         unsupported_models = ["gemini-2.5-pro-preview-06-05"]
         if model in unsupported_models:
             return False

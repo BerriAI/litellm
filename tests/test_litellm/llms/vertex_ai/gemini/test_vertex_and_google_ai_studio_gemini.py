@@ -1259,6 +1259,78 @@ def test_vertex_ai_penalty_parameters_validation():
     assert result["max_output_tokens"] == 100
 
 
+def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
+    """
+    Test that penalty parameters are not supported for Gemini 3 models.
+    
+    This test ensures that:
+    1. Gemini 3 models do not support penalty parameters
+    2. Penalty parameters are excluded from supported params list for Gemini 3 models
+    3. Penalty parameters are filtered out when mapping params for Gemini 3 models
+    """
+    v = VertexGeminiConfig()
+
+    # Test Gemini 3 models
+    gemini_3_models = [
+        "gemini-3-pro-preview",
+        "vertex_ai/gemini-3-pro-preview",
+        "gemini/gemini-3-pro-preview",
+    ]
+
+    for model in gemini_3_models:
+        # Test _supports_penalty_parameters method
+        assert v._supports_penalty_parameters(model) == False, \
+            f"Gemini 3 model {model} should not support penalty parameters"
+
+        # Test get_supported_openai_params method
+        supported_params = v.get_supported_openai_params(model)
+        assert "frequency_penalty" not in supported_params, \
+            f"frequency_penalty should not be in supported params for {model}"
+        assert "presence_penalty" not in supported_params, \
+            f"presence_penalty should not be in supported params for {model}"
+
+        # Test parameter mapping - penalty params should be filtered out
+        non_default_params = {
+            "temperature": 0.7,
+            "frequency_penalty": 0.5,
+            "presence_penalty": 0.3,
+            "max_tokens": 100
+        }
+
+        optional_params = {}
+        result = v.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False
+        )
+
+        # Penalty parameters should be filtered out for Gemini 3 models
+        assert "frequency_penalty" not in result, \
+            f"frequency_penalty should be filtered out for Gemini 3 model {model}"
+        assert "presence_penalty" not in result, \
+            f"presence_penalty should be filtered out for Gemini 3 model {model}"
+
+        # Other parameters should still be included
+        assert "temperature" in result, \
+            f"temperature should still be included for Gemini 3 model {model}"
+        assert "max_output_tokens" in result, \
+            f"max_output_tokens should still be included for Gemini 3 model {model}"
+        assert result["temperature"] == 0.7
+        assert result["max_output_tokens"] == 100
+
+    # Test that non-Gemini 3 models still support penalty parameters (if they're not in the unsupported list)
+    non_gemini_3_model = "gemini-2.5-pro"
+    assert v._supports_penalty_parameters(non_gemini_3_model) == True, \
+        f"Non-Gemini 3 model {non_gemini_3_model} should support penalty parameters"
+    
+    supported_params = v.get_supported_openai_params(non_gemini_3_model)
+    assert "frequency_penalty" in supported_params, \
+        f"frequency_penalty should be in supported params for {non_gemini_3_model}"
+    assert "presence_penalty" in supported_params, \
+        f"presence_penalty should be in supported params for {non_gemini_3_model}"
+
+
 def test_vertex_ai_annotation_streaming_events():
     """
     Test that annotation events are properly emitted during streaming for Vertex AI Gemini.
