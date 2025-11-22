@@ -31,12 +31,10 @@ class TestDockerModelRunnerIntegration:
         1. Hits the correct URL: {api_base}/v1/chat/completions where api_base includes engine path
         2. Sends the correct request body with messages and parameters
         """
-        # Mock _get_httpx_client to return a mock HTTPHandler
-        with patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client") as mock_get_client:
-            # Create a mock HTTPHandler instance
-            mock_http_handler = Mock()
-            mock_get_client.return_value = mock_http_handler
-            
+        # Patch the low-level HTTP call helper used by BaseLLMHTTPHandler so no real HTTP is made
+        with patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler._make_common_sync_call"
+        ) as mock_common_call:
             # Create mock response
             mock_response = Mock(spec=httpx.Response)
             mock_response.json.return_value = {
@@ -61,14 +59,15 @@ class TestDockerModelRunnerIntegration:
             mock_response.status_code = 200
             mock_response.headers = httpx.Headers({"content-type": "application/json"})
             mock_response.text = json.dumps(mock_response.json.return_value)
-            
-            # Capture the request
+
             captured_kwargs = {}
-            def mock_post(**kwargs):
+
+            def mock_call(*args, **kwargs):
+                # Capture api_base (URL) and data (body)
                 captured_kwargs.update(kwargs)
                 return mock_response
-            
-            mock_http_handler.post.side_effect = mock_post
+
+            mock_common_call.side_effect = mock_call
 
             # Make the completion call with engine in api_base
             response = completion(
@@ -80,8 +79,8 @@ class TestDockerModelRunnerIntegration:
             )
 
             # Verify the request was made
-            assert mock_http_handler.post.called
-            url = captured_kwargs.get('url', '')
+            mock_common_call.assert_called_once()
+            url = captured_kwargs.get('api_base', '')
             data = captured_kwargs.get('data', '')
             print("URL For request", url)
             print("request body for request", data)
@@ -114,12 +113,10 @@ class TestDockerModelRunnerIntegration:
         2. Specifies a different engine in the api_base
         3. Model name is sent in the request body
         """
-        # Mock _get_httpx_client to return a mock HTTPHandler
-        with patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client") as mock_get_client:
-            # Create a mock HTTPHandler instance
-            mock_http_handler = Mock()
-            mock_get_client.return_value = mock_http_handler
-            
+        # Patch the low-level HTTP call helper used by BaseLLMHTTPHandler so no real HTTP is made
+        with patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler._make_common_sync_call"
+        ) as mock_common_call:
             # Create mock response
             mock_response = Mock(spec=httpx.Response)
             mock_response.json.return_value = {
@@ -144,14 +141,14 @@ class TestDockerModelRunnerIntegration:
             mock_response.status_code = 200
             mock_response.headers = httpx.Headers({"content-type": "application/json"})
             mock_response.text = json.dumps(mock_response.json.return_value)
-            
-            # Capture the request
+
             captured_kwargs = {}
-            def mock_post(**kwargs):
+
+            def mock_call(*args, **kwargs):
                 captured_kwargs.update(kwargs)
                 return mock_response
-            
-            mock_http_handler.post.side_effect = mock_post
+
+            mock_common_call.side_effect = mock_call
 
             # Make the completion call with custom engine and host
             response = completion(
@@ -163,8 +160,8 @@ class TestDockerModelRunnerIntegration:
             )
 
             # Verify the request was made
-            assert mock_http_handler.post.called
-            url = captured_kwargs.get('url', '')
+            mock_common_call.assert_called_once()
+            url = captured_kwargs.get('api_base', '')
             data = captured_kwargs.get('data', '')
             print("URL For request", url)
             print("request body for request", data)
