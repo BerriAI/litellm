@@ -398,7 +398,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return json_schema
 
-    def map_response_format_to_anthropic_output_schema(
+    def map_response_format_to_anthropic_output_format(
         self, value: Optional[dict]
     ) -> Optional[AnthropicOutputSchema]:
         json_schema: Optional[dict] = self._extract_json_schema_from_response_format(
@@ -514,6 +514,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "response_format" and isinstance(value, dict):
+
                 if any(
                     substring in model
                     for substring in {
@@ -523,11 +524,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "opus-4-1",
                     }
                 ):
-                    _output_schema = (
-                        self.map_response_format_to_anthropic_output_schema(value)
+                    _output_format = (
+                        self.map_response_format_to_anthropic_output_format(value)
                     )
-                    if _output_schema is not None:
-                        optional_params["output_schema"] = _output_schema
+                    if _output_format is not None:
+                        optional_params["output_format"] = _output_format
                 _tool = self.map_response_format_to_anthropic_tool(
                     value, optional_params, is_thinking_enabled
                 )
@@ -718,7 +719,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         if optional_params.get("context_management") is not None:
             self._ensure_context_management_beta_header(headers)
-        if optional_params.get("output_schema") is not None:
+        if optional_params.get("output_format") is not None:
             headers["anthropic-beta"] = (
                 ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value
             )
