@@ -302,6 +302,10 @@ class CallTypes(str, Enum):
     avector_store_file_update = "avector_store_file_update"
     vector_store_file_delete = "vector_store_file_delete"
     avector_store_file_delete = "avector_store_file_delete"
+    vector_store_create = "vector_store_create"
+    avector_store_create = "avector_store_create"
+    vector_store_search = "vector_store_search"
+    avector_store_search = "avector_store_search"
 
     #########################################################
     # Container Call Types
@@ -375,8 +379,10 @@ CallTypesLiteral = Literal[
     "agenerate_content_stream",
     "ocr",
     "aocr",
-    "avector_store_search",
+    "vector_store_create",
+    "avector_store_create",
     "vector_store_search",
+    "avector_store_search",
     "vector_store_file_create",
     "avector_store_file_create",
     "vector_store_file_list",
@@ -2472,6 +2478,7 @@ all_litellm_params = (
         "use_litellm_proxy",
         "prompt_label",
         "shared_session",
+        "search_tool_name",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -2587,6 +2594,7 @@ class LlmProviders(str, Enum):
     EMPOWER = "empower"
     GITHUB = "github"
     COMPACTIFAI = "compactifai"
+    DOCKER_MODEL_RUNNER = "docker_model_runner"
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
@@ -2722,7 +2730,7 @@ class LiteLLMFineTuningJob(FineTuningJob):
 
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
-    usage: Optional[Usage] = None
+    usage: Optional[Usage] = None  # type: ignore[assignment]
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator

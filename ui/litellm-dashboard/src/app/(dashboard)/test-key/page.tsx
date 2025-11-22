@@ -1,6 +1,6 @@
 "use client";
 
-import ChatUI from "@/components/chat_ui/ChatUI";
+import ChatUI from "@/components/playground/chat_ui/ChatUI";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useState, useEffect } from "react";
 import { fetchProxySettings } from "@/utils/proxyUtils";

@@ -7205,6 +7205,8 @@ class ProviderConfigManager:
             return litellm.DashScopeChatConfig()
         elif litellm.LlmProviders.MOONSHOT == provider:
             return litellm.MoonshotChatConfig()
+        elif litellm.LlmProviders.DOCKER_MODEL_RUNNER == provider:
+            return litellm.DockerModelRunnerChatConfig()
         elif litellm.LlmProviders.V0 == provider:
             return litellm.V0ChatConfig()
         elif litellm.LlmProviders.MORPH == provider:
@@ -7389,6 +7391,8 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            return litellm.GithubCopilotResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
         return None
@@ -7755,6 +7759,12 @@ class ProviderConfigManager:
             )
 
             return LiteLLMProxyImageEditConfig()
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.image_edit import (
+                get_vertex_ai_image_edit_config,
+            )
+
+            return get_vertex_ai_image_edit_config(model)
         return None
 
     @staticmethod

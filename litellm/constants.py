@@ -381,6 +381,7 @@ LITELLM_CHAT_PROVIDERS = [
     "wandb",
     "ovhcloud",
     "lemonade",
+    "docker_model_runner",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -567,6 +568,7 @@ openai_compatible_providers: List = [
     "wandb",
     "cometapi",
     "clarifai",
+    "docker_model_runner",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -1118,6 +1120,7 @@ SECRET_MANAGER_REFRESH_INTERVAL = int(
 )
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
+    "public_mcp_servers",
     "public_agent_groups",
     "public_model_groups",
     "public_model_groups_links",
