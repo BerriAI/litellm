@@ -602,6 +602,7 @@ async def test_dotprompt_auto_detection_with_model_only():
                 prompt_variables={"user_message": "Hello world"},
                 messages=[{"role": "user", "content": "This will be ignored"}],
                 client=client,
+                api_key="test-api-key",
             )
             
             mock_post.assert_called_once()
@@ -685,6 +686,7 @@ async def test_dotprompt_with_prompt_version():
                 prompt_variables={"user_message": "Test v1"},
                 messages=[],
                 client=client,
+                api_key="test-api-key",
             )
             
             mock_post.assert_called_once()
@@ -741,6 +743,7 @@ async def test_dotprompt_with_prompt_version():
                 prompt_variables={"user_message": "Test v2"},
                 messages=[],
                 client=client,
+                api_key="test-api-key",
             )
             
             mock_post.assert_called_once()
