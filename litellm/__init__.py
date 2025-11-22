@@ -1116,7 +1116,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 from .llms.triton.completion.transformation import TritonGenerateConfig
 from .llms.triton.completion.transformation import TritonInferConfig
-from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
 from .llms.gemini.common_utils import GeminiModelInfo
 
 
