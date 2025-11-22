@@ -1126,9 +1126,6 @@ from .llms.vertex_ai.vertex_embeddings.transformation import (
 
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
-from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
-    AmazonInvokeConfig,
-)
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
 )
@@ -2329,5 +2326,11 @@ def __getattr__(name: str) -> Any:
         from .llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings as _bedrock_tool_name_mappings
         globals()["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
         return _bedrock_tool_name_mappings
+    
+    # Lazy-load AmazonInvokeConfig to reduce import-time memory cost
+    if name == "AmazonInvokeConfig":
+        from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig as _AmazonInvokeConfig
+        globals()["AmazonInvokeConfig"] = _AmazonInvokeConfig
+        return _AmazonInvokeConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
