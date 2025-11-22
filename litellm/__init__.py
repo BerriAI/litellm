@@ -1771,6 +1771,21 @@ def _lazy_import_dotprompt(name: str) -> Any:
     raise AttributeError(f"Dotprompt lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_type_items(name: str) -> Any:
+    """Lazy import for type-related items - imports only the requested item by name."""
+    if name == "COHERE_EMBEDDING_INPUT_TYPES":
+        from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES as _COHERE_EMBEDDING_INPUT_TYPES
+        globals()["COHERE_EMBEDDING_INPUT_TYPES"] = _COHERE_EMBEDDING_INPUT_TYPES
+        return _COHERE_EMBEDDING_INPUT_TYPES
+    
+    if name == "GuardrailItem":
+        from litellm.types.guardrails import GuardrailItem as _GuardrailItem
+        globals()["GuardrailItem"] = _GuardrailItem
+        return _GuardrailItem
+    
+    raise AttributeError(f"Type items lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -1844,17 +1859,9 @@ def __getattr__(name: str) -> Any:
     if name in {"global_prompt_manager", "global_prompt_directory", "set_global_prompt_directory"}:
         return _lazy_import_dotprompt(name)
     
-    # Lazy-load COHERE_EMBEDDING_INPUT_TYPES to reduce import-time memory cost
-    if name == "COHERE_EMBEDDING_INPUT_TYPES":
-        from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES as _COHERE_EMBEDDING_INPUT_TYPES
-        globals()["COHERE_EMBEDDING_INPUT_TYPES"] = _COHERE_EMBEDDING_INPUT_TYPES
-        return _COHERE_EMBEDDING_INPUT_TYPES
-    
-    # Lazy-load GuardrailItem to reduce import-time memory cost
-    if name == "GuardrailItem":
-        from litellm.types.guardrails import GuardrailItem as _GuardrailItem
-        globals()["GuardrailItem"] = _GuardrailItem
-        return _GuardrailItem
+    # Lazy-load type-related items to reduce import-time memory cost
+    if name in {"COHERE_EMBEDDING_INPUT_TYPES", "GuardrailItem"}:
+        return _lazy_import_type_items(name)
     
     # Lazy-load remove_index_from_tool_calls to reduce import-time memory cost
     if name == "remove_index_from_tool_calls":
