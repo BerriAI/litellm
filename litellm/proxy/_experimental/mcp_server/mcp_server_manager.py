@@ -256,6 +256,9 @@ class MCPServerManager:
                 allowed_tools=server_config.get("allowed_tools", None),
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 allowed_params=server_config.get("allowed_params", None),
+                allowed_param_patterns=server_config.get(
+                    "allowed_param_patterns", None
+                ),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
             )
@@ -395,12 +398,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -1383,6 +1386,68 @@ class MCPServerManager:
                 },
             )
 
+    def validate_allowed_param_patterns(
+        self, tool_name: str, arguments: Dict[str, Any], server: MCPServer
+    ) -> None:
+        """
+        Validate parameter values using regex patterns for the given tool.
+        """
+        from litellm.proxy._experimental.mcp_server.utils import (
+            split_server_prefix_from_name,
+        )
+
+        if not server.allowed_param_patterns:
+            return
+
+        unprefixed_tool_name, _ = split_server_prefix_from_name(tool_name)
+
+        tool_patterns = server.allowed_param_patterns.get(
+            tool_name
+        ) or server.allowed_param_patterns.get(unprefixed_tool_name)
+
+        if not tool_patterns:
+            return
+
+        path_value_map: Dict[str, List[Any]] = {}
+
+        def _walk(value: Any, current_path: str) -> None:
+            if isinstance(value, dict):
+                for key, sub_value in value.items():
+                    next_path = f"{current_path}.{key}" if current_path else key
+                    _walk(sub_value, next_path)
+            elif isinstance(value, list):
+                list_path = f"{current_path}[]" if current_path else "[]"
+                for item in value:
+                    _walk(item, list_path)
+            else:
+                if not current_path:
+                    return
+                path_value_map.setdefault(current_path, []).append(value)
+
+        _walk(arguments, "")
+
+        for pattern_path, regex_pattern in tool_patterns.items():
+            try:
+                compiled_pattern = re.compile(regex_pattern)
+            except re.error as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": f"Invalid regex for path '{pattern_path}' in tool {tool_name}: {exc}",
+                    },
+                ) from exc
+
+            for value in path_value_map.get(pattern_path, []) or []:
+                str_value = str(value)
+                if not compiled_pattern.fullmatch(str_value):
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": f"Value '{str_value}' for path '{pattern_path}' is not allowed for tool {tool_name}",
+                            "allowed_pattern": regex_pattern,
+                        },
+                    )
+
     async def check_tool_permission_for_key_team(
         self,
         tool_name: str,
@@ -1509,6 +1574,11 @@ class MCPServerManager:
 
         ## filter parameters based on allowed_params configuration
         self.validate_allowed_params(
+            tool_name=name,
+            arguments=arguments,
+            server=server,
+        )
+        self.validate_allowed_param_patterns(
             tool_name=name,
             arguments=arguments,
             server=server,
