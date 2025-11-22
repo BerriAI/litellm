@@ -1050,7 +1050,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 
-from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
@@ -1940,5 +1939,11 @@ def __getattr__(name: str) -> Any:
         from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls as _remove_index_from_tool_calls
         globals()["remove_index_from_tool_calls"] = _remove_index_from_tool_calls
         return _remove_index_from_tool_calls
+    
+    # Lazy-load BytezChatConfig to reduce import-time memory cost
+    if name == "BytezChatConfig":
+        from .llms.bytez.chat.transformation import BytezChatConfig as _BytezChatConfig
+        globals()["BytezChatConfig"] = _BytezChatConfig
+        return _BytezChatConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
