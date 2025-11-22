@@ -1036,6 +1036,22 @@
         "rerank": false
       }
     },
+    "docker_model_runner": {
+      "display_name": "Docker Model Runner (`docker_model_runner`)",
+      "url": "https://docs.litellm.ai/docs/providers/docker_model_runner",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "morph": {
       "display_name": "Morph (`morph`)",
       "url": "https://docs.litellm.ai/docs/providers/morph",
@@ -1356,6 +1372,23 @@
         "moderations": false,
         "batches": false,
         "rerank": false
+      }
+    },
+    "runwayml": {
+      "display_name": "RunwayML (`runwayml`)",
+      "url": "https://docs.litellm.ai/docs/providers/runwayml/videos",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "video_generations": true
       }
     },
     "sagemaker_chat": {

@@ -3,6 +3,7 @@ import traceback
 from typing import Any, Optional
 
 import httpx
+import re
 
 import litellm
 from litellm._logging import verbose_logger
@@ -45,13 +46,20 @@ class ExceptionCheckers:
         if not isinstance(error_str, str):
             return False
 
-        if "429" in error_str or "rate limit" in error_str.lower():
+        # Only treat 429 as a rate limit signal when it appears as a standalone token
+        if re.search(r"\b429\b", error_str):
+            return True
+
+        _error_str_lower = error_str.lower()
+
+        # Match "rate limit" (including variations like rate-limit / rate_limit)
+        if re.search(r"rate[\s_\-]*limit", _error_str_lower):
             return True
 
         #######################################
         # Mistral API returns this error string
         #########################################
-        if "service tier capacity exceeded" in error_str.lower():
+        if "service tier capacity exceeded" in _error_str_lower:
             return True
 
         return False
@@ -153,9 +161,6 @@ def _get_response_headers(original_exception: Exception) -> Optional[httpx.Heade
         return None
 
     return _response_headers
-
-
-import re
 
 
 def extract_and_raise_litellm_exception(

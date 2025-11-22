@@ -274,8 +274,8 @@ def get_logging_payload(  # noqa: PLR0915
         end_user_id = end_user_id or standard_logging_payload["metadata"].get(
             "user_api_key_end_user_id"
         )
-    else:
-        api_key = ""
+    # BUG FIX: Don't overwrite api_key when standard_logging_payload is None
+    # The api_key was already extracted from metadata (line 243) and hashed (lines 256-259)
     request_tags = (
         json.dumps(metadata.get("tags", []))
         if isinstance(metadata.get("tags", []), list)
@@ -651,7 +651,20 @@ def _get_response_for_spend_logs_payload(
     if payload is None:
         return "{}"
     if _should_store_prompts_and_responses_in_spend_logs():
-        return json.dumps(payload.get("response", {}))
+        response_obj: Any = payload.get("response")
+        if response_obj is None:
+            return "{}"
+
+        sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
+            {"response": response_obj}
+        )
+        sanitized_response = sanitized_wrapper.get("response", response_obj)
+
+        if sanitized_response is None:
+            return "{}"
+        if isinstance(sanitized_response, str):
+            return sanitized_response
+        return safe_dumps(sanitized_response)
     return "{}"
 
 

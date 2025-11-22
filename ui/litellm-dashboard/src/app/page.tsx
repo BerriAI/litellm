@@ -19,14 +19,16 @@ import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
 import ModelHubTable from "@/components/model_hub_table";
+import PublicModelHub from "@/components/public_model_hub";
 import NewUsagePage from "@/components/new_usage";
 import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
-import ChatUI from "@/components/chat_ui/ChatUI";
+import PlaygroundPage from "@/app/(dashboard)/playground/page";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
+import AgentsPanel from "@/components/agents";
 import PromptsPanel from "@/components/prompts";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
@@ -42,6 +44,7 @@ import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldTeams from "@/components/OldTeams";
 import { SearchTools } from "@/components/search_tools";
+import { isAdminRole } from "@/utils/roles";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -105,6 +108,7 @@ function formatUserRole(userRole: string) {
 interface ProxySettings {
   PROXY_BASE_URL: string;
   PROXY_LOGOUT_URL: string;
+  LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
 
 const queryClient = new QueryClient();
@@ -360,13 +364,7 @@ export default function CreateKeyPage() {
                     teams={teams}
                   />
                 ) : page == "llm-playground" ? (
-                  <ChatUI
-                    userID={userID}
-                    userRole={userRole}
-                    token={token}
-                    accessToken={accessToken}
-                    disabledPersonalKeyCreation={disabledPersonalKeyCreation}
-                  />
+                  <PlaygroundPage />
                 ) : page == "users" ? (
                   <ViewUserDashboard
                     userID={userID}
@@ -415,6 +413,8 @@ export default function CreateKeyPage() {
                   <BudgetPanel accessToken={accessToken} />
                 ) : page == "guardrails" ? (
                   <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
+                ) : page == "agents" ? (
+                  <AgentsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "prompts" ? (
                   <PromptsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "transform-request" ? (
@@ -431,12 +431,16 @@ export default function CreateKeyPage() {
                 ) : page == "cost-tracking-settings" ? (
                   <CostTrackingSettings userID={userID} userRole={userRole} accessToken={accessToken} />
                 ) : page == "model-hub-table" ? (
-                  <ModelHubTable
-                    accessToken={accessToken}
-                    publicPage={false}
-                    premiumUser={premiumUser}
-                    userRole={userRole}
-                  />
+                  isAdminRole(userRole) ? (
+                    <ModelHubTable
+                      accessToken={accessToken}
+                      publicPage={false}
+                      premiumUser={premiumUser}
+                      userRole={userRole}
+                    />
+                  ) : (
+                    <PublicModelHub accessToken={accessToken} isEmbedded={true} />
+                  )
                 ) : page == "caching" ? (
                   <CacheDashboard
                     userID={userID}
@@ -476,6 +480,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     teams={(teams as Team[]) ?? []}
+                    organizations={(organizations as Organization[]) ?? []}
                     premiumUser={premiumUser}
                   />
                 ) : (
