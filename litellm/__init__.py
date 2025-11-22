@@ -1115,7 +1115,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 from .llms.triton.completion.transformation import TritonGenerateConfig
 from .llms.triton.completion.transformation import TritonInferConfig
-from .llms.ai21.chat.transformation import AI21ChatConfig as AI21Config
 from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes
