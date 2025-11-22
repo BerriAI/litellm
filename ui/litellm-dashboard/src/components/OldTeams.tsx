@@ -30,7 +30,7 @@ import {
   Text,
   TextInput,
 } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Select as Select2, Tooltip, Typography } from "antd";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import { fetchTeams } from "./common_components/fetch_teams";
@@ -1260,6 +1260,26 @@ const Teams: React.FC<TeamProps> = ({
                             value: name,
                             label: name,
                           }))}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Disable Global Guardrails{" "}
+                            <Tooltip title="When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="disable_global_guardrails"
+                        className="mt-4"
+                        valuePropName="checked"
+                        help="Bypass global guardrails for this team"
+                      >
+                        <Switch 
+                          disabled={!premiumUser}
+                          checkedChildren={premiumUser ? "Yes" : "Premium feature - Upgrade to disable global guardrails by team"}
+                          unCheckedChildren={premiumUser ? "No" : "Premium feature - Upgrade to disable global guardrails by team"}
                         />
                       </Form.Item>
                       <Form.Item
