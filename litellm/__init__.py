@@ -2147,6 +2147,29 @@ def _lazy_import_azure_responses_configs(name: str) -> Any:
     raise AttributeError(f"Azure Responses API configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_openai_o_series_configs(name: str) -> Any:
+    """Lazy import for OpenAI O-Series config classes - imports only the requested class."""
+    if name == "OpenAIOSeriesConfig":
+        from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
+        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
+        return _OpenAIOSeriesConfig
+    
+    if name == "OpenAIO1Config":
+        from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
+        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
+        globals()["OpenAIO1Config"] = _OpenAIOSeriesConfig  # alias
+        return _OpenAIOSeriesConfig
+    
+    if name == "openaiOSeriesConfig":
+        from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
+        _openaiOSeriesConfig = _OpenAIOSeriesConfig()
+        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
+        globals()["openaiOSeriesConfig"] = _openaiOSeriesConfig
+        return _openaiOSeriesConfig
+    
+    raise AttributeError(f"OpenAI O-Series configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2485,26 +2508,9 @@ def __getattr__(name: str) -> Any:
     if name in {"AzureOpenAIResponsesAPIConfig", "AzureOpenAIOSeriesResponsesAPIConfig"}:
         return _lazy_import_azure_responses_configs(name)
     
-    # Lazy-load OpenAIOSeriesConfig to reduce import-time memory cost
-    if name == "OpenAIOSeriesConfig":
-        from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
-        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
-        return _OpenAIOSeriesConfig
-    
-    # Lazy-load OpenAIO1Config alias to reduce import-time memory cost
-    if name == "OpenAIO1Config":
-        from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
-        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
-        globals()["OpenAIO1Config"] = _OpenAIOSeriesConfig  # alias
-        return _OpenAIOSeriesConfig
-    
-    # Lazy-load openaiOSeriesConfig instance to reduce import-time memory cost
-    if name == "openaiOSeriesConfig":
-        from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
-        _openaiOSeriesConfig = _OpenAIOSeriesConfig()
-        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
-        globals()["openaiOSeriesConfig"] = _openaiOSeriesConfig
-        return _openaiOSeriesConfig
+    # Lazy-load OpenAI O-Series configs to reduce import-time memory cost
+    if name in {"OpenAIOSeriesConfig", "OpenAIO1Config", "openaiOSeriesConfig"}:
+        return _lazy_import_openai_o_series_configs(name)
     
     # Lazy-load AzureOpenAIO1Config to reduce import-time memory cost
     if name == "AzureOpenAIO1Config":
