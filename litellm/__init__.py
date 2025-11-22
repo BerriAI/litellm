@@ -1050,7 +1050,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 
-from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
 from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
@@ -1950,5 +1949,11 @@ def __getattr__(name: str) -> Any:
         from .llms.custom_llm import CustomLLM as _CustomLLM
         globals()["CustomLLM"] = _CustomLLM
         return _CustomLLM
+    
+    # Lazy-load AmazonConverseConfig to reduce import-time memory cost
+    if name == "AmazonConverseConfig":
+        from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig as _AmazonConverseConfig
+        globals()["AmazonConverseConfig"] = _AmazonConverseConfig
+        return _AmazonConverseConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
