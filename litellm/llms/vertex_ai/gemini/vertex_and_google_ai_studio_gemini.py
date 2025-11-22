@@ -81,6 +81,9 @@ from litellm.types.utils import (
     TopLogprob,
     Usage,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _encode_tool_call_id_with_signature,
+)
 from litellm.utils import (
     CustomStreamWrapper,
     ModelResponse,
@@ -1192,7 +1195,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         "function": _function_chunk,
                         "index": cumulative_tool_call_idx,
                     }
+                    # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
+                        _tool_response_chunk[
+                            "id"
+                        ] = _encode_tool_call_id_with_signature(
+                            _tool_response_chunk["id"], thought_signature
+                        )
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
                         }
@@ -1702,7 +1711,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 # Convert thinking_blocks to reasoning_content for streaming
                 # This ensures reasoning_content is available in streaming responses
-                if isinstance(model_response, ModelResponseStream) and reasoning_content is None:
+                if (
+                    isinstance(model_response, ModelResponseStream)
+                    and reasoning_content is None
+                ):
                     reasoning_content_parts = []
                     for block in thinking_blocks:
                         thinking_text = block.get("thinking")
