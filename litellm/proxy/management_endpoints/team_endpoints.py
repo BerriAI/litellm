@@ -688,8 +688,7 @@ async def new_team(  # noqa: PLR0915
                     },
                 )
 
-
-            if (data.max_budget is not None and user_api_key_dict.user_id is not None):
+            if data.max_budget is not None and user_api_key_dict.user_id is not None:
                 # Fetch user object to get max_budget
                 user_obj = await get_user_object(
                     user_id=user_api_key_dict.user_id,
@@ -699,7 +698,7 @@ async def new_team(  # noqa: PLR0915
                 )
 
                 if (
-                    user_obj is not None 
+                    user_obj is not None
                     and user_obj.max_budget is not None
                     and data.max_budget > user_obj.max_budget
                 ):
