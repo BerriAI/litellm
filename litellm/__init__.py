@@ -1148,9 +1148,6 @@ from .llms.xai.responses.transformation import XAIResponsesAPIConfig
 from .llms.litellm_proxy.responses.transformation import (
     LiteLLMProxyResponsesAPIConfig,
 )
-from .llms.openai.chat.gpt_transformation import (
-    OpenAIGPTConfig,
-)
 from .llms.openai.chat.gpt_5_transformation import (
     OpenAIGPT5Config,
 )
@@ -1160,8 +1157,6 @@ from .llms.openai.transcriptions.whisper_transformation import (
 from .llms.openai.transcriptions.gpt_transformation import (
     OpenAIGPTAudioTranscriptionConfig,
 )
-
-openAIGPTConfig = OpenAIGPTConfig()
 from .llms.openai.chat.gpt_audio_transformation import (
     OpenAIGPTAudioConfig,
 )
