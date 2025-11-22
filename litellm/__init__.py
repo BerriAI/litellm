@@ -2132,6 +2132,21 @@ def _lazy_import_deprecated_provider_configs(name: str) -> Any:
     raise AttributeError(f"Deprecated provider configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_azure_responses_configs(name: str) -> Any:
+    """Lazy import for Azure OpenAI Responses API config classes - imports only the requested class."""
+    if name == "AzureOpenAIResponsesAPIConfig":
+        from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig as _AzureOpenAIResponsesAPIConfig
+        globals()["AzureOpenAIResponsesAPIConfig"] = _AzureOpenAIResponsesAPIConfig
+        return _AzureOpenAIResponsesAPIConfig
+    
+    if name == "AzureOpenAIOSeriesResponsesAPIConfig":
+        from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig as _AzureOpenAIOSeriesResponsesAPIConfig
+        globals()["AzureOpenAIOSeriesResponsesAPIConfig"] = _AzureOpenAIOSeriesResponsesAPIConfig
+        return _AzureOpenAIOSeriesResponsesAPIConfig
+    
+    raise AttributeError(f"Azure Responses API configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -2466,17 +2481,9 @@ def __getattr__(name: str) -> Any:
         globals()["VoyageContextualEmbeddingConfig"] = _VoyageContextualEmbeddingConfig
         return _VoyageContextualEmbeddingConfig
     
-    # Lazy-load AzureOpenAIResponsesAPIConfig to reduce import-time memory cost
-    if name == "AzureOpenAIResponsesAPIConfig":
-        from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig as _AzureOpenAIResponsesAPIConfig
-        globals()["AzureOpenAIResponsesAPIConfig"] = _AzureOpenAIResponsesAPIConfig
-        return _AzureOpenAIResponsesAPIConfig
-    
-    # Lazy-load AzureOpenAIOSeriesResponsesAPIConfig to reduce import-time memory cost
-    if name == "AzureOpenAIOSeriesResponsesAPIConfig":
-        from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig as _AzureOpenAIOSeriesResponsesAPIConfig
-        globals()["AzureOpenAIOSeriesResponsesAPIConfig"] = _AzureOpenAIOSeriesResponsesAPIConfig
-        return _AzureOpenAIOSeriesResponsesAPIConfig
+    # Lazy-load Azure Responses API configs to reduce import-time memory cost
+    if name in {"AzureOpenAIResponsesAPIConfig", "AzureOpenAIOSeriesResponsesAPIConfig"}:
+        return _lazy_import_azure_responses_configs(name)
     
     # Lazy-load OpenAIOSeriesConfig to reduce import-time memory cost
     if name == "OpenAIOSeriesConfig":
