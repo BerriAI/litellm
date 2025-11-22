@@ -2031,6 +2031,14 @@ def __getattr__(name: str) -> Any:
     if name == "AI21ChatConfig":
         from .llms.ai21.chat.transformation import AI21ChatConfig as _AI21ChatConfig
         globals()["AI21ChatConfig"] = _AI21ChatConfig
+        globals()["AI21Config"] = _AI21ChatConfig  # alias
+        return _AI21ChatConfig
+    
+    # Lazy-load AI21Config alias to reduce import-time memory cost
+    if name == "AI21Config":
+        from .llms.ai21.chat.transformation import AI21ChatConfig as _AI21ChatConfig
+        globals()["AI21ChatConfig"] = _AI21ChatConfig
+        globals()["AI21Config"] = _AI21ChatConfig
         return _AI21ChatConfig
     
     # Lazy-load LlamaAPIConfig to reduce import-time memory cost
