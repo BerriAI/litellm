@@ -2339,4 +2339,10 @@ def __getattr__(name: str) -> Any:
         globals()["MistralEmbeddingConfig"] = _MistralEmbeddingConfig
         return _MistralEmbeddingConfig
     
+    # Lazy-load OpenAITextCompletionConfig to reduce import-time memory cost
+    if name == "OpenAITextCompletionConfig":
+        from .llms.openai.completion.transformation import OpenAITextCompletionConfig as _OpenAITextCompletionConfig
+        globals()["OpenAITextCompletionConfig"] = _OpenAITextCompletionConfig
+        return _OpenAITextCompletionConfig
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
