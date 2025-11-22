@@ -304,6 +304,7 @@ model LiteLLM_SpendLogs {
   cache_key           String?   @default("")
   request_tags        Json?     @default("[]")
   team_id             String? 
+  organization_id     String?
   end_user            String?
   requester_ip_address String?
   messages            Json?     @default("{}")
