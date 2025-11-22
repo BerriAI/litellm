@@ -118,6 +118,7 @@ if TYPE_CHECKING:
     from litellm.llms.cohere.chat.transformation import CohereChatConfig
     from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
     from litellm.llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
+    from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
     from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
     from litellm.llms.groq.chat.transformation import GroqChatConfig
     from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
