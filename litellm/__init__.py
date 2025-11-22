@@ -1836,6 +1836,26 @@ def _lazy_import_small_provider_chat_configs(name: str) -> Any:
     raise AttributeError(f"Small provider chat configs lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_data_platform_configs(name: str) -> Any:
+    """Lazy import for data platform provider chat config classes - imports only the requested class."""
+    if name == "DatabricksConfig":
+        from .llms.databricks.chat.transformation import DatabricksConfig as _DatabricksConfig
+        globals()["DatabricksConfig"] = _DatabricksConfig
+        return _DatabricksConfig
+    
+    if name == "PredibaseConfig":
+        from .llms.predibase.chat.transformation import PredibaseConfig as _PredibaseConfig
+        globals()["PredibaseConfig"] = _PredibaseConfig
+        return _PredibaseConfig
+    
+    if name == "SnowflakeConfig":
+        from .llms.snowflake.chat.transformation import SnowflakeConfig as _SnowflakeConfig
+        globals()["SnowflakeConfig"] = _SnowflakeConfig
+        return _SnowflakeConfig
+    
+    raise AttributeError(f"Data platform configs lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -1961,29 +1981,15 @@ def __getattr__(name: str) -> Any:
         globals()["AnthropicConfig"] = _AnthropicConfig
         return _AnthropicConfig
     
-    # Lazy-load DatabricksConfig to reduce import-time memory cost
-    if name == "DatabricksConfig":
-        from .llms.databricks.chat.transformation import DatabricksConfig as _DatabricksConfig
-        globals()["DatabricksConfig"] = _DatabricksConfig
-        return _DatabricksConfig
-    
-    # Lazy-load PredibaseConfig to reduce import-time memory cost
-    if name == "PredibaseConfig":
-        from .llms.predibase.chat.transformation import PredibaseConfig as _PredibaseConfig
-        globals()["PredibaseConfig"] = _PredibaseConfig
-        return _PredibaseConfig
+    # Lazy-load data platform configs to reduce import-time memory cost
+    if name in {"DatabricksConfig", "PredibaseConfig", "SnowflakeConfig"}:
+        return _lazy_import_data_platform_configs(name)
     
     # Lazy-load ReplicateConfig to reduce import-time memory cost
     if name == "ReplicateConfig":
         from .llms.replicate.chat.transformation import ReplicateConfig as _ReplicateConfig
         globals()["ReplicateConfig"] = _ReplicateConfig
         return _ReplicateConfig
-    
-    # Lazy-load SnowflakeConfig to reduce import-time memory cost
-    if name == "SnowflakeConfig":
-        from .llms.snowflake.chat.transformation import SnowflakeConfig as _SnowflakeConfig
-        globals()["SnowflakeConfig"] = _SnowflakeConfig
-        return _SnowflakeConfig
     
     # Lazy-load HuggingFaceEmbeddingConfig to reduce import-time memory cost
     if name == "HuggingFaceEmbeddingConfig":
