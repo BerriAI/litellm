@@ -674,6 +674,17 @@ export default function KeyInfoView({
                   </div>
 
                   <div>
+                    <Text className="font-medium">Disable Global Guardrails</Text>
+                    <Text>
+                      {currentKeyData.metadata?.disable_global_guardrails === true ? (
+                        <Badge color="yellow">Enabled - Global guardrails bypassed</Badge>
+                      ) : (
+                        <Badge color="green">Disabled - Global guardrails active</Badge>
+                      )}
+                    </Text>
+                  </div>
+
+                  <div>
                     <Text className="font-medium">Models</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {currentKeyData.models && currentKeyData.models.length > 0 ? (
