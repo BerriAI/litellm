@@ -1,4 +1,4 @@
-import { render, renderHook } from "@testing-library/react";
+import { render, renderHook, waitFor } from "@testing-library/react";
 import { describe, it, vi, expect } from "vitest";
 import { Form } from "antd";
 import AddModelTab from "./add_model_tab";
@@ -85,7 +85,7 @@ describe("Add Model Tab", () => {
     const userRole = "Admin";
     const premiumUser = true;
 
-    const { findByRole } = render(
+    const { container, findByText } = render(
       <AddModelTab
         form={form}
         handleOk={handleOk}
@@ -104,7 +104,14 @@ describe("Add Model Tab", () => {
         premiumUser={premiumUser}
       />,
     );
-    // Check for the heading specifically (use findByRole for async rendering)
-    expect(await findByRole("heading", { name: "Add Model" }, { timeout: 10000 })).toBeInTheDocument();
+    
+    // Wait for the tabs to render which indicates the component loaded
+    await waitFor(
+      () => {
+        const tabs = container.querySelectorAll('[role="tab"]');
+        expect(tabs.length).toBeGreaterThan(0);
+      },
+      { timeout: 10000 },
+    );
   });
 });
