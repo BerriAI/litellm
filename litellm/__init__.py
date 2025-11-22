@@ -28,7 +28,6 @@ from litellm.types.integrations.datadog import DatadogInitParams
 # Caching classes are lazy-loaded to reduce import-time memory cost
 # from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 
-from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm.types.utils import (
     ImageObject,
     BudgetConfig,
@@ -83,7 +82,6 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.types.guardrails import GuardrailItem
 from litellm.types.secret_managers.main import (
     KeyManagementSystem,
     KeyManagementSettings,
@@ -101,6 +99,8 @@ from litellm.types.utils import PriorityReservationSettings
 # Import only for type checking; runtime access is via __getattr__
 if TYPE_CHECKING:
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
+    from litellm.types.guardrails import GuardrailItem
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -315,7 +315,7 @@ AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the lates
 ### DEFAULT WATSONX API VERSION ###
 WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
-COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: COHERE_EMBEDDING_INPUT_TYPES = "search_document"
+COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: "COHERE_EMBEDDING_INPUT_TYPES" = "search_document"
 ### CREDENTIALS ###
 credential_list: List[CredentialItem] = []
 ### GUARDRAILS ###
@@ -327,7 +327,7 @@ llamaguard_unsafe_content_categories: Optional[str] = None
 blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
-guardrail_name_config_map: Dict[str, GuardrailItem] = {}
+guardrail_name_config_map: Dict[str, "GuardrailItem"] = {}
 include_cost_in_streaming_usage: bool = False
 ### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
@@ -1066,7 +1066,7 @@ openai_video_generation_models = ["sora-2"]
 
 from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
+# Note: remove_index_from_tool_calls is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: get_modified_max_tokens is not exported from __init__.py and is only used
 # internally in utils.py, so we don't need to import it here
 # client must be imported immediately as it's used as a decorator at function definition time
@@ -1835,5 +1835,23 @@ def __getattr__(name: str) -> Any:
         from litellm.integrations.dotprompt import set_global_prompt_directory as _set_global_prompt_directory
         globals()["set_global_prompt_directory"] = _set_global_prompt_directory
         return _set_global_prompt_directory
+    
+    # Lazy-load COHERE_EMBEDDING_INPUT_TYPES to reduce import-time memory cost
+    if name == "COHERE_EMBEDDING_INPUT_TYPES":
+        from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES as _COHERE_EMBEDDING_INPUT_TYPES
+        globals()["COHERE_EMBEDDING_INPUT_TYPES"] = _COHERE_EMBEDDING_INPUT_TYPES
+        return _COHERE_EMBEDDING_INPUT_TYPES
+    
+    # Lazy-load GuardrailItem to reduce import-time memory cost
+    if name == "GuardrailItem":
+        from litellm.types.guardrails import GuardrailItem as _GuardrailItem
+        globals()["GuardrailItem"] = _GuardrailItem
+        return _GuardrailItem
+    
+    # Lazy-load remove_index_from_tool_calls to reduce import-time memory cost
+    if name == "remove_index_from_tool_calls":
+        from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls as _remove_index_from_tool_calls
+        globals()["remove_index_from_tool_calls"] = _remove_index_from_tool_calls
+        return _remove_index_from_tool_calls
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
