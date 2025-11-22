@@ -88,6 +88,10 @@ if TYPE_CHECKING:
     from litellm.llms.github.chat.transformation import GithubChatConfig
     from litellm.llms.compactifai.chat.transformation import CompactifAIChatConfig
     from litellm.llms.empower.chat.transformation import EmpowerChatConfig
+    from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
+    from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.databricks.chat.transformation import DatabricksConfig
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -1056,13 +1060,10 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 
-from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
 from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
 from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
-from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.datarobot.chat.transformation import DataRobotConfig
-from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
@@ -1991,5 +1992,29 @@ def __getattr__(name: str) -> Any:
         from .llms.empower.chat.transformation import EmpowerChatConfig as _EmpowerChatConfig
         globals()["EmpowerChatConfig"] = _EmpowerChatConfig
         return _EmpowerChatConfig
+    
+    # Lazy-load HuggingFaceChatConfig to reduce import-time memory cost
+    if name == "HuggingFaceChatConfig":
+        from .llms.huggingface.chat.transformation import HuggingFaceChatConfig as _HuggingFaceChatConfig
+        globals()["HuggingFaceChatConfig"] = _HuggingFaceChatConfig
+        return _HuggingFaceChatConfig
+    
+    # Lazy-load OpenrouterConfig to reduce import-time memory cost
+    if name == "OpenrouterConfig":
+        from .llms.openrouter.chat.transformation import OpenrouterConfig as _OpenrouterConfig
+        globals()["OpenrouterConfig"] = _OpenrouterConfig
+        return _OpenrouterConfig
+    
+    # Lazy-load AnthropicConfig to reduce import-time memory cost
+    if name == "AnthropicConfig":
+        from .llms.anthropic.chat.transformation import AnthropicConfig as _AnthropicConfig
+        globals()["AnthropicConfig"] = _AnthropicConfig
+        return _AnthropicConfig
+    
+    # Lazy-load DatabricksConfig to reduce import-time memory cost
+    if name == "DatabricksConfig":
+        from .llms.databricks.chat.transformation import DatabricksConfig as _DatabricksConfig
+        globals()["DatabricksConfig"] = _DatabricksConfig
+        return _DatabricksConfig
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
