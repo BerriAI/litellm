@@ -74,10 +74,6 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.types.secret_managers.main import (
-    KeyManagementSystem,
-    KeyManagementSettings,
-)
 from litellm.types.utils import LlmProviders, PriorityReservationSettings
 if TYPE_CHECKING:
     from litellm.integrations.custom_logger import CustomLogger
@@ -85,6 +81,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import GuardrailItem
     from litellm.types.utils import CredentialItem, BudgetConfig, PriorityReservationDict, StandardKeyGenerationConfig, LlmProviders, PriorityReservationSettings
     from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, LiteLLM_UpperboundKeyGenerateParams
+    from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -440,8 +437,11 @@ secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 )
 _google_kms_resource_name: Optional[str] = None
-_key_management_system: Optional[KeyManagementSystem] = None
-_key_management_settings: KeyManagementSettings = KeyManagementSettings()
+_key_management_system: Optional["KeyManagementSystem"] = None
+# KeyManagementSettings must be imported directly because _key_management_settings
+# is accessed during import (in dd_tracing.py via get_secret)
+from litellm.types.secret_managers.main import KeyManagementSettings
+_key_management_settings: "KeyManagementSettings" = KeyManagementSettings()
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
@@ -1818,6 +1818,21 @@ def _lazy_import_ui_sso(name: str) -> Any:
     raise AttributeError(f"UI SSO lazy import: unknown attribute {name!r}")
 
 
+def _lazy_import_secret_managers(name: str) -> Any:
+    """Lazy import for types.secret_managers.main module - imports only the requested item by name."""
+    if name == "KeyManagementSystem":
+        from litellm.types.secret_managers.main import KeyManagementSystem as _KeyManagementSystem
+        globals()["KeyManagementSystem"] = _KeyManagementSystem
+        return _KeyManagementSystem
+    
+    if name == "KeyManagementSettings":
+        from litellm.types.secret_managers.main import KeyManagementSettings as _KeyManagementSettings
+        globals()["KeyManagementSettings"] = _KeyManagementSettings
+        return _KeyManagementSettings
+    
+    raise AttributeError(f"Secret managers lazy import: unknown attribute {name!r}")
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
@@ -1869,6 +1884,9 @@ def __getattr__(name: str) -> Any:
     
     if name in {"DefaultTeamSSOParams", "LiteLLM_UpperboundKeyGenerateParams"}:
         return _lazy_import_ui_sso(name)
+    
+    if name == "KeyManagementSystem":
+        return _lazy_import_secret_managers(name)
     
     if name == "provider_list":
         provider_list_val = list(LlmProviders)
