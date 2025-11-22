@@ -259,9 +259,12 @@ class TestPromptVersionsEndpoint:
 
             # Should return 3 versions of jack, sorted newest first
             assert len(response.prompts) == 3
-            assert response.prompts[0].prompt_id == "jack.v3"
-            assert response.prompts[1].prompt_id == "jack.v2"
-            assert response.prompts[2].prompt_id == "jack.v1"
+            assert response.prompts[0].prompt_id == "jack"
+            assert response.prompts[0].version == 3
+            assert response.prompts[1].prompt_id == "jack"
+            assert response.prompts[1].version == 2
+            assert response.prompts[2].prompt_id == "jack"
+            assert response.prompts[2].version == 1
 
             # Test with versioned prompt ID (should strip version)
             response = await get_prompt_versions(
@@ -270,7 +273,8 @@ class TestPromptVersionsEndpoint:
             )
 
             assert len(response.prompts) == 3
-            assert response.prompts[0].prompt_id == "jack.v3"
+            assert response.prompts[0].prompt_id == "jack"
+            assert response.prompts[0].version == 3
 
     @pytest.mark.asyncio
     async def test_get_prompt_versions_not_found(self):
