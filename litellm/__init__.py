@@ -95,6 +95,13 @@ if TYPE_CHECKING:
     from litellm.llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
+    from litellm.llms.friendliai.chat.transformation import FriendliaiChatConfig
+    from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
+    from litellm.llms.xai.chat.transformation import XAIChatConfig
+    from litellm.llms.xai.common_utils import XAIModelInfo
+    from litellm.llms.aiml.chat.transformation import AIMLChatConfig
+    from litellm.llms.volcengine.chat.transformation import VolcEngineChatConfig
+    from litellm.llms.codestral.completion.transformation import CodestralTextCompletionConfig
     from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
     from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -1176,15 +1183,6 @@ from .llms.fireworks_ai.audio_transcription.transformation import (
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
-from .llms.friendliai.chat.transformation import FriendliaiChatConfig
-from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
-from .llms.xai.chat.transformation import XAIChatConfig
-from .llms.xai.common_utils import XAIModelInfo
-from .llms.aiml.chat.transformation import AIMLChatConfig
-from .llms.volcengine.chat.transformation import (
-    VolcEngineChatConfig as VolcEngineConfig,
-)
-from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
 from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
@@ -1461,7 +1459,7 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_openai_like_configs(name)
     
     # Lazy-load small provider chat configs to reduce import-time memory cost
-    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig", "BasetenConfig", "SambanovaConfig", "FireworksAIConfig"}:
+    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig", "BasetenConfig", "SambanovaConfig", "FireworksAIConfig", "FriendliaiChatConfig", "XAIChatConfig", "AIMLChatConfig", "VolcEngineConfig", "VolcEngineChatConfig"}:
         from ._lazy_imports import _lazy_import_small_provider_chat_configs
         return _lazy_import_small_provider_chat_configs(name)
     
@@ -1594,10 +1592,17 @@ def __getattr__(name: str) -> Any:
         "DeepInfraConfig", "GroqChatConfig", "VoyageEmbeddingConfig",
         "InfinityEmbeddingConfig", "AzureAIStudioConfig", "MistralConfig",
         "SambaNovaEmbeddingConfig", "FireworksAITextCompletionConfig",
+        "JinaAIEmbeddingConfig", "CodestralTextCompletionConfig",
     }
     if name in _misc_transformation_config_names:
         from ._lazy_imports import _lazy_import_misc_transformation_configs
         return _lazy_import_misc_transformation_configs(name)
+    
+    # Lazy-load XAIModelInfo to reduce import-time memory cost
+    if name == "XAIModelInfo":
+        from .llms.xai.common_utils import XAIModelInfo as _XAIModelInfo
+        globals()["XAIModelInfo"] = _XAIModelInfo
+        return _XAIModelInfo
     
     # Lazy-load rerank configs to reduce import-time memory cost
     _rerank_config_names = {

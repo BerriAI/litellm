@@ -596,6 +596,33 @@ def _lazy_import_small_provider_chat_configs(name: str) -> Any:
         _globals["FireworksAIConfig"] = _FireworksAIConfig
         return _FireworksAIConfig
     
+    if name == "FriendliaiChatConfig":
+        from .llms.friendliai.chat.transformation import FriendliaiChatConfig as _FriendliaiChatConfig
+        _globals["FriendliaiChatConfig"] = _FriendliaiChatConfig
+        return _FriendliaiChatConfig
+    
+    if name == "XAIChatConfig":
+        from .llms.xai.chat.transformation import XAIChatConfig as _XAIChatConfig
+        _globals["XAIChatConfig"] = _XAIChatConfig
+        return _XAIChatConfig
+    
+    if name == "AIMLChatConfig":
+        from .llms.aiml.chat.transformation import AIMLChatConfig as _AIMLChatConfig
+        _globals["AIMLChatConfig"] = _AIMLChatConfig
+        return _AIMLChatConfig
+    
+    if name == "VolcEngineConfig":
+        from .llms.volcengine.chat.transformation import VolcEngineChatConfig as _VolcEngineChatConfig
+        _globals["VolcEngineChatConfig"] = _VolcEngineChatConfig
+        _globals["VolcEngineConfig"] = _VolcEngineChatConfig  # alias
+        return _VolcEngineChatConfig
+    
+    if name == "VolcEngineChatConfig":
+        from .llms.volcengine.chat.transformation import VolcEngineChatConfig as _VolcEngineChatConfig
+        _globals["VolcEngineChatConfig"] = _VolcEngineChatConfig
+        _globals["VolcEngineConfig"] = _VolcEngineChatConfig  # alias
+        return _VolcEngineChatConfig
+    
     raise AttributeError(f"Small provider chat configs lazy import: unknown attribute {name!r}")
 
 
@@ -990,5 +1017,15 @@ def _lazy_import_misc_transformation_configs(name: str) -> Any:
         from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig as _FireworksAITextCompletionConfig
         _globals["FireworksAITextCompletionConfig"] = _FireworksAITextCompletionConfig
         return _FireworksAITextCompletionConfig
+    
+    if name == "JinaAIEmbeddingConfig":
+        from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig as _JinaAIEmbeddingConfig
+        _globals["JinaAIEmbeddingConfig"] = _JinaAIEmbeddingConfig
+        return _JinaAIEmbeddingConfig
+    
+    if name == "CodestralTextCompletionConfig":
+        from .llms.codestral.completion.transformation import CodestralTextCompletionConfig as _CodestralTextCompletionConfig
+        _globals["CodestralTextCompletionConfig"] = _CodestralTextCompletionConfig
+        return _CodestralTextCompletionConfig
     
     raise AttributeError(f"Misc transformation configs lazy import: unknown attribute {name!r}")
