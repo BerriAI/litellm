@@ -386,6 +386,9 @@ curl --location 'http://localhost:4000/v1/vector_stores/vs_123/files' \
     - Fix UI logos loading with SERVER_ROOT_PATH - [PR #16618](https://github.com/BerriAI/litellm/pull/16618)
     - Fix remove misleading 'Custom' option mention from OpenAI endpoint tooltips - [PR #16622](https://github.com/BerriAI/litellm/pull/16622)
 
+- **SSO**
+    - Ensure `role` from SSO provider is used when a user is inserted onto LiteLLM - [PR #16794](https://github.com/BerriAI/litellm/pull/16794)
+
 #### Bugs
 
 - **Management Endpoints**
