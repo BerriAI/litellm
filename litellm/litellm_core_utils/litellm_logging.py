@@ -4619,6 +4619,17 @@ class StandardLoggingPayloadSetup:
         return header_tags if header_tags else None
 
     @staticmethod
+    def _get_response_tags(proxy_server_request: dict) -> List[str]:
+        response_tags: List[str] = []
+        headers = proxy_server_request.get("headers", {})
+        if headers:
+            if "x-litellm-tags" in headers and isinstance(
+                headers["x-litellm-tags"], str
+            ):
+                response_tags.extend(headers["x-litellm-tags"].split(","))
+        return response_tags
+
+    @staticmethod
     def _get_request_tags(
         litellm_params: dict, proxy_server_request: dict
     ) -> List[str]:
@@ -4637,10 +4648,15 @@ class StandardLoggingPayloadSetup:
         additional_header_tags = StandardLoggingPayloadSetup._get_extra_header_tags(
             proxy_server_request
         )
+        response_tags = StandardLoggingPayloadSetup._get_response_tags(
+            proxy_server_request
+        )
         if user_agent_tags is not None:
             request_tags.extend(user_agent_tags)
         if additional_header_tags is not None:
             request_tags.extend(additional_header_tags)
+        if response_tags:
+            request_tags.extend(response_tags)
         return request_tags
 
 
