@@ -530,6 +530,14 @@ class ProxyBaseLLMRequestProcessing:
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
+
+        # Fallback: extract model_id from litellm_metadata if not in hidden_params
+        # This is needed for ResponsesAPIStreamingIterator where _hidden_params might not be accessible
+        if not model_id:
+            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", "") or ""
+
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
         response_cost = hidden_params.get("response_cost", None) or ""
@@ -755,7 +763,7 @@ class ProxyBaseLLMRequestProcessing:
         #
         # Note: We check the direct model_info path first (not nested in metadata) because that's where the router sets it.
         # The nested metadata path is only a fallback for cases where model_info wasn't set at the top level.
-        model_id = self.maybe_get_model_id_from_logging_obj(_litellm_logging_obj)
+        model_id = self.maybe_get_model_id(_litellm_logging_obj)
 
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
@@ -1076,7 +1084,7 @@ class ProxyBaseLLMRequestProcessing:
                 return obj
         return None
 
-    def maybe_get_model_id_from_logging_obj(self, _logging_obj: Optional[LiteLLMLoggingObj]) -> Optional[str]:
+    def maybe_get_model_id(self, _logging_obj: Optional[LiteLLMLoggingObj]) -> Optional[str]:
         """
         Get model_id from logging object or request metadata.
 

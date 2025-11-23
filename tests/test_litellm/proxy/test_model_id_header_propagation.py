@@ -1,7 +1,7 @@
 """
 Test that x-litellm-model-id header is propagated correctly on error responses.
 
-This test suite verifies the `maybe_get_model_id_from_logging_obj` method
+This test suite verifies the `maybe_get_model_id` method
 which is responsible for extracting model_id from different locations
 depending on the request lifecycle stage.
 """
@@ -13,7 +13,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy._types import UserAPIKeyAuth
 
 
-def test_maybe_get_model_id_from_logging_obj_from_litellm_params():
+def test_maybe_get_model_id_from_litellm_params():
     """
     Test extraction of model_id from logging_obj.litellm_params (used by /v1/chat/completions).
     """
@@ -29,12 +29,12 @@ def test_maybe_get_model_id_from_logging_obj_from_litellm_params():
     }
 
     # Test extraction
-    model_id = processor.maybe_get_model_id_from_logging_obj(mock_logging_obj)
+    model_id = processor.maybe_get_model_id(mock_logging_obj)
 
     assert model_id == "test-model-id-from-litellm-params"
 
 
-def test_maybe_get_model_id_from_logging_obj_from_litellm_params_nested():
+def test_maybe_get_model_id_from_litellm_params_nested():
     """
     Test extraction of model_id from nested metadata in logging_obj.litellm_params.
     """
@@ -51,12 +51,12 @@ def test_maybe_get_model_id_from_logging_obj_from_litellm_params_nested():
     }
 
     # Test extraction
-    model_id = processor.maybe_get_model_id_from_logging_obj(mock_logging_obj)
+    model_id = processor.maybe_get_model_id(mock_logging_obj)
 
     assert model_id == "test-model-id-nested"
 
 
-def test_maybe_get_model_id_from_logging_obj_from_kwargs():
+def test_maybe_get_model_id_from_kwargs():
     """
     Test extraction of model_id from logging_obj.kwargs (fallback path).
     """
@@ -74,12 +74,12 @@ def test_maybe_get_model_id_from_logging_obj_from_kwargs():
     }
 
     # Test extraction
-    model_id = processor.maybe_get_model_id_from_logging_obj(mock_logging_obj)
+    model_id = processor.maybe_get_model_id(mock_logging_obj)
 
     assert model_id == "test-model-id-from-kwargs"
 
 
-def test_maybe_get_model_id_from_logging_obj_from_data():
+def test_maybe_get_model_id_from_data():
     """
     Test extraction of model_id from self.data (used by /v1/messages and /v1/responses).
     """
@@ -98,12 +98,12 @@ def test_maybe_get_model_id_from_logging_obj_from_data():
     mock_logging_obj.kwargs = {}
 
     # Test extraction - should fall back to self.data
-    model_id = processor.maybe_get_model_id_from_logging_obj(mock_logging_obj)
+    model_id = processor.maybe_get_model_id(mock_logging_obj)
 
     assert model_id == "test-model-id-from-data"
 
 
-def test_maybe_get_model_id_from_logging_obj_no_logging_obj():
+def test_maybe_get_model_id_no_logging_obj():
     """
     Test extraction of model_id when logging_obj is None (should use self.data).
     """
@@ -117,12 +117,12 @@ def test_maybe_get_model_id_from_logging_obj_no_logging_obj():
     })
 
     # Test extraction with None logging_obj
-    model_id = processor.maybe_get_model_id_from_logging_obj(None)
+    model_id = processor.maybe_get_model_id(None)
 
     assert model_id == "test-model-id-no-logging-obj"
 
 
-def test_maybe_get_model_id_from_logging_obj_not_found():
+def test_maybe_get_model_id_not_found():
     """
     Test extraction of model_id when it's not available anywhere (should return None).
     """
@@ -134,7 +134,7 @@ def test_maybe_get_model_id_from_logging_obj_not_found():
     mock_logging_obj.kwargs = {}
 
     # Test extraction - should return None
-    model_id = processor.maybe_get_model_id_from_logging_obj(mock_logging_obj)
+    model_id = processor.maybe_get_model_id(mock_logging_obj)
 
     assert model_id is None
 
@@ -161,7 +161,7 @@ def test_maybe_get_model_id_priority_litellm_params_over_data():
     }
 
     # Test extraction - should prefer litellm_params
-    model_id = processor.maybe_get_model_id_from_logging_obj(mock_logging_obj)
+    model_id = processor.maybe_get_model_id(mock_logging_obj)
 
     assert model_id == "model-id-from-litellm-params"
 
