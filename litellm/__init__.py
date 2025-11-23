@@ -1220,7 +1220,15 @@ from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
 from .utils import client
-from .main import *  # type: ignore
+# main module functions are lazy-loaded to reduce import-time memory cost
+# from .main import *  # type: ignore
+# However, get_secret functions must be imported directly as they're used during module initialization
+from .secret_managers.main import get_secret, get_secret_str, get_secret_bool
+# ModelResponse, token_counter, print_verbose, and CustomStreamWrapper must be imported directly
+# as they're used during module initialization or in type annotations
+from .types.utils import ModelResponse
+from .utils import token_counter, print_verbose
+from .litellm_core_utils.streaming_handler import CustomStreamWrapper
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
