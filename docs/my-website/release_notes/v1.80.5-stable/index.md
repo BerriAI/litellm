@@ -54,6 +54,33 @@ pip install litellm==1.80.5
 
 ---
 
+### Performance – `/realtime` 182× Lower p99 Latency
+
+This update reduces `/realtime` latency by removing redundant encodings on the hot path, reusing shared SSL contexts, and caching formatting strings that were being regenerated twice per request despite rarely changing.
+
+#### Results
+
+| Metric          | Before    | After     | Improvement                |
+| --------------- | --------- | --------- | -------------------------- |
+| Median latency  | 2,200 ms  | **59 ms** | **−97% (~37× faster)**     |
+| p95 latency     | 8,500 ms  | **67 ms** | **−99% (~127× faster)**    |
+| p99 latency     | 18,000 ms | **99 ms** | **−99% (~182× faster)**    |
+| Average latency | 3,214 ms  | **63 ms** | **−98% (~51× faster)**     |
+| RPS             | 165       | **1,207** | **+631% (~7.3× increase)** |
+
+
+#### Test Setup
+
+| Category | Specification |
+|----------|---------------|
+| **Load Testing** | Locust: 1,000 concurrent users, 500 ramp-up |
+| **System** | 4 vCPUs, 8 GB RAM, 4 workers, 4 instances |
+| **Database** | PostgreSQL (Redis unused) |
+| **Configuration** | [config.yaml](https://gist.github.com/AlexsanderHamir/420fb44c31c00b4f17a99588637f01ec) |
+| **Load Script** | [no_cache_hits.py](https://gist.github.com/AlexsanderHamir/73b83ada21d9b84d4fe09665cf1745f5) |
+
+---
+
 ## New Providers and Endpoints
 
 ### New Providers
