@@ -376,3 +376,19 @@ def _lazy_import_types_utils(name: str) -> Any:
     
     raise AttributeError(f"Types utils lazy import: unknown attribute {name!r}")
 
+
+def _lazy_import_ui_sso(name: str) -> Any:
+    """Lazy import for types.proxy.management_endpoints.ui_sso module - imports only the requested item by name."""
+    _globals = _get_litellm_globals()
+    if name == "DefaultTeamSSOParams":
+        from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams as _DefaultTeamSSOParams
+        _globals["DefaultTeamSSOParams"] = _DefaultTeamSSOParams
+        return _DefaultTeamSSOParams
+    
+    if name == "LiteLLM_UpperboundKeyGenerateParams":
+        from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams as _LiteLLM_UpperboundKeyGenerateParams
+        _globals["LiteLLM_UpperboundKeyGenerateParams"] = _LiteLLM_UpperboundKeyGenerateParams
+        return _LiteLLM_UpperboundKeyGenerateParams
+    
+    raise AttributeError(f"UI SSO lazy import: unknown attribute {name!r}")
+

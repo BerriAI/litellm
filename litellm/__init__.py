@@ -1356,19 +1356,6 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 
 
-def _lazy_import_ui_sso(name: str) -> Any:
-    """Lazy import for types.proxy.management_endpoints.ui_sso module - imports only the requested item by name."""
-    if name == "DefaultTeamSSOParams":
-        from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams as _DefaultTeamSSOParams
-        globals()["DefaultTeamSSOParams"] = _DefaultTeamSSOParams
-        return _DefaultTeamSSOParams
-    
-    if name == "LiteLLM_UpperboundKeyGenerateParams":
-        from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams as _LiteLLM_UpperboundKeyGenerateParams
-        globals()["LiteLLM_UpperboundKeyGenerateParams"] = _LiteLLM_UpperboundKeyGenerateParams
-        return _LiteLLM_UpperboundKeyGenerateParams
-    
-    raise AttributeError(f"UI SSO lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_secret_managers(name: str) -> Any:
@@ -1969,6 +1956,7 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_types_utils(name)
     
     if name in {"DefaultTeamSSOParams", "LiteLLM_UpperboundKeyGenerateParams"}:
+        from ._lazy_imports import _lazy_import_ui_sso
         return _lazy_import_ui_sso(name)
     
     if name == "KeyManagementSystem":
