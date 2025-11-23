@@ -48,10 +48,6 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
-> [!IMPORTANT]
-> LiteLLM v1.0.0 now requires `openai>=1.0.0`. Migration guide [here](https://docs.litellm.ai/docs/migration)
-> LiteLLM v1.40.14+ now requires `pydantic>=2.0.0`. No changes required.
-
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Getting_Started.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
@@ -113,6 +109,8 @@ print(response)
     }
 }
 ```
+
+> **Note:** LiteLLM also supports the [Responses API](https://docs.litellm.ai/docs/response_api) (`litellm.responses()`) for MCP tools, Computer Use, and session management.
 
 Call any model supported by a provider, with `model=<provider_name>/<model_name>`. There might be provider-specific details here, so refer to [provider docs for more information](https://docs.litellm.ai/docs/providers)
 
