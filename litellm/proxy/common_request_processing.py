@@ -1077,6 +1077,12 @@ class ProxyBaseLLMRequestProcessing:
         return None
 
     def maybe_get_model_id_from_logging_obj(self, _logging_obj: Optional[LiteLLMLoggingObj]) -> Optional[str]:
+        """
+        Get model_id from logging object or request metadata.
+
+        The router sets model_info.id when selecting a deployment. This tries multiple locations
+        where the ID might be stored depending on the request lifecycle stage.
+        """
         model_id = None
         if _logging_obj:
             # 1. Try getting from litellm_params (updated during call)
@@ -1108,5 +1114,11 @@ class ProxyBaseLLMRequestProcessing:
                         metadata = litellm_params.get("metadata") or {}
                         model_info = metadata.get("model_info") or {}
                         model_id = model_info.get("id", None)
+
+        # 3. Final fallback to self.data["litellm_metadata"] (for routes like /v1/responses that populate data before error)
+        if not model_id:
+            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", None)
 
         return model_id
