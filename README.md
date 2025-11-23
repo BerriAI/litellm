@@ -110,7 +110,7 @@ print(response)
 }
 ```
 
-> **Note:** LiteLLM also supports the [Responses API](https://docs.litellm.ai/docs/response_api) (`litellm.responses()`) for MCP tools, Computer Use, and session management.
+> **Note:** LiteLLM also supports the [Responses API](https://docs.litellm.ai/docs/response_api) (`litellm.responses()`)
 
 Call any model supported by a provider, with `model=<provider_name>/<model_name>`. There might be provider-specific details here, so refer to [provider docs for more information](https://docs.litellm.ai/docs/providers)
 
