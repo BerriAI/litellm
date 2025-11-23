@@ -1358,19 +1358,6 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 
 
-def _lazy_import_secret_managers(name: str) -> Any:
-    """Lazy import for types.secret_managers.main module - imports only the requested item by name."""
-    if name == "KeyManagementSystem":
-        from litellm.types.secret_managers.main import KeyManagementSystem as _KeyManagementSystem
-        globals()["KeyManagementSystem"] = _KeyManagementSystem
-        return _KeyManagementSystem
-    
-    if name == "KeyManagementSettings":
-        from litellm.types.secret_managers.main import KeyManagementSettings as _KeyManagementSettings
-        globals()["KeyManagementSettings"] = _KeyManagementSettings
-        return _KeyManagementSettings
-    
-    raise AttributeError(f"Secret managers lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_logging_integrations(name: str) -> Any:
@@ -1960,6 +1947,7 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_ui_sso(name)
     
     if name == "KeyManagementSystem":
+        from ._lazy_imports import _lazy_import_secret_managers
         return _lazy_import_secret_managers(name)
     
     if name == "provider_list":

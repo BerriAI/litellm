@@ -392,3 +392,19 @@ def _lazy_import_ui_sso(name: str) -> Any:
     
     raise AttributeError(f"UI SSO lazy import: unknown attribute {name!r}")
 
+
+def _lazy_import_secret_managers(name: str) -> Any:
+    """Lazy import for types.secret_managers.main module - imports only the requested item by name."""
+    _globals = _get_litellm_globals()
+    if name == "KeyManagementSystem":
+        from litellm.types.secret_managers.main import KeyManagementSystem as _KeyManagementSystem
+        _globals["KeyManagementSystem"] = _KeyManagementSystem
+        return _KeyManagementSystem
+    
+    if name == "KeyManagementSettings":
+        from litellm.types.secret_managers.main import KeyManagementSettings as _KeyManagementSettings
+        _globals["KeyManagementSettings"] = _KeyManagementSettings
+        return _KeyManagementSettings
+    
+    raise AttributeError(f"Secret managers lazy import: unknown attribute {name!r}")
+
