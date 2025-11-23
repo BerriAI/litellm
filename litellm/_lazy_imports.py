@@ -411,70 +411,73 @@ def _lazy_import_secret_managers(name: str) -> Any:
 
 def _lazy_import_logging_integrations(name: str) -> Any:
     """Lazy import for logging-related integrations - imports only the requested item by name."""
+    _globals = _get_litellm_globals()
     if name == "CustomLogger":
         from litellm.integrations.custom_logger import CustomLogger as _CustomLogger
-        globals()["CustomLogger"] = _CustomLogger
+        _globals["CustomLogger"] = _CustomLogger
         return _CustomLogger
     
     if name == "LoggingCallbackManager":
         from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager as _LoggingCallbackManager
-        globals()["LoggingCallbackManager"] = _LoggingCallbackManager
+        _globals["LoggingCallbackManager"] = _LoggingCallbackManager
         return _LoggingCallbackManager
     
     raise AttributeError(f"Logging integrations lazy import: unknown attribute {name!r}")
 
 def _lazy_import_nvidia_nim_configs(name: str) -> Any:
     """Lazy import for NvidiaNim config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "NvidiaNimConfig":
         from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
-        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
+        _globals["NvidiaNimConfig"] = _NvidiaNimConfig
         return _NvidiaNimConfig
     
     if name == "nvidiaNimConfig":
         from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
         _nvidiaNimConfig = _NvidiaNimConfig()
-        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
-        globals()["nvidiaNimConfig"] = _nvidiaNimConfig
+        _globals["NvidiaNimConfig"] = _NvidiaNimConfig
+        _globals["nvidiaNimConfig"] = _nvidiaNimConfig
         return _nvidiaNimConfig
     
     raise AttributeError(f"NvidiaNim configs lazy import: unknown attribute {name!r}")
 
 def _lazy_import_openai_gpt_configs(name: str) -> Any:
     """Lazy import for OpenAI GPT config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "OpenAIGPTConfig":
         from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as _OpenAIGPTConfig
-        globals()["OpenAIGPTConfig"] = _OpenAIGPTConfig
+        _globals["OpenAIGPTConfig"] = _OpenAIGPTConfig
         return _OpenAIGPTConfig
     
     if name == "openAIGPTConfig":
         from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as _OpenAIGPTConfig
         _openAIGPTConfig = _OpenAIGPTConfig()
-        globals()["OpenAIGPTConfig"] = _OpenAIGPTConfig
-        globals()["openAIGPTConfig"] = _openAIGPTConfig
+        _globals["OpenAIGPTConfig"] = _OpenAIGPTConfig
+        _globals["openAIGPTConfig"] = _openAIGPTConfig
         return _openAIGPTConfig
     
     if name == "OpenAIGPT5Config":
         from .llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config as _OpenAIGPT5Config
-        globals()["OpenAIGPT5Config"] = _OpenAIGPT5Config
+        _globals["OpenAIGPT5Config"] = _OpenAIGPT5Config
         return _OpenAIGPT5Config
     
     if name == "openAIGPT5Config":
         from .llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config as _OpenAIGPT5Config
         _openAIGPT5Config = _OpenAIGPT5Config()
-        globals()["OpenAIGPT5Config"] = _OpenAIGPT5Config
-        globals()["openAIGPT5Config"] = _openAIGPT5Config
+        _globals["OpenAIGPT5Config"] = _OpenAIGPT5Config
+        _globals["openAIGPT5Config"] = _openAIGPT5Config
         return _openAIGPT5Config
     
     if name == "OpenAIGPTAudioConfig":
         from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as _OpenAIGPTAudioConfig
-        globals()["OpenAIGPTAudioConfig"] = _OpenAIGPTAudioConfig
+        _globals["OpenAIGPTAudioConfig"] = _OpenAIGPTAudioConfig
         return _OpenAIGPTAudioConfig
     
     if name == "openAIGPTAudioConfig":
         from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as _OpenAIGPTAudioConfig
         _openAIGPTAudioConfig = _OpenAIGPTAudioConfig()
-        globals()["OpenAIGPTAudioConfig"] = _OpenAIGPTAudioConfig
-        globals()["openAIGPTAudioConfig"] = _openAIGPTAudioConfig
+        _globals["OpenAIGPTAudioConfig"] = _OpenAIGPTAudioConfig
+        _globals["openAIGPTAudioConfig"] = _openAIGPTAudioConfig
         return _openAIGPTAudioConfig
     
     raise AttributeError(f"OpenAI GPT configs lazy import: unknown attribute {name!r}")
@@ -483,19 +486,20 @@ def _lazy_import_openai_gpt_configs(name: str) -> Any:
 
 def _lazy_import_dotprompt(name: str) -> Any:
     """Lazy import for dotprompt module - imports only the requested item by name."""
+    _globals = _get_litellm_globals()
     if name == "global_prompt_manager":
         from litellm.integrations.dotprompt import global_prompt_manager as _global_prompt_manager
-        globals()["global_prompt_manager"] = _global_prompt_manager
+        _globals["global_prompt_manager"] = _global_prompt_manager
         return _global_prompt_manager
     
     if name == "global_prompt_directory":
         from litellm.integrations.dotprompt import global_prompt_directory as _global_prompt_directory
-        globals()["global_prompt_directory"] = _global_prompt_directory
+        _globals["global_prompt_directory"] = _global_prompt_directory
         return _global_prompt_directory
     
     if name == "set_global_prompt_directory":
         from litellm.integrations.dotprompt import set_global_prompt_directory as _set_global_prompt_directory
-        globals()["set_global_prompt_directory"] = _set_global_prompt_directory
+        _globals["set_global_prompt_directory"] = _set_global_prompt_directory
         return _set_global_prompt_directory
     
     raise AttributeError(f"Dotprompt lazy import: unknown attribute {name!r}")
@@ -503,14 +507,15 @@ def _lazy_import_dotprompt(name: str) -> Any:
 
 def _lazy_import_type_items(name: str) -> Any:
     """Lazy import for type-related items - imports only the requested item by name."""
+    _globals = _get_litellm_globals()
     if name == "COHERE_EMBEDDING_INPUT_TYPES":
         from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES as _COHERE_EMBEDDING_INPUT_TYPES
-        globals()["COHERE_EMBEDDING_INPUT_TYPES"] = _COHERE_EMBEDDING_INPUT_TYPES
+        _globals["COHERE_EMBEDDING_INPUT_TYPES"] = _COHERE_EMBEDDING_INPUT_TYPES
         return _COHERE_EMBEDDING_INPUT_TYPES
     
     if name == "GuardrailItem":
         from litellm.types.guardrails import GuardrailItem as _GuardrailItem
-        globals()["GuardrailItem"] = _GuardrailItem
+        _globals["GuardrailItem"] = _GuardrailItem
         return _GuardrailItem
     
     raise AttributeError(f"Type items lazy import: unknown attribute {name!r}")
@@ -518,9 +523,10 @@ def _lazy_import_type_items(name: str) -> Any:
 
 def _lazy_import_core_helpers(name: str) -> Any:
     """Lazy import for core helper functions - imports only the requested item by name."""
+    _globals = _get_litellm_globals()
     if name == "remove_index_from_tool_calls":
         from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls as _remove_index_from_tool_calls
-        globals()["remove_index_from_tool_calls"] = _remove_index_from_tool_calls
+        _globals["remove_index_from_tool_calls"] = _remove_index_from_tool_calls
         return _remove_index_from_tool_calls
     
     raise AttributeError(f"Core helpers lazy import: unknown attribute {name!r}")
@@ -528,14 +534,15 @@ def _lazy_import_core_helpers(name: str) -> Any:
 
 def _lazy_import_openai_like_configs(name: str) -> Any:
     """Lazy import for OpenAI-like config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "OpenAILikeChatConfig":
         from .llms.openai_like.chat.handler import OpenAILikeChatConfig as _OpenAILikeChatConfig
-        globals()["OpenAILikeChatConfig"] = _OpenAILikeChatConfig
+        _globals["OpenAILikeChatConfig"] = _OpenAILikeChatConfig
         return _OpenAILikeChatConfig
     
     if name == "AiohttpOpenAIChatConfig":
         from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig as _AiohttpOpenAIChatConfig
-        globals()["AiohttpOpenAIChatConfig"] = _AiohttpOpenAIChatConfig
+        _globals["AiohttpOpenAIChatConfig"] = _AiohttpOpenAIChatConfig
         return _AiohttpOpenAIChatConfig
     
     raise AttributeError(f"OpenAI-like configs lazy import: unknown attribute {name!r}")
@@ -543,44 +550,51 @@ def _lazy_import_openai_like_configs(name: str) -> Any:
 
 def _lazy_import_small_provider_chat_configs(name: str) -> Any:
     """Lazy import for smaller provider chat config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "GaladrielChatConfig":
         from .llms.galadriel.chat.transformation import GaladrielChatConfig as _GaladrielChatConfig
-        globals()["GaladrielChatConfig"] = _GaladrielChatConfig
+        _globals["GaladrielChatConfig"] = _GaladrielChatConfig
         return _GaladrielChatConfig
     
     if name == "GithubChatConfig":
         from .llms.github.chat.transformation import GithubChatConfig as _GithubChatConfig
-        globals()["GithubChatConfig"] = _GithubChatConfig
+        _globals["GithubChatConfig"] = _GithubChatConfig
         return _GithubChatConfig
     
     if name == "CompactifAIChatConfig":
         from .llms.compactifai.chat.transformation import CompactifAIChatConfig as _CompactifAIChatConfig
-        globals()["CompactifAIChatConfig"] = _CompactifAIChatConfig
+        _globals["CompactifAIChatConfig"] = _CompactifAIChatConfig
         return _CompactifAIChatConfig
     
     if name == "EmpowerChatConfig":
         from .llms.empower.chat.transformation import EmpowerChatConfig as _EmpowerChatConfig
-        globals()["EmpowerChatConfig"] = _EmpowerChatConfig
+        _globals["EmpowerChatConfig"] = _EmpowerChatConfig
         return _EmpowerChatConfig
+    
+    if name == "FeatherlessAIConfig":
+        from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig as _FeatherlessAIConfig
+        _globals["FeatherlessAIConfig"] = _FeatherlessAIConfig
+        return _FeatherlessAIConfig
     
     raise AttributeError(f"Small provider chat configs lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_data_platform_configs(name: str) -> Any:
     """Lazy import for data platform provider chat config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "DatabricksConfig":
         from .llms.databricks.chat.transformation import DatabricksConfig as _DatabricksConfig
-        globals()["DatabricksConfig"] = _DatabricksConfig
+        _globals["DatabricksConfig"] = _DatabricksConfig
         return _DatabricksConfig
     
     if name == "PredibaseConfig":
         from .llms.predibase.chat.transformation import PredibaseConfig as _PredibaseConfig
-        globals()["PredibaseConfig"] = _PredibaseConfig
+        _globals["PredibaseConfig"] = _PredibaseConfig
         return _PredibaseConfig
     
     if name == "SnowflakeConfig":
         from .llms.snowflake.chat.transformation import SnowflakeConfig as _SnowflakeConfig
-        globals()["SnowflakeConfig"] = _SnowflakeConfig
+        _globals["SnowflakeConfig"] = _SnowflakeConfig
         return _SnowflakeConfig
     
     raise AttributeError(f"Data platform configs lazy import: unknown attribute {name!r}")
@@ -588,14 +602,15 @@ def _lazy_import_data_platform_configs(name: str) -> Any:
 
 def _lazy_import_huggingface_configs(name: str) -> Any:
     """Lazy import for HuggingFace config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "HuggingFaceChatConfig":
         from .llms.huggingface.chat.transformation import HuggingFaceChatConfig as _HuggingFaceChatConfig
-        globals()["HuggingFaceChatConfig"] = _HuggingFaceChatConfig
+        _globals["HuggingFaceChatConfig"] = _HuggingFaceChatConfig
         return _HuggingFaceChatConfig
     
     if name == "HuggingFaceEmbeddingConfig":
         from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig as _HuggingFaceEmbeddingConfig
-        globals()["HuggingFaceEmbeddingConfig"] = _HuggingFaceEmbeddingConfig
+        _globals["HuggingFaceEmbeddingConfig"] = _HuggingFaceEmbeddingConfig
         return _HuggingFaceEmbeddingConfig
     
     raise AttributeError(f"HuggingFace configs lazy import: unknown attribute {name!r}")
@@ -603,19 +618,20 @@ def _lazy_import_huggingface_configs(name: str) -> Any:
 
 def _lazy_import_anthropic_configs(name: str) -> Any:
     """Lazy import for Anthropic config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "AnthropicConfig":
         from .llms.anthropic.chat.transformation import AnthropicConfig as _AnthropicConfig
-        globals()["AnthropicConfig"] = _AnthropicConfig
+        _globals["AnthropicConfig"] = _AnthropicConfig
         return _AnthropicConfig
     
     if name == "AnthropicTextConfig":
         from .llms.anthropic.completion.transformation import AnthropicTextConfig as _AnthropicTextConfig
-        globals()["AnthropicTextConfig"] = _AnthropicTextConfig
+        _globals["AnthropicTextConfig"] = _AnthropicTextConfig
         return _AnthropicTextConfig
     
     if name == "AnthropicMessagesConfig":
         from .llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig as _AnthropicMessagesConfig
-        globals()["AnthropicMessagesConfig"] = _AnthropicMessagesConfig
+        _globals["AnthropicMessagesConfig"] = _AnthropicMessagesConfig
         return _AnthropicMessagesConfig
     
     raise AttributeError(f"Anthropic configs lazy import: unknown attribute {name!r}")
@@ -623,14 +639,15 @@ def _lazy_import_anthropic_configs(name: str) -> Any:
 
 def _lazy_import_triton_configs(name: str) -> Any:
     """Lazy import for Triton config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "TritonConfig":
         from .llms.triton.completion.transformation import TritonConfig as _TritonConfig
-        globals()["TritonConfig"] = _TritonConfig
+        _globals["TritonConfig"] = _TritonConfig
         return _TritonConfig
     
     if name == "TritonEmbeddingConfig":
         from .llms.triton.embedding.transformation import TritonEmbeddingConfig as _TritonEmbeddingConfig
-        globals()["TritonEmbeddingConfig"] = _TritonEmbeddingConfig
+        _globals["TritonEmbeddingConfig"] = _TritonEmbeddingConfig
         return _TritonEmbeddingConfig
     
     raise AttributeError(f"Triton configs lazy import: unknown attribute {name!r}")
@@ -638,16 +655,17 @@ def _lazy_import_triton_configs(name: str) -> Any:
 
 def _lazy_import_ai21_configs(name: str) -> Any:
     """Lazy import for AI21 config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "AI21ChatConfig":
         from .llms.ai21.chat.transformation import AI21ChatConfig as _AI21ChatConfig
-        globals()["AI21ChatConfig"] = _AI21ChatConfig
-        globals()["AI21Config"] = _AI21ChatConfig  # alias
+        _globals["AI21ChatConfig"] = _AI21ChatConfig
+        _globals["AI21Config"] = _AI21ChatConfig  # alias
         return _AI21ChatConfig
     
     if name == "AI21Config":
         from .llms.ai21.chat.transformation import AI21ChatConfig as _AI21ChatConfig
-        globals()["AI21ChatConfig"] = _AI21ChatConfig
-        globals()["AI21Config"] = _AI21ChatConfig  # alias
+        _globals["AI21ChatConfig"] = _AI21ChatConfig
+        _globals["AI21Config"] = _AI21ChatConfig  # alias
         return _AI21ChatConfig
     
     raise AttributeError(f"AI21 configs lazy import: unknown attribute {name!r}")
@@ -655,14 +673,15 @@ def _lazy_import_ai21_configs(name: str) -> Any:
 
 def _lazy_import_ollama_configs(name: str) -> Any:
     """Lazy import for Ollama config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "OllamaChatConfig":
         from .llms.ollama.chat.transformation import OllamaChatConfig as _OllamaChatConfig
-        globals()["OllamaChatConfig"] = _OllamaChatConfig
+        _globals["OllamaChatConfig"] = _OllamaChatConfig
         return _OllamaChatConfig
     
     if name == "OllamaConfig":
         from .llms.ollama.completion.transformation import OllamaConfig as _OllamaConfig
-        globals()["OllamaConfig"] = _OllamaConfig
+        _globals["OllamaConfig"] = _OllamaConfig
         return _OllamaConfig
     
     raise AttributeError(f"Ollama configs lazy import: unknown attribute {name!r}")
@@ -670,14 +689,15 @@ def _lazy_import_ollama_configs(name: str) -> Any:
 
 def _lazy_import_sagemaker_configs(name: str) -> Any:
     """Lazy import for Sagemaker config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "SagemakerConfig":
         from .llms.sagemaker.completion.transformation import SagemakerConfig as _SagemakerConfig
-        globals()["SagemakerConfig"] = _SagemakerConfig
+        _globals["SagemakerConfig"] = _SagemakerConfig
         return _SagemakerConfig
     
     if name == "SagemakerChatConfig":
         from .llms.sagemaker.chat.transformation import SagemakerChatConfig as _SagemakerChatConfig
-        globals()["SagemakerChatConfig"] = _SagemakerChatConfig
+        _globals["SagemakerChatConfig"] = _SagemakerChatConfig
         return _SagemakerChatConfig
     
     raise AttributeError(f"Sagemaker configs lazy import: unknown attribute {name!r}")
@@ -685,14 +705,15 @@ def _lazy_import_sagemaker_configs(name: str) -> Any:
 
 def _lazy_import_cohere_chat_configs(name: str) -> Any:
     """Lazy import for Cohere chat config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "CohereChatConfig":
         from .llms.cohere.chat.transformation import CohereChatConfig as _CohereChatConfig
-        globals()["CohereChatConfig"] = _CohereChatConfig
+        _globals["CohereChatConfig"] = _CohereChatConfig
         return _CohereChatConfig
     
     if name == "CohereV2ChatConfig":
         from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig as _CohereV2ChatConfig
-        globals()["CohereV2ChatConfig"] = _CohereV2ChatConfig
+        _globals["CohereV2ChatConfig"] = _CohereV2ChatConfig
         return _CohereV2ChatConfig
     
     raise AttributeError(f"Cohere chat configs lazy import: unknown attribute {name!r}")
@@ -700,54 +721,55 @@ def _lazy_import_cohere_chat_configs(name: str) -> Any:
 
 def _lazy_import_rerank_configs(name: str) -> Any:
     """Lazy import for rerank config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "HuggingFaceRerankConfig":
         from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig as _HuggingFaceRerankConfig
-        globals()["HuggingFaceRerankConfig"] = _HuggingFaceRerankConfig
+        _globals["HuggingFaceRerankConfig"] = _HuggingFaceRerankConfig
         return _HuggingFaceRerankConfig
     
     if name == "CohereRerankConfig":
         from .llms.cohere.rerank.transformation import CohereRerankConfig as _CohereRerankConfig
-        globals()["CohereRerankConfig"] = _CohereRerankConfig
+        _globals["CohereRerankConfig"] = _CohereRerankConfig
         return _CohereRerankConfig
     
     if name == "CohereRerankV2Config":
         from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config as _CohereRerankV2Config
-        globals()["CohereRerankV2Config"] = _CohereRerankV2Config
+        _globals["CohereRerankV2Config"] = _CohereRerankV2Config
         return _CohereRerankV2Config
     
     if name == "AzureAIRerankConfig":
         from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig as _AzureAIRerankConfig
-        globals()["AzureAIRerankConfig"] = _AzureAIRerankConfig
+        _globals["AzureAIRerankConfig"] = _AzureAIRerankConfig
         return _AzureAIRerankConfig
     
     if name == "InfinityRerankConfig":
         from .llms.infinity.rerank.transformation import InfinityRerankConfig as _InfinityRerankConfig
-        globals()["InfinityRerankConfig"] = _InfinityRerankConfig
+        _globals["InfinityRerankConfig"] = _InfinityRerankConfig
         return _InfinityRerankConfig
     
     if name == "JinaAIRerankConfig":
         from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig as _JinaAIRerankConfig
-        globals()["JinaAIRerankConfig"] = _JinaAIRerankConfig
+        _globals["JinaAIRerankConfig"] = _JinaAIRerankConfig
         return _JinaAIRerankConfig
     
     if name == "DeepinfraRerankConfig":
         from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig as _DeepinfraRerankConfig
-        globals()["DeepinfraRerankConfig"] = _DeepinfraRerankConfig
+        _globals["DeepinfraRerankConfig"] = _DeepinfraRerankConfig
         return _DeepinfraRerankConfig
     
     if name == "HostedVLLMRerankConfig":
         from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig as _HostedVLLMRerankConfig
-        globals()["HostedVLLMRerankConfig"] = _HostedVLLMRerankConfig
+        _globals["HostedVLLMRerankConfig"] = _HostedVLLMRerankConfig
         return _HostedVLLMRerankConfig
     
     if name == "NvidiaNimRerankConfig":
         from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig as _NvidiaNimRerankConfig
-        globals()["NvidiaNimRerankConfig"] = _NvidiaNimRerankConfig
+        _globals["NvidiaNimRerankConfig"] = _NvidiaNimRerankConfig
         return _NvidiaNimRerankConfig
     
     if name == "VertexAIRerankConfig":
         from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig as _VertexAIRerankConfig
-        globals()["VertexAIRerankConfig"] = _VertexAIRerankConfig
+        _globals["VertexAIRerankConfig"] = _VertexAIRerankConfig
         return _VertexAIRerankConfig
     
     raise AttributeError(f"Rerank configs lazy import: unknown attribute {name!r}")
@@ -755,43 +777,44 @@ def _lazy_import_rerank_configs(name: str) -> Any:
 
 def _lazy_import_vertex_ai_configs(name: str) -> Any:
     """Lazy import for Vertex AI config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "VertexGeminiConfig":
         from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
-        globals()["VertexGeminiConfig"] = _VertexGeminiConfig
-        globals()["VertexAIConfig"] = _VertexGeminiConfig  # alias
+        _globals["VertexGeminiConfig"] = _VertexGeminiConfig
+        _globals["VertexAIConfig"] = _VertexGeminiConfig  # alias
         return _VertexGeminiConfig
     
     if name == "VertexAIConfig":
         from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
-        globals()["VertexGeminiConfig"] = _VertexGeminiConfig
-        globals()["VertexAIConfig"] = _VertexGeminiConfig  # alias
+        _globals["VertexGeminiConfig"] = _VertexGeminiConfig
+        _globals["VertexAIConfig"] = _VertexGeminiConfig  # alias
         return _VertexGeminiConfig
     
     if name == "GoogleAIStudioGeminiConfig":
         from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as _GoogleAIStudioGeminiConfig
-        globals()["GoogleAIStudioGeminiConfig"] = _GoogleAIStudioGeminiConfig
-        globals()["GeminiConfig"] = _GoogleAIStudioGeminiConfig  # alias
+        _globals["GoogleAIStudioGeminiConfig"] = _GoogleAIStudioGeminiConfig
+        _globals["GeminiConfig"] = _GoogleAIStudioGeminiConfig  # alias
         return _GoogleAIStudioGeminiConfig
     
     if name == "GeminiConfig":
         from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as _GoogleAIStudioGeminiConfig
-        globals()["GoogleAIStudioGeminiConfig"] = _GoogleAIStudioGeminiConfig
-        globals()["GeminiConfig"] = _GoogleAIStudioGeminiConfig  # alias
+        _globals["GoogleAIStudioGeminiConfig"] = _GoogleAIStudioGeminiConfig
+        _globals["GeminiConfig"] = _GoogleAIStudioGeminiConfig  # alias
         return _GoogleAIStudioGeminiConfig
     
     if name == "VertexAIAnthropicConfig":
         from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig as _VertexAIAnthropicConfig
-        globals()["VertexAIAnthropicConfig"] = _VertexAIAnthropicConfig
+        _globals["VertexAIAnthropicConfig"] = _VertexAIAnthropicConfig
         return _VertexAIAnthropicConfig
     
     if name == "VertexAILlama3Config":
         from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import VertexAILlama3Config as _VertexAILlama3Config
-        globals()["VertexAILlama3Config"] = _VertexAILlama3Config
+        _globals["VertexAILlama3Config"] = _VertexAILlama3Config
         return _VertexAILlama3Config
     
     if name == "VertexAIAi21Config":
         from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import VertexAIAi21Config as _VertexAIAi21Config
-        globals()["VertexAIAi21Config"] = _VertexAIAi21Config
+        _globals["VertexAIAi21Config"] = _VertexAIAi21Config
         return _VertexAIAi21Config
     
     raise AttributeError(f"Vertex AI configs lazy import: unknown attribute {name!r}")
@@ -799,49 +822,50 @@ def _lazy_import_vertex_ai_configs(name: str) -> Any:
 
 def _lazy_import_amazon_bedrock_configs(name: str) -> Any:
     """Lazy import for Amazon Bedrock config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "AmazonCohereChatConfig":
         from .llms.bedrock.chat.invoke_handler import AmazonCohereChatConfig as _AmazonCohereChatConfig
-        globals()["AmazonCohereChatConfig"] = _AmazonCohereChatConfig
+        _globals["AmazonCohereChatConfig"] = _AmazonCohereChatConfig
         return _AmazonCohereChatConfig
     
     if name == "AmazonBedrockGlobalConfig":
         from .llms.bedrock.common_utils import AmazonBedrockGlobalConfig as _AmazonBedrockGlobalConfig
-        globals()["AmazonBedrockGlobalConfig"] = _AmazonBedrockGlobalConfig
+        _globals["AmazonBedrockGlobalConfig"] = _AmazonBedrockGlobalConfig
         return _AmazonBedrockGlobalConfig
     
     if name == "AmazonAI21Config":
         from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config as _AmazonAI21Config
-        globals()["AmazonAI21Config"] = _AmazonAI21Config
+        _globals["AmazonAI21Config"] = _AmazonAI21Config
         return _AmazonAI21Config
     
     if name == "AmazonAnthropicConfig":
         from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import AmazonAnthropicConfig as _AmazonAnthropicConfig
-        globals()["AmazonAnthropicConfig"] = _AmazonAnthropicConfig
+        _globals["AmazonAnthropicConfig"] = _AmazonAnthropicConfig
         return _AmazonAnthropicConfig
     
     if name == "AmazonAnthropicClaudeConfig":
         from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig as _AmazonAnthropicClaudeConfig
-        globals()["AmazonAnthropicClaudeConfig"] = _AmazonAnthropicClaudeConfig
+        _globals["AmazonAnthropicClaudeConfig"] = _AmazonAnthropicClaudeConfig
         return _AmazonAnthropicClaudeConfig
     
     if name == "AmazonTitanG1Config":
         from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config as _AmazonTitanG1Config
-        globals()["AmazonTitanG1Config"] = _AmazonTitanG1Config
+        _globals["AmazonTitanG1Config"] = _AmazonTitanG1Config
         return _AmazonTitanG1Config
     
     if name == "AmazonTitanMultimodalEmbeddingG1Config":
         from .llms.bedrock.embed.amazon_titan_multimodal_transformation import AmazonTitanMultimodalEmbeddingG1Config as _AmazonTitanMultimodalEmbeddingG1Config
-        globals()["AmazonTitanMultimodalEmbeddingG1Config"] = _AmazonTitanMultimodalEmbeddingG1Config
+        _globals["AmazonTitanMultimodalEmbeddingG1Config"] = _AmazonTitanMultimodalEmbeddingG1Config
         return _AmazonTitanMultimodalEmbeddingG1Config
     
     if name == "AmazonTitanV2Config":
         from .llms.bedrock.embed.amazon_titan_v2_transformation import AmazonTitanV2Config as _AmazonTitanV2Config
-        globals()["AmazonTitanV2Config"] = _AmazonTitanV2Config
+        _globals["AmazonTitanV2Config"] = _AmazonTitanV2Config
         return _AmazonTitanV2Config
     
     if name == "BedrockCohereEmbeddingConfig":
         from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig as _BedrockCohereEmbeddingConfig
-        globals()["BedrockCohereEmbeddingConfig"] = _BedrockCohereEmbeddingConfig
+        _globals["BedrockCohereEmbeddingConfig"] = _BedrockCohereEmbeddingConfig
         return _BedrockCohereEmbeddingConfig
     
     raise AttributeError(f"Amazon Bedrock configs lazy import: unknown attribute {name!r}")
@@ -849,14 +873,15 @@ def _lazy_import_amazon_bedrock_configs(name: str) -> Any:
 
 def _lazy_import_deprecated_provider_configs(name: str) -> Any:
     """Lazy import for deprecated provider config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "PalmConfig":
         from .llms.deprecated_providers.palm import PalmConfig as _PalmConfig
-        globals()["PalmConfig"] = _PalmConfig
+        _globals["PalmConfig"] = _PalmConfig
         return _PalmConfig
     
     if name == "AlephAlphaConfig":
         from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig as _AlephAlphaConfig
-        globals()["AlephAlphaConfig"] = _AlephAlphaConfig
+        _globals["AlephAlphaConfig"] = _AlephAlphaConfig
         return _AlephAlphaConfig
     
     raise AttributeError(f"Deprecated provider configs lazy import: unknown attribute {name!r}")
@@ -864,14 +889,15 @@ def _lazy_import_deprecated_provider_configs(name: str) -> Any:
 
 def _lazy_import_azure_responses_configs(name: str) -> Any:
     """Lazy import for Azure OpenAI Responses API config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "AzureOpenAIResponsesAPIConfig":
         from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig as _AzureOpenAIResponsesAPIConfig
-        globals()["AzureOpenAIResponsesAPIConfig"] = _AzureOpenAIResponsesAPIConfig
+        _globals["AzureOpenAIResponsesAPIConfig"] = _AzureOpenAIResponsesAPIConfig
         return _AzureOpenAIResponsesAPIConfig
     
     if name == "AzureOpenAIOSeriesResponsesAPIConfig":
         from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig as _AzureOpenAIOSeriesResponsesAPIConfig
-        globals()["AzureOpenAIOSeriesResponsesAPIConfig"] = _AzureOpenAIOSeriesResponsesAPIConfig
+        _globals["AzureOpenAIOSeriesResponsesAPIConfig"] = _AzureOpenAIOSeriesResponsesAPIConfig
         return _AzureOpenAIOSeriesResponsesAPIConfig
     
     raise AttributeError(f"Azure Responses API configs lazy import: unknown attribute {name!r}")
@@ -879,22 +905,23 @@ def _lazy_import_azure_responses_configs(name: str) -> Any:
 
 def _lazy_import_openai_o_series_configs(name: str) -> Any:
     """Lazy import for OpenAI O-Series config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "OpenAIOSeriesConfig":
         from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
-        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
+        _globals["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
         return _OpenAIOSeriesConfig
     
     if name == "OpenAIO1Config":
         from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
-        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
-        globals()["OpenAIO1Config"] = _OpenAIOSeriesConfig  # alias
+        _globals["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
+        _globals["OpenAIO1Config"] = _OpenAIOSeriesConfig  # alias
         return _OpenAIOSeriesConfig
     
     if name == "openaiOSeriesConfig":
         from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as _OpenAIOSeriesConfig
         _openaiOSeriesConfig = _OpenAIOSeriesConfig()
-        globals()["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
-        globals()["openaiOSeriesConfig"] = _openaiOSeriesConfig
+        _globals["OpenAIOSeriesConfig"] = _OpenAIOSeriesConfig
+        _globals["openaiOSeriesConfig"] = _openaiOSeriesConfig
         return _openaiOSeriesConfig
     
     raise AttributeError(f"OpenAI O-Series configs lazy import: unknown attribute {name!r}")
@@ -903,34 +930,35 @@ def _lazy_import_openai_o_series_configs(name: str) -> Any:
 
 def _lazy_import_misc_transformation_configs(name: str) -> Any:
     """Lazy import for miscellaneous transformation config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
     if name == "DeepInfraConfig":
         from .llms.deepinfra.chat.transformation import DeepInfraConfig as _DeepInfraConfig
-        globals()["DeepInfraConfig"] = _DeepInfraConfig
+        _globals["DeepInfraConfig"] = _DeepInfraConfig
         return _DeepInfraConfig
     
     if name == "GroqChatConfig":
         from .llms.groq.chat.transformation import GroqChatConfig as _GroqChatConfig
-        globals()["GroqChatConfig"] = _GroqChatConfig
+        _globals["GroqChatConfig"] = _GroqChatConfig
         return _GroqChatConfig
     
     if name == "VoyageEmbeddingConfig":
         from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as _VoyageEmbeddingConfig
-        globals()["VoyageEmbeddingConfig"] = _VoyageEmbeddingConfig
+        _globals["VoyageEmbeddingConfig"] = _VoyageEmbeddingConfig
         return _VoyageEmbeddingConfig
     
     if name == "InfinityEmbeddingConfig":
         from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as _InfinityEmbeddingConfig
-        globals()["InfinityEmbeddingConfig"] = _InfinityEmbeddingConfig
+        _globals["InfinityEmbeddingConfig"] = _InfinityEmbeddingConfig
         return _InfinityEmbeddingConfig
     
     if name == "AzureAIStudioConfig":
         from .llms.azure_ai.chat.transformation import AzureAIStudioConfig as _AzureAIStudioConfig
-        globals()["AzureAIStudioConfig"] = _AzureAIStudioConfig
+        _globals["AzureAIStudioConfig"] = _AzureAIStudioConfig
         return _AzureAIStudioConfig
     
     if name == "MistralConfig":
         from .llms.mistral.chat.transformation import MistralConfig as _MistralConfig
-        globals()["MistralConfig"] = _MistralConfig
+        _globals["MistralConfig"] = _MistralConfig
         return _MistralConfig
     
     raise AttributeError(f"Misc transformation configs lazy import: unknown attribute {name!r}")

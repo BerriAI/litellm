@@ -88,6 +88,7 @@ if TYPE_CHECKING:
     from litellm.llms.github.chat.transformation import GithubChatConfig
     from litellm.llms.compactifai.chat.transformation import CompactifAIChatConfig
     from litellm.llms.empower.chat.transformation import EmpowerChatConfig
+    from litellm.llms.featherless_ai.chat.transformation import FeatherlessAIConfig
     from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
     from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -1163,7 +1164,6 @@ from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
 
 nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
-from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.baseten.chat import BasetenConfig
 from .llms.sambanova.chat import SambanovaConfig
@@ -1461,7 +1461,7 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_openai_like_configs(name)
     
     # Lazy-load small provider chat configs to reduce import-time memory cost
-    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig"}:
+    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig"}:
         from ._lazy_imports import _lazy_import_small_provider_chat_configs
         return _lazy_import_small_provider_chat_configs(name)
     
