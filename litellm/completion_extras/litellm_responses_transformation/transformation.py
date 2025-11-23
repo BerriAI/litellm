@@ -234,6 +234,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         cast(List[Dict[str, Any]], value)
                     )
                 )
+            elif key == "response_format":
+                # Convert response_format to text.format
+                text_format = self._transform_response_format_to_text_format(value)
+                if text_format:
+                    responses_api_request["text"] = text_format  # type: ignore
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
             elif key == "metadata":
@@ -664,6 +669,63 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return Reasoning(effort="low")
         elif reasoning_effort == "minimal":
             return Reasoning(effort="minimal")
+        return None
+
+    def _transform_response_format_to_text_format(
+        self, response_format: Union[Dict[str, Any], Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Transform Chat Completion response_format parameter to Responses API text.format parameter.
+
+        Chat Completion response_format structure:
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "schema_name",
+                "schema": {...},
+                "strict": True
+            }
+        }
+
+        Responses API text parameter structure:
+        {
+            "format": {
+                "type": "json_schema",
+                "name": "schema_name",
+                "schema": {...},
+                "strict": True
+            }
+        }
+        """
+        if not response_format:
+            return None
+
+        if isinstance(response_format, dict):
+            format_type = response_format.get("type")
+
+            if format_type == "json_schema":
+                json_schema = response_format.get("json_schema", {})
+                return {
+                    "format": {
+                        "type": "json_schema",
+                        "name": json_schema.get("name", "response_schema"),
+                        "schema": json_schema.get("schema", {}),
+                        "strict": json_schema.get("strict", False),
+                    }
+                }
+            elif format_type == "json_object":
+                return {
+                    "format": {
+                        "type": "json_object"
+                    }
+                }
+            elif format_type == "text":
+                return {
+                    "format": {
+                        "type": "text"
+                    }
+                }
+
         return None
 
     def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
