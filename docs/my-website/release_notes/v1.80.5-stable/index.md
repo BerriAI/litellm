@@ -48,9 +48,12 @@ pip install litellm==1.80.5
 - **Prompt Management** - Full prompt versioning support with UI for editing, testing, and version history
 - **MCP Hub** - Publish and discover MCP servers within your organization
 - **Model Compare UI** - Side-by-side model comparison interface for testing
-- **Gemini 3w** - Day-0 support with thought signatures in Responses API
-- **Azure GPT-5.1 Models** - Complete Azure GPT-5.1 family support with EU region pricing
-- **Performance Improvements** - Realtime endpoint optimizations and SSL context caching
+- **Gemini 3** - Day-0 support for Gemini 3 models with thought signatures
+- **Batch API Spend Tracking** - Granular spend tracking with custom metadata for batch and file creation requests
+- **AWS IAM Secret Manager** - IAM role authentication support for AWS Secret Manager
+- **Logging Callback Controls** - Admin-level controls to prevent callers from disabling logging callbacks in compliance environments
+- **Proxy CLI JWT Authentication** - Enable developers to authenticate with the proxy CLI using JWTs
+- **Batch API Routing** - Route batch and file operations to specific models and deployments 
 
 ---
 
@@ -80,6 +83,35 @@ This update reduces `/realtime` latency by removing redundant encodings on the h
 | **Load Script** | [no_cache_hits.py](https://gist.github.com/AlexsanderHamir/73b83ada21d9b84d4fe09665cf1745f5) |
 
 ---
+
+## Model Compare UI
+
+New interactive playground UI enables side-by-side comparison of multiple LLM models, making it easy to evaluate and compare model responses.
+
+**Features:**
+- Compare responses from multiple models in real-time
+- Side-by-side view with synchronized scrolling
+- Support for all LiteLLM-supported models
+- Cost tracking per model
+- Response time comparison
+- Pre-configured prompts for quick and easy testing
+
+**Details:**
+
+- **Parameterization**: Configure API keys, endpoints, models, and model parameters, as well as interaction types (chat completions, embeddings, etc.)
+
+- **Model Comparison**: Compare up to 3 different models simultaneously with side-by-side response views
+
+- **Comparison Metrics**: View detailed comparison information including:
+
+  - Time To First Token
+  - Input / Output / Reasoning Tokens
+  - Total Latency
+  - Cost (if enabled in config)
+
+- **Safety Filters**: Configure and test guardrails (safety filters) directly in the playground interface
+
+[Get Started with Model Compare](../../docs/proxy/model_compare_ui) - [PR #16855](https://github.com/BerriAI/litellm/pull/16855)
 
 ## New Providers and Endpoints
 
@@ -255,9 +287,7 @@ This update reduces `/realtime` latency by removing redundant encodings on the h
     - Edit add callbacks route to use data from backend - [PR #16699](https://github.com/BerriAI/litellm/pull/16699)
 
 - **Usage & Analytics**
-    - Organization Usage in Usage Tab - [PR #16614](https://github.com/BerriAI/litellm/pull/16614)
     - Allow partial matches for user ID in User Table - [PR #16952](https://github.com/BerriAI/litellm/pull/16952)
-    - Docs for Model Compare UI and Org Usage - [PR #16928](https://github.com/BerriAI/litellm/pull/16928)
 
 - **General UI**
     - Allow setting base_url in API reference docs - [PR #16674](https://github.com/BerriAI/litellm/pull/16674)
@@ -405,37 +435,6 @@ This update reduces `/realtime` latency by removing redundant encodings on the h
 
 - **Investigation**
     - Investigate issue root cause - [PR #16859](https://github.com/BerriAI/litellm/pull/16859)
-
----
-
-## Model Compare UI
-
-New interactive playground UI enables side-by-side comparison of multiple LLM models, making it easy to evaluate and compare model responses.
-
-**Features:**
-- Compare responses from multiple models in real-time
-- Side-by-side view with synchronized scrolling
-- Support for all LiteLLM-supported models
-- Cost tracking per model
-- Response time comparison
-- Pre-configured prompts for quick and easy testing
-
-**Details:**
-
-- **Parameterization**: Configure API keys, endpoints, models, and model parameters, as well as interaction types (chat completions, embeddings, etc.)
-
-- **Model Comparison**: Compare up to 3 different models simultaneously with side-by-side response views
-
-- **Comparison Metrics**: View detailed comparison information including:
-
-  - Time To First Token
-  - Input / Output / Reasoning Tokens
-  - Total Latency
-  - Cost (if enabled in config)
-
-- **Safety Filters**: Configure and test guardrails (safety filters) directly in the playground interface
-
-[Get Started with Model Compare](../../docs/proxy/model_compare_ui) - [PR #16855](https://github.com/BerriAI/litellm/pull/16855)
 
 ---
 
