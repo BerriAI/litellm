@@ -4051,70 +4051,113 @@ def _path_matches_pattern(path: str, pattern: str) -> bool:
 def _build_preserved_paths(
     data: Any, current_path: str, preserve_fields: List[str], preserved_paths: set
 ) -> None:
-    """Recursively build set of paths that should be preserved."""
-    if isinstance(data, dict):
-        for key, value in data.items():
-            new_path = f"{current_path}.{key}" if current_path else key
+    """Iteratively build set of paths that should be preserved."""
+    # Use a stack to avoid recursion: (data, path)
+    stack = [(data, current_path)]
 
-            # Check if this path matches any preserve pattern
-            for pattern in preserve_fields:
-                if _path_matches_pattern(new_path, pattern):
-                    preserved_paths.add(new_path)
+    while stack:
+        current_data, current_path_str = stack.pop()
 
-            if isinstance(value, (dict, list)):
-                _build_preserved_paths(
-                    value, new_path, preserve_fields, preserved_paths
-                )
+        if isinstance(current_data, dict):
+            for key, value in current_data.items():
+                new_path = f"{current_path_str}.{key}" if current_path_str else key
 
-    elif isinstance(data, list):
-        for idx, item in enumerate(data):
-            new_path = f"{current_path}.{idx}" if current_path else str(idx)
-            if isinstance(item, (dict, list)):
-                _build_preserved_paths(item, new_path, preserve_fields, preserved_paths)
+                # Check if this path matches any preserve pattern
+                for pattern in preserve_fields:
+                    if _path_matches_pattern(new_path, pattern):
+                        preserved_paths.add(new_path)
+
+                if isinstance(value, (dict, list)):
+                    stack.append((value, new_path))
+
+        elif isinstance(current_data, list):
+            for idx, item in enumerate(current_data):
+                new_path = f"{current_path_str}.{idx}" if current_path_str else str(idx)
+                if isinstance(item, (dict, list)):
+                    stack.append((item, new_path))
 
 
 def _remove_none_except_preserved(
     data: Any, current_path: str, preserved_paths: set
 ) -> Any:
-    """Recursively remove None values except for preserved paths."""
-    if isinstance(data, dict):
-        result = {}
-        for key, value in data.items():
-            new_path = f"{current_path}.{key}" if current_path else key
+    """Iteratively remove None values except for preserved paths."""
+    if not isinstance(data, (dict, list)):
+        return data
 
-            if value is None:
-                # Only include if this path is preserved
-                if new_path in preserved_paths:
-                    result[key] = None
-            elif isinstance(value, (dict, list)):
-                processed = _remove_none_except_preserved(
-                    value, new_path, preserved_paths
-                )
-                if processed is not None and processed != {} and processed != []:
-                    result[key] = processed
-            else:
-                result[key] = value
-        return result
+    # Use a stack for iterative processing: (data, path, is_first_visit)
+    # We'll process in a way that allows us to build the result bottom-up
+    stack = [(data, current_path, True)]  # (data, path, is_first_visit)
+    results_map = {}  # Maps id(data) -> processed result
 
-    elif isinstance(data, list):
-        result = []
-        for idx, item in enumerate(data):
-            new_path = f"{current_path}.{idx}" if current_path else str(idx)
+    while stack:
+        current_data, current_path_str, is_first_visit = stack.pop()
 
-            if item is None:
-                if new_path in preserved_paths:
-                    result.append(None)
-            elif isinstance(item, (dict, list)):
-                processed = _remove_none_except_preserved(
-                    item, new_path, preserved_paths
-                )
-                if processed is not None:
-                    result.append(processed)
-            else:
-                result.append(item)
-        return result
+        if is_first_visit:
+            # First visit - mark for revisit and add children to stack
+            stack.append((current_data, current_path_str, False))
 
-    return data
+            if isinstance(current_data, dict):
+                # Add children in reverse order so they're processed in correct order
+                for key in reversed(list(current_data.keys())):
+                    value = current_data[key]
+                    new_path = f"{current_path_str}.{key}" if current_path_str else key
+
+                    if isinstance(value, (dict, list)):
+                        stack.append((value, new_path, True))
+
+            elif isinstance(current_data, list):
+                # Add children in reverse order
+                for idx in reversed(range(len(current_data))):
+                    item = current_data[idx]
+                    new_path = (
+                        f"{current_path_str}.{idx}" if current_path_str else str(idx)
+                    )
+
+                    if isinstance(item, (dict, list)):
+                        stack.append((item, new_path, True))
+        else:
+            # Second visit - children are processed, build result
+            if isinstance(current_data, dict):
+                result = {}
+                for key, value in current_data.items():
+                    new_path = f"{current_path_str}.{key}" if current_path_str else key
+
+                    if value is None:
+                        if new_path in preserved_paths:
+                            result[key] = None
+                    elif isinstance(value, (dict, list)):
+                        processed = results_map.get(id(value))
+                        if (
+                            processed is not None
+                            and processed != {}
+                            and processed != []
+                        ):
+                            result[key] = processed
+                    else:
+                        result[key] = value
+
+                results_map[id(current_data)] = result
+
+            elif isinstance(current_data, list):
+                result = []
+                for idx, item in enumerate(current_data):
+                    new_path = (
+                        f"{current_path_str}.{idx}" if current_path_str else str(idx)
+                    )
+
+                    if item is None:
+                        if new_path in preserved_paths:
+                            result.append(None)
+                    elif isinstance(item, (dict, list)):
+                        processed = results_map.get(id(item))
+                        if processed is not None:
+                            result.append(processed)
+                    else:
+                        result.append(item)
+
+                results_map[id(current_data)] = result
+
+    return results_map.get(id(data), data)
 
 
 def model_dump_with_preserved_fields(
