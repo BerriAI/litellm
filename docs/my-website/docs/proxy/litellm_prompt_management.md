@@ -14,6 +14,12 @@ For variables you can use the following syntax to insert them into your prompts 
 
 Now that your prompt is published, you can use the following code snippet to call it from your application.
 
+### Simple usage 
+
+### With Messages 
+
+### With prompt variables
+
 ## Prompt Versioning
 
 ### Update a Prompt
