@@ -44,13 +44,13 @@ import aiohttp
 import dotenv
 import httpx
 import openai
-import tiktoken
+# tiktoken is imported lazily when needed to avoid loading it at import time
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel
-from tiktoken import Encoding
+# Encoding is imported lazily when needed to avoid loading tiktoken at import time
 from tokenizers import Tokenizer
 
 import litellm
@@ -96,7 +96,7 @@ from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.default_encoding import encoding
+# default_encoding is imported lazily when needed to avoid loading tiktoken at import time
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
@@ -140,7 +140,12 @@ from litellm.litellm_core_utils.redact_messages import (
 )
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
+# get_modified_max_tokens is imported lazily when needed to avoid loading token_counter
+# (which imports default_encoding and tiktoken) at import time
+# Cached after first import to avoid repeated import overhead
+_get_modified_max_tokens = None
+_default_encoding = None
+_tiktoken_encoding_type = None
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
@@ -239,6 +244,24 @@ from typing import (
     get_args,
 )
 
+# Helper function for lazy importing and caching - must be defined after typing imports
+def _lazy_import_and_cache(cache_var_name: str, import_func: Callable[[], Any]) -> Any:
+    """
+    Helper function for lazy importing and caching modules to avoid repeated import overhead.
+    
+    Args:
+        cache_var_name: Name of the global variable to cache the imported object
+        import_func: Function that performs the import and returns the object
+    
+    Returns:
+        The cached imported object
+    """
+    cache = globals().get(cache_var_name)
+    if cache is None:
+        cache = import_func()
+        globals()[cache_var_name] = cache
+    return cache
+
 from openai import OpenAIError as OriginalError
 
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -261,7 +284,10 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+# BaseFilesConfig is lazy-loaded to reduce import-time memory cost
+# It's only needed when get_provider_files_config is called
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -305,7 +331,9 @@ from .exceptions import (
     UnprocessableEntityError,
     UnsupportedParamsError,
 )
-from .proxy._types import AllowedModelRegion, KeyManagementSystem
+# AllowedModelRegion and KeyManagementSystem are lazy-loaded to reduce import-time memory cost
+if TYPE_CHECKING:
+    from .proxy._types import AllowedModelRegion, KeyManagementSystem
 from .types.llms.openai import (
     ChatCompletionDeltaToolCallChunk,
     ChatCompletionToolCallChunk,
@@ -1235,6 +1263,12 @@ def client(original_function):  # noqa: PLR0915
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
                     user_max_tokens = kwargs.get("max_tokens")
+                    # Import get_modified_max_tokens lazily and cache it to avoid repeated import overhead
+                    # This avoids loading token_counter (which imports default_encoding and tiktoken) at import time
+                    get_modified_max_tokens = _lazy_import_and_cache(
+                        "_get_modified_max_tokens",
+                        lambda: __import__("litellm.litellm_core_utils.token_counter", fromlist=["get_modified_max_tokens"]).get_modified_max_tokens
+                    )
                     modified_max_tokens = get_modified_max_tokens(
                         model=model,
                         base_model=base_model,
@@ -1472,6 +1506,12 @@ def client(original_function):  # noqa: PLR0915
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
                     user_max_tokens = kwargs.get("max_tokens")
+                    # Import get_modified_max_tokens lazily and cache it to avoid repeated import overhead
+                    # This avoids loading token_counter (which imports default_encoding and tiktoken) at import time
+                    get_modified_max_tokens = _lazy_import_and_cache(
+                        "_get_modified_max_tokens",
+                        lambda: __import__("litellm.litellm_core_utils.token_counter", fromlist=["get_modified_max_tokens"]).get_modified_max_tokens
+                    )
                     modified_max_tokens = get_modified_max_tokens(
                         model=model,
                         base_model=base_model,
@@ -1743,6 +1783,12 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
 
 
 def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
+    # Import encoding lazily and cache it to avoid repeated import overhead
+    # This avoids loading tiktoken at import time
+    encoding = _lazy_import_and_cache(
+        "_default_encoding",
+        lambda: __import__("litellm.litellm_core_utils.default_encoding", fromlist=["encoding"]).encoding
+    )
     return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
@@ -1782,6 +1828,12 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc: The encoded text.
     """
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
+    # Import Encoding lazily and cache it to avoid repeated import overhead
+    # This avoids loading tiktoken at import time
+    Encoding = _lazy_import_and_cache(
+        "_tiktoken_encoding_type",
+        lambda: __import__("tiktoken", fromlist=["Encoding"]).Encoding
+    )
     if isinstance(tokenizer_json["tokenizer"], Encoding):
         enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
     else:
@@ -4302,7 +4354,7 @@ def _get_model_region(
     return litellm_params.region_name
 
 
-def _infer_model_region(litellm_params: LiteLLM_Params) -> Optional[AllowedModelRegion]:
+def _infer_model_region(litellm_params: LiteLLM_Params) -> Optional["AllowedModelRegion"]:
     """
     Infer if a model is in the EU or US region
 
@@ -5798,6 +5850,12 @@ def prompt_token_calculator(model, messages):
         anthropic_obj = Anthropic()
         num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
+        # Import encoding lazily and cache it to avoid repeated import overhead
+        # This avoids loading tiktoken at import time
+        encoding = _lazy_import_and_cache(
+            "_default_encoding",
+            lambda: __import__("litellm.litellm_core_utils.default_encoding", fromlist=["encoding"]).encoding
+        )
         num_tokens = len(encoding.encode(text))
     return num_tokens
 
@@ -7489,7 +7547,7 @@ class ProviderConfigManager:
     def get_provider_files_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseFilesConfig]:
+    ) -> Optional["BaseFilesConfig"]:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.files.transformation import (
                 GoogleAIStudioFilesHandler,  # experimental approach, to reduce bloat on __init__.py

@@ -47,18 +47,18 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-import tiktoken
+# tiktoken is imported lazily when needed to avoid loading it at import time
 from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
-from litellm import (  # type: ignore
-    Logging,
-    client,
-    exception_type,
-    get_litellm_params,
-    get_optional_params,
-)
+# client must be imported from litellm as it's a decorator used at function definition time
+from litellm import client
+# Other utils are imported directly to avoid circular imports
+from litellm.utils import exception_type, get_litellm_params, get_optional_params
+# Logging is imported lazily when needed to avoid loading litellm_logging at import time
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -232,7 +232,9 @@ from .types.utils import (
     all_litellm_params,
 )
 
-encoding = tiktoken.get_encoding("cl100k_base")
+# encoding is initialized lazily when needed to avoid loading tiktoken at import time
+# This will be set when token_counter or encode/decode functions are first called
+encoding = None
 from litellm.types.utils import ModelResponseStream
 from litellm.utils import (
     Choices,
@@ -1152,6 +1154,8 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = base_url
         if num_retries is not None:
             max_retries = num_retries
+        # Import Logging lazily only when needed
+        from litellm.litellm_core_utils.litellm_logging import Logging
         logging: Logging = cast(Logging, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
@@ -5095,6 +5099,8 @@ def text_completion(  # noqa: PLR0915
         # processing prompt - users can pass raw tokens to OpenAI Completion()
         if isinstance(prompt, list):
             import concurrent.futures
+            # Import tiktoken lazily to avoid loading it at import time
+            import tiktoken
 
             tokenizer = tiktoken.encoding_for_model("text-davinci-003")
             ## if it's a 2d list - each element in the list is a text_completion() request
@@ -6295,7 +6301,7 @@ def stream_chunk_builder(  # noqa: PLR0915
     messages: Optional[list] = None,
     start_time=None,
     end_time=None,
-    logging_obj: Optional[Logging] = None,
+    logging_obj: Optional["Logging"] = None,
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
         if chunks is None:

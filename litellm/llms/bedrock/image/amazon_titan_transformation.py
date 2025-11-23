@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from openai.types.image import Image
 
-from litellm import get_model_info
+from litellm.utils import get_model_info
 from litellm.types.llms.bedrock import (
     AmazonNovaCanvasImageGenerationConfig,
     AmazonTitanImageGenerationRequestBody,
