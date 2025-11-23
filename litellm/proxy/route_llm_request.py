@@ -1,8 +1,10 @@
+import re
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import HTTPException, status
 
 import litellm
+from litellm.exceptions import BadRequestError
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -130,6 +132,40 @@ async def route_request(
 ):
     """
     Common helper to route the request
+    """
+    try:
+        return await _route_request_impl(data, llm_router, user_model, route_type)
+    except TypeError as e:
+        error_msg = str(e)
+        if "missing" in error_msg.lower() or "required" in error_msg.lower():
+            # Extract the missing parameter name from the error message
+            missing_param_match = re.search(r"missing (\d+ )?required positional argument[s]?:? '?([^']+)'?", error_msg)
+            if missing_param_match:
+                missing_param = missing_param_match.group(2)
+                raise BadRequestError(
+                    message=f"Missing required parameter: {missing_param}",
+                    model=data.get("model", ""),
+                    llm_provider="",
+                )
+            else:
+                raise BadRequestError(
+                    message="Missing required parameters",
+                    model=data.get("model", ""),
+                    llm_provider="",
+                )
+        else:
+            # Re-raise other TypeError exceptions
+            raise e
+
+
+async def _route_request_impl(
+    data: dict,
+    llm_router: Optional[LitellmRouter],
+    user_model: Optional[str],
+    route_type: str,
+):
+    """
+    Internal implementation of route_request
     """
     add_shared_session_to_data(data)
     
