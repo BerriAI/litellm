@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # LiteLLM AI Gateway Prompt Management
 
 Use the LiteLLM AI Gateway to create, manage and version your prompts.
@@ -77,83 +80,220 @@ Once you're satisfied with your prompt, click the **Save** button in the top rig
 
 ## Using Your Prompts
 
-Now that your prompt is published, you can use it in your application via the LiteLLM proxy API.
+Now that your prompt is published, you can use it in your application via the LiteLLM proxy API. Click the **Get Code** button in the UI to view code snippets customized for your prompt.
 
-### Simple Usage
+### Basic Usage
 
-Call a prompt without any variables:
+Call a prompt using just the prompt ID and model:
 
-```python
-import litellm
+<Tabs>
+<TabItem value="curl" label="cURL">
 
-response = litellm.completion(
-    model="prompt/your-prompt-id",
-    messages=[{"role": "user", "content": "Hello"}]
-)
+```bash showLineNumbers title="Basic Prompt Call"
+curl -X POST 'http://localhost:4000/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-1234' \
+  -d '{
+    "model": "gpt-4",
+    "prompt_id": "your-prompt-id"
+  }' | jq
 ```
 
-### With Custom Messages
+</TabItem>
+<TabItem value="python" label="Python">
 
-You can override or add to the prompt's messages:
+```python showLineNumbers title="basic_prompt.py"
+import openai
 
-```python
-import litellm
-
-response = litellm.completion(
-    model="prompt/your-prompt-id",
-    messages=[
-        {"role": "user", "content": "What's the weather like?"}
-    ]
-)
-```
-
-### With Prompt Variables
-
-Pass variables to your prompt template using the `prompt_variables` parameter:
-
-```python
-import litellm
-
-response = litellm.completion(
-    model="prompt/your-prompt-id",
-    messages=[{"role": "user", "content": "what is it ?"}],
-    prompt_variables={"dish": "cookies"}
-)
-```
-
-### Using the OpenAI SDK
-
-You can also use the OpenAI SDK directly with the LiteLLM proxy:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your-litellm-api-key",
-    base_url="http://your-litellm-proxy:4000"
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://localhost:4000"
 )
 
 response = client.chat.completions.create(
-    model="prompt/your-prompt-id",
-    messages=[{"role": "user", "content": "what is it ?"}],
+    model="gpt-4",
     extra_body={
-        "prompt_variables": {"dish": "pasta"}
+        "prompt_id": "your-prompt-id"
     }
 )
+
+print(response)
 ```
 
-### cURL Example
+</TabItem>
+<TabItem value="javascript" label="JavaScript">
 
-```bash
-curl -X POST http://your-litellm-proxy:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-litellm-api-key" \
+```javascript showLineNumbers title="basicPrompt.js"
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+    apiKey: "sk-1234",
+    baseURL: "http://localhost:4000"
+});
+
+async function main() {
+    const response = await client.chat.completions.create({
+        model: "gpt-4",
+        prompt_id: "your-prompt-id"
+    });
+    
+    console.log(response);
+}
+
+main();
+```
+
+</TabItem>
+</Tabs>
+
+### With Custom Messages
+
+Add custom messages to your prompt:
+
+<Tabs>
+<TabItem value="curl" label="cURL">
+
+```bash showLineNumbers title="Prompt with Custom Messages"
+curl -X POST 'http://localhost:4000/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-1234' \
   -d '{
-    "model": "prompt/your-prompt-id",
-    "messages": [{"role": "user", "content": "what is it ?"}],
-    "prompt_variables": {"dish": "cookies"}
-  }'
+    "model": "gpt-4",
+    "prompt_id": "your-prompt-id",
+    "messages": [
+      {
+        "role": "user",
+        "content": "hi"
+      }
+    ]
+  }' | jq
 ```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python showLineNumbers title="prompt_with_messages.py"
+import openai
+
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://localhost:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-4",
+    messages=[
+        {"role": "user", "content": "hi"}
+    ],
+    extra_body={
+        "prompt_id": "your-prompt-id"
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="javascript" label="JavaScript">
+
+```javascript showLineNumbers title="promptWithMessages.js"
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+    apiKey: "sk-1234",
+    baseURL: "http://localhost:4000"
+});
+
+async function main() {
+    const response = await client.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+            { role: "user", content: "hi" }
+        ],
+        prompt_id: "your-prompt-id"
+    });
+    
+    console.log(response);
+}
+
+main();
+```
+
+</TabItem>
+</Tabs>
+
+### With Prompt Variables
+
+Pass variables to your prompt template using `prompt_variables`:
+
+<Tabs>
+<TabItem value="curl" label="cURL">
+
+```bash showLineNumbers title="Prompt with Variables"
+curl -X POST 'http://localhost:4000/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-1234' \
+  -d '{
+    "model": "gpt-4",
+    "prompt_id": "your-prompt-id",
+    "prompt_variables": {
+      "dish": "cookies"
+    }
+  }' | jq
+```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python showLineNumbers title="prompt_with_variables.py"
+import openai
+
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://localhost:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-4",
+    extra_body={
+        "prompt_id": "your-prompt-id",
+        "prompt_variables": {
+            "dish": "cookies"
+        }
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="javascript" label="JavaScript">
+
+```javascript showLineNumbers title="promptWithVariables.js"
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+    apiKey: "sk-1234",
+    baseURL: "http://localhost:4000"
+});
+
+async function main() {
+    const response = await client.chat.completions.create({
+        model: "gpt-4",
+        prompt_id: "your-prompt-id",
+        prompt_variables: {
+            "dish": "cookies"
+        }
+    });
+    
+    console.log(response);
+}
+
+main();
+```
+
+</TabItem>
+</Tabs>
 
 ## Prompt Versioning
 
@@ -228,53 +368,82 @@ To restore an older version:
 
 ### Use Specific Versions in API Calls
 
-By default, API calls use the latest version of a prompt. To use a specific version, append the version number to the prompt ID:
+By default, API calls use the latest version of a prompt. To use a specific version, pass the `prompt_version` parameter:
 
-```python
-import litellm
+<Tabs>
+<TabItem value="curl" label="cURL">
 
-# Use latest version (default)
-response = litellm.completion(
-    model="prompt/jack-sparrow",
-    messages=[{"role": "user", "content": "Hello"}]
-)
-
-# Use specific version v2
-response = litellm.completion(
-    model="prompt/jack-sparrow:v2",
-    messages=[{"role": "user", "content": "Hello"}]
-)
-```
-
-With the OpenAI SDK:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your-litellm-api-key",
-    base_url="http://your-litellm-proxy:4000"
-)
-
-# Use version v3
-response = client.chat.completions.create(
-    model="prompt/jack-sparrow:v3",
-    messages=[{"role": "user", "content": "Hello"}]
-)
-```
-
-Using cURL:
-
-```bash
-curl -X POST http://your-litellm-proxy:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-litellm-api-key" \
+```bash showLineNumbers title="Use Specific Prompt Version"
+curl -X POST 'http://localhost:4000/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-1234' \
   -d '{
-    "model": "prompt/jack-sparrow:v2",
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'
+    "model": "gpt-4",
+    "prompt_id": "jack-sparrow",
+    "prompt_version": 2,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Who are u"
+      }
+    ]
+  }' | jq
 ```
 
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python showLineNumbers title="prompt_version.py"
+import openai
+
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://localhost:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-4",
+    messages=[
+        {"role": "user", "content": "Who are u"}
+    ],
+    extra_body={
+        "prompt_id": "jack-sparrow",
+        "prompt_version": 2
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="javascript" label="JavaScript">
+
+```javascript showLineNumbers title="promptVersion.js"
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+    apiKey: "sk-1234",
+    baseURL: "http://localhost:4000"
+});
+
+async function main() {
+    const response = await client.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+            { role: "user", content: "Who are u" }
+        ],
+        prompt_id: "jack-sparrow",
+        prompt_version: 2
+    });
+    
+    console.log(response);
+}
+
+main();
+```
+
+</TabItem>
+</Tabs>
 
 
 
