@@ -1352,35 +1352,6 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 
 
-# Lazy import for caching classes to reduce import-time memory cost
-def _lazy_import_caching(name: str) -> Any:
-    """Lazy import for caching classes - imports only the requested class by name."""
-    if name == "Cache":
-        from litellm.caching.caching import Cache as _Cache
-        globals()["Cache"] = _Cache
-        return _Cache
-    
-    if name == "DualCache":
-        from litellm.caching.caching import DualCache as _DualCache
-        globals()["DualCache"] = _DualCache
-        return _DualCache
-    
-    if name == "RedisCache":
-        from litellm.caching.caching import RedisCache as _RedisCache
-        globals()["RedisCache"] = _RedisCache
-        return _RedisCache
-    
-    if name == "InMemoryCache":
-        from litellm.caching.caching import InMemoryCache as _InMemoryCache
-        globals()["InMemoryCache"] = _InMemoryCache
-        return _InMemoryCache
-    
-    if name == "LLMClientCache":
-        from litellm.caching.llm_caching_handler import LLMClientCache as _LLMClientCache
-        globals()["LLMClientCache"] = _LLMClientCache
-        return _LLMClientCache
-    
-    raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_types_utils(name: str) -> Any:
@@ -2037,6 +2008,7 @@ def __getattr__(name: str) -> Any:
     
     # Lazy-load caching classes to reduce import-time memory cost
     if name in {"Cache", "DualCache", "RedisCache", "InMemoryCache", "LLMClientCache"}:
+        from ._lazy_imports import _lazy_import_caching
         return _lazy_import_caching(name)
     
     # Lazy-load types.utils to reduce import-time memory cost

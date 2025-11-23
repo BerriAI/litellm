@@ -289,3 +289,34 @@ def _lazy_import_http_handlers(name: str) -> Any:
     
     raise AttributeError(f"HTTP handler lazy import: unknown attribute {name!r}")
 
+
+def _lazy_import_caching(name: str) -> Any:
+    """Lazy import for caching classes - imports only the requested class by name."""
+    _globals = _get_litellm_globals()
+    if name == "Cache":
+        from litellm.caching.caching import Cache as _Cache
+        _globals["Cache"] = _Cache
+        return _Cache
+    
+    if name == "DualCache":
+        from litellm.caching.caching import DualCache as _DualCache
+        _globals["DualCache"] = _DualCache
+        return _DualCache
+    
+    if name == "RedisCache":
+        from litellm.caching.caching import RedisCache as _RedisCache
+        _globals["RedisCache"] = _RedisCache
+        return _RedisCache
+    
+    if name == "InMemoryCache":
+        from litellm.caching.caching import InMemoryCache as _InMemoryCache
+        _globals["InMemoryCache"] = _InMemoryCache
+        return _InMemoryCache
+    
+    if name == "LLMClientCache":
+        from litellm.caching.llm_caching_handler import LLMClientCache as _LLMClientCache
+        _globals["LLMClientCache"] = _LLMClientCache
+        return _LLMClientCache
+    
+    raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
+
