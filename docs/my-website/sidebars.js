@@ -252,6 +252,9 @@ const sidebars = {
             "proxy/response_headers",
             "proxy/forward_client_headers",
             "proxy/model_discovery",
+            "tutorials/langgraph",
+            "tutorials/openai_agents",
+            "tutorials/google_adk",
           ],
         },
         {
@@ -738,7 +741,6 @@ const sidebars = {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
           items: [
-            'tutorials/google_adk',
             'tutorials/azure_openai',
             'tutorials/instructor',
             "tutorials/gradio_integration",
