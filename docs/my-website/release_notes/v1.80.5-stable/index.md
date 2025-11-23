@@ -325,12 +325,6 @@ pip install litellm==1.80.5
 - **MCP Server IDs** - Add mcp server ids - [PR #16904](https://github.com/BerriAI/litellm/pull/16904)
 - **MCP URL Format** - Fix mcp url format - [PR #16940](https://github.com/BerriAI/litellm/pull/16940)
 
----
-
-## Agents
-
-- **[AI Hub](../../docs/agents)**
-    - Make agents discoverable on model hub page for internal discovery - [PR #16678](https://github.com/BerriAI/litellm/pull/16678)
 
 ---
 
