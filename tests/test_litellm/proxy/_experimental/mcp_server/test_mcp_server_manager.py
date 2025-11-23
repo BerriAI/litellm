@@ -93,6 +93,66 @@ class TestMCPServerManager:
         assert client.stdio_config["args"] == ["server.js"]
         assert client.stdio_config["env"] == {"NODE_ENV": "test"}
 
+    def test_validate_allowed_param_patterns_allows_nested_values(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="o365",
+            transport=MCPTransport.http,
+            allowed_param_patterns={
+                "send_email": {
+                    "to[]": r"^.+@berri\.ai$",
+                    "recipients.cc[].email": r"^.+@berri\.ai$",
+                    "message.subject": r"^.{1,50}$",
+                }
+            },
+        )
+
+        arguments = {
+            "to": ["user@berri.ai"],
+            "recipients": {"cc": [{"email": "support@berri.ai"}]},
+            "message": {"subject": "Quarterly update"},
+        }
+
+        manager.validate_allowed_param_patterns(
+            tool_name="send_email", arguments=arguments, server=server
+        )
+
+    def test_validate_allowed_param_patterns_blocks_invalid_values(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="mail_mcp",
+            transport=MCPTransport.http,
+            allowed_param_patterns={"send_email": {"to": r"^.+@berri\.ai$"}},
+        )
+
+        arguments = {"to": "user@example.com"}
+
+        with pytest.raises(HTTPException) as exc:
+            manager.validate_allowed_param_patterns(
+                tool_name="send_email", arguments=arguments, server=server
+            )
+
+        assert exc.value.status_code == 403
+        assert "berri" in exc.value.detail["allowed_pattern"]
+
+    def test_validate_allowed_param_patterns_handles_prefixed_tools(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="mail_mcp",
+            transport=MCPTransport.http,
+            allowed_param_patterns={"send_email": {"to": r"^.+@berri\\.ai$"}},
+        )
+
+        arguments = {"to": "intruder@example.com"}
+
+        with pytest.raises(HTTPException):
+            manager.validate_allowed_param_patterns(
+                tool_name="mail_mcp-send_email", arguments=arguments, server=server
+            )
+
     @pytest.mark.asyncio
     async def test_list_tools_with_server_specific_auth_headers(self):
         """Test list_tools method with server-specific auth headers"""
@@ -300,9 +360,13 @@ class TestMCPServerManager:
         mock_client = AsyncMock()
         mock_resources = [Resource(name="file", uri="https://example.com/file")]
         mock_client.list_resources = AsyncMock(return_value=mock_resources)
-        prefixed_resources = [Resource(name="alias-server-file", uri="https://example.com/file")]
+        prefixed_resources = [
+            Resource(name="alias-server-file", uri="https://example.com/file")
+        ]
 
-        with patch.object(manager, "_create_mcp_client", return_value=mock_client) as mock_create_client, patch.object(
+        with patch.object(
+            manager, "_create_mcp_client", return_value=mock_client
+        ) as mock_create_client, patch.object(
             manager,
             "_create_prefixed_resources",
             return_value=prefixed_resources,
@@ -351,7 +415,9 @@ class TestMCPServerManager:
             )
         ]
 
-        with patch.object(manager, "_create_mcp_client", return_value=mock_client) as mock_create_client, patch.object(
+        with patch.object(
+            manager, "_create_mcp_client", return_value=mock_client
+        ) as mock_create_client, patch.object(
             manager,
             "_create_prefixed_resource_templates",
             return_value=prefixed_templates,
@@ -398,7 +464,9 @@ class TestMCPServerManager:
         )
         mock_client.read_resource = AsyncMock(return_value=read_result)
 
-        with patch.object(manager, "_create_mcp_client", return_value=mock_client) as mock_create_client:
+        with patch.object(
+            manager, "_create_mcp_client", return_value=mock_client
+        ) as mock_create_client:
             result = await manager.read_resource_from_server(
                 server=server,
                 url="https://example.com/resource",
@@ -409,7 +477,9 @@ class TestMCPServerManager:
         mock_create_client.assert_called_once()
         called_kwargs = mock_create_client.call_args.kwargs
         assert called_kwargs["extra_headers"] == {"X-Test": "1", "X-Static": "1"}
-        mock_client.read_resource.assert_awaited_once_with("https://example.com/resource")
+        mock_client.read_resource.assert_awaited_once_with(
+            "https://example.com/resource"
+        )
         assert result is read_result
 
     @pytest.mark.asyncio
@@ -527,9 +597,7 @@ class TestMCPServerManager:
         assert server.scopes == ["config"]  # config overrides discovery
         assert server.authorization_url == "https://config.example.com/auth"
         assert server.token_url == "https://discovered.example.com/token"
-        assert (
-            server.registration_url == "https://discovered.example.com/register"
-        )
+        assert server.registration_url == "https://discovered.example.com/register"
 
     @pytest.mark.asyncio
     async def test_list_tools_handles_missing_server_alias(self):
@@ -1558,7 +1626,9 @@ class TestMCPServerManager:
         # Register the server and map a tool to it
         manager.registry = {"test-server": server}
         manager.tool_name_to_mcp_server_name_mapping["test_tool"] = "test-server"
-        manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = "test-server"
+        manager.tool_name_to_mcp_server_name_mapping[
+            "test-server-test_tool"
+        ] = "test-server"
 
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
