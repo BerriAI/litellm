@@ -359,7 +359,7 @@ export default function KeyInfoView({
               icon={TrashIcon}
               variant="secondary"
               onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center"
+              className="flex items-center text-red-500 border-red-500 hover:text-red-700"
             >
               Delete Key
             </Button>

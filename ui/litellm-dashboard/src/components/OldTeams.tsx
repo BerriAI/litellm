@@ -1,6 +1,7 @@
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
+import { updateExistingKeys } from "@/utils/dataUtils";
 import { isAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ChevronDownIcon, ChevronRightIcon, PencilAltIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
@@ -33,6 +34,7 @@ import {
 import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { fetchTeams } from "./common_components/fetch_teams";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
@@ -45,7 +47,15 @@ import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "./molecules/notifications_manager";
-import { Organization, fetchMCPAccessGroups, getGuardrailsList, teamDeleteCall } from "./networking";
+import {
+  Member,
+  Organization,
+  fetchMCPAccessGroups,
+  getGuardrailsList,
+  teamCreateCall,
+  teamDeleteCall,
+  v2TeamListCall,
+} from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
@@ -74,10 +84,6 @@ interface EditTeamModalProps {
   team: any; // Assuming TeamType is a type representing your team object
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
-
-import { updateExistingKeys } from "@/utils/dataUtils";
-import DeleteResourceModal from "./common_components/DeleteResourceModal";
-import { Member, teamCreateCall, v2TeamListCall } from "./networking";
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -331,11 +337,10 @@ const Teams: React.FC<TeamProps> = ({
     try {
       setIsTeamDeleting(true);
       await teamDeleteCall(accessToken, teamToDelete.team_id);
-      // Successfully completed the deletion. Update the state to trigger a rerender.
       await fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+      NotificationsManager.success("Team deleted successfully");
     } catch (error) {
-      console.error("Error deleting the team:", error);
-      // Handle any error situations, such as displaying an error message to the user.
+      NotificationsManager.fromBackend("Error deleting the team: " + error);
     } finally {
       setIsTeamDeleting(false);
       setIsDeleteModalOpen(false);
@@ -344,7 +349,6 @@ const Teams: React.FC<TeamProps> = ({
   };
 
   const cancelDelete = () => {
-    // Close the confirmation modal and reset the teamToDelete
     setIsDeleteModalOpen(false);
     setTeamToDelete(null);
   };
@@ -1276,10 +1280,14 @@ const Teams: React.FC<TeamProps> = ({
                         valuePropName="checked"
                         help="Bypass global guardrails for this team"
                       >
-                        <Switch 
+                        <Switch
                           disabled={!premiumUser}
-                          checkedChildren={premiumUser ? "Yes" : "Premium feature - Upgrade to disable global guardrails by team"}
-                          unCheckedChildren={premiumUser ? "No" : "Premium feature - Upgrade to disable global guardrails by team"}
+                          checkedChildren={
+                            premiumUser ? "Yes" : "Premium feature - Upgrade to disable global guardrails by team"
+                          }
+                          unCheckedChildren={
+                            premiumUser ? "No" : "Premium feature - Upgrade to disable global guardrails by team"
+                          }
                         />
                       </Form.Item>
                       <Form.Item

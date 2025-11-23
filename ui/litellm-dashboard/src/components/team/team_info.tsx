@@ -359,9 +359,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       };
       const serverIds = new Set(servers || []);
       const mcpToolPermissions = Object.fromEntries(
-        Object.entries(values.mcp_tool_permissions || {}).filter(([serverId]) =>
-          serverIds.has(serverId)
-        )
+        Object.entries(values.mcp_tool_permissions || {}).filter(([serverId]) => serverIds.has(serverId)),
       );
 
       updateData.object_permission = {};
@@ -687,10 +685,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     valuePropName="checked"
                     help="Bypass global guardrails for this team"
                   >
-                    <Switch
-                      checkedChildren="Yes"
-                      unCheckedChildren="No"
-                    />
+                    <Switch checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
 
                   <Form.Item label="Vector Stores" name="vector_stores">
@@ -761,9 +756,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
                     <div className="flex justify-end items-center gap-2">
-                      <Button htmlType="button" onClick={() => setIsEditing(false)}>
+                      <TremorButton variant="secondary" onClick={() => setIsEditing(false)}>
                         Cancel
-                      </Button>
+                      </TremorButton>
                       <TremorButton type="submit">Save Changes</TremorButton>
                     </div>
                   </div>
