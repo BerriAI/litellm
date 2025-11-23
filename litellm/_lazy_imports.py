@@ -623,6 +623,16 @@ def _lazy_import_small_provider_chat_configs(name: str) -> Any:
         _globals["VolcEngineConfig"] = _VolcEngineChatConfig  # alias
         return _VolcEngineChatConfig
     
+    if name == "HerokuChatConfig":
+        from .llms.heroku.chat.transformation import HerokuChatConfig as _HerokuChatConfig
+        _globals["HerokuChatConfig"] = _HerokuChatConfig
+        return _HerokuChatConfig
+    
+    if name == "CometAPIConfig":
+        from .llms.cometapi.chat.transformation import CometAPIConfig as _CometAPIConfig
+        _globals["CometAPIConfig"] = _CometAPIConfig
+        return _CometAPIConfig
+    
     raise AttributeError(f"Small provider chat configs lazy import: unknown attribute {name!r}")
 
 
@@ -948,6 +958,32 @@ def _lazy_import_azure_responses_configs(name: str) -> Any:
         return _AzureOpenAIOSeriesResponsesAPIConfig
     
     raise AttributeError(f"Azure Responses API configs lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_azure_openai_configs(name: str) -> Any:
+    """Lazy import for Azure OpenAI config classes - imports only the requested class."""
+    _globals = _get_litellm_globals()
+    if name == "AzureOpenAIConfig":
+        from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig as _AzureOpenAIConfig
+        _globals["AzureOpenAIConfig"] = _AzureOpenAIConfig
+        return _AzureOpenAIConfig
+    
+    if name == "AzureOpenAIGPT5Config":
+        from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config as _AzureOpenAIGPT5Config
+        _globals["AzureOpenAIGPT5Config"] = _AzureOpenAIGPT5Config
+        return _AzureOpenAIGPT5Config
+    
+    if name == "AzureOpenAITextConfig":
+        from .llms.azure.completion.transformation import AzureOpenAITextConfig as _AzureOpenAITextConfig
+        _globals["AzureOpenAITextConfig"] = _AzureOpenAITextConfig
+        return _AzureOpenAITextConfig
+    
+    if name == "AzureOpenAIAssistantsAPIConfig":
+        from .llms.azure.azure import AzureOpenAIAssistantsAPIConfig as _AzureOpenAIAssistantsAPIConfig
+        _globals["AzureOpenAIAssistantsAPIConfig"] = _AzureOpenAIAssistantsAPIConfig
+        return _AzureOpenAIAssistantsAPIConfig
+    
+    raise AttributeError(f"Azure OpenAI configs lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_openai_o_series_configs(name: str) -> Any:

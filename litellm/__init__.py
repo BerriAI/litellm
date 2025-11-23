@@ -102,6 +102,12 @@ if TYPE_CHECKING:
     from litellm.llms.aiml.chat.transformation import AIMLChatConfig
     from litellm.llms.volcengine.chat.transformation import VolcEngineChatConfig
     from litellm.llms.codestral.completion.transformation import CodestralTextCompletionConfig
+    from litellm.llms.azure.azure import AzureOpenAIError, AzureOpenAIAssistantsAPIConfig
+    from litellm.llms.heroku.chat.transformation import HerokuChatConfig
+    from litellm.llms.cometapi.chat.transformation import CometAPIConfig
+    from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+    from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+    from litellm.llms.azure.completion.transformation import AzureOpenAITextConfig
     from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
     from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -1183,15 +1189,6 @@ from .llms.fireworks_ai.audio_transcription.transformation import (
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
-from .llms.azure.azure import (
-    AzureOpenAIError,
-    AzureOpenAIAssistantsAPIConfig,
-)
-from .llms.heroku.chat.transformation import HerokuChatConfig
-from .llms.cometapi.chat.transformation import CometAPIConfig
-from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
-from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.llamafile.chat.transformation import LlamafileChatConfig
 from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
@@ -1459,7 +1456,7 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_openai_like_configs(name)
     
     # Lazy-load small provider chat configs to reduce import-time memory cost
-    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig", "BasetenConfig", "SambanovaConfig", "FireworksAIConfig", "FriendliaiChatConfig", "XAIChatConfig", "AIMLChatConfig", "VolcEngineConfig", "VolcEngineChatConfig"}:
+    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig", "BasetenConfig", "SambanovaConfig", "FireworksAIConfig", "FriendliaiChatConfig", "XAIChatConfig", "AIMLChatConfig", "VolcEngineConfig", "VolcEngineChatConfig", "HerokuChatConfig", "CometAPIConfig"}:
         from ._lazy_imports import _lazy_import_small_provider_chat_configs
         return _lazy_import_small_provider_chat_configs(name)
     
@@ -1603,6 +1600,17 @@ def __getattr__(name: str) -> Any:
         from .llms.xai.common_utils import XAIModelInfo as _XAIModelInfo
         globals()["XAIModelInfo"] = _XAIModelInfo
         return _XAIModelInfo
+    
+    # Lazy-load Azure OpenAI configs to reduce import-time memory cost
+    if name in {"AzureOpenAIConfig", "AzureOpenAIGPT5Config", "AzureOpenAITextConfig", "AzureOpenAIAssistantsAPIConfig"}:
+        from ._lazy_imports import _lazy_import_azure_openai_configs
+        return _lazy_import_azure_openai_configs(name)
+    
+    # Lazy-load AzureOpenAIError to reduce import-time memory cost
+    if name == "AzureOpenAIError":
+        from .llms.azure.azure import AzureOpenAIError as _AzureOpenAIError
+        globals()["AzureOpenAIError"] = _AzureOpenAIError
+        return _AzureOpenAIError
     
     # Lazy-load rerank configs to reduce import-time memory cost
     _rerank_config_names = {
