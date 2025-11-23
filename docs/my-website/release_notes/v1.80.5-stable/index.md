@@ -53,7 +53,7 @@ pip install litellm==1.80.5
 - **Logging Callback Controls** - [Admin-level controls to prevent callers from disabling logging callbacks in compliance environments](../../docs/proxy/dynamic_logging#disabling-dynamic-callback-management-enterprise)
 - **Proxy CLI JWT Authentication** - [Enable developers to authenticate to LiteLLM AI Gateway using the Proxy CLI](../../docs/proxy/cli_sso)
 - **Batch API Routing** - [Route batch operations to different provider accounts using model-specific credentials from your config.yaml](../../docs/batches#multi-account--model-based-routing)
-- **Prompt Management** - Full prompt versioning support with UI for editing, testing, and version history
+- **Prompt Management** - [Full prompt versioning support with UI for editing, testing, and version history](../../docs/proxy/litellm_prompt_management)
 
 ---
 
