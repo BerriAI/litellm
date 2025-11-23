@@ -633,6 +633,51 @@ def _lazy_import_small_provider_chat_configs(name: str) -> Any:
         _globals["CometAPIConfig"] = _CometAPIConfig
         return _CometAPIConfig
     
+    if name == "HostedVLLMChatConfig":
+        from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig as _HostedVLLMChatConfig
+        _globals["HostedVLLMChatConfig"] = _HostedVLLMChatConfig
+        return _HostedVLLMChatConfig
+    
+    if name == "LlamafileChatConfig":
+        from .llms.llamafile.chat.transformation import LlamafileChatConfig as _LlamafileChatConfig
+        _globals["LlamafileChatConfig"] = _LlamafileChatConfig
+        return _LlamafileChatConfig
+    
+    if name == "LiteLLMProxyChatConfig":
+        from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig as _LiteLLMProxyChatConfig
+        _globals["LiteLLMProxyChatConfig"] = _LiteLLMProxyChatConfig
+        return _LiteLLMProxyChatConfig
+    
+    if name == "DeepSeekChatConfig":
+        from .llms.deepseek.chat.transformation import DeepSeekChatConfig as _DeepSeekChatConfig
+        _globals["DeepSeekChatConfig"] = _DeepSeekChatConfig
+        return _DeepSeekChatConfig
+    
+    if name == "LMStudioChatConfig":
+        from .llms.lm_studio.chat.transformation import LMStudioChatConfig as _LMStudioChatConfig
+        _globals["LMStudioChatConfig"] = _LMStudioChatConfig
+        return _LMStudioChatConfig
+    
+    if name == "NscaleConfig":
+        from .llms.nscale.chat.transformation import NscaleConfig as _NscaleConfig
+        _globals["NscaleConfig"] = _NscaleConfig
+        return _NscaleConfig
+    
+    if name == "PerplexityChatConfig":
+        from .llms.perplexity.chat.transformation import PerplexityChatConfig as _PerplexityChatConfig
+        _globals["PerplexityChatConfig"] = _PerplexityChatConfig
+        return _PerplexityChatConfig
+    
+    if name == "IBMWatsonXChatConfig":
+        from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig as _IBMWatsonXChatConfig
+        _globals["IBMWatsonXChatConfig"] = _IBMWatsonXChatConfig
+        return _IBMWatsonXChatConfig
+    
+    if name == "GithubCopilotConfig":
+        from .llms.github_copilot.chat.transformation import GithubCopilotConfig as _GithubCopilotConfig
+        _globals["GithubCopilotConfig"] = _GithubCopilotConfig
+        return _GithubCopilotConfig
+    
     raise AttributeError(f"Small provider chat configs lazy import: unknown attribute {name!r}")
 
 
@@ -957,6 +1002,11 @@ def _lazy_import_azure_responses_configs(name: str) -> Any:
         _globals["AzureOpenAIOSeriesResponsesAPIConfig"] = _AzureOpenAIOSeriesResponsesAPIConfig
         return _AzureOpenAIOSeriesResponsesAPIConfig
     
+    if name == "GithubCopilotResponsesAPIConfig":
+        from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as _GithubCopilotResponsesAPIConfig
+        _globals["GithubCopilotResponsesAPIConfig"] = _GithubCopilotResponsesAPIConfig
+        return _GithubCopilotResponsesAPIConfig
+    
     raise AttributeError(f"Azure Responses API configs lazy import: unknown attribute {name!r}")
 
 
@@ -1063,5 +1113,25 @@ def _lazy_import_misc_transformation_configs(name: str) -> Any:
         from .llms.codestral.completion.transformation import CodestralTextCompletionConfig as _CodestralTextCompletionConfig
         _globals["CodestralTextCompletionConfig"] = _CodestralTextCompletionConfig
         return _CodestralTextCompletionConfig
+    
+    if name == "VLLMConfig":
+        from .llms.vllm.completion.transformation import VLLMConfig as _VLLMConfig
+        _globals["VLLMConfig"] = _VLLMConfig
+        return _VLLMConfig
+    
+    if name == "IBMWatsonXAIConfig":
+        from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig as _IBMWatsonXAIConfig
+        _globals["IBMWatsonXAIConfig"] = _IBMWatsonXAIConfig
+        return _IBMWatsonXAIConfig
+    
+    if name == "LmStudioEmbeddingConfig":
+        from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig as _LmStudioEmbeddingConfig
+        _globals["LmStudioEmbeddingConfig"] = _LmStudioEmbeddingConfig
+        return _LmStudioEmbeddingConfig
+    
+    if name == "IBMWatsonXEmbeddingConfig":
+        from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig as _IBMWatsonXEmbeddingConfig
+        _globals["IBMWatsonXEmbeddingConfig"] = _IBMWatsonXEmbeddingConfig
+        return _IBMWatsonXEmbeddingConfig
     
     raise AttributeError(f"Misc transformation configs lazy import: unknown attribute {name!r}")

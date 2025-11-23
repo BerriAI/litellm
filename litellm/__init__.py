@@ -108,6 +108,20 @@ if TYPE_CHECKING:
     from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
     from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
     from litellm.llms.azure.completion.transformation import AzureOpenAITextConfig
+    from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+    from litellm.llms.llamafile.chat.transformation import LlamafileChatConfig
+    from litellm.llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
+    from litellm.llms.vllm.completion.transformation import VLLMConfig
+    from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+    from litellm.llms.lm_studio.chat.transformation import LMStudioChatConfig
+    from litellm.llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
+    from litellm.llms.nscale.chat.transformation import NscaleConfig
+    from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
+    from litellm.llms.watsonx.completion.transformation import IBMWatsonXAIConfig
+    from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+    from litellm.llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+    from litellm.llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig
     from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
     from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -1189,22 +1203,6 @@ from .llms.fireworks_ai.audio_transcription.transformation import (
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
-from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
-from .llms.llamafile.chat.transformation import LlamafileChatConfig
-from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
-from .llms.vllm.completion.transformation import VLLMConfig
-from .llms.deepseek.chat.transformation import DeepSeekChatConfig
-from .llms.lm_studio.chat.transformation import LMStudioChatConfig
-from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
-from .llms.nscale.chat.transformation import NscaleConfig
-from .llms.perplexity.chat.transformation import PerplexityChatConfig
-from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
-from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
-from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
-from .llms.github_copilot.chat.transformation import GithubCopilotConfig
-from .llms.github_copilot.responses.transformation import (
-    GithubCopilotResponsesAPIConfig,
-)
 from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
@@ -1456,7 +1454,7 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_openai_like_configs(name)
     
     # Lazy-load small provider chat configs to reduce import-time memory cost
-    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig", "BasetenConfig", "SambanovaConfig", "FireworksAIConfig", "FriendliaiChatConfig", "XAIChatConfig", "AIMLChatConfig", "VolcEngineConfig", "VolcEngineChatConfig", "HerokuChatConfig", "CometAPIConfig"}:
+    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig", "BasetenConfig", "SambanovaConfig", "FireworksAIConfig", "FriendliaiChatConfig", "XAIChatConfig", "AIMLChatConfig", "VolcEngineConfig", "VolcEngineChatConfig", "HerokuChatConfig", "CometAPIConfig", "HostedVLLMChatConfig", "LlamafileChatConfig", "LiteLLMProxyChatConfig", "DeepSeekChatConfig", "LMStudioChatConfig", "NscaleConfig", "PerplexityChatConfig", "IBMWatsonXChatConfig", "GithubCopilotConfig"}:
         from ._lazy_imports import _lazy_import_small_provider_chat_configs
         return _lazy_import_small_provider_chat_configs(name)
     
@@ -1590,6 +1588,8 @@ def __getattr__(name: str) -> Any:
         "InfinityEmbeddingConfig", "AzureAIStudioConfig", "MistralConfig",
         "SambaNovaEmbeddingConfig", "FireworksAITextCompletionConfig",
         "JinaAIEmbeddingConfig", "CodestralTextCompletionConfig",
+        "VLLMConfig", "IBMWatsonXAIConfig", "LmStudioEmbeddingConfig",
+        "IBMWatsonXEmbeddingConfig",
     }
     if name in _misc_transformation_config_names:
         from ._lazy_imports import _lazy_import_misc_transformation_configs
@@ -1692,7 +1692,7 @@ def __getattr__(name: str) -> Any:
         return _VoyageContextualEmbeddingConfig
     
     # Lazy-load Azure Responses API configs to reduce import-time memory cost
-    if name in {"AzureOpenAIResponsesAPIConfig", "AzureOpenAIOSeriesResponsesAPIConfig"}:
+    if name in {"AzureOpenAIResponsesAPIConfig", "AzureOpenAIOSeriesResponsesAPIConfig", "GithubCopilotResponsesAPIConfig"}:
         from ._lazy_imports import _lazy_import_azure_responses_configs
         return _lazy_import_azure_responses_configs(name)
     
