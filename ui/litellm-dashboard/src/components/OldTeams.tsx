@@ -195,17 +195,16 @@ const Teams: React.FC<TeamProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
+  const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [perTeamInfo, setPerTeamInfo] = useState<Record<string, PerTeamInfo>>({});
-
+  const [isTeamDeleting, setIsTeamDeleting] = useState(false);
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
-  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
 
   useEffect(() => {
@@ -318,9 +317,9 @@ const Teams: React.FC<TeamProps> = ({
     memberForm.resetFields();
   };
 
-  const handleDelete = async (team_id: string) => {
+  const handleDelete = async (team: Team) => {
     // Set the team to delete and open the confirmation modal
-    setTeamToDelete(team_id);
+    setTeamToDelete(team);
     setIsDeleteModalOpen(true);
   };
 
@@ -330,25 +329,22 @@ const Teams: React.FC<TeamProps> = ({
     }
 
     try {
-      await teamDeleteCall(accessToken, teamToDelete);
-      // Successfully completed the deletion. Update the state to trigger a rerender.
+      setIsTeamDeleting(true);
+      await teamDeleteCall(accessToken, teamToDelete.team_id);
       await fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+      NotificationsManager.success("Team deleted successfully");
     } catch (error) {
-      console.error("Error deleting the team:", error);
-      // Handle any error situations, such as displaying an error message to the user.
+      NotificationsManager.fromBackend("Error deleting the team: " + error);
+    } finally {
+      setIsTeamDeleting(false);
+      setIsDeleteModalOpen(false);
+      setTeamToDelete(null);
     }
-
-    // Close the confirmation modal and reset the teamToDelete
-    setIsDeleteModalOpen(false);
-    setTeamToDelete(null);
-    setDeleteConfirmInput("");
   };
 
   const cancelDelete = () => {
-    // Close the confirmation modal and reset the teamToDelete
     setIsDeleteModalOpen(false);
     setTeamToDelete(null);
-    setDeleteConfirmInput("");
   };
 
   useEffect(() => {
@@ -950,7 +946,7 @@ const Teams: React.FC<TeamProps> = ({
                                           <Tooltip title="Delete team">
                                             {" "}
                                             <Icon
-                                              onClick={() => handleDelete(team.team_id)}
+                                              onClick={() => handleDelete(team)}
                                               icon={TrashIcon}
                                               size="sm"
                                               className="cursor-pointer hover:text-red-600"
@@ -974,87 +970,27 @@ const Teams: React.FC<TeamProps> = ({
                             )}
                           </TableBody>
                         </Table>
-                        {isDeleteModalOpen &&
-                          (() => {
-                            const team = teams?.find((t) => t.team_id === teamToDelete);
-                            const teamName = team?.team_alias || "";
-                            const keyCount = team?.keys?.length || 0;
-                            const isValid = deleteConfirmInput === teamName;
-                            return (
-                              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                                <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl min-h-[380px] py-6 overflow-hidden transform transition-all flex flex-col justify-between">
-                                  <div>
-                                    <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-                                      <h3 className="text-lg font-semibold text-gray-900">Delete Team</h3>
-                                      <button
-                                        onClick={() => {
-                                          cancelDelete();
-                                          setDeleteConfirmInput("");
-                                        }}
-                                        className="text-gray-400 hover:text-gray-500 focus:outline-none"
-                                      >
-                                        <XIcon size={20} />
-                                      </button>
-                                    </div>
-                                    <div className="px-6 py-4">
-                                      {keyCount > 0 && (
-                                        <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-md mb-5">
-                                          <div className="text-red-500 mt-0.5">
-                                            <AlertTriangleIcon size={20} />
-                                          </div>
-                                          <div>
-                                            <p className="text-base font-medium text-red-600">
-                                              Warning: This team has {keyCount} associated key{keyCount > 1 ? "s" : ""}.
-                                            </p>
-                                            <p className="text-base text-red-600 mt-2">
-                                              Deleting the team will also delete all associated keys. This action is
-                                              irreversible.
-                                            </p>
-                                          </div>
-                                        </div>
-                                      )}
-                                      <p className="text-base text-gray-600 mb-5">
-                                        Are you sure you want to force delete this team and all its keys?
-                                      </p>
-                                      <div className="mb-5">
-                                        <label className="block text-base font-medium text-gray-700 mb-2">
-                                          {`Type `}
-                                          <span className="underline">{teamName}</span>
-                                          {` to confirm deletion:`}
-                                        </label>
-                                        <input
-                                          type="text"
-                                          value={deleteConfirmInput}
-                                          onChange={(e) => setDeleteConfirmInput(e.target.value)}
-                                          placeholder="Enter team name exactly"
-                                          className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base"
-                                          autoFocus
-                                        />
-                                      </div>
-                                    </div>
-                                  </div>
-                                  <div className="px-6 py-4 bg-gray-50 flex justify-end gap-4">
-                                    <button
-                                      onClick={() => {
-                                        cancelDelete();
-                                        setDeleteConfirmInput("");
-                                      }}
-                                      className="px-5 py-3 bg-white border border-gray-300 rounded-md text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                                    >
-                                      Cancel
-                                    </button>
-                                    <button
-                                      onClick={confirmDelete}
-                                      disabled={!isValid}
-                                      className={`px-5 py-3 rounded-md text-base font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 ${isValid ? "bg-red-600 hover:bg-red-700" : "bg-red-300 cursor-not-allowed"}`}
-                                    >
-                                      Force Delete
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })()}
+                        <DeleteResourceModal
+                          isOpen={isDeleteModalOpen}
+                          title="Delete Team?"
+                          alertMessage={
+                            teamToDelete?.keys?.length === 0
+                              ? undefined
+                              : `Warning: This team has ${teamToDelete?.keys?.length} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`
+                          }
+                          message="Are you sure you want to delete this team and all its keys? This action cannot be undone."
+                          resourceInformationTitle="Team Information"
+                          resourceInformation={[
+                            { label: "Team ID", value: teamToDelete?.team_id, code: true },
+                            { label: "Team Name", value: teamToDelete?.team_alias },
+                            { label: "Keys", value: teamToDelete?.keys?.length },
+                            { label: "Members", value: teamToDelete?.members_with_roles?.length },
+                          ]}
+                          requiredConfirmation={teamToDelete?.team_alias}
+                          onCancel={cancelDelete}
+                          onOk={confirmDelete}
+                          confirmLoading={isTeamDeleting}
+                        />
                       </Card>
                     </Col>
                   </Grid>
@@ -1322,6 +1258,30 @@ const Teams: React.FC<TeamProps> = ({
                             value: name,
                             label: name,
                           }))}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Disable Global Guardrails{" "}
+                            <Tooltip title="When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="disable_global_guardrails"
+                        className="mt-4"
+                        valuePropName="checked"
+                        help="Bypass global guardrails for this team"
+                      >
+                        <Switch
+                          disabled={!premiumUser}
+                          checkedChildren={
+                            premiumUser ? "Yes" : "Premium feature - Upgrade to disable global guardrails by team"
+                          }
+                          unCheckedChildren={
+                            premiumUser ? "No" : "Premium feature - Upgrade to disable global guardrails by team"
+                          }
                         />
                       </Form.Item>
                       <Form.Item
