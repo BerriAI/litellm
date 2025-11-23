@@ -71,3 +71,233 @@ The result will show the model's response with your variables substituted:
 
 ![Prompt Test Results](../../img/add_prompt_use_var.png)
 
+### Step 6: Save Your Prompt
+
+Once you're satisfied with your prompt, click the **Save** button in the top right corner to save it to your prompt library.
+
+## Using Your Prompts
+
+Now that your prompt is published, you can use it in your application via the LiteLLM proxy API.
+
+### Simple Usage
+
+Call a prompt without any variables:
+
+```python
+import litellm
+
+response = litellm.completion(
+    model="prompt/your-prompt-id",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
+
+### With Custom Messages
+
+You can override or add to the prompt's messages:
+
+```python
+import litellm
+
+response = litellm.completion(
+    model="prompt/your-prompt-id",
+    messages=[
+        {"role": "user", "content": "What's the weather like?"}
+    ]
+)
+```
+
+### With Prompt Variables
+
+Pass variables to your prompt template using the `prompt_variables` parameter:
+
+```python
+import litellm
+
+response = litellm.completion(
+    model="prompt/your-prompt-id",
+    messages=[{"role": "user", "content": "what is it ?"}],
+    prompt_variables={"dish": "cookies"}
+)
+```
+
+### Using the OpenAI SDK
+
+You can also use the OpenAI SDK directly with the LiteLLM proxy:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-litellm-api-key",
+    base_url="http://your-litellm-proxy:4000"
+)
+
+response = client.chat.completions.create(
+    model="prompt/your-prompt-id",
+    messages=[{"role": "user", "content": "what is it ?"}],
+    extra_body={
+        "prompt_variables": {"dish": "pasta"}
+    }
+)
+```
+
+### cURL Example
+
+```bash
+curl -X POST http://your-litellm-proxy:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-litellm-api-key" \
+  -d '{
+    "model": "prompt/your-prompt-id",
+    "messages": [{"role": "user", "content": "what is it ?"}],
+    "prompt_variables": {"dish": "cookies"}
+  }'
+```
+
+## Prompt Versioning
+
+LiteLLM automatically versions your prompts each time you update them. This allows you to maintain a complete history of changes and roll back to previous versions if needed.
+
+### View Prompt Details
+
+Click on any prompt ID in the prompts table to view its details page. This page shows:
+- **Prompt ID**: The unique identifier for your prompt
+- **Version**: The current version number (e.g., v4)
+- **Prompt Type**: The storage type (e.g., db)
+- **Created At**: When the prompt was first created
+- **Last Updated**: Timestamp of the most recent update
+- **LiteLLM Parameters**: The raw JSON configuration
+
+![Prompt Details](../../img/edit_prompt.png)
+
+### Update a Prompt
+
+To update an existing prompt:
+
+1. Click on the prompt you want to update from the prompts table
+2. Click the **Prompt Studio** button in the top right
+3. Make your changes to:
+   - Model selection
+   - Developer message (system instructions)
+   - Prompt messages
+   - Variables
+4. Test your changes in the chat interface on the right
+5. Click the **Update** button to save the new version
+
+![Edit Prompt in Studio](../../img/edit_prompt2.png)
+
+Each time you click **Update**, a new version is created (v1 → v2 → v3, etc.) while maintaining the same prompt ID.
+
+### View Version History
+
+To view all versions of a prompt:
+
+1. Open the prompt in **Prompt Studio**
+2. Click the **History** button in the top right
+3. A **Version History** panel will open on the right side
+
+![Version History Panel](../../img/edit_prompt3.png)
+
+The version history panel displays:
+- **Latest version** (marked with a "Latest" badge and "Active" status)
+- All previous versions (v4, v3, v2, v1, etc.)
+- Timestamps for each version
+- Database save status ("Saved to Database")
+
+### View and Restore Older Versions
+
+To view or restore an older version:
+
+1. In the **Version History** panel, click on any previous version (e.g., v2)
+2. The prompt studio will load that version's configuration
+3. You can see:
+   - The developer message from that version
+   - The prompt messages from that version
+   - The model and parameters used
+   - All variables defined at that time
+
+![View Older Version](../../img/edit_prompt4.png)
+
+The selected version will be highlighted with an "Active" badge in the version history panel.
+
+To restore an older version:
+1. View the older version you want to restore
+2. Click the **Update** button
+3. This will create a new version with the content from the older version
+
+### Use Specific Versions in API Calls
+
+By default, API calls use the latest version of a prompt. To use a specific version, append the version number to the prompt ID:
+
+```python
+import litellm
+
+# Use latest version (default)
+response = litellm.completion(
+    model="prompt/jack-sparrow",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+
+# Use specific version v2
+response = litellm.completion(
+    model="prompt/jack-sparrow:v2",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
+
+With the OpenAI SDK:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-litellm-api-key",
+    base_url="http://your-litellm-proxy:4000"
+)
+
+# Use version v3
+response = client.chat.completions.create(
+    model="prompt/jack-sparrow:v3",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
+
+Using cURL:
+
+```bash
+curl -X POST http://your-litellm-proxy:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-litellm-api-key" \
+  -d '{
+    "model": "prompt/jack-sparrow:v2",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+## Managing Prompts
+
+### Get Code Snippets
+
+Click the **Get Code** button on either the Prompt Details page or in Prompt Studio to view pre-generated code snippets for using your prompt in various programming languages and frameworks.
+
+### Delete a Prompt
+
+Admin users can delete prompts by:
+- Clicking the delete icon in the Actions column of the prompts table, or
+- Clicking the **Delete Prompt** button on the Prompt Details page
+
+Deleting a prompt removes all versions permanently.
+
+## Best Practices
+
+1. **Use descriptive prompt IDs**: Choose meaningful names that describe what the prompt does
+2. **Test before updating**: Always test your prompts with different variable values before creating a new version
+3. **Version control**: Update prompts instead of creating duplicates to maintain version history
+4. **Use variables**: Make prompts reusable by using variables instead of hardcoding values
+5. **Document your prompts**: Use clear developer messages to ensure consistent model behavior
+6. **Pin stable versions**: For production use, reference specific version numbers (e.g., `:v5`) instead of relying on the latest version
+7. **Review version history**: Regularly review your version history to understand how your prompts have evolved
+
+
+
