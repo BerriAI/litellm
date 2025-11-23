@@ -379,20 +379,6 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = litellm.model_alias_map[self.data["model"]]
 
-        # Inject model_id into metadata if available
-        # This ensures model_id is available in logging_obj for failed requests
-        if llm_router and self.data.get("model"):
-            try:
-                model_ids = llm_router.get_model_ids(self.data["model"])
-                if model_ids:
-                    if "metadata" not in self.data:
-                        self.data["metadata"] = {}
-                    if "model_info" not in self.data["metadata"]:
-                        self.data["metadata"]["model_info"] = {}
-                    self.data["metadata"]["model_info"]["id"] = model_ids[0]
-            except Exception as e:
-                verbose_proxy_logger.error(f"Error getting model ID from router for model: {self.data['model']}: {e}")
-
         # Check key-specific aliases
         if (
             isinstance(self.data["model"], str)
