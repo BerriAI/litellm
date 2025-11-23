@@ -15,6 +15,8 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Tuple, cast
 
+import orjson
+
 import litellm
 from litellm._logging import print_verbose
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -173,7 +175,7 @@ class RedisSemanticCache(BaseCache):
 
         # Convert string representation to Python object
         try:
-            cached_response = json.loads(cached_response)
+            cached_response = orjson.loads(cached_response)
         except json.JSONDecodeError:
             try:
                 cached_response = ast.literal_eval(cached_response)
