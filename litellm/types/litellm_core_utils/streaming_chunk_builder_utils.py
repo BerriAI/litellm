@@ -13,3 +13,4 @@ class UsagePerChunk(TypedDict):
     web_search_requests: Optional[int]
     completion_tokens_details: Optional[CompletionTokensDetails]
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper]
+    cost: Optional[float]
