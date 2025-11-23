@@ -576,6 +576,11 @@ def _lazy_import_small_provider_chat_configs(name: str) -> Any:
         _globals["FeatherlessAIConfig"] = _FeatherlessAIConfig
         return _FeatherlessAIConfig
     
+    if name == "CerebrasConfig":
+        from .llms.cerebras.chat import CerebrasConfig as _CerebrasConfig
+        _globals["CerebrasConfig"] = _CerebrasConfig
+        return _CerebrasConfig
+    
     raise AttributeError(f"Small provider chat configs lazy import: unknown attribute {name!r}")
 
 
