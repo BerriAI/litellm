@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.80.0-stable - Agent Hub Support"
+title: "v1.80.0-stable - Agent Hub Support"
 slug: "v1-80-0"
 date: 2025-11-15T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.0.rc.2
+ghcr.io/berriai/litellm:v1.80.0-stable
 ```
 
 </TabItem>
