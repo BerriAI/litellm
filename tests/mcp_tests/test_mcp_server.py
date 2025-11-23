@@ -1048,7 +1048,7 @@ async def test_mcp_server_manager_config_integration_with_database():
     )
 
     # Test the add_update_server method (this tests our fix)
-    test_manager.add_update_server(db_server)
+    await test_manager.add_update_server(db_server)
 
     # Verify the server was added with correct access_groups
     registry = test_manager.get_registry()
@@ -1342,7 +1342,8 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
         )
 
 
-def test_add_update_server_with_alias():
+@pytest.mark.asyncio
+async def test_add_update_server_with_alias():
     """
     Test that add_update_server correctly handles servers with alias.
     """
@@ -1371,7 +1372,7 @@ def test_add_update_server_with_alias():
     mock_mcp_server.token_url = None
 
     # Add server to manager
-    test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_update_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use alias)
     assert "test-server-123" in test_manager.registry
@@ -1381,7 +1382,8 @@ def test_add_update_server_with_alias():
     assert added_server.server_name == "Test Server"
 
 
-def test_add_update_server_without_alias():
+@pytest.mark.asyncio
+async def test_add_update_server_without_alias():
     """
     Test that add_update_server correctly handles servers without alias.
     """
@@ -1410,7 +1412,7 @@ def test_add_update_server_without_alias():
     mock_mcp_server.token_url = None
 
     # Add server to manager
-    test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_update_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use server_name)
     assert "test-server-123" in test_manager.registry
@@ -1420,7 +1422,8 @@ def test_add_update_server_without_alias():
     assert added_server.server_name == "Test Server"
 
 
-def test_add_update_server_fallback_to_server_id():
+@pytest.mark.asyncio
+async def test_add_update_server_fallback_to_server_id():
     """
     Test that add_update_server falls back to server_id when neither alias nor server_name are available.
     """
@@ -1449,7 +1452,7 @@ def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.token_url = None
 
     # Add server to manager
-    test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_update_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use server_id)
     assert "test-server-123" in test_manager.registry
