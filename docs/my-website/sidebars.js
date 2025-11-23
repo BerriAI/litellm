@@ -82,6 +82,7 @@ const sidebars = {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
+        "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
         "proxy/prompt_management"
