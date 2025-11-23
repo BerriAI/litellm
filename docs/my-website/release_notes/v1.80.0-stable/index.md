@@ -1,5 +1,5 @@
 ---
-title: "v1.80.0-stable - Agent Hub Support"
+title: "v1.80.0-stable - Introducing Agent Hub: Register, Publish, and Share Agents"
 slug: "v1-80-0"
 date: 2025-11-15T10:00:00
 authors:
