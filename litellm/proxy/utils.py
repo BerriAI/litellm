@@ -4087,7 +4087,7 @@ def _remove_none_except_preserved(
     # Use a stack for iterative processing: (data, path, is_first_visit)
     # We'll process in a way that allows us to build the result bottom-up
     stack = [(data, current_path, True)]  # (data, path, is_first_visit)
-    results_map = {}  # Maps id(data) -> processed result
+    results_map: dict[int, Any] = {}  # Maps id(data) -> processed result
 
     while stack:
         current_data, current_path_str, is_first_visit = stack.pop()
@@ -4117,6 +4117,7 @@ def _remove_none_except_preserved(
                         stack.append((item, new_path, True))
         else:
             # Second visit - children are processed, build result
+            result: Union[dict[str, Any], list[Any]]
             if isinstance(current_data, dict):
                 result = {}
                 for key, value in current_data.items():
