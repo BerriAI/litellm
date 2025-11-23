@@ -243,19 +243,6 @@ async def anthropic_response(  # noqa: PLR0915
         headers = getattr(e, "headers", {}) or {}
         headers.update(custom_headers)
 
-        # Raise ProxyException with proper headers
-        from litellm.proxy.proxy_server import ProxyException
-
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-                provider_specific_fields=getattr(e, "provider_specific_fields", None),
-                headers=headers,
-            )
-
         error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
