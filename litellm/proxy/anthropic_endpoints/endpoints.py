@@ -85,20 +85,6 @@ async def anthropic_response(  # noqa: PLR0915
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
-        # Inject model_id into metadata if available
-        # This ensures model_id is available in logging_obj for failed requests
-        if llm_router and data.get("model"):
-            try:
-                model_ids = llm_router.get_model_ids(data["model"])
-                if model_ids:
-                    if "metadata" not in data:
-                        data["metadata"] = {}
-                    if "model_info" not in data["metadata"]:
-                        data["metadata"]["model_info"] = {}
-                    data["metadata"]["model_info"]["id"] = model_ids[0]
-            except Exception as e:
-                verbose_proxy_logger.error(f"Error getting model ID from router for model: {data['model']}: {e}")
-
         ### CALL HOOKS ### - modify incoming data before calling the model
         data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=data, call_type=CallTypes.anthropic_messages.value
@@ -168,8 +154,13 @@ async def anthropic_response(  # noqa: PLR0915
 
         response = responses[1]
 
+        # Extract model_id from request metadata (set by router during routing)
+        litellm_metadata = data.get("litellm_metadata", {}) or {}
+        model_info = litellm_metadata.get("model_info", {}) or {}
+        model_id = model_info.get("id", "") or ""
+
+        # Get other metadata from hidden_params
         hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
         response_cost = hidden_params.get("response_cost", None) or ""
@@ -230,22 +221,50 @@ async def anthropic_response(  # noqa: PLR0915
                 str(e)
             )
         )
-        error_msg = f"{str(e)}"
 
-        # Get headers with model_id if available
-        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        # Extract model_id from request metadata (same as success path)
+        litellm_metadata = data.get("litellm_metadata", {}) or {}
+        model_info = litellm_metadata.get("model_info", {}) or {}
+        model_id = model_info.get("id", "") or ""
+
+        # Get headers
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
-            model_id=data.get("metadata", {}).get("model_info", {}).get("id", None),
+            call_id=data.get("litellm_call_id", ""),
+            model_id=model_id,
             version=version,
-            request_data=data
+            response_cost=0,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            request_data=data,
+            timeout=getattr(e, "timeout", None),
+            litellm_logging_obj=None,
         )
 
+        headers = getattr(e, "headers", {}) or {}
+        headers.update(custom_headers)
+
+        # Raise ProxyException with proper headers
+        from litellm.proxy.proxy_server import ProxyException
+
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                provider_specific_fields=getattr(e, "provider_specific_fields", None),
+                headers=headers,
+            )
+
+        error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
+            openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
-            headers=headers
+            provider_specific_fields=getattr(e, "provider_specific_fields", None),
+            headers=headers,
         )
 
 

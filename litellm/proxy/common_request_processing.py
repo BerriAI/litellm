@@ -766,6 +766,9 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         # Attempt to get model_id from logging object
+        #
+        # Note: We check the direct model_info path first (not nested in metadata) because that's where the router sets it.
+        # The nested metadata path is only a fallback for cases where model_info wasn't set at the top level.
         model_id = None
         if _litellm_logging_obj:
             # 1. Try getting from litellm_params (updated during call)
@@ -773,16 +776,28 @@ class ProxyBaseLLMRequestProcessing:
                 hasattr(_litellm_logging_obj, "litellm_params")
                 and _litellm_logging_obj.litellm_params
             ):
-                metadata = _litellm_logging_obj.litellm_params.get("metadata") or {}
-                model_info = metadata.get("model_info") or {}
+                # First check direct model_info path (set by router.py with selected deployment)
+                model_info = _litellm_logging_obj.litellm_params.get("model_info") or {}
                 model_id = model_info.get("id", None)
+
+                # Fallback to nested metadata path
+                if not model_id:
+                    metadata = _litellm_logging_obj.litellm_params.get("metadata") or {}
+                    model_info = metadata.get("model_info") or {}
+                    model_id = model_info.get("id", None)
 
             # 2. Fallback to kwargs (initial)
             if not model_id and _litellm_logging_obj.kwargs:
                 litellm_params = _litellm_logging_obj.kwargs.get("litellm_params", {})
-                metadata = litellm_params.get("metadata") or {}
-                model_info = metadata.get("model_info") or {}
+                # First check direct model_info path
+                model_info = litellm_params.get("model_info") or {}
                 model_id = model_info.get("id", None)
+
+                # Fallback to nested metadata path
+                if not model_id:
+                    metadata = litellm_params.get("metadata") or {}
+                    model_info = metadata.get("model_info") or {}
+                    model_id = model_info.get("id", None)
 
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
