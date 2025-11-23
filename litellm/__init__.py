@@ -1354,59 +1354,6 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 
 
-def _lazy_import_types_utils(name: str) -> Any:
-    """Lazy import for types.utils module - imports only the requested item by name."""
-    if name == "ImageObject":
-        from litellm.types.utils import ImageObject as _ImageObject
-        globals()["ImageObject"] = _ImageObject
-        return _ImageObject
-    
-    if name == "BudgetConfig":
-        from litellm.types.utils import BudgetConfig as _BudgetConfig
-        globals()["BudgetConfig"] = _BudgetConfig
-        return _BudgetConfig
-    
-    if name == "all_litellm_params":
-        from litellm.types.utils import all_litellm_params as _all_litellm_params
-        globals()["all_litellm_params"] = _all_litellm_params
-        return _all_litellm_params
-    
-    if name == "_litellm_completion_params":
-        from litellm.types.utils import all_litellm_params as _all_litellm_params
-        globals()["_litellm_completion_params"] = _all_litellm_params
-        return _all_litellm_params
-    
-    if name == "CredentialItem":
-        from litellm.types.utils import CredentialItem as _CredentialItem
-        globals()["CredentialItem"] = _CredentialItem
-        return _CredentialItem
-    
-    if name == "PriorityReservationDict":
-        from litellm.types.utils import PriorityReservationDict as _PriorityReservationDict
-        globals()["PriorityReservationDict"] = _PriorityReservationDict
-        return _PriorityReservationDict
-    
-    if name == "StandardKeyGenerationConfig":
-        from litellm.types.utils import StandardKeyGenerationConfig as _StandardKeyGenerationConfig
-        globals()["StandardKeyGenerationConfig"] = _StandardKeyGenerationConfig
-        return _StandardKeyGenerationConfig
-    
-    if name == "LlmProviders":
-        from litellm.types.utils import LlmProviders as _LlmProviders
-        globals()["LlmProviders"] = _LlmProviders
-        return _LlmProviders
-    
-    if name == "SearchProviders":
-        from litellm.types.utils import SearchProviders as _SearchProviders
-        globals()["SearchProviders"] = _SearchProviders
-        return _SearchProviders
-    
-    if name == "PriorityReservationSettings":
-        from litellm.types.utils import PriorityReservationSettings as _PriorityReservationSettings
-        globals()["PriorityReservationSettings"] = _PriorityReservationSettings
-        return _PriorityReservationSettings
-    
-    raise AttributeError(f"Types utils lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_ui_sso(name: str) -> Any:
@@ -2018,6 +1965,7 @@ def __getattr__(name: str) -> Any:
         "LlmProviders", "SearchProviders", "PriorityReservationSettings",
     }
     if name in _types_utils_names:
+        from ._lazy_imports import _lazy_import_types_utils
         return _lazy_import_types_utils(name)
     
     if name in {"DefaultTeamSSOParams", "LiteLLM_UpperboundKeyGenerateParams"}:
