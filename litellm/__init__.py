@@ -1346,35 +1346,6 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 # Lazy import helper functions are imported inside __getattr__ to avoid any import-time overhead
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _lazy_import_logging_integrations(name: str) -> Any:
-    """Lazy import for logging-related integrations - imports only the requested item by name."""
-    if name == "CustomLogger":
-        from litellm.integrations.custom_logger import CustomLogger as _CustomLogger
-        globals()["CustomLogger"] = _CustomLogger
-        return _CustomLogger
-    
-    if name == "LoggingCallbackManager":
-        from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager as _LoggingCallbackManager
-        globals()["LoggingCallbackManager"] = _LoggingCallbackManager
-        return _LoggingCallbackManager
-    
-    raise AttributeError(f"Logging integrations lazy import: unknown attribute {name!r}")
-
-
 def _lazy_import_dotprompt(name: str) -> Any:
     """Lazy import for dotprompt module - imports only the requested item by name."""
     if name == "global_prompt_manager":
@@ -1962,6 +1933,7 @@ def __getattr__(name: str) -> Any:
     
     # Lazy-load logging integrations to avoid circular imports
     if name in {"CustomLogger", "LoggingCallbackManager"}:
+        from ._lazy_imports import _lazy_import_logging_integrations
         return _lazy_import_logging_integrations(name)
     
     # Lazy-load dotprompt imports to avoid circular imports
