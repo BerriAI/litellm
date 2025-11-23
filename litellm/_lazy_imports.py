@@ -1215,3 +1215,18 @@ def _lazy_import_misc_transformation_configs(name: str) -> Any:
         return _SnowflakeEmbeddingConfig
     
     raise AttributeError(f"Misc transformation configs lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_main_functions(name: str) -> Any:
+    """Lazy import for main module functions and classes - dynamically imports from main."""
+    _globals = _get_litellm_globals()
+    try:
+        # Dynamically import the requested attribute from main module
+        main_module = __import__("litellm.main", fromlist=[name])
+        if hasattr(main_module, name):
+            attr = getattr(main_module, name)
+            _globals[name] = attr
+            return attr
+        raise AttributeError(f"module 'litellm.main' has no attribute {name!r}")
+    except ImportError as e:
+        raise AttributeError(f"Failed to lazy import {name!r} from litellm.main: {e}") from e
