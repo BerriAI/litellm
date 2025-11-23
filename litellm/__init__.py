@@ -90,6 +90,11 @@ if TYPE_CHECKING:
     from litellm.llms.empower.chat.transformation import EmpowerChatConfig
     from litellm.llms.featherless_ai.chat.transformation import FeatherlessAIConfig
     from litellm.llms.cerebras.chat import CerebrasConfig
+    from litellm.llms.baseten.chat import BasetenConfig
+    from litellm.llms.sambanova.chat import SambanovaConfig
+    from litellm.llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
+    from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+    from litellm.llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
     from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
     from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -1165,11 +1170,6 @@ from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
 
 nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
-from .llms.baseten.chat import BasetenConfig
-from .llms.sambanova.chat import SambanovaConfig
-from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
-from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
 from .llms.fireworks_ai.audio_transcription.transformation import (
     FireworksAIAudioTranscriptionConfig,
 )
@@ -1461,7 +1461,7 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_openai_like_configs(name)
     
     # Lazy-load small provider chat configs to reduce import-time memory cost
-    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig"}:
+    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig", "BasetenConfig", "SambanovaConfig", "FireworksAIConfig"}:
         from ._lazy_imports import _lazy_import_small_provider_chat_configs
         return _lazy_import_small_provider_chat_configs(name)
     
@@ -1593,6 +1593,7 @@ def __getattr__(name: str) -> Any:
     _misc_transformation_config_names = {
         "DeepInfraConfig", "GroqChatConfig", "VoyageEmbeddingConfig",
         "InfinityEmbeddingConfig", "AzureAIStudioConfig", "MistralConfig",
+        "SambaNovaEmbeddingConfig", "FireworksAITextCompletionConfig",
     }
     if name in _misc_transformation_config_names:
         from ._lazy_imports import _lazy_import_misc_transformation_configs

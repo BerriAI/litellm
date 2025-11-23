@@ -581,6 +581,21 @@ def _lazy_import_small_provider_chat_configs(name: str) -> Any:
         _globals["CerebrasConfig"] = _CerebrasConfig
         return _CerebrasConfig
     
+    if name == "BasetenConfig":
+        from .llms.baseten.chat import BasetenConfig as _BasetenConfig
+        _globals["BasetenConfig"] = _BasetenConfig
+        return _BasetenConfig
+    
+    if name == "SambanovaConfig":
+        from .llms.sambanova.chat import SambanovaConfig as _SambanovaConfig
+        _globals["SambanovaConfig"] = _SambanovaConfig
+        return _SambanovaConfig
+    
+    if name == "FireworksAIConfig":
+        from .llms.fireworks_ai.chat.transformation import FireworksAIConfig as _FireworksAIConfig
+        _globals["FireworksAIConfig"] = _FireworksAIConfig
+        return _FireworksAIConfig
+    
     raise AttributeError(f"Small provider chat configs lazy import: unknown attribute {name!r}")
 
 
@@ -965,5 +980,15 @@ def _lazy_import_misc_transformation_configs(name: str) -> Any:
         from .llms.mistral.chat.transformation import MistralConfig as _MistralConfig
         _globals["MistralConfig"] = _MistralConfig
         return _MistralConfig
+    
+    if name == "SambaNovaEmbeddingConfig":
+        from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig as _SambaNovaEmbeddingConfig
+        _globals["SambaNovaEmbeddingConfig"] = _SambaNovaEmbeddingConfig
+        return _SambaNovaEmbeddingConfig
+    
+    if name == "FireworksAITextCompletionConfig":
+        from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig as _FireworksAITextCompletionConfig
+        _globals["FireworksAITextCompletionConfig"] = _FireworksAITextCompletionConfig
+        return _FireworksAITextCompletionConfig
     
     raise AttributeError(f"Misc transformation configs lazy import: unknown attribute {name!r}")
