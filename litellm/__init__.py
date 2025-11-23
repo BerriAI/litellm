@@ -1346,20 +1346,6 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 # Lazy import helper functions are imported inside __getattr__ to avoid any import-time overhead
 
-# Lazy import for litellm_logging to avoid loading the module at import time
-# This significantly reduces memory usage when importing litellm
-def _lazy_import_litellm_logging(name: str) -> Any:
-    if name == "Logging":
-        from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
-        globals()["Logging"] = _Logging
-        return _Logging
-    
-    if name == "modify_integration":
-        from litellm.litellm_core_utils.litellm_logging import modify_integration as _modify_integration
-        globals()["modify_integration"] = _modify_integration
-        return _modify_integration
-    
-    raise AttributeError(f"Litellm logging lazy import: unknown attribute {name!r}")
 
 
 # Lazy import for utils functions to avoid loading utils.py (which imports tiktoken) at import time
@@ -2251,6 +2237,7 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_cost_calculator(name)
     
     if name in {"Logging", "modify_integration"}:
+        from ._lazy_imports import _lazy_import_litellm_logging
         return _lazy_import_litellm_logging(name)
     
     # Lazy load utils functions

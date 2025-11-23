@@ -32,3 +32,19 @@ def _lazy_import_cost_calculator(name: str) -> Any:
     
     raise AttributeError(f"Cost calculator lazy import: unknown attribute {name!r}")
 
+
+def _lazy_import_litellm_logging(name: str) -> Any:
+    """Lazy import for litellm_logging module."""
+    _globals = _get_litellm_globals()
+    if name == "Logging":
+        from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
+        _globals["Logging"] = _Logging
+        return _Logging
+    
+    if name == "modify_integration":
+        from litellm.litellm_core_utils.litellm_logging import modify_integration as _modify_integration
+        _globals["modify_integration"] = _modify_integration
+        return _modify_integration
+    
+    raise AttributeError(f"Litellm logging lazy import: unknown attribute {name!r}")
+
