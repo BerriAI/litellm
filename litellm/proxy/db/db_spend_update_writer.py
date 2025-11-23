@@ -994,11 +994,11 @@ class DBSpendUpdateWriter:
                             # If _update_daily_spend ever gets the ability to write to multiple tables at once, the sorting
                             # should sort by the table first.
                             key=lambda x: (
-                                x[1]["date"],
+                                x[1].get("date") or "",
                                 x[1].get(entity_id_field) or "",
-                                x[1]["api_key"],
-                                x[1]["model"],
-                                x[1]["custom_llm_provider"],
+                                x[1].get("api_key") or "",
+                                x[1].get("model") or "",
+                                x[1].get("custom_llm_provider") or "",
                             ),
                         )[:BATCH_SIZE]
                     )

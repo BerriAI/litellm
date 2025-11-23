@@ -1,8 +1,7 @@
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
-import { updateExistingKeys } from "@/utils/dataUtils";
-import { isAdminRole } from "@/utils/roles";
+import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ChevronDownIcon, ChevronRightIcon, PencilAltIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
@@ -31,10 +30,10 @@ import {
   Text,
   TextInput,
 } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Tooltip, Typography } from "antd";
+import { AlertTriangleIcon, XIcon } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
-import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { fetchTeams } from "./common_components/fetch_teams";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
@@ -47,15 +46,7 @@ import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "./molecules/notifications_manager";
-import {
-  Member,
-  Organization,
-  fetchMCPAccessGroups,
-  getGuardrailsList,
-  teamCreateCall,
-  teamDeleteCall,
-  v2TeamListCall,
-} from "./networking";
+import { Organization, fetchMCPAccessGroups, getGuardrailsList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
@@ -84,6 +75,9 @@ interface EditTeamModalProps {
   team: any; // Assuming TeamType is a type representing your team object
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
+
+import { updateExistingKeys } from "@/utils/dataUtils";
+import { Member, teamCreateCall, v2TeamListCall } from "./networking";
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -615,7 +609,7 @@ const Teams: React.FC<TeamProps> = ({
                 <div className="flex">
                   <Tab>Your Teams</Tab>
                   <Tab>Available Teams</Tab>
-                  {isAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
+                  {isProxyAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
                 </div>
                 <div className="flex items-center space-x-2">
                   {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
@@ -1004,7 +998,7 @@ const Teams: React.FC<TeamProps> = ({
                 <TabPanel>
                   <AvailableTeamsPanel accessToken={accessToken} userID={userID} />
                 </TabPanel>
-                {isAdminRole(userRole || "") && (
+                {isProxyAdminRole(userRole || "") && (
                   <TabPanel>
                     <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />
                   </TabPanel>
