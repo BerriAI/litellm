@@ -275,29 +275,8 @@ curl -X POST http://your-litellm-proxy:4000/v1/chat/completions \
   }'
 ```
 
-## Managing Prompts
 
-### Get Code Snippets
 
-Click the **Get Code** button on either the Prompt Details page or in Prompt Studio to view pre-generated code snippets for using your prompt in various programming languages and frameworks.
-
-### Delete a Prompt
-
-Admin users can delete prompts by:
-- Clicking the delete icon in the Actions column of the prompts table, or
-- Clicking the **Delete Prompt** button on the Prompt Details page
-
-Deleting a prompt removes all versions permanently.
-
-## Best Practices
-
-1. **Use descriptive prompt IDs**: Choose meaningful names that describe what the prompt does
-2. **Test before updating**: Always test your prompts with different variable values before creating a new version
-3. **Version control**: Update prompts instead of creating duplicates to maintain version history
-4. **Use variables**: Make prompts reusable by using variables instead of hardcoding values
-5. **Document your prompts**: Use clear developer messages to ensure consistent model behavior
-6. **Pin stable versions**: For production use, reference specific version numbers (e.g., `:v5`) instead of relying on the latest version
-7. **Review version history**: Regularly review your version history to understand how your prompts have evolved
 
 
 
