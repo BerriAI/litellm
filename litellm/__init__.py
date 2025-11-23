@@ -1806,23 +1806,6 @@ def _lazy_import_openai_gpt_configs(name: str) -> Any:
     raise AttributeError(f"OpenAI GPT configs lazy import: unknown attribute {name!r}")
 
 
-def _lazy_import_nvidia_nim_configs(name: str) -> Any:
-    """Lazy import for NvidiaNim config classes - imports only the requested class."""
-    if name == "NvidiaNimConfig":
-        from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
-        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
-        return _NvidiaNimConfig
-    
-    if name == "nvidiaNimConfig":
-        from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
-        _nvidiaNimConfig = _NvidiaNimConfig()
-        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
-        globals()["nvidiaNimConfig"] = _nvidiaNimConfig
-        return _nvidiaNimConfig
-    
-    raise AttributeError(f"NvidiaNim configs lazy import: unknown attribute {name!r}")
-
-
 def _lazy_import_misc_transformation_configs(name: str) -> Any:
     """Lazy import for miscellaneous transformation config classes - imports only the requested class."""
     if name == "DeepInfraConfig":
@@ -2203,6 +2186,7 @@ def __getattr__(name: str) -> Any:
     
     # Lazy-load NvidiaNim configs to reduce import-time memory cost
     if name in {"NvidiaNimConfig", "nvidiaNimConfig"}:
+        from ._lazy_imports import _lazy_import_nvidia_nim_configs
         return _lazy_import_nvidia_nim_configs(name)
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

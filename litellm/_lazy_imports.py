@@ -422,3 +422,19 @@ def _lazy_import_logging_integrations(name: str) -> Any:
         return _LoggingCallbackManager
     
     raise AttributeError(f"Logging integrations lazy import: unknown attribute {name!r}")
+
+def _lazy_import_nvidia_nim_configs(name: str) -> Any:
+    """Lazy import for NvidiaNim config classes - imports only the requested class."""
+    if name == "NvidiaNimConfig":
+        from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
+        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
+        return _NvidiaNimConfig
+    
+    if name == "nvidiaNimConfig":
+        from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as _NvidiaNimConfig
+        _nvidiaNimConfig = _NvidiaNimConfig()
+        globals()["NvidiaNimConfig"] = _NvidiaNimConfig
+        globals()["nvidiaNimConfig"] = _nvidiaNimConfig
+        return _nvidiaNimConfig
+    
+    raise AttributeError(f"NvidiaNim configs lazy import: unknown attribute {name!r}")
