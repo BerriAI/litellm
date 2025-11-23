@@ -803,6 +803,124 @@ def test_fix_enum_empty_strings():
     assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
 
 
+def test_fix_enum_types():
+    """
+    Test _fix_enum_types function removes enum fields when type is not string.
+    
+    This test verifies the fix for the issue where Gemini rejects cached content
+    with function parameter enums on non-string types, causing API failures.
+
+    Relevant issue: Gemini only allows enums for string-typed fields
+    """
+    from litellm.llms.vertex_ai.common_utils import _fix_enum_types
+
+    # Input: Schema with enum on non-string type (the problematic case)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "truncateMode": {
+                "enum": ["auto", "none", "start", "end"],
+                "type": "string",  # This should keep the enum
+                "description": "How to truncate content"
+            },
+            "maxLength": {
+                "enum": [100, 200, 500],  # This should be removed
+                "type": "integer",
+                "description": "Maximum length"
+            },
+            "enabled": {
+                "enum": [True, False],  # This should be removed
+                "type": "boolean",
+                "description": "Whether feature is enabled"
+            },
+            "nested": {
+                "type": "object",
+                "properties": {
+                    "innerEnum": {
+                        "enum": ["a", "b", "c"],  # This should be kept
+                        "type": "string"
+                    },
+                    "innerNonStringEnum": {
+                        "enum": [1, 2, 3],  # This should be removed
+                        "type": "integer"
+                    }
+                }
+            },
+            "anyOfField": {
+                "anyOf": [
+                    {"type": "string", "enum": ["option1", "option2"]},  # This should be kept
+                    {"type": "integer", "enum": [1, 2, 3]}  # This should be removed
+                ]
+            }
+        }
+    }
+
+    # Expected output: Non-string enums removed, string enums kept
+    expected_output = {
+        "type": "object",
+        "properties": {
+            "truncateMode": {
+                "enum": ["auto", "none", "start", "end"],  # Kept - string type
+                "type": "string",
+                "description": "How to truncate content"
+            },
+            "maxLength": {  # enum removed
+                "type": "integer",
+                "description": "Maximum length"
+            },
+            "enabled": {  # enum removed
+                "type": "boolean",
+                "description": "Whether feature is enabled"
+            },
+            "nested": {
+                "type": "object",
+                "properties": {
+                    "innerEnum": {
+                        "enum": ["a", "b", "c"],  # Kept - string type
+                        "type": "string"
+                    },
+                    "innerNonStringEnum": {  # enum removed
+                        "type": "integer"
+                    }
+                }
+            },
+            "anyOfField": {
+                "anyOf": [
+                    {"type": "string", "enum": ["option1", "option2"]},  # Kept - has string type
+                    {"type": "integer"}  # enum removed
+                ]
+            }
+        }
+    }
+
+    # Apply the transformation
+    _fix_enum_types(input_schema)
+
+    # Verify the transformation
+    assert input_schema == expected_output
+
+    # Verify specific transformations:
+    # 1. String enums are preserved
+    assert "enum" in input_schema["properties"]["truncateMode"]
+    assert input_schema["properties"]["truncateMode"]["enum"] == ["auto", "none", "start", "end"]
+    
+    assert "enum" in input_schema["properties"]["nested"]["properties"]["innerEnum"]
+    assert input_schema["properties"]["nested"]["properties"]["innerEnum"]["enum"] == ["a", "b", "c"]
+
+    # 2. Non-string enums are removed
+    assert "enum" not in input_schema["properties"]["maxLength"]
+    assert "enum" not in input_schema["properties"]["enabled"]
+    assert "enum" not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
+
+    # 3. anyOf with string type keeps enum, non-string removes it
+    assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
+    assert "enum" not in input_schema["properties"]["anyOfField"]["anyOf"][1]
+
+    # 4. Other properties preserved
+    assert input_schema["properties"]["maxLength"]["type"] == "integer"
+    assert input_schema["properties"]["enabled"]["type"] == "boolean"
+
+
 def test_get_token_url():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexLLM,
