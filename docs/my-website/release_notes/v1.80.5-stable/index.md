@@ -45,15 +45,15 @@ pip install litellm==1.80.5
 
 ## Key Highlights
 
+- **MCP Hub** - [Publish and discover MCP servers within your organization](../../docs/proxy/ai_hub#mcp-servers)
+- **Model Compare UI** - [Side-by-side model comparison interface for testing](../../docs/proxy/model_compare_ui)
+- **Gemini 3** - [Day-0 support for Gemini 3 models with thought signatures](../../blog/gemini_3)
+- **Batch API Spend Tracking** - [Granular spend tracking with custom metadata for batch and file creation requests](../../docs/proxy/cost_tracking#-custom-spend-log-metadata)
+- **AWS IAM Secret Manager** - [IAM role authentication support for AWS Secret Manager](../../docs/secret_managers/aws_secret_manager#iam-role-assumption)
+- **Logging Callback Controls** - [Admin-level controls to prevent callers from disabling logging callbacks in compliance environments](../../docs/proxy/dynamic_logging#disabling-dynamic-callback-management-enterprise)
+- **Proxy CLI JWT Authentication** - [Enable developers to authenticate to LiteLLM AI Gateway using the Proxy CLI](../../docs/proxy/cli_sso)
+- **Batch API Routing** - [Route batch operations to different provider accounts using model-specific credentials from your config.yaml](../../docs/batches#multi-account--model-based-routing)
 - **Prompt Management** - Full prompt versioning support with UI for editing, testing, and version history
-- **MCP Hub** - Publish and discover MCP servers within your organization
-- **Model Compare UI** - Side-by-side model comparison interface for testing
-- **Gemini 3** - Day-0 support for Gemini 3 models with thought signatures
-- **Batch API Spend Tracking** - Granular spend tracking with custom metadata for batch and file creation requests
-- **AWS IAM Secret Manager** - IAM role authentication support for AWS Secret Manager
-- **Logging Callback Controls** - Admin-level controls to prevent callers from disabling logging callbacks in compliance environments
-- **Proxy CLI JWT Authentication** - Enable developers to authenticate with the proxy CLI using JWTs
-- **Batch API Routing** - Route batch and file operations to specific models and deployments 
 
 ---
 
