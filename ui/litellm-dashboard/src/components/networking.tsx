@@ -7296,19 +7296,32 @@ export const testMCPConnectionRequest = async (accessToken: string, mcpServerCon
   }
 };
 
-export const testMCPToolsListRequest = async (accessToken: string, mcpServerConfig: Record<string, any>) => {
+export const testMCPToolsListRequest = async (
+  accessToken: string | null,
+  mcpServerConfig: Record<string, any>,
+  oauthAccessToken?: string | null,
+) => {
   try {
     console.log("Testing MCP tools list with config:", JSON.stringify(mcpServerConfig));
 
     // Construct the URL for POST request
     const url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/test/tools/list` : `/mcp-rest/test/tools/list`;
 
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (accessToken) {
+      headers["x-litellm-api-key"] = accessToken;
+    }
+    if (oauthAccessToken) {
+      headers["Authorization"] = `Bearer ${oauthAccessToken}`;
+    } else if (accessToken) {
+      headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
+    }
+
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
+      headers,
       body: JSON.stringify(mcpServerConfig),
     });
 
@@ -7344,6 +7357,140 @@ export const testMCPToolsListRequest = async (accessToken: string, mcpServerConf
     // For network errors or other exceptions, still throw
     throw error;
   }
+};
+
+export const cacheTemporaryMcpServer = async (accessToken: string, payload: Record<string, any>) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server/oauth/session` : `/v1/mcp/server/oauth/session`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const errorMessage = deriveErrorMessage(data) || data?.error || "Failed to cache MCP server";
+    throw new Error(errorMessage);
+  }
+  return data;
+};
+
+interface RegisterMcpOAuthClientPayload {
+  client_name?: string;
+  grant_types?: string[];
+  response_types?: string[];
+  token_endpoint_auth_method?: string;
+}
+
+export const registerMcpOAuthClient = async (accessToken: string, serverId: string, payload: RegisterMcpOAuthClientPayload) => {
+  const base = getProxyBaseUrl();
+  const normalizedServerId = encodeURIComponent(serverId.trim());
+  const url = `${base}/v1/mcp/server/oauth/${normalizedServerId}/register`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const errorMessage = deriveErrorMessage(data) || data?.detail || "Failed to register OAuth client";
+    throw new Error(errorMessage);
+  }
+  return data;
+};
+
+interface BuildOAuthAuthorizeURLParams {
+  serverId: string;
+  clientId?: string;
+  redirectUri: string;
+  state: string;
+  codeChallenge: string;
+  scope?: string;
+}
+
+export const buildMcpOAuthAuthorizeUrl = ({
+  serverId,
+  clientId,
+  redirectUri,
+  state,
+  codeChallenge,
+  scope,
+}: BuildOAuthAuthorizeURLParams): string => {
+  const base = getProxyBaseUrl();
+  const normalizedServerId = encodeURIComponent(serverId.trim());
+  const url = `${base}/v1/mcp/server/oauth/${normalizedServerId}/authorize`;
+  const params = new URLSearchParams({
+    redirect_uri: redirectUri,
+    state,
+    response_type: "code",
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+  });
+  if (clientId && clientId.trim().length > 0) {
+    params.set("client_id", clientId);
+  }
+  if (scope && scope.trim().length > 0) {
+    params.set("scope", scope);
+  }
+  return `${url}?${params.toString()}`;
+};
+
+interface ExchangeMcpOAuthTokenParams {
+  serverId: string;
+  code: string;
+  clientId?: string;
+  clientSecret?: string;
+  codeVerifier: string;
+  redirectUri: string;
+}
+
+export const exchangeMcpOAuthToken = async ({
+  serverId,
+  code,
+  clientId,
+  clientSecret,
+  codeVerifier,
+  redirectUri,
+}: ExchangeMcpOAuthTokenParams) => {
+  const base = getProxyBaseUrl();
+  const normalizedServerId = encodeURIComponent(serverId.trim());
+  const url = `${base}/v1/mcp/server/oauth/${normalizedServerId}/token`;
+
+  const body = new URLSearchParams();
+  body.set("grant_type", "authorization_code");
+  body.set("code", code);
+  if (clientId && clientId.trim().length > 0) {
+    body.set("client_id", clientId);
+  }
+  if (clientSecret && clientSecret.trim().length > 0) {
+    body.set("client_secret", clientSecret);
+  }
+  body.set("code_verifier", codeVerifier);
+  body.set("redirect_uri", redirectUri);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const errorMessage = deriveErrorMessage(data) || data?.detail || "OAuth token exchange failed";
+    throw new Error(errorMessage);
+  }
+  return data;
 };
 
 export const vectorStoreSearchCall = async (
