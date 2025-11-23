@@ -678,6 +678,71 @@ def _lazy_import_small_provider_chat_configs(name: str) -> Any:
         _globals["GithubCopilotConfig"] = _GithubCopilotConfig
         return _GithubCopilotConfig
     
+    if name == "NebiusConfig":
+        from .llms.nebius.chat.transformation import NebiusConfig as _NebiusConfig
+        _globals["NebiusConfig"] = _NebiusConfig
+        return _NebiusConfig
+    
+    if name == "WandbConfig":
+        from .llms.wandb.chat.transformation import WandbConfig as _WandbConfig
+        _globals["WandbConfig"] = _WandbConfig
+        return _WandbConfig
+    
+    if name == "DashScopeChatConfig":
+        from .llms.dashscope.chat.transformation import DashScopeChatConfig as _DashScopeChatConfig
+        _globals["DashScopeChatConfig"] = _DashScopeChatConfig
+        return _DashScopeChatConfig
+    
+    if name == "MoonshotChatConfig":
+        from .llms.moonshot.chat.transformation import MoonshotChatConfig as _MoonshotChatConfig
+        _globals["MoonshotChatConfig"] = _MoonshotChatConfig
+        return _MoonshotChatConfig
+    
+    if name == "DockerModelRunnerChatConfig":
+        from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig as _DockerModelRunnerChatConfig
+        _globals["DockerModelRunnerChatConfig"] = _DockerModelRunnerChatConfig
+        return _DockerModelRunnerChatConfig
+    
+    if name == "V0ChatConfig":
+        from .llms.v0.chat.transformation import V0ChatConfig as _V0ChatConfig
+        _globals["V0ChatConfig"] = _V0ChatConfig
+        return _V0ChatConfig
+    
+    if name == "OCIChatConfig":
+        from .llms.oci.chat.transformation import OCIChatConfig as _OCIChatConfig
+        _globals["OCIChatConfig"] = _OCIChatConfig
+        return _OCIChatConfig
+    
+    if name == "MorphChatConfig":
+        from .llms.morph.chat.transformation import MorphChatConfig as _MorphChatConfig
+        _globals["MorphChatConfig"] = _MorphChatConfig
+        return _MorphChatConfig
+    
+    if name == "LambdaAIChatConfig":
+        from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig as _LambdaAIChatConfig
+        _globals["LambdaAIChatConfig"] = _LambdaAIChatConfig
+        return _LambdaAIChatConfig
+    
+    if name == "HyperbolicChatConfig":
+        from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig as _HyperbolicChatConfig
+        _globals["HyperbolicChatConfig"] = _HyperbolicChatConfig
+        return _HyperbolicChatConfig
+    
+    if name == "VercelAIGatewayConfig":
+        from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig as _VercelAIGatewayConfig
+        _globals["VercelAIGatewayConfig"] = _VercelAIGatewayConfig
+        return _VercelAIGatewayConfig
+    
+    if name == "OVHCloudChatConfig":
+        from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig as _OVHCloudChatConfig
+        _globals["OVHCloudChatConfig"] = _OVHCloudChatConfig
+        return _OVHCloudChatConfig
+    
+    if name == "LemonadeChatConfig":
+        from .llms.lemonade.chat.transformation import LemonadeChatConfig as _LemonadeChatConfig
+        _globals["LemonadeChatConfig"] = _LemonadeChatConfig
+        return _LemonadeChatConfig
+    
     raise AttributeError(f"Small provider chat configs lazy import: unknown attribute {name!r}")
 
 
@@ -1133,5 +1198,20 @@ def _lazy_import_misc_transformation_configs(name: str) -> Any:
         from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig as _IBMWatsonXEmbeddingConfig
         _globals["IBMWatsonXEmbeddingConfig"] = _IBMWatsonXEmbeddingConfig
         return _IBMWatsonXEmbeddingConfig
+    
+    if name == "OVHCloudEmbeddingConfig":
+        from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig as _OVHCloudEmbeddingConfig
+        _globals["OVHCloudEmbeddingConfig"] = _OVHCloudEmbeddingConfig
+        return _OVHCloudEmbeddingConfig
+    
+    if name == "CometAPIEmbeddingConfig":
+        from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig as _CometAPIEmbeddingConfig
+        _globals["CometAPIEmbeddingConfig"] = _CometAPIEmbeddingConfig
+        return _CometAPIEmbeddingConfig
+    
+    if name == "SnowflakeEmbeddingConfig":
+        from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig as _SnowflakeEmbeddingConfig
+        _globals["SnowflakeEmbeddingConfig"] = _SnowflakeEmbeddingConfig
+        return _SnowflakeEmbeddingConfig
     
     raise AttributeError(f"Misc transformation configs lazy import: unknown attribute {name!r}")

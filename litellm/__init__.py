@@ -122,6 +122,22 @@ if TYPE_CHECKING:
     from litellm.llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
     from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
     from litellm.llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig
+    from litellm.llms.nebius.chat.transformation import NebiusConfig
+    from litellm.llms.wandb.chat.transformation import WandbConfig
+    from litellm.llms.dashscope.chat.transformation import DashScopeChatConfig
+    from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
+    from litellm.llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
+    from litellm.llms.v0.chat.transformation import V0ChatConfig
+    from litellm.llms.oci.chat.transformation import OCIChatConfig
+    from litellm.llms.morph.chat.transformation import MorphChatConfig
+    from litellm.llms.lambda_ai.chat.transformation import LambdaAIChatConfig
+    from litellm.llms.hyperbolic.chat.transformation import HyperbolicChatConfig
+    from litellm.llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
+    from litellm.llms.ovhcloud.chat.transformation import OVHCloudChatConfig
+    from litellm.llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
+    from litellm.llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
+    from litellm.llms.lemonade.chat.transformation import LemonadeChatConfig
+    from litellm.llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
     from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
     from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -1203,22 +1219,6 @@ from .llms.fireworks_ai.audio_transcription.transformation import (
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
-from .llms.nebius.chat.transformation import NebiusConfig
-from .llms.wandb.chat.transformation import WandbConfig
-from .llms.dashscope.chat.transformation import DashScopeChatConfig
-from .llms.moonshot.chat.transformation import MoonshotChatConfig
-from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
-from .llms.v0.chat.transformation import V0ChatConfig
-from .llms.oci.chat.transformation import OCIChatConfig
-from .llms.morph.chat.transformation import MorphChatConfig
-from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
-from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
-from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
-from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
-from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
-from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
-from .llms.lemonade.chat.transformation import LemonadeChatConfig
-from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
 from .utils import client
 from .main import *  # type: ignore
 from .integrations import *
@@ -1454,7 +1454,7 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_openai_like_configs(name)
     
     # Lazy-load small provider chat configs to reduce import-time memory cost
-    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig", "BasetenConfig", "SambanovaConfig", "FireworksAIConfig", "FriendliaiChatConfig", "XAIChatConfig", "AIMLChatConfig", "VolcEngineConfig", "VolcEngineChatConfig", "HerokuChatConfig", "CometAPIConfig", "HostedVLLMChatConfig", "LlamafileChatConfig", "LiteLLMProxyChatConfig", "DeepSeekChatConfig", "LMStudioChatConfig", "NscaleConfig", "PerplexityChatConfig", "IBMWatsonXChatConfig", "GithubCopilotConfig"}:
+    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig", "BasetenConfig", "SambanovaConfig", "FireworksAIConfig", "FriendliaiChatConfig", "XAIChatConfig", "AIMLChatConfig", "VolcEngineConfig", "VolcEngineChatConfig", "HerokuChatConfig", "CometAPIConfig", "HostedVLLMChatConfig", "LlamafileChatConfig", "LiteLLMProxyChatConfig", "DeepSeekChatConfig", "LMStudioChatConfig", "NscaleConfig", "PerplexityChatConfig", "IBMWatsonXChatConfig", "GithubCopilotConfig", "NebiusConfig", "WandbConfig", "DashScopeChatConfig", "MoonshotChatConfig", "DockerModelRunnerChatConfig", "V0ChatConfig", "OCIChatConfig", "MorphChatConfig", "LambdaAIChatConfig", "HyperbolicChatConfig", "VercelAIGatewayConfig", "OVHCloudChatConfig", "LemonadeChatConfig"}:
         from ._lazy_imports import _lazy_import_small_provider_chat_configs
         return _lazy_import_small_provider_chat_configs(name)
     
@@ -1589,7 +1589,8 @@ def __getattr__(name: str) -> Any:
         "SambaNovaEmbeddingConfig", "FireworksAITextCompletionConfig",
         "JinaAIEmbeddingConfig", "CodestralTextCompletionConfig",
         "VLLMConfig", "IBMWatsonXAIConfig", "LmStudioEmbeddingConfig",
-        "IBMWatsonXEmbeddingConfig",
+        "IBMWatsonXEmbeddingConfig", "OVHCloudEmbeddingConfig",
+        "CometAPIEmbeddingConfig", "SnowflakeEmbeddingConfig",
     }
     if name in _misc_transformation_config_names:
         from ._lazy_imports import _lazy_import_misc_transformation_configs
