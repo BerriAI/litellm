@@ -176,6 +176,10 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
     );
   }, 0);
 
+  if (guardrailEntries.length === 0) {
+    return null;
+  }
+
   const tooltipTitle = allSucceeded ? null : "Guardrail failed to run.";
 
   if (guardrailEntries.length === 0) {
