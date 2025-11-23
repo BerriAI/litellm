@@ -622,13 +622,6 @@ class LiteLLMAnthropicMessagesAdapter:
             stop_reason=anthropic_finish_reason,
         )
 
-        # Preserve model_id from the OpenAI response's _hidden_params
-        # This is needed for load balancing attribution
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id")
-        if model_id:
-            translated_obj["_litellm_model_id"] = model_id  # type: ignore
-
         return translated_obj
 
     def _translate_streaming_openai_chunk_to_anthropic_content_block(

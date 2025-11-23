@@ -228,7 +228,7 @@ async def anthropic_response(  # noqa: PLR0915
         model_id = model_info.get("id", "") or ""
 
         # Get headers
-        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=data.get("litellm_call_id", ""),
             model_id=model_id,
@@ -240,17 +240,12 @@ async def anthropic_response(  # noqa: PLR0915
             litellm_logging_obj=None,
         )
 
-        headers = getattr(e, "headers", {}) or {}
-        headers.update(custom_headers)
-
         error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
-            openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
-            provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )
 
