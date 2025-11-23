@@ -532,7 +532,6 @@ class ProxyBaseLLMRequestProcessing:
         model_id = hidden_params.get("model_id", None) or ""
 
         # Fallback: extract model_id from litellm_metadata if not in hidden_params
-        # This is needed for ResponsesAPIStreamingIterator where _hidden_params might not be accessible
         if not model_id:
             litellm_metadata = self.data.get("litellm_metadata", {}) or {}
             model_info = litellm_metadata.get("model_info", {}) or {}
