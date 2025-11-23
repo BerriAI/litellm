@@ -39,8 +39,9 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `proxyConfigMap.create`     | When `true`, render a ConfigMap from `.Values.proxy_config` and mount it.                                                                                                                                      | `true` |
 | `proxyConfigMap.name`       | When `create=false`, name of the existing ConfigMap to mount.                                                                                                                                                  | `""`  |
 | `proxyConfigMap.key`        | Key in the ConfigMap that contains the proxy config file.                                                                                                                                                      | `"config.yaml"` |
-| `proxy_config.*`            | See [values.yaml](./values.yaml) for default settings. Rendered into the ConfigMap’s `config.yaml` only when `proxyConfigMap.create=true`. See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples. | `N/A` |
-| `extraContainers[]`         | An array of additional containers to be deployed as sidecars alongside the LiteLLM Proxy.
+| `proxy_config.*`            | See [values.yaml](./values.yaml) for default settings. Rendered into the ConfigMap's `config.yaml` only when `proxyConfigMap.create=true`. See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples. | `N/A` |
+| `extraContainers[]`         | An array of additional containers to be deployed as sidecars alongside the LiteLLM Proxy.                                                                                             | `[]`  |
+| `extraResources[]`          | An array of additional Kubernetes resources to deploy alongside LiteLLM. Useful for external-secrets, custom secrets, etc.                                                           | `[]`  |
 | `pdb.enabled`                   | Enable a PodDisruptionBudget for the LiteLLM proxy Deployment                                                                 | `false` |
 | `pdb.minAvailable`             | Minimum number/percentage of pods that must be available during **voluntary** disruptions (choose **one** of minAvailable/maxUnavailable) | `null`  |
 | `pdb.maxUnavailable`           | Maximum number/percentage of pods that can be unavailable during **voluntary** disruptions (choose **one** of minAvailable/maxUnavailable) | `null`  |
@@ -148,6 +149,56 @@ data:
 ```
 
 Source: [GitHub Gist from troyharvey](https://gist.github.com/troyharvey/4506472732157221e04c6b15e3b3f094)
+
+## Using External Secrets Operator
+
+The chart supports deploying additional Kubernetes resources via the `extraResources` array in values.yaml. This is particularly useful for integrating with the [External Secrets Operator](https://external-secrets.io/) to manage secrets from external systems like AWS Systems Manager Parameter Store, HashiCorp Vault, Azure Key Vault, etc.
+
+### Example: AWS SSM Parameter Store Integration
+
+See [examples/external-secrets-ssm.yaml](./examples/external-secrets-ssm.yaml) for a complete example of using AWS SSM Parameter Store with external-secrets.
+
+Prerequisites:
+1. Install external-secrets operator in your cluster
+2. Configure IRSA (IAM Role for Service Accounts) for AWS SSM access
+3. Store your secrets in SSM Parameter Store
+
+```bash
+# Install external-secrets operator
+helm repo add external-secrets https://charts.external-secrets.io
+helm install external-secrets external-secrets/external-secrets \
+  -n external-secrets-system --create-namespace
+
+# Deploy LiteLLM with external-secrets
+helm install litellm . -f examples/external-secrets-ssm.yaml
+```
+
+The example configuration will:
+- Create a SecretStore for AWS SSM Parameter Store
+- Fetch secrets from SSM parameters like `/litellm/master-key`, `/litellm/openai/api-key`
+- Make them available as Kubernetes secrets
+- Configure LiteLLM to use these secrets via environment variables
+
+### Custom External Resources
+
+You can also use `extraResources` to deploy any custom Kubernetes resources:
+
+```yaml
+extraResources:
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: my-custom-secret
+    data:
+      key: dmFsdWU=  # base64 encoded "value"
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: my-config
+    data:
+      config.yaml: |
+        key: value
+```
 
 ### Migration Job Settings
 
