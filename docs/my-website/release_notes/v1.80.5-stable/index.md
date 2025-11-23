@@ -84,7 +84,7 @@ This update reduces `/realtime` latency by removing redundant encodings on the h
 
 ---
 
-## Model Compare UI
+### Model Compare UI
 
 New interactive playground UI enables side-by-side comparison of multiple LLM models, making it easy to evaluate and compare model responses.
 
@@ -111,7 +111,7 @@ New interactive playground UI enables side-by-side comparison of multiple LLM mo
 
 - **Safety Filters**: Configure and test guardrails (safety filters) directly in the playground interface
 
-[Get Started with Model Compare](../../docs/proxy/model_compare_ui) - [PR #16855](https://github.com/BerriAI/litellm/pull/16855)
+[Get Started with Model Compare](../../docs/proxy/model_compare_ui)
 
 ## New Providers and Endpoints
 
