@@ -284,7 +284,10 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+# BaseFilesConfig is lazy-loaded to reduce import-time memory cost
+# It's only needed when get_provider_files_config is called
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -328,7 +331,9 @@ from .exceptions import (
     UnprocessableEntityError,
     UnsupportedParamsError,
 )
-from .proxy._types import AllowedModelRegion, KeyManagementSystem
+# AllowedModelRegion and KeyManagementSystem are lazy-loaded to reduce import-time memory cost
+if TYPE_CHECKING:
+    from .proxy._types import AllowedModelRegion, KeyManagementSystem
 from .types.llms.openai import (
     ChatCompletionDeltaToolCallChunk,
     ChatCompletionToolCallChunk,
@@ -4349,7 +4354,7 @@ def _get_model_region(
     return litellm_params.region_name
 
 
-def _infer_model_region(litellm_params: LiteLLM_Params) -> Optional[AllowedModelRegion]:
+def _infer_model_region(litellm_params: LiteLLM_Params) -> Optional["AllowedModelRegion"]:
     """
     Infer if a model is in the EU or US region
 
@@ -7542,7 +7547,7 @@ class ProviderConfigManager:
     def get_provider_files_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseFilesConfig]:
+    ) -> Optional["BaseFilesConfig"]:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.files.transformation import (
                 GoogleAIStudioFilesHandler,  # experimental approach, to reduce bloat on __init__.py
