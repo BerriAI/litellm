@@ -1344,26 +1344,7 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
     global_gitlab_config = config
 
 
-# Lazy import for cost_calculator functions to avoid loading the module at import time
-# This significantly reduces memory usage when importing litellm
-def _lazy_import_cost_calculator(name: str) -> Any:
-    """Lazy import for cost_calculator functions."""
-    if name == "completion_cost":
-        from .cost_calculator import completion_cost as _completion_cost
-        globals()["completion_cost"] = _completion_cost
-        return _completion_cost
-    
-    if name == "cost_per_token":
-        from .cost_calculator import cost_per_token as _cost_per_token
-        globals()["cost_per_token"] = _cost_per_token
-        return _cost_per_token
-    
-    if name == "response_cost_calculator":
-        from .cost_calculator import response_cost_calculator as _response_cost_calculator
-        globals()["response_cost_calculator"] = _response_cost_calculator
-        return _response_cost_calculator
-    
-    raise AttributeError(f"Cost calculator lazy import: unknown attribute {name!r}")
+# Lazy import helper functions are imported inside __getattr__ to avoid any import-time overhead
 
 # Lazy import for litellm_logging to avoid loading the module at import time
 # This significantly reduces memory usage when importing litellm
@@ -2266,6 +2247,7 @@ def _lazy_import_misc_transformation_configs(name: str) -> Any:
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
+        from ._lazy_imports import _lazy_import_cost_calculator
         return _lazy_import_cost_calculator(name)
     
     if name in {"Logging", "modify_integration"}:
