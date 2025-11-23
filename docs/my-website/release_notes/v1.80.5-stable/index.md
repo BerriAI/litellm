@@ -46,6 +46,7 @@ pip install litellm==1.80.5
 ## Key Highlights
 
 - **Gemini 3** - [Day-0 support for Gemini 3 models with thought signatures](../../blog/gemini_3)
+- **Prompt Management** - [Full prompt versioning support with UI for editing, testing, and version history](../../docs/proxy/litellm_prompt_management)
 - **MCP Hub** - [Publish and discover MCP servers within your organization](../../docs/proxy/ai_hub#mcp-servers)
 - **Model Compare UI** - [Side-by-side model comparison interface for testing](../../docs/proxy/model_compare_ui)
 - **Batch API Spend Tracking** - [Granular spend tracking with custom metadata for batch and file creation requests](../../docs/proxy/cost_tracking#-custom-spend-log-metadata)
@@ -53,7 +54,44 @@ pip install litellm==1.80.5
 - **Logging Callback Controls** - [Admin-level controls to prevent callers from disabling logging callbacks in compliance environments](../../docs/proxy/dynamic_logging#disabling-dynamic-callback-management-enterprise)
 - **Proxy CLI JWT Authentication** - [Enable developers to authenticate to LiteLLM AI Gateway using the Proxy CLI](../../docs/proxy/cli_sso)
 - **Batch API Routing** - [Route batch operations to different provider accounts using model-specific credentials from your config.yaml](../../docs/batches#multi-account--model-based-routing)
-- **Prompt Management** - [Full prompt versioning support with UI for editing, testing, and version history](../../docs/proxy/litellm_prompt_management)
+
+---
+
+### Prompt Management
+
+<Image 
+  img={require('../../img/prompt_history.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+<br/>
+
+This release introduces **LiteLLM Prompt Studio** - a comprehensive prompt management solution built directly into the LiteLLM UI. Create, test, and version your prompts without leaving your browser.
+
+You can now do the following on LiteLLM Prompt Studio:
+
+- **Create & Test Prompts**: Build prompts with developer messages (system instructions) and test them in real-time with an interactive chat interface
+- **Dynamic Variables**: Use `{{variable_name}}` syntax to create reusable prompt templates with automatic variable detection
+- **Version Control**: Automatic versioning for every prompt update with complete version history tracking and rollback capabilities
+- **Prompt Studio**: Edit prompts in a dedicated studio environment with live testing and preview
+
+**API Integration:**
+
+Use your prompts in any application with simple API calls:
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4",
+    extra_body={
+        "prompt_id": "your-prompt-id",
+        "prompt_version": 2,  # Optional: specify version
+        "prompt_variables": {"name": "value"}  # Optional: pass variables
+    }
+)
+```
+
+Get started here: [LiteLLM Prompt Management Documentation](../../docs/proxy/litellm_prompt_management)
 
 ---
 
