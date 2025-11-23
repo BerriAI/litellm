@@ -644,6 +644,33 @@ This configuration ensures that:
 2. The `delete_repo` tool is explicitly blocked
 3. Each tool can only use its specified parameters
 
+### Enforce Value Patterns
+
+When you need tighter control over how a tool is used (for example limiting who an e-mail sender can contact), restrict **which values** are accepted with `allowed_param_patterns`. Attach regex guards to the argument paths that matter for your workflow.
+
+```yaml title="config.yaml with allowed_param_patterns" showLineNumbers
+mcp_servers:
+  mail_mcp:
+    url: https://litellm.ai/mcp
+    transport: http
+    allowed_params:
+      send_email: ["to", "cc", "subject", "body"]
+    allowed_param_patterns:
+      send_email:
+        to[]: "^.+@berri\\.ai$"
+        cc[]: "^.+@berri\\.ai$"
+        message.subject: "^.{1,120}$"
+        attachments[].fileName: "^[\\w.-]+\\.(pdf|docx)$"
+```
+
+**Path syntax**
+- Use dot notation to describe nested objects (`message.subject`)
+- Append `[]` whenever you want to validate every item in an array (`to[]`, `attachments[].fileName`)
+- Paths are evaluated on the OpenAI-style arguments payload after tool selection; values are converted to strings before matching with `re.fullmatch`
+- Configure patterns with prefixed or unprefixed tool names (e.g., `mail_mcp-send_email` or `send_email`)
+
+If any value fails its regex, LiteLLM blocks the tool call with a 403 response that includes the path and expected pattern. Invalid regex patterns raise a 500 so administrators can fix the configuration early.
+
 ---
 
 ## MCP Server Access Control

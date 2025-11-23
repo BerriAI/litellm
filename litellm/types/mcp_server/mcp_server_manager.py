@@ -7,11 +7,13 @@ from litellm.proxy._types import MCPAuthType, MCPTransportType
 # MCPInfo now allows arbitrary additional fields for custom metadata
 MCPInfo = Dict[str, Any]
 
+
 class MCPOAuthMetadata(BaseModel):
     scopes: Optional[List[str]] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+
 
 class MCPServer(BaseModel):
     server_id: str
@@ -32,6 +34,9 @@ class MCPServer(BaseModel):
     allowed_params: Optional[
         Dict[str, List[str]]
     ] = None  # map of tool names to allowed parameter lists
+    allowed_param_patterns: Optional[
+        Dict[str, Dict[str, str]]
+    ] = None  # map of tool names to nested param regex patterns
     static_headers: Optional[
         Dict[str, str]
     ] = None  # static headers to forward to the MCP server
