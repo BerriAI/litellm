@@ -1,5 +1,5 @@
 # Tool Permission Guardrail Type Definitions
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -15,6 +15,10 @@ class ToolPermissionRule(BaseModel):
     )
     decision: Literal["allow", "deny"] = Field(
         description="Whether to allow or deny this tool usage"
+    )
+    allowed_param_patterns: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Optional regex map enforcing nested parameter values using dot/[] paths",
     )
 
 
