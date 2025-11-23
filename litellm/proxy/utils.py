@@ -4027,3 +4027,134 @@ def validate_model_access(
                 model_id
             ),
         )
+
+
+def _path_matches_pattern(path: str, pattern: str) -> bool:
+    """Check if a path matches a pattern (supporting * wildcard for list indices)."""
+    path_parts = path.split(".")
+    pattern_parts = pattern.split(".")
+
+    if len(path_parts) != len(pattern_parts):
+        return False
+
+    for path_part, pattern_part in zip(path_parts, pattern_parts):
+        if pattern_part == "*":
+            # Wildcard matches any numeric index
+            if not path_part.isdigit():
+                return False
+        elif path_part != pattern_part:
+            return False
+
+    return True
+
+
+def _build_preserved_paths(
+    data: Any, current_path: str, preserve_fields: List[str], preserved_paths: set
+) -> None:
+    """Recursively build set of paths that should be preserved."""
+    if isinstance(data, dict):
+        for key, value in data.items():
+            new_path = f"{current_path}.{key}" if current_path else key
+
+            # Check if this path matches any preserve pattern
+            for pattern in preserve_fields:
+                if _path_matches_pattern(new_path, pattern):
+                    preserved_paths.add(new_path)
+
+            if isinstance(value, (dict, list)):
+                _build_preserved_paths(
+                    value, new_path, preserve_fields, preserved_paths
+                )
+
+    elif isinstance(data, list):
+        for idx, item in enumerate(data):
+            new_path = f"{current_path}.{idx}" if current_path else str(idx)
+            if isinstance(item, (dict, list)):
+                _build_preserved_paths(item, new_path, preserve_fields, preserved_paths)
+
+
+def _remove_none_except_preserved(
+    data: Any, current_path: str, preserved_paths: set
+) -> Any:
+    """Recursively remove None values except for preserved paths."""
+    if isinstance(data, dict):
+        result = {}
+        for key, value in data.items():
+            new_path = f"{current_path}.{key}" if current_path else key
+
+            if value is None:
+                # Only include if this path is preserved
+                if new_path in preserved_paths:
+                    result[key] = None
+            elif isinstance(value, (dict, list)):
+                processed = _remove_none_except_preserved(
+                    value, new_path, preserved_paths
+                )
+                if processed is not None and processed != {} and processed != []:
+                    result[key] = processed
+            else:
+                result[key] = value
+        return result
+
+    elif isinstance(data, list):
+        result = []
+        for idx, item in enumerate(data):
+            new_path = f"{current_path}.{idx}" if current_path else str(idx)
+
+            if item is None:
+                if new_path in preserved_paths:
+                    result.append(None)
+            elif isinstance(item, (dict, list)):
+                processed = _remove_none_except_preserved(
+                    item, new_path, preserved_paths
+                )
+                if processed is not None:
+                    result.append(processed)
+            else:
+                result.append(item)
+        return result
+
+    return data
+
+
+def model_dump_with_preserved_fields(
+    obj: Any,
+    preserve_fields: Optional[List[str]] = None,
+    exclude_unset: bool = True,
+) -> Dict[str, Any]:
+    """
+    Serialize a Pydantic model to a dictionary while preserving specific fields even if they are None.
+
+    This function is useful when you need to maintain API compatibility where certain fields
+    must always be present in the response (e.g., message.content in OpenAI API responses).
+
+    Args:
+        obj: The Pydantic BaseModel instance to serialize
+        preserve_fields: List of field paths to preserve even if None (e.g., ["choices.*.message.content"])
+        exclude_unset: Whether to exclude fields that were not explicitly set
+
+    Returns:
+        Dictionary representation with None values excluded except for preserved fields
+
+    Example:
+        >>> result = model_dump_with_preserved_fields(
+        ...     response,
+        ...     preserve_fields=["choices.*.message.content", "choices.*.message.role"]
+        ... )
+    """
+    if preserve_fields is None:
+        preserve_fields = [
+            "choices.*.message.content",
+            "choices.*.message.role",
+            "choices.*.delta.content",
+        ]
+
+    # First, get the full dump without excluding None values
+    full_dump = obj.model_dump(exclude_none=False, exclude_unset=exclude_unset)
+
+    # Build the set of preserved paths
+    preserved_paths: set = set()
+    _build_preserved_paths(full_dump, "", preserve_fields, preserved_paths)
+
+    # Remove None values except for preserved paths
+    return _remove_none_except_preserved(full_dump, "", preserved_paths)
