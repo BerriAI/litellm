@@ -2632,6 +2632,7 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
+    SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
