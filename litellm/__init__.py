@@ -1728,4 +1728,15 @@ def __getattr__(name: str) -> Any:
         from ._lazy_imports import _lazy_import_nvidia_nim_configs
         return _lazy_import_nvidia_nim_configs(name)
     
+    # Lazy-load main module functions and classes to reduce import-time memory cost
+    # This handles completion, acompletion, embedding, aembedding, text_completion,
+    # atext_completion, moderation, amoderation, transcription, atranscription,
+    # speech, aspeech, health_check, ahealth_check, LiteLLM, Chat, Completions,
+    # AsyncCompletions, and other public exports from main.py
+    from ._lazy_imports import _lazy_import_main_functions
+    try:
+        return _lazy_import_main_functions(name)
+    except AttributeError:
+        pass
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
