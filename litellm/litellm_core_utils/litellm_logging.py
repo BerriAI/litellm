@@ -4626,7 +4626,8 @@ class StandardLoggingPayloadSetup:
             if "x-litellm-tags" in headers and isinstance(
                 headers["x-litellm-tags"], str
             ):
-                response_tags.extend(headers["x-litellm-tags"].split(","))
+                new_tags = headers["x-litellm-tags"].split(",")
+                response_tags.extend([tag for tag in new_tags if tag not in response_tags])
         return response_tags
 
     @staticmethod
