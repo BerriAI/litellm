@@ -1350,36 +1350,6 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 
 
-# Lazy import for HTTP handlers to reduce import-time memory cost
-def _lazy_import_http_handlers(name: str) -> Any:
-    """Lazy import for HTTP handler instances and classes - imports only what's needed per name."""
-    # Handle HTTP handler instances
-    if name == "module_level_aclient":
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as _AsyncHTTPHandler
-        _module_level_aclient = _AsyncHTTPHandler(
-            timeout=request_timeout, client_alias="module level aclient"
-        )
-        globals()["module_level_aclient"] = _module_level_aclient
-        return _module_level_aclient
-    
-    if name == "module_level_client":
-        from litellm.llms.custom_httpx.http_handler import HTTPHandler as _HTTPHandler
-        _module_level_client = _HTTPHandler(timeout=request_timeout)
-        globals()["module_level_client"] = _module_level_client
-        return _module_level_client
-    
-    # Handle HTTP handler classes for backward compatibility
-    if name == "AsyncHTTPHandler":
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as _AsyncHTTPHandler
-        globals()["AsyncHTTPHandler"] = _AsyncHTTPHandler
-        return _AsyncHTTPHandler
-    
-    if name == "HTTPHandler":
-        from litellm.llms.custom_httpx.http_handler import HTTPHandler as _HTTPHandler
-        globals()["HTTPHandler"] = _HTTPHandler
-        return _HTTPHandler
-    
-    raise AttributeError(f"HTTP handler lazy import: unknown attribute {name!r}")
 
 
 # Lazy import for caching classes to reduce import-time memory cost
@@ -2062,6 +2032,7 @@ def __getattr__(name: str) -> Any:
     
     # Lazy-load HTTP handlers to reduce import-time memory cost
     if name in {"module_level_aclient", "module_level_client", "AsyncHTTPHandler", "HTTPHandler"}:
+        from ._lazy_imports import _lazy_import_http_handlers
         return _lazy_import_http_handlers(name)
     
     # Lazy-load caching classes to reduce import-time memory cost
