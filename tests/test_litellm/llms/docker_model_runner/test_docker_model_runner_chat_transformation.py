@@ -1,8 +1,8 @@
 """
-Unit tests for Docker Model Runner configuration.
+Unit tests for Docker Model Runner transformation.
 
-This test validates that litellm.completion correctly routes requests to Docker Model Runner
-with the proper URL structure and request body.
+This test validates that the DockerModelRunnerChatConfig correctly transforms
+requests to the proper URL, headers, and body format.
 """
 
 import os
@@ -13,159 +13,192 @@ sys.path.insert(
 )
 
 import json
-from unittest.mock import Mock, patch
+from typing import cast
 
-import httpx
 import pytest
 
-import litellm
-from litellm import completion
+from litellm.llms.docker_model_runner.chat.transformation import (
+    DockerModelRunnerChatConfig,
+)
+from litellm.types.llms.openai import AllMessageValues
 
 
-class TestDockerModelRunnerIntegration:
-    """Integration test for Docker Model Runner"""
+class TestDockerModelRunnerTransformation:
+    """
+    Unit tests for Docker Model Runner transformation layer.
+    """
 
-    def test_completion_hits_correct_url_and_body(self):
+    def test_get_complete_url_with_default_api_base(self):
         """
-        Test that litellm.completion with docker_model_runner provider:
-        1. Hits the correct URL: {api_base}/v1/chat/completions where api_base includes engine path
-        2. Sends the correct request body with messages and parameters
+        Test that get_complete_url returns the correct URL with default api_base.
         """
-        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
-            # Mock the response
-            mock_response = Mock(spec=httpx.Response)
-            mock_response.json.return_value = {
-                "id": "chatcmpl-123",
-                "object": "chat.completion",
-                "created": 1677652288,
-                "model": "llama-3.1",
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello! How can I help you today?"
-                    },
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": 10,
-                    "completion_tokens": 20,
-                    "total_tokens": 30
-                }
-            }
-            mock_response.status_code = 200
-            mock_response.headers = httpx.Headers({"content-type": "application/json"})
-            mock_post.return_value = mock_response
+        config = DockerModelRunnerChatConfig()
+        
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="llama-3.1",
+            optional_params={},
+            litellm_params={},
+            stream=False
+        )
+        
+        assert url == "http://localhost:22088/engines/llama.cpp/v1/chat/completions"
 
-            # Make the completion call with engine in api_base
-            response = completion(
-                model="docker_model_runner/llama-3.1",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                api_base="http://localhost:22088/engines/llama.cpp",
-                temperature=0.7,
-                max_tokens=100
-            )
-
-            # Verify the URL was correct
-            assert mock_post.called
-            call_args = mock_post.call_args
-            url = call_args[1]["url"]
-            print("URL For request", url)
-            print("request body for request", json.dumps(call_args[1]["data"], indent=4))
-            
-            # Should hit {api_base}/v1/chat/completions where api_base includes engine
-            assert "/engines/llama.cpp/v1/chat/completions" in url
-            assert "http://localhost:22088" in url
-
-            # Verify the request body
-            request_data = call_args[1]["data"]
-            if isinstance(request_data, str):
-                request_data = json.loads(request_data)
-            
-            # Check messages
-            assert "messages" in request_data
-            assert len(request_data["messages"]) == 1
-            assert request_data["messages"][0]["role"] == "user"
-            assert request_data["messages"][0]["content"] == "Hello, how are you?"
-            
-            # Check parameters
-            assert request_data["temperature"] == 0.7
-            assert request_data["max_tokens"] == 100
-            
-            # Verify response
-            assert response.choices[0].message.content == "Hello! How can I help you today?"
-
-    def test_completion_with_custom_engine_and_host(self):
+    def test_get_complete_url_with_custom_api_base(self):
         """
-        Test that litellm.completion works with custom engine and host:
-        1. Uses model-runner.docker.internal as host
-        2. Specifies a different engine in the api_base
-        3. Model name is sent in the request body
+        Test that get_complete_url correctly appends /v1/chat/completions to custom api_base.
         """
-        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
-            # Mock the response
-            mock_response = Mock(spec=httpx.Response)
-            mock_response.json.return_value = {
-                "id": "chatcmpl-456",
-                "object": "chat.completion",
-                "created": 1677652288,
-                "model": "mistral-7b",
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Bonjour! How can I assist you?"
-                    },
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": 15,
-                    "completion_tokens": 25,
-                    "total_tokens": 40
-                }
-            }
-            mock_response.status_code = 200
-            mock_response.headers = httpx.Headers({"content-type": "application/json"})
-            mock_post.return_value = mock_response
+        config = DockerModelRunnerChatConfig()
+        
+        url = config.get_complete_url(
+            api_base="http://localhost:22088/engines/llama.cpp",
+            api_key=None,
+            model="llama-3.1",
+            optional_params={},
+            litellm_params={},
+            stream=False
+        )
+        
+        assert url == "http://localhost:22088/engines/llama.cpp/v1/chat/completions"
+        assert "/engines/llama.cpp/v1/chat/completions" in url
+        assert "http://localhost:22088" in url
 
-            # Make the completion call with custom engine and host
-            response = completion(
-                model="docker_model_runner/mistral-7b",
-                messages=[{"role": "user", "content": "Hello!"}],
-                api_base="http://model-runner.docker.internal/engines/custom-engine",
-                temperature=0.5,
-                max_tokens=200
-            )
+    def test_get_complete_url_with_custom_engine_and_host(self):
+        """
+        Test that get_complete_url works with custom engine and host.
+        """
+        config = DockerModelRunnerChatConfig()
+        
+        url = config.get_complete_url(
+            api_base="http://model-runner.docker.internal/engines/custom-engine",
+            api_key=None,
+            model="mistral-7b",
+            optional_params={},
+            litellm_params={},
+            stream=False
+        )
+        
+        assert "model-runner.docker.internal" in url
+        assert "/engines/custom-engine/v1/chat/completions" in url
+        assert url == "http://model-runner.docker.internal/engines/custom-engine/v1/chat/completions"
 
-            # Verify the URL was correct
-            assert mock_post.called
-            call_args = mock_post.call_args
-            url = call_args[1]["url"]
-            print("URL For request", url)
-            print("request body for request", json.dumps(call_args[1]["data"], indent=4))
-            
-            # Should hit the custom host and engine
-            assert "model-runner.docker.internal" in url
-            assert "/engines/custom-engine/v1/chat/completions" in url
+    def test_get_complete_url_removes_trailing_slash(self):
+        """
+        Test that get_complete_url removes trailing slashes from api_base.
+        """
+        config = DockerModelRunnerChatConfig()
+        
+        url = config.get_complete_url(
+            api_base="http://localhost:22088/engines/llama.cpp/",
+            api_key=None,
+            model="llama-3.1",
+            optional_params={},
+            litellm_params={},
+            stream=False
+        )
+        
+        # Should not have double slashes
+        assert "/v1/chat/completions" in url
+        assert "//v1" not in url
 
-            # Verify the request body contains the model name
-            request_data = call_args[1]["data"]
-            if isinstance(request_data, str):
-                request_data = json.loads(request_data)
-            
-            # Check that model name is in the request body
-            assert request_data["model"] == "mistral-7b"
-            
-            # Check messages
-            assert "messages" in request_data
-            assert len(request_data["messages"]) == 1
-            assert request_data["messages"][0]["role"] == "user"
-            assert request_data["messages"][0]["content"] == "Hello!"
-            
-            # Check parameters
-            assert request_data["temperature"] == 0.5
-            assert request_data["max_tokens"] == 200
-            
-            # Verify response
-            assert response.choices[0].message.content == "Bonjour! How can I assist you?"
+    def test_transform_request_body(self):
+        """
+        Test that transform_request creates the correct request body with messages and parameters.
+        """
+        config = DockerModelRunnerChatConfig()
+        
+        messages = cast(list[AllMessageValues], [{"role": "user", "content": "Hello, how are you?"}])
+        optional_params = {
+            "temperature": 0.7,
+            "max_tokens": 100
+        }
+        
+        request_data = config.transform_request(
+            model="llama-3.1",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+        
+        # Check messages
+        assert "messages" in request_data
+        assert len(request_data["messages"]) == 1
+        assert request_data["messages"][0]["role"] == "user"
+        assert request_data["messages"][0]["content"] == "Hello, how are you?"
+        
+        # Check parameters
+        assert request_data["temperature"] == 0.7
+        assert request_data["max_tokens"] == 100
+        
+        # Check model name is in request
+        assert request_data["model"] == "llama-3.1"
+
+    def test_validate_environment_returns_headers(self):
+        """
+        Test that validate_environment returns the correct headers.
+        """
+        config = DockerModelRunnerChatConfig()
+        
+        headers = config.validate_environment(
+            headers={},
+            model="llama-3.1",
+            messages=cast(list[AllMessageValues], [{"role": "user", "content": "Hello"}]),
+            optional_params={},
+            litellm_params={},
+            api_key="test-key",
+            api_base="http://localhost:22088/engines/llama.cpp"
+        )
+        
+        # Should have Authorization header with Bearer token
+        assert "Authorization" in headers
+        assert "Bearer" in headers["Authorization"]
+
+    def test_map_openai_params(self):
+        """
+        Test that map_openai_params correctly maps OpenAI parameters.
+        """
+        config = DockerModelRunnerChatConfig()
+        
+        non_default_params = {
+            "temperature": 0.5,
+            "max_tokens": 200,
+            "top_p": 0.9
+        }
+        optional_params = {}
+        
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="mistral-7b",
+            drop_params=False
+        )
+        
+        # Check that parameters are mapped correctly
+        assert result["temperature"] == 0.5
+        assert result["max_tokens"] == 200
+        assert result["top_p"] == 0.9
+
+    def test_map_max_completion_tokens_to_max_tokens(self):
+        """
+        Test that max_completion_tokens is mapped to max_tokens.
+        """
+        config = DockerModelRunnerChatConfig()
+        
+        non_default_params = {
+            "max_completion_tokens": 150
+        }
+        optional_params = {}
+        
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="llama-3.1",
+            drop_params=False
+        )
+        
+        # max_completion_tokens should be mapped to max_tokens
+        assert result["max_tokens"] == 150
+        assert "max_completion_tokens" not in result
 

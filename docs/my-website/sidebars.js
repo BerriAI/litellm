@@ -82,6 +82,7 @@ const sidebars = {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
+        "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
         "proxy/prompt_management"
@@ -730,6 +731,7 @@ const sidebars = {
         "tutorials/prompt_caching",
         "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
+        "tutorials/presidio_pii_masking",
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
         "tutorials/claude_responses_api",
@@ -789,6 +791,7 @@ const sidebars = {
           },
           items: [
             "projects/smolagents",
+            "projects/mini-swe-agent",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",

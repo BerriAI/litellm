@@ -688,8 +688,7 @@ async def new_team(  # noqa: PLR0915
                     },
                 )
 
-
-            if (data.max_budget is not None and user_api_key_dict.user_id is not None):
+            if data.max_budget is not None and user_api_key_dict.user_id is not None:
                 # Fetch user object to get max_budget
                 user_obj = await get_user_object(
                     user_id=user_api_key_dict.user_id,
@@ -699,7 +698,7 @@ async def new_team(  # noqa: PLR0915
                 )
 
                 if (
-                    user_obj is not None 
+                    user_obj is not None
                     and user_obj.max_budget is not None
                     and data.max_budget > user_obj.max_budget
                 ):
@@ -3247,11 +3246,6 @@ async def team_member_permissions(
         check_cache_only=False,
         check_db_only=True,
     )
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found for team_id={team_id}"},
-        )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
@@ -3320,11 +3314,6 @@ async def update_team_member_permissions(
         check_cache_only=False,
         check_db_only=True,
     )
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found for team_id={data.team_id}"},
-        )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
