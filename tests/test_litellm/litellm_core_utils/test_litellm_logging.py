@@ -759,3 +759,81 @@ def test_get_final_response_obj_with_empty_response_obj_and_list_init():
     assert len(result) == 2
     assert result[0].name == "Object1"
     assert result[1].name == "Object2"
+
+
+def test_get_response_tags():
+    """
+    Test _get_response_tags method with various scenarios including duplicate prevention.
+
+    Scenarios tested:
+    1. No headers present
+    2. Headers present but no x-litellm-tags
+    3. Single tag in x-litellm-tags
+    4. Multiple tags in x-litellm-tags (comma-separated)
+    5. Duplicate tags in x-litellm-tags (should not be added twice)
+    6. Invalid header format (not a string)
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Test case 1: No headers present
+    result = StandardLoggingPayloadSetup._get_response_tags(proxy_server_request={})
+    assert result == []
+    assert isinstance(result, list)
+
+    # Test case 2: Headers present but no x-litellm-tags
+    result = StandardLoggingPayloadSetup._get_response_tags(
+        proxy_server_request={
+            "headers": {
+                "content-type": "application/json",
+                "authorization": "Bearer token",
+            }
+        }
+    )
+    assert result == []
+
+    # Test case 3: Single tag in x-litellm-tags
+    result = StandardLoggingPayloadSetup._get_response_tags(
+        proxy_server_request={"headers": {"x-litellm-tags": "production"}}
+    )
+    assert result == ["production"]
+    assert len(result) == 1
+
+    # Test case 4: Multiple tags in x-litellm-tags (comma-separated)
+    result = StandardLoggingPayloadSetup._get_response_tags(
+        proxy_server_request={
+            "headers": {"x-litellm-tags": "production,us-west-2,critical"}
+        }
+    )
+    assert "production" in result
+    assert "us-west-2" in result
+    assert "critical" in result
+    assert len(result) == 3
+
+    # Test case 5: Duplicate tags in x-litellm-tags (should not be added twice)
+    result = StandardLoggingPayloadSetup._get_response_tags(
+        proxy_server_request={
+            "headers": {"x-litellm-tags": "production,test,production,staging,test"}
+        }
+    )
+    assert result == ["production", "test", "staging"]
+    assert len(result) == 3
+    # Verify no duplicates
+    assert result.count("production") == 1
+    assert result.count("test") == 1
+    assert result.count("staging") == 1
+
+    # Test case 6: Invalid header format (not a string)
+    result = StandardLoggingPayloadSetup._get_response_tags(
+        proxy_server_request={
+            "headers": {
+                "x-litellm-tags": ["production", "staging"]  # List instead of string
+            }
+        }
+    )
+    assert result == []
+
+    # Test case 7: Empty string in x-litellm-tags
+    result = StandardLoggingPayloadSetup._get_response_tags(
+        proxy_server_request={"headers": {"x-litellm-tags": ""}}
+    )
+    assert result == [""]
