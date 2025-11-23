@@ -7472,6 +7472,12 @@ class ProviderConfigManager:
             )
 
             return AzurePassthroughConfig()
+        elif LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.passthrough.transformation import (
+                OpenAIPassthroughConfig,
+            )
+
+            return OpenAIPassthroughConfig()
         return None
 
     @staticmethod
