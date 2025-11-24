@@ -185,14 +185,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
             headers: dict,
             extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-        return super().transform_video_remix_request(
-            video_id=video_id,
-            prompt=prompt,
-            api_base=api_base,
-            litellm_params=litellm_params,
-            headers=headers,
-            extra_body=extra_body,
-        )
+        raise NotImplementedError("Video remix is not supported by BurnCloud. ")
 
     def transform_video_content_response(
             self,
@@ -208,11 +201,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
             logging_obj: LiteLLMLoggingObj,
             custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
-        return super().transform_video_remix_response(
-            raw_response=raw_response,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-        )
+        raise NotImplementedError("Video remix is not supported by BurnCloud. ")
 
     def transform_video_list_request(
             self,
@@ -224,15 +213,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
             order: Optional[str] = None,
             extra_query: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-        return super().transform_video_list_request(
-            api_base=api_base,
-            litellm_params=litellm_params,
-            headers=headers,
-            after=after,
-            limit=limit,
-            order=order,
-            extra_query=extra_query,
-        )
+        raise NotImplementedError("Video remix is not supported by BurnCloud. ")
 
     def transform_video_list_response(
             self,
@@ -240,11 +221,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
             logging_obj: LiteLLMLoggingObj,
             custom_llm_provider: Optional[str] = None,
     ) -> Dict[str,str]:
-        return super().transform_video_list_response(
-            raw_response=raw_response,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-        )
+        raise NotImplementedError("Video remix is not supported by BurnCloud. ")
 
     def transform_video_delete_request(
             self,
@@ -253,22 +230,14 @@ class BurnCloudVideoConfig(BaseVideoConfig):
             litellm_params: GenericLiteLLMParams,
             headers: dict,
     ) -> Tuple[str, Dict]:
-        return super().transform_video_delete_request(
-            video_id=video_id,
-            api_base=api_base,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
+        raise NotImplementedError("Video remix is not supported by BurnCloud. ")
 
     def transform_video_delete_response(
             self,
             raw_response: httpx.Response,
             logging_obj: LiteLLMLoggingObj,
     ) -> VideoObject:
-        return super().transform_video_delete_response(
-            raw_response=raw_response,
-            logging_obj=logging_obj,
-        )
+        raise NotImplementedError("Video remix is not supported by BurnCloud. ")
 
     def transform_video_status_retrieve_request(
             self,
