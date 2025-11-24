@@ -118,9 +118,10 @@ from litellm.litellm_core_utils.get_litellm_params import (
 # from litellm.litellm_core_utils.get_llm_provider_logic import (
 #     get_llm_provider,
 # )
-from litellm.litellm_core_utils.get_supported_openai_params import (
-    get_supported_openai_params,
-)
+# get_supported_openai_params is imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.get_supported_openai_params import (
+#     get_supported_openai_params,
+# )
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     LiteLLMResponseObjectHandler,
@@ -1256,6 +1257,16 @@ def _get_llm_provider():
     if _get_llm_provider_func is None:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider as _get_llm_provider_func
     return _get_llm_provider_func
+
+# Cached lazy import helper for get_supported_openai_params
+_get_supported_openai_params_func = None
+
+def _get_supported_openai_params():
+    """Lazy import helper for get_supported_openai_params to avoid loading at import time."""
+    global _get_supported_openai_params_func
+    if _get_supported_openai_params_func is None:
+        from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params as _get_supported_openai_params_func
+    return _get_supported_openai_params_func
 
 
 def client(original_function):  # noqa: PLR0915
@@ -2971,7 +2982,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         else:
             optional_params = non_default_params
     elif custom_llm_provider == "triton":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             request_type="embeddings",
@@ -2984,7 +2995,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             drop_params=drop_params if drop_params is not None else False,
         )
     elif custom_llm_provider == "databricks":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model or "",
             custom_llm_provider="databricks",
             request_type="embeddings",
@@ -2995,7 +3006,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
 
     elif custom_llm_provider == "nvidia_nim":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model or "",
             custom_llm_provider="nvidia_nim",
             request_type="embeddings",
@@ -3005,7 +3016,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model,
             custom_llm_provider="vertex_ai",
             request_type="embeddings",
@@ -3049,7 +3060,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             non_default_params=non_default_params, optional_params={}
         )
     elif custom_llm_provider == "mistral":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model,
             custom_llm_provider="mistral",
             request_type="embeddings",
@@ -3059,7 +3070,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             non_default_params=non_default_params, optional_params={}
         )
     elif custom_llm_provider == "jina_ai":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model,
             custom_llm_provider="jina_ai",
             request_type="embeddings",
@@ -3072,7 +3083,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             drop_params=drop_params if drop_params is not None else False,
         )
     elif custom_llm_provider == "voyage":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model,
             custom_llm_provider="voyage",
             request_type="embeddings",
@@ -3095,7 +3106,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                 drop_params=drop_params if drop_params is not None else False,
             )
     elif custom_llm_provider == "infinity":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model,
             custom_llm_provider="infinity",
             request_type="embeddings",
@@ -3108,7 +3119,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             drop_params=drop_params if drop_params is not None else False,
         )
     elif custom_llm_provider == "fireworks_ai":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model,
             custom_llm_provider="fireworks_ai",
             request_type="embeddings",
@@ -3118,7 +3129,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             non_default_params=non_default_params, optional_params={}, model=model
         )
     elif custom_llm_provider == "sambanova":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model,
             custom_llm_provider="sambanova",
             request_type="embeddings",
@@ -3131,7 +3142,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             drop_params=drop_params if drop_params is not None else False,
         )
     elif custom_llm_provider == "ovhcloud":
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model,
             custom_llm_provider="ovhcloud",
             request_type="embeddings",
@@ -3666,7 +3677,7 @@ def get_optional_params(  # noqa: PLR0915
         model=model, custom_llm_provider=custom_llm_provider
     )
     if supported_params is None:
-        supported_params = get_supported_openai_params(
+        supported_params = _get_supported_openai_params()(
             model=model, custom_llm_provider="openai"
         )
 
