@@ -1269,7 +1269,8 @@ from .proxy.proxy_cli import run_server
 # from .batches.main import *
 # Note: images.main is lazy-loaded via __getattr__ to reduce import-time memory cost
 # from .images.main import *
-from .videos.main import *
+# Note: videos.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .videos.main import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
@@ -1465,6 +1466,20 @@ def __getattr__(name: str) -> Any:
     if name in _image_functions:
         from .images import main as _images_main
         _func = getattr(_images_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load video functions to reduce import-time memory cost
+    _video_functions = {
+        "video_generation", "avideo_generation",
+        "video_content", "avideo_content",
+        "video_list", "avideo_list",
+        "video_status", "avideo_status",
+        "video_remix", "avideo_remix",
+    }
+    if name in _video_functions:
+        from .videos import main as _videos_main
+        _func = getattr(_videos_main, name)
         globals()[name] = _func
         return _func
     
