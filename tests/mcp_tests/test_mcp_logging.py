@@ -106,7 +106,7 @@ async def test_mcp_cost_tracking():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload = test_logger.standard_logging_payload
-            print("logged_standard_logging_payload", json.dumps(logged_standard_logging_payload, indent=4))
+            # print("logged_standard_logging_payload", json.dumps(logged_standard_logging_payload, indent=4))
             
             # Add assertions
             assert response is not None
@@ -340,6 +340,6 @@ async def test_mcp_tool_call_hook():
 
             # check logged standard logging payload
             logged_standard_logging_payload = test_logger.standard_logging_payload
-            print("logged_standard_logging_payload", json.dumps(logged_standard_logging_payload, indent=4))
+            # print("logged_standard_logging_payload", json.dumps(logged_standard_logging_payload, indent=4))
             assert logged_standard_logging_payload is not None, "Standard logging payload should not be None"
             assert logged_standard_logging_payload["response_cost"] == 1.42
