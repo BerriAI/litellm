@@ -45,9 +45,14 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        await KeyManagementEventHooks._send_key_created_email(
-            response.model_dump(exclude_none=True)
-        )
+        try:
+            await KeyManagementEventHooks._send_key_created_email(
+                response.model_dump(exclude_none=True)
+            )
+        except ValueError as e:
+            verbose_proxy_logger.warning(f"Error sending key created email: {e}")
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error sending key created email: {e}")
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
