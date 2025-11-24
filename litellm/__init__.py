@@ -1191,7 +1191,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 ####### VIDEO GENERATION MODELS ###################
 openai_video_generation_models = ["sora-2"]
 
-from .timeout import timeout
+# Note: timeout is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: get_llm_provider is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: remove_index_from_tool_calls is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
@@ -1364,6 +1364,12 @@ def __getattr__(name: str) -> Any:
             _models_initialized = True
         globals()["model_cost"] = _model_cost
         return _model_cost
+    
+    # Lazy load timeout decorator to reduce import-time memory cost
+    if name == "timeout":
+        from .timeout import timeout as _timeout
+        globals()["timeout"] = _timeout
+        return _timeout
     
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
         from ._lazy_imports import _lazy_import_cost_calculator
