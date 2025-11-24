@@ -1261,6 +1261,7 @@ _get_llm_provider_cached: Optional[Callable] = None
 
 # Track which modules have had their public functions bulk-cached
 _batches_functions_cached: bool = False
+_assistants_functions_cached: bool = False
 
 
 def _lazy_import_batches_functions(name: str) -> Any:
@@ -1313,6 +1314,61 @@ def _lazy_import_batches_functions(name: str) -> Any:
         return attr
     except AttributeError:
         raise AttributeError(f"module 'litellm.batches.main' has no attribute {name!r}")
+
+
+def _lazy_import_assistants_functions(name: str) -> Any:
+    """Lazy import for assistants module functions - dynamically imports from assistants.main.
+    
+    The "lazy" part is about WHEN the module loads (on first attribute access via __getattr__),
+    not WHAT gets loaded. Python's import system doesn't support partial imports, so the entire
+    litellm.assistants.main module will be loaded when any assistants function is first accessed.
+    
+    Since we're loading the entire module anyway, we optimize by caching all public functions
+    at once on first access, so subsequent accesses are direct (no __getattr__ overhead).
+    """
+    global _assistants_functions_cached
+    _globals = _get_litellm_globals()
+    
+    # Fast path: if already cached, return directly
+    if name in _globals and _assistants_functions_cached:
+        return _globals[name]
+    
+    # Check if module is already loaded to avoid re-importing
+    assistants_module_name = "litellm.assistants.main"
+    assistants_module = sys.modules.get(assistants_module_name)
+    
+    if assistants_module is None:
+        # Import the entire module (this executes all module-level code)
+        # The laziness is that this happens on first access, not at __init__.py import time
+        try:
+            assistants_module = importlib.import_module(assistants_module_name)
+        except ImportError as e:
+            raise AttributeError(f"Failed to lazy import {name!r} from litellm.assistants.main: {e}") from e
+    
+    # Bulk cache all public functions on first access (only once, tracked by flag)
+    if not _assistants_functions_cached:
+        _assistants_public_functions = {
+            "aget_assistants", "get_assistants", "acreate_assistants", "create_assistants",
+            "adelete_assistant", "delete_assistant", "acreate_thread", "create_thread",
+            "aget_thread", "get_thread", "a_add_message", "add_message",
+            "aget_messages", "get_messages", "arun_thread_stream", "arun_thread",
+            "run_thread_stream", "run_thread",
+        }
+        for func_name in _assistants_public_functions:
+            if hasattr(assistants_module, func_name):
+                _globals[func_name] = getattr(assistants_module, func_name)
+        _assistants_functions_cached = True
+        # Fast path: if the requested function was just cached, return it directly
+        if name in _globals:
+            return _globals[name]
+    
+    # Retrieve the specific function/attribute from the loaded module
+    try:
+        attr = getattr(assistants_module, name)
+        _globals[name] = attr  # Cache it (in case it wasn't in the public list)
+        return attr
+    except AttributeError:
+        raise AttributeError(f"module 'litellm.assistants.main' has no attribute {name!r}")
 
 
 def get_cached_llm_provider() -> Callable:

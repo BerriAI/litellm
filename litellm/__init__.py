@@ -1273,7 +1273,8 @@ from .exceptions import (
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
-from .assistants.main import *
+# assistants.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .assistants.main import *
 # batches.main is lazy-loaded via __getattr__ to reduce import-time memory cost
 # from .batches.main import *
 from .images.main import *
@@ -1785,6 +1786,26 @@ def __getattr__(name: str) -> Any:
         from ._lazy_imports import _lazy_import_batches_functions
         try:
             return _lazy_import_batches_functions(name)
+        except AttributeError:
+            pass
+    
+    # Lazy-load assistants module functions to reduce import-time memory cost
+    # This handles aget_assistants, get_assistants, acreate_assistants, create_assistants,
+    # adelete_assistant, delete_assistant, acreate_thread, create_thread,
+    # aget_thread, get_thread, a_add_message, add_message,
+    # aget_messages, get_messages, arun_thread_stream, arun_thread,
+    # run_thread_stream, run_thread from assistants.main
+    _assistants_function_names = {
+        "aget_assistants", "get_assistants", "acreate_assistants", "create_assistants",
+        "adelete_assistant", "delete_assistant", "acreate_thread", "create_thread",
+        "aget_thread", "get_thread", "a_add_message", "add_message",
+        "aget_messages", "get_messages", "arun_thread_stream", "arun_thread",
+        "run_thread_stream", "run_thread",
+    }
+    if name in _assistants_function_names:
+        from ._lazy_imports import _lazy_import_assistants_functions
+        try:
+            return _lazy_import_assistants_functions(name)
         except AttributeError:
             pass
     
