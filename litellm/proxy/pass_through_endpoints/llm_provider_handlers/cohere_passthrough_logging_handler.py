@@ -96,6 +96,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             try:
                 cohere_embed_config = CohereEmbeddingConfig()
                 litellm_model_response = litellm.EmbeddingResponse()
+                handler_instance = CoherePassthroughLoggingHandler()
 
                 input_texts = request_body.get("texts", [])
                 if not input_texts:
@@ -121,15 +122,21 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     call_type="aembedding",
                 )
 
+                # Set the calculated cost in _hidden_params to prevent recalculation
+                if not hasattr(litellm_model_response, "_hidden_params"):
+                    litellm_model_response._hidden_params = {}
+                litellm_model_response._hidden_params["response_cost"] = response_cost
+
                 kwargs["response_cost"] = response_cost
                 kwargs["model"] = model
                 kwargs["custom_llm_provider"] = "cohere"
 
+                # Extract user information for tracking
                 passthrough_logging_payload: Optional[
                     PassthroughStandardLoggingPayload
                 ] = kwargs.get("passthrough_logging_payload")
                 if passthrough_logging_payload:
-                    user = self._get_user_from_metadata(
+                    user = handler_instance._get_user_from_metadata(
                         passthrough_logging_payload=passthrough_logging_payload,
                     )
                     if user:
@@ -139,43 +146,37 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                         )
 
                 # Create standard logging object
-                get_standard_logging_object_payload(
-                    kwargs=kwargs,
-                    init_response_obj=litellm_model_response,
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=logging_obj,
-                    status="success",
-                )
+                if litellm_model_response is not None:
+                    get_standard_logging_object_payload(
+                        kwargs=kwargs,
+                        init_response_obj=litellm_model_response,
+                        start_time=start_time,
+                        end_time=end_time,
+                        logging_obj=logging_obj,
+                        status="success",
+                    )
 
+                # Update logging object with cost information
                 logging_obj.model_call_details["model"] = model
                 logging_obj.model_call_details["custom_llm_provider"] = "cohere"
                 logging_obj.model_call_details["response_cost"] = response_cost
 
-                verbose_proxy_logger.debug(
-                    f"Cohere embed passthrough cost tracking - Model: {model}, Cost: ${response_cost:.6f}"
-                )
-
+                print(f"🔥🔥🔥🔥Cohere passthrough logging handler - Model: {model}, Cost: ${response_cost:.6f}, kwargs: {kwargs}")
                 return {
                     "result": litellm_model_response,
                     "kwargs": kwargs,
                 }
-
-            except Exception as e:
-                verbose_proxy_logger.error(
-                    f"Error in Cohere embed passthrough cost tracking: {str(e)}, falling back to chat handler"
+            except Exception:
+                # For other routes (e.g., /v2/chat), fall back to chat handler
+                return super().passthrough_chat_handler(
+                    httpx_response=httpx_response,
+                    response_body=response_body,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    request_body=request_body,
+                    **kwargs,
                 )
-
-        # For other routes (e.g., /v2/chat), fall back to chat handler
-        return super().passthrough_chat_handler(
-            httpx_response=httpx_response,
-            response_body=response_body,
-            logging_obj=logging_obj,
-            url_route=url_route,
-            result=result,
-            start_time=start_time,
-            end_time=end_time,
-            cache_hit=cache_hit,
-            request_body=request_body,
-            **kwargs,
-        )
