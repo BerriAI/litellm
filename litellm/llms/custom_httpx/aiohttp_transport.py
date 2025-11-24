@@ -194,7 +194,18 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 try:
                     if not old_session.closed:
                         try:
-                            asyncio.create_task(old_session.close())
+                            if session_loop is not None and session_loop.is_closed():
+                                # Loop is closed, cannot close gracefully.
+                                # Mark as closed to suppress warning.
+                                # We accept the potential resource leak as the loop is dead.
+                                # This prevents 'Unclosed client session' logs in tests/CI.
+                                if hasattr(old_session, "_closed"):
+                                    old_session._closed = True
+                                if hasattr(old_session, "_connector") and old_session._connector is not None:
+                                    if hasattr(old_session._connector, "_closed"):
+                                        old_session._connector._closed = True
+                            else:
+                                asyncio.create_task(old_session.close())
                         except RuntimeError:
                             # Different event loop - can't schedule task, rely on GC
                             verbose_logger.debug("Old session from different loop, relying on GC")
