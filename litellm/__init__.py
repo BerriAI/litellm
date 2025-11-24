@@ -1193,9 +1193,8 @@ from .timeout import timeout
 # Note: remove_index_from_tool_calls is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
+# Note: TritonGenerateConfig and TritonInferConfig are lazy-loaded via __getattr__ to reduce import-time memory cost
 
-from .llms.triton.completion.transformation import TritonGenerateConfig
-from .llms.triton.completion.transformation import TritonInferConfig
 from .llms.gemini.common_utils import GeminiModelInfo
 
 
@@ -1552,7 +1551,7 @@ def __getattr__(name: str) -> Any:
         return _GroqSTTConfig
     
     # Lazy-load Triton configs to reduce import-time memory cost
-    if name in {"TritonConfig", "TritonEmbeddingConfig"}:
+    if name in {"TritonConfig", "TritonEmbeddingConfig", "TritonGenerateConfig", "TritonInferConfig"}:
         from ._lazy_imports import _lazy_import_triton_configs
         return _lazy_import_triton_configs(name)
     

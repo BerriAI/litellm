@@ -818,6 +818,16 @@ def _lazy_import_triton_configs(name: str) -> Any:
         _globals["TritonEmbeddingConfig"] = _TritonEmbeddingConfig
         return _TritonEmbeddingConfig
     
+    if name == "TritonGenerateConfig":
+        from .llms.triton.completion.transformation import TritonGenerateConfig as _TritonGenerateConfig
+        _globals["TritonGenerateConfig"] = _TritonGenerateConfig
+        return _TritonGenerateConfig
+    
+    if name == "TritonInferConfig":
+        from .llms.triton.completion.transformation import TritonInferConfig as _TritonInferConfig
+        _globals["TritonInferConfig"] = _TritonInferConfig
+        return _TritonInferConfig
+    
     raise AttributeError(f"Triton configs lazy import: unknown attribute {name!r}")
 
 
