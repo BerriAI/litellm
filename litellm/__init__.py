@@ -1211,11 +1211,7 @@ openai_video_generation_models = ["sora-2"]
 # Note: LiteLLMProxyResponsesAPIConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: OpenAIWhisperAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: OpenAIGPTAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
-
-from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
-
-nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
-
+# Note: NvidiaNimEmbeddingConfig and nvidiaNimEmbeddingConfig are lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: FireworksAIAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: FireworksAIEmbeddingConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 from .utils import client
@@ -1648,6 +1644,18 @@ def __getattr__(name: str) -> Any:
         from .llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig as _TwelveLabsMarengoEmbeddingConfig
         globals()["TwelveLabsMarengoEmbeddingConfig"] = _TwelveLabsMarengoEmbeddingConfig
         return _TwelveLabsMarengoEmbeddingConfig
+    
+    # Lazy-load NvidiaNimEmbeddingConfig and nvidiaNimEmbeddingConfig to reduce import-time memory cost
+    if name == "NvidiaNimEmbeddingConfig":
+        from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig as _NvidiaNimEmbeddingConfig
+        globals()["NvidiaNimEmbeddingConfig"] = _NvidiaNimEmbeddingConfig
+        return _NvidiaNimEmbeddingConfig
+    
+    if name == "nvidiaNimEmbeddingConfig":
+        from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
+        _nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
+        globals()["nvidiaNimEmbeddingConfig"] = _nvidiaNimEmbeddingConfig
+        return _nvidiaNimEmbeddingConfig
     
     # Lazy-load XAIModelInfo to reduce import-time memory cost
     if name == "XAIModelInfo":
