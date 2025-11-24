@@ -114,10 +114,10 @@ from litellm.litellm_core_utils.get_litellm_params import (
     _get_base_model_from_litellm_call_metadata,
     get_litellm_params,
 )
-from litellm.litellm_core_utils.get_llm_provider_logic import (
-    _is_non_openai_azure_model,
-    get_llm_provider,
-)
+# get_llm_provider is imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.get_llm_provider_logic import (
+#     get_llm_provider,
+# )
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -1247,6 +1247,16 @@ def _get_error_message_func():
         from litellm.litellm_core_utils import exception_mapping_utils as _exception_mapping_utils_module
     return _exception_mapping_utils_module.get_error_message
 
+# Cached lazy import helper for get_llm_provider
+_get_llm_provider_func = None
+
+def _get_llm_provider():
+    """Lazy import helper for get_llm_provider to avoid loading at import time."""
+    global _get_llm_provider_func
+    if _get_llm_provider_func is None:
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider as _get_llm_provider_func
+    return _get_llm_provider_func
+
 
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
@@ -2193,7 +2203,7 @@ def supports_response_schema(
     """
     ## GET LLM PROVIDER ##
     try:
-        model, custom_llm_provider, _, _ = get_llm_provider(
+        model, custom_llm_provider, _, _ = _get_llm_provider()(
             model=model, custom_llm_provider=custom_llm_provider
         )
     except Exception as e:
@@ -4768,7 +4778,7 @@ def get_max_tokens(model: str) -> Optional[int]:
                 return litellm.model_cost[model]["max_output_tokens"]
             elif "max_tokens" in litellm.model_cost[model]:
                 return litellm.model_cost[model]["max_tokens"]
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        model, custom_llm_provider, _, _ = _get_llm_provider()(model=model)
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
             return max_tokens
@@ -4888,7 +4898,7 @@ def _get_potential_model_names(
     if custom_llm_provider is None:
         # Get custom_llm_provider
         try:
-            split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+            split_model, custom_llm_provider, _, _ = _get_llm_provider()(model=model)
         except Exception:
             split_model = model
         combined_model_name = model
@@ -5605,7 +5615,7 @@ def validate_environment(  # noqa: PLR0915
         }
     ## EXTRACT LLM PROVIDER - if model name provided
     try:
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        _, custom_llm_provider, _, _ = _get_llm_provider()(model=model)
     except Exception:
         custom_llm_provider = None
 
@@ -6173,7 +6183,7 @@ def register_prompt_template(
     complete_model = model
     potential_models = [complete_model]
     try:
-        model = get_llm_provider(model=model)[0]
+        model = _get_llm_provider()(model=model)[0]
         potential_models.append(model)
     except Exception:
         pass
