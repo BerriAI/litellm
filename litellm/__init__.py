@@ -210,7 +210,7 @@ if TYPE_CHECKING:
     from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
     from litellm.llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig
     from litellm.llms.nvidia_nim.chat.transformation import NvidiaNimConfig
-import httpx
+# Note: httpx is lazy-loaded to reduce import-time memory cost
 import dotenv
 # Note: register_async_client_cleanup is lazy-loaded to reduce import-time memory cost
 # It will be called lazily when async functions are first accessed
@@ -488,8 +488,9 @@ error_logs: Dict = {}
 add_function_to_prompt: bool = (
     False  # if function calling not supported by api, append function call details to system prompt
 )
-client_session: Optional[httpx.Client] = None
-aclient_session: Optional[httpx.AsyncClient] = None
+# Type annotations use strings to enable lazy loading of httpx
+client_session: Optional["httpx.Client"] = None
+aclient_session: Optional["httpx.AsyncClient"] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
@@ -1434,6 +1435,12 @@ def __getattr__(name: str) -> Any:
     if name == "KeyManagementSystem" or name == "KeyManagementSettings":
         from ._lazy_imports import _lazy_import_secret_managers
         return _lazy_import_secret_managers(name)
+    
+    # Lazy load httpx to reduce import-time memory cost
+    if name == "httpx":
+        import httpx as _httpx
+        globals()["httpx"] = _httpx
+        return _httpx
     
     if name == "provider_list":
         from ._lazy_imports import _lazy_import_types_utils
