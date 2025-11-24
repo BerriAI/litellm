@@ -177,7 +177,6 @@ class BurnCloudVideoConfig(BaseVideoConfig):
 
         return url, data
 
-    @abstractmethod
     def transform_video_remix_request(
             self,
             video_id: str,
@@ -187,7 +186,14 @@ class BurnCloudVideoConfig(BaseVideoConfig):
             headers: dict,
             extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-        pass
+        return super().transform_video_remix_request(
+            video_id=video_id,
+            prompt=prompt,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+            extra_body=extra_body,
+        )
 
     def transform_video_content_response(
             self,
@@ -197,16 +203,18 @@ class BurnCloudVideoConfig(BaseVideoConfig):
         """Transform the BurnCloud video content download response."""
         return raw_response.content
 
-    @abstractmethod
     def transform_video_remix_response(
             self,
             raw_response: httpx.Response,
             logging_obj: LiteLLMLoggingObj,
             custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
-        pass
+        return super().transform_video_remix_response(
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+        )
 
-    @abstractmethod
     def transform_video_list_request(
             self,
             api_base: str,
@@ -217,18 +225,28 @@ class BurnCloudVideoConfig(BaseVideoConfig):
             order: Optional[str] = None,
             extra_query: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-        pass
+        return super().transform_video_list_request(
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+            after=after,
+            limit=limit,
+            order=order,
+            extra_query=extra_query,
+        )
 
-    @abstractmethod
     def transform_video_list_response(
             self,
             raw_response: httpx.Response,
             logging_obj: LiteLLMLoggingObj,
             custom_llm_provider: Optional[str] = None,
     ) -> Dict[str,str]:
-        pass
+        return super().transform_video_list_response(
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+        )
 
-    @abstractmethod
     def transform_video_delete_request(
             self,
             video_id: str,
@@ -236,15 +254,22 @@ class BurnCloudVideoConfig(BaseVideoConfig):
             litellm_params: GenericLiteLLMParams,
             headers: dict,
     ) -> Tuple[str, Dict]:
-        pass
+        return super().transform_video_delete_request(
+            video_id=video_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
-    @abstractmethod
     def transform_video_delete_response(
             self,
             raw_response: httpx.Response,
             logging_obj: LiteLLMLoggingObj,
     ) -> VideoObject:
-        pass
+        return super().transform_video_delete_response(
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
 
     def transform_video_status_retrieve_request(
             self,
