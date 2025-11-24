@@ -218,7 +218,7 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                    "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                                 },
                             },
                         ],

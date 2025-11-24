@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 from uuid import uuid4
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
@@ -273,18 +274,29 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         return self._contains_vision_content(input_param)
 
-    def _contains_vision_content(self, value: Any) -> bool:
+    def _contains_vision_content(
+        self, value: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
+    ) -> bool:
         """
         Recursively check if a value contains vision content.
 
         Looks for items with type="input_image" in the structure.
         """
+        if depth > max_depth:
+            verbose_logger.warning(
+                f"[GitHub Copilot] Max recursion depth {max_depth} reached while checking for vision content"
+            )
+            return False
+
         if value is None:
             return False
 
         # Check arrays
         if isinstance(value, list):
-            return any(self._contains_vision_content(item) for item in value)
+            return any(
+                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth)
+                for item in value
+            )
 
         # Only check dict/object types
         if not isinstance(value, dict):
@@ -298,7 +310,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Check content field recursively
         if "content" in value and isinstance(value["content"], list):
             return any(
-                self._contains_vision_content(item) for item in value["content"]
+                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth)
+                for item in value["content"]
             )
 
         return False

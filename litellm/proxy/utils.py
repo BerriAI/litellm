@@ -398,41 +398,17 @@ class ProxyLogging:
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
         for callback in litellm.callbacks:
             if isinstance(callback, str):
+
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                     cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
+
                 if callback is None:
                     continue
-            if callback not in litellm.input_callback:
-                litellm.input_callback.append(callback)  # type: ignore
-            if callback not in litellm.success_callback:
-                litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
-            if callback not in litellm.failure_callback:
-                litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
-            if callback not in litellm._async_success_callback:
-                litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
-            if callback not in litellm._async_failure_callback:
-                litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
-            if callback not in litellm.service_callback:
-                litellm.service_callback.append(callback)  # type: ignore
 
-        if (
-            len(litellm.input_callback) > 0
-            or len(litellm.success_callback) > 0
-            or len(litellm.failure_callback) > 0
-        ):
-            callback_list = list(
-                set(
-                    litellm.input_callback
-                    + litellm.success_callback
-                    + litellm.failure_callback
-                )
-            )
-            litellm.litellm_core_utils.litellm_logging.set_callbacks(
-                callback_list=callback_list
-            )
+            litellm.logging_callback_manager.add_litellm_callback(callback)
 
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
@@ -894,6 +870,7 @@ class ProxyLogging:
             Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None)
         )
         prompt_id = data.get("prompt_id", None)
+        prompt_version = data.get("prompt_version", None)
 
         ## PROMPT TEMPLATE CHECK ##
         if (
@@ -901,12 +878,28 @@ class ProxyLogging:
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion")
         ):
+            from litellm.proxy.prompts.prompt_endpoints import (
+                construct_versioned_prompt_id,
+                get_latest_version_prompt_id,
+            )
             from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
 
+            # If no version is specified, find the latest version
+            if prompt_version is None:
+                lookup_prompt_id = get_latest_version_prompt_id(
+                    prompt_id=prompt_id,
+                    all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS,
+                )
+            else:
+                # Construct versioned prompt_id if prompt_version is provided
+                lookup_prompt_id = construct_versioned_prompt_id(
+                    prompt_id=prompt_id, version=prompt_version
+                )
+
             custom_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
-                prompt_id
+                lookup_prompt_id
             )
-            prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+            prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(lookup_prompt_id)
             litellm_prompt_id: Optional[str] = None
             if prompt_spec is not None:
                 litellm_prompt_id = prompt_spec.litellm_params.prompt_id
@@ -1027,16 +1020,14 @@ class ProxyLogging:
                         event_type = GuardrailEventHooks.during_mcp_call
 
                     if (
-                        callback.should_run_guardrail(
-                            data=data, event_type=event_type
-                        )
+                        callback.should_run_guardrail(data=data, event_type=event_type)
                         is not True
                     ):
                         continue
                 # Convert user_api_key_dict to proper format for async_moderation_hook
                 if call_type == "mcp_call":
-                    user_api_key_auth_dict = (
-                        self._convert_user_api_key_auth_to_dict(user_api_key_dict)
+                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
+                        user_api_key_dict
                     )
                 else:
                     user_api_key_auth_dict = user_api_key_dict
@@ -1458,22 +1449,29 @@ class ProxyLogging:
                 ):
                     continue
 
+                guardrail_response: Optional[Any] = None
                 if "apply_guardrail" in type(callback).__dict__:
                     data["guardrail_to_apply"] = callback
-                    response = await unified_guardrail.async_post_call_success_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        data=data,
-                        response=response,
+                    guardrail_response = (
+                        await unified_guardrail.async_post_call_success_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            response=response,
+                        )
                     )
                 else:
-                    response = await callback.async_post_call_success_hook(
+                    guardrail_response = await callback.async_post_call_success_hook(
                         user_api_key_dict=user_api_key_dict,
                         data=data,
                         response=response,
                     )
 
+                if guardrail_response is not None:
+                    response = guardrail_response
+
             ############ Handle CustomLogger ###############################
             #################################################################
+
             for callback in other_callbacks:
                 await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
