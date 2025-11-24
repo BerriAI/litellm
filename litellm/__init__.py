@@ -1201,10 +1201,7 @@ openai_video_generation_models = ["sora-2"]
 
 
 # Note: VertexAITextEmbeddingConfig and vertexAITextEmbeddingConfig are lazy-loaded via __getattr__ to reduce import-time memory cost
-
-from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
-    TwelveLabsMarengoEmbeddingConfig,
-)
+# Note: TwelveLabsMarengoEmbeddingConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: OpenAIImageVariationConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: DeepgramAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: TopazModelInfo is lazy-loaded via __getattr__ to reduce import-time memory cost
@@ -1645,6 +1642,12 @@ def __getattr__(name: str) -> Any:
         _vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
         globals()["vertexAITextEmbeddingConfig"] = _vertexAITextEmbeddingConfig
         return _vertexAITextEmbeddingConfig
+    
+    # Lazy-load TwelveLabsMarengoEmbeddingConfig to reduce import-time memory cost
+    if name == "TwelveLabsMarengoEmbeddingConfig":
+        from .llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig as _TwelveLabsMarengoEmbeddingConfig
+        globals()["TwelveLabsMarengoEmbeddingConfig"] = _TwelveLabsMarengoEmbeddingConfig
+        return _TwelveLabsMarengoEmbeddingConfig
     
     # Lazy-load XAIModelInfo to reduce import-time memory cost
     if name == "XAIModelInfo":
