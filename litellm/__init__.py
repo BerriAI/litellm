@@ -1280,10 +1280,14 @@ from .batch_completion.main import *  # type: ignore
 # from .responses.main import *
 # Note: containers.main is lazy-loaded via __getattr__ to reduce import-time memory cost
 # from .containers.main import *
-from .ocr.main import *
-from .search.main import *
-from .realtime_api.main import _arealtime
-from .fine_tuning.main import *
+# Note: ocr.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .ocr.main import *
+# Note: search.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .search.main import *
+# Note: _arealtime is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .realtime_api.main import _arealtime
+# Note: fine_tuning.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .fine_tuning.main import *
 from .files.main import *
 from .vector_store_files.main import (
     acreate as avector_store_file_create,
@@ -1532,6 +1536,46 @@ def __getattr__(name: str) -> Any:
     if name in _container_functions:
         from .containers import main as _containers_main
         _func = getattr(_containers_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load OCR functions to reduce import-time memory cost
+    _ocr_functions = {
+        "ocr", "aocr",
+    }
+    if name in _ocr_functions:
+        from .ocr import main as _ocr_main
+        _func = getattr(_ocr_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load search functions to reduce import-time memory cost
+    _search_functions = {
+        "search", "asearch",
+    }
+    if name in _search_functions:
+        from .search import main as _search_main
+        _func = getattr(_search_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load _arealtime to reduce import-time memory cost
+    if name == "_arealtime":
+        from .realtime_api import main as _realtime_main
+        _func = getattr(_realtime_main, "_arealtime")
+        globals()["_arealtime"] = _func
+        return _func
+    
+    # Lazy load fine-tuning functions to reduce import-time memory cost
+    _fine_tuning_functions = {
+        "create_fine_tuning_job", "acreate_fine_tuning_job",
+        "cancel_fine_tuning_job", "acancel_fine_tuning_job",
+        "list_fine_tuning_jobs", "alist_fine_tuning_jobs",
+        "retrieve_fine_tuning_job", "aretrieve_fine_tuning_job",
+    }
+    if name in _fine_tuning_functions:
+        from .fine_tuning import main as _fine_tuning_main
+        _func = getattr(_fine_tuning_main, name)
         globals()[name] = _func
         return _func
     
