@@ -1211,27 +1211,17 @@ from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
 # Note: TopazModelInfo is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: TopazImageVariationConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: OpenAIResponsesAPIConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
-from .llms.xai.responses.transformation import XAIResponsesAPIConfig
-from .llms.litellm_proxy.responses.transformation import (
-    LiteLLMProxyResponsesAPIConfig,
-)
-from .llms.openai.transcriptions.whisper_transformation import (
-    OpenAIWhisperAudioTranscriptionConfig,
-)
-from .llms.openai.transcriptions.gpt_transformation import (
-    OpenAIGPTAudioTranscriptionConfig,
-)
+# Note: XAIResponsesAPIConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: LiteLLMProxyResponsesAPIConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: OpenAIWhisperAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: OpenAIGPTAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
 
 nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
-from .llms.fireworks_ai.audio_transcription.transformation import (
-    FireworksAIAudioTranscriptionConfig,
-)
-from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
-    FireworksAIEmbeddingConfig,
-)
+# Note: FireworksAIAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: FireworksAIEmbeddingConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 from .utils import client
 # main module functions are lazy-loaded to reduce import-time memory cost
 # from .main import *  # type: ignore
@@ -1676,6 +1666,42 @@ def __getattr__(name: str) -> Any:
         from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig as _OpenAIResponsesAPIConfig
         globals()["OpenAIResponsesAPIConfig"] = _OpenAIResponsesAPIConfig
         return _OpenAIResponsesAPIConfig
+    
+    # Lazy-load XAIResponsesAPIConfig to reduce import-time memory cost
+    if name == "XAIResponsesAPIConfig":
+        from .llms.xai.responses.transformation import XAIResponsesAPIConfig as _XAIResponsesAPIConfig
+        globals()["XAIResponsesAPIConfig"] = _XAIResponsesAPIConfig
+        return _XAIResponsesAPIConfig
+    
+    # Lazy-load LiteLLMProxyResponsesAPIConfig to reduce import-time memory cost
+    if name == "LiteLLMProxyResponsesAPIConfig":
+        from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as _LiteLLMProxyResponsesAPIConfig
+        globals()["LiteLLMProxyResponsesAPIConfig"] = _LiteLLMProxyResponsesAPIConfig
+        return _LiteLLMProxyResponsesAPIConfig
+    
+    # Lazy-load OpenAIWhisperAudioTranscriptionConfig to reduce import-time memory cost
+    if name == "OpenAIWhisperAudioTranscriptionConfig":
+        from .llms.openai.transcriptions.whisper_transformation import OpenAIWhisperAudioTranscriptionConfig as _OpenAIWhisperAudioTranscriptionConfig
+        globals()["OpenAIWhisperAudioTranscriptionConfig"] = _OpenAIWhisperAudioTranscriptionConfig
+        return _OpenAIWhisperAudioTranscriptionConfig
+    
+    # Lazy-load OpenAIGPTAudioTranscriptionConfig to reduce import-time memory cost
+    if name == "OpenAIGPTAudioTranscriptionConfig":
+        from .llms.openai.transcriptions.gpt_transformation import OpenAIGPTAudioTranscriptionConfig as _OpenAIGPTAudioTranscriptionConfig
+        globals()["OpenAIGPTAudioTranscriptionConfig"] = _OpenAIGPTAudioTranscriptionConfig
+        return _OpenAIGPTAudioTranscriptionConfig
+    
+    # Lazy-load FireworksAIAudioTranscriptionConfig to reduce import-time memory cost
+    if name == "FireworksAIAudioTranscriptionConfig":
+        from .llms.fireworks_ai.audio_transcription.transformation import FireworksAIAudioTranscriptionConfig as _FireworksAIAudioTranscriptionConfig
+        globals()["FireworksAIAudioTranscriptionConfig"] = _FireworksAIAudioTranscriptionConfig
+        return _FireworksAIAudioTranscriptionConfig
+    
+    # Lazy-load FireworksAIEmbeddingConfig to reduce import-time memory cost
+    if name == "FireworksAIEmbeddingConfig":
+        from .llms.fireworks_ai.embed.fireworks_ai_transformation import FireworksAIEmbeddingConfig as _FireworksAIEmbeddingConfig
+        globals()["FireworksAIEmbeddingConfig"] = _FireworksAIEmbeddingConfig
+        return _FireworksAIEmbeddingConfig
     
     # Lazy-load Azure OpenAI configs to reduce import-time memory cost
     if name in {"AzureOpenAIConfig", "AzureOpenAIGPT5Config", "AzureOpenAITextConfig", "AzureOpenAIAssistantsAPIConfig"}:
