@@ -1172,7 +1172,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 openai_video_generation_models = ["sora-2"]
 
 from .timeout import timeout
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+# Note: get_llm_provider is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: remove_index_from_tool_calls is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
@@ -1379,6 +1379,12 @@ def __getattr__(name: str) -> Any:
         from litellm.litellm_core_utils.default_encoding import encoding as _encoding
         globals()["encoding"] = _encoding
         return _encoding
+    
+    # Lazy-load get_llm_provider to reduce import-time memory cost
+    if name == "get_llm_provider":
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider as _get_llm_provider
+        globals()["get_llm_provider"] = _get_llm_provider
+        return _get_llm_provider
     
     # Lazy-load HTTP handlers to reduce import-time memory cost
     if name in {"module_level_aclient", "module_level_client", "AsyncHTTPHandler", "HTTPHandler"}:

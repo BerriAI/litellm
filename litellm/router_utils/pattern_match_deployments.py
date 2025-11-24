@@ -7,8 +7,8 @@ import re
 from re import Match
 from typing import Dict, List, Optional, Tuple
 
-from litellm import get_llm_provider
 from litellm._logging import verbose_router_logger
+from litellm._lazy_imports import get_cached_llm_provider
 
 
 class PatternUtils:
@@ -225,6 +225,8 @@ class PatternMatchRouter:
         """
         if custom_llm_provider is None:
             try:
+                # Use cached get_llm_provider for hot-path performance
+                get_llm_provider = get_cached_llm_provider()
                 (
                     _,
                     custom_llm_provider,

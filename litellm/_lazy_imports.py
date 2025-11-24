@@ -5,7 +5,7 @@ litellm components to reduce import-time memory consumption.
 """
 import importlib
 import sys
-from typing import Any
+from typing import Any, Callable, Optional
 
 
 def _get_litellm_globals() -> dict:
@@ -1243,4 +1243,27 @@ def _lazy_import_main_functions(name: str) -> Any:
         _globals[name] = attr
         return attr
     except AttributeError:
-        raise AttributeError(f"module 'litellm.main' has no attribute {name!r}") from None
+        raise AttributeError(f"module 'litellm.main' has no attribute {name!r}")
+
+
+# Module-level cache for hot-path functions to avoid repeated import overhead
+_get_llm_provider_cached: Optional[Callable] = None
+
+
+def get_cached_llm_provider() -> Callable:
+    """
+    Get cached get_llm_provider function with lazy loading.
+    This avoids repeated import overhead in hot-path functions.
+    
+    This is a shared utility for modules that need to call get_llm_provider
+    frequently (e.g., routing, realtime API) without the overhead of
+    repeated imports or __getattr__ lookups.
+    
+    Returns:
+        The get_llm_provider function
+    """
+    global _get_llm_provider_cached
+    if _get_llm_provider_cached is None:
+        from litellm import get_llm_provider
+        _get_llm_provider_cached = get_llm_provider
+    return _get_llm_provider_cached
