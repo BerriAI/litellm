@@ -92,21 +92,23 @@ async def anthropic_response(  # noqa: PLR0915
         )
 
         if data.get("stream", None) is not None and data["stream"] is True:
-            # For streaming, convert to delta format
-            from litellm import ModelResponseStream
-            from litellm.utils import CustomStreamWrapper
+            # For streaming, use the standard SSE data generator
+            async def _passthrough_stream_generator():
+                yield _anthropic_response
 
-            _streaming_response = CustomStreamWrapper(
-                completion_stream=iter([_anthropic_response]),
-                model=e.model,
-                custom_llm_provider="anthropic",
-                logging_obj=data.get("litellm_logging_obj", None),
+            selected_data_generator = (
+                ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                    response=_passthrough_stream_generator(),
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=_data,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
             )
 
-            return create_streaming_response(
-                response=_streaming_response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=_data,
+            return await create_streaming_response(
+                generator=selected_data_generator,
+                media_type="text/event-stream",
+                headers={},
             )
 
         return _anthropic_response
