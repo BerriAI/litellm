@@ -1667,6 +1667,12 @@ def __getattr__(name: str) -> Any:
         globals()["agenerate_content"] = _agenerate_content
         return _agenerate_content
     
+    # Lazy load CreateFileRequest to reduce import-time memory cost
+    if name == "CreateFileRequest":
+        from .types.llms.openai import CreateFileRequest as _CreateFileRequest
+        globals()["CreateFileRequest"] = _CreateFileRequest
+        return _CreateFileRequest
+    
     if name == "provider_list":
         from ._lazy_imports import _lazy_import_types_utils
         LlmProviders = _lazy_import_types_utils("LlmProviders")
