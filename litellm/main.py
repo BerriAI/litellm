@@ -81,6 +81,11 @@ def _get_exception_type():
     from litellm.utils import _get_exception_type as _get_exception_type_func
     return _get_exception_type_func()
 
+def _get_llm_provider():
+    """Lazy import helper for get_llm_provider to avoid loading at module import time."""
+    from litellm.utils import _get_llm_provider as _get_llm_provider_func
+    return _get_llm_provider_func()
+
 # Lazy initialization for azure_audio_transcriptions
 _azure_audio_transcriptions = None
 
@@ -549,7 +554,7 @@ from litellm.utils import (
     create_pretrained_tokenizer,
     create_tokenizer,
     get_api_key,
-    get_llm_provider,
+    # get_llm_provider is imported lazily when needed to avoid loading at import time
     get_non_default_completion_params,
     get_non_default_transcription_params,
     get_optional_params_embeddings,
@@ -1050,7 +1055,7 @@ async def acompletion(
         "shared_session": shared_session,
     }
     if custom_llm_provider is None:
-        _, custom_llm_provider, _, _ = get_llm_provider(
+        _, custom_llm_provider, _, _ = _get_llm_provider()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=completion_kwargs.get("base_url", None),
@@ -1676,7 +1681,7 @@ def completion(  # type: ignore # noqa: PLR0915
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+        model, custom_llm_provider, dynamic_api_key, api_base = _get_llm_provider()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
@@ -4370,7 +4375,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
+        _, custom_llm_provider, _, _ = _get_llm_provider()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=kwargs.get("api_base", None),
@@ -4550,7 +4555,7 @@ def embedding(  # noqa: PLR0915
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
 
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+    model, custom_llm_provider, dynamic_api_key, api_base = _get_llm_provider()(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
@@ -5581,7 +5586,7 @@ def text_completion(  # noqa: PLR0915
         optional_params["custom_llm_provider"] = custom_llm_provider
 
     # get custom_llm_provider
-    _model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+    _model, custom_llm_provider, dynamic_api_key, api_base = _get_llm_provider()(
         model=model,  # type: ignore
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
@@ -5943,7 +5948,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
+        _, custom_llm_provider, _, _ = _get_llm_provider()(
             model=model, api_base=kwargs.get("api_base", None)
         )
 
@@ -6043,7 +6048,7 @@ def transcription(
 
     model_response = litellm.utils.TranscriptionResponse()
 
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+    model, custom_llm_provider, dynamic_api_key, api_base = _get_llm_provider()(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
@@ -6222,7 +6227,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
+        _, custom_llm_provider, _, _ = _get_llm_provider()(
             model=model, api_base=kwargs.get("api_base", None)
         )
 
@@ -6272,7 +6277,7 @@ def speech(  # noqa: PLR0915
     proxy_server_request = kwargs.get("proxy_server_request", None)
     extra_headers = kwargs.get("extra_headers", None)
     model_info = kwargs.get("model_info", None)
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+    model, custom_llm_provider, dynamic_api_key, api_base = _get_llm_provider()(
         model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
     )  # type: ignore
     kwargs.pop("tags", [])
@@ -6641,7 +6646,7 @@ async def ahealth_check(
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        model, custom_llm_provider, _, _ = _get_llm_provider()(model=model)
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
