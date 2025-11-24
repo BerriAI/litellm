@@ -385,7 +385,6 @@ const sidebars = {
         "anthropic_unified",
         "moderation",
         "ocr",
-        "skills",
         {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
@@ -431,6 +430,7 @@ const sidebars = {
             "search/searxng",
           ]
         },
+        "skills",
         {
           type: "category",
           label: "/vector_stores",
