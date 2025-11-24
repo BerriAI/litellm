@@ -1206,7 +1206,7 @@ vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
 )
-from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
+# Note: OpenAIImageVariationConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 from .llms.deepgram.audio_transcription.transformation import (
     DeepgramAudioTranscriptionConfig,
 )
@@ -1648,6 +1648,12 @@ def __getattr__(name: str) -> Any:
         from .llms.gemini.common_utils import GeminiModelInfo as _GeminiModelInfo
         globals()["GeminiModelInfo"] = _GeminiModelInfo
         return _GeminiModelInfo
+    
+    # Lazy-load OpenAIImageVariationConfig to reduce import-time memory cost
+    if name == "OpenAIImageVariationConfig":
+        from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig as _OpenAIImageVariationConfig
+        globals()["OpenAIImageVariationConfig"] = _OpenAIImageVariationConfig
+        return _OpenAIImageVariationConfig
     
     # Lazy-load Azure OpenAI configs to reduce import-time memory cost
     if name in {"AzureOpenAIConfig", "AzureOpenAIGPT5Config", "AzureOpenAITextConfig", "AzureOpenAIAssistantsAPIConfig"}:
