@@ -133,22 +133,33 @@ from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_s
 # )
 # get_api_base is imported lazily when needed to avoid loading at import time
 # from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
-from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
-    get_formatted_prompt,
-)
-from litellm.litellm_core_utils.llm_response_utils.get_headers import (
-    get_response_headers,
-)
-from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-    ResponseMetadata,
-)
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _parse_content_for_reasoning,
-)
-from litellm.litellm_core_utils.redact_messages import (
-    LiteLLMLoggingObject,
-    redact_message_input_output_from_logging,
-)
+# get_formatted_prompt is imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
+#     get_formatted_prompt,
+# )
+# get_response_headers is imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+#     get_response_headers,
+# )
+# ResponseMetadata is imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+#     ResponseMetadata,
+# )
+# _parse_content_for_reasoning is imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.prompt_templates.common_utils import (
+#     _parse_content_for_reasoning,
+# )
+# LiteLLMLoggingObject and redact_message_input_output_from_logging are imported lazily when needed
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.redact_messages import (
+        LiteLLMLoggingObject
+    )
+else:
+    LiteLLMLoggingObject = None  # Will be lazy-loaded when needed
+# from litellm.litellm_core_utils.redact_messages import (
+#     LiteLLMLoggingObject,
+#     redact_message_input_output_from_logging,
+# )
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 # get_modified_max_tokens is imported lazily when needed to avoid loading token_counter
@@ -901,7 +912,7 @@ def function_setup(  # noqa: PLR0915
 
 
 async def _client_async_logging_helper(
-    logging_obj: LiteLLMLoggingObject,
+    logging_obj: "LiteLLMLoggingObject",
     result,
     start_time,
     end_time,
@@ -1333,6 +1344,69 @@ def _get_api_base():
             globals()["get_api_base"] = _get_api_base_func
     return _get_api_base_func
 
+# Cached lazy import helpers for get_formatted_prompt, get_response_headers, ResponseMetadata, _parse_content_for_reasoning, and redact_messages
+_get_formatted_prompt_func = None
+_get_response_headers_func = None
+_response_metadata_class = None
+_parse_content_for_reasoning_func = None
+_litellm_logging_object_class = None
+_redact_message_input_output_from_logging_func = None
+
+def _get_formatted_prompt():
+    """Lazy import helper for get_formatted_prompt to avoid loading at import time."""
+    global _get_formatted_prompt_func
+    if _get_formatted_prompt_func is None:
+        from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import get_formatted_prompt as _get_formatted_prompt_func
+        if "get_formatted_prompt" not in globals():
+            globals()["get_formatted_prompt"] = _get_formatted_prompt_func
+    return _get_formatted_prompt_func
+
+def _get_response_headers_func_helper():
+    """Lazy import helper for get_response_headers to avoid loading at import time."""
+    global _get_response_headers_func
+    if _get_response_headers_func is None:
+        from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers as _get_response_headers_func
+        if "get_response_headers" not in globals():
+            globals()["get_response_headers"] = _get_response_headers_func
+    return _get_response_headers_func
+
+def _get_response_metadata():
+    """Lazy import helper for ResponseMetadata to avoid loading at import time."""
+    global _response_metadata_class
+    if _response_metadata_class is None:
+        from litellm.litellm_core_utils.llm_response_utils.response_metadata import ResponseMetadata as _response_metadata_class
+        if "ResponseMetadata" not in globals():
+            globals()["ResponseMetadata"] = _response_metadata_class
+    return _response_metadata_class
+
+def _get_parse_content_for_reasoning():
+    """Lazy import helper for _parse_content_for_reasoning to avoid loading at import time."""
+    global _parse_content_for_reasoning_func
+    if _parse_content_for_reasoning_func is None:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import _parse_content_for_reasoning as _parse_content_for_reasoning_func
+        if "_parse_content_for_reasoning" not in globals():
+            globals()["_parse_content_for_reasoning"] = _parse_content_for_reasoning_func
+    return _parse_content_for_reasoning_func
+
+def _get_litellm_logging_object():
+    """Lazy import helper for LiteLLMLoggingObject to avoid loading at import time."""
+    global LiteLLMLoggingObject, _litellm_logging_object_class
+    if LiteLLMLoggingObject is None:
+        from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject as _litellm_logging_object_class
+        LiteLLMLoggingObject = _litellm_logging_object_class
+        if "LiteLLMLoggingObject" not in globals():
+            globals()["LiteLLMLoggingObject"] = _litellm_logging_object_class
+    return LiteLLMLoggingObject
+
+def _get_redact_message_input_output_from_logging():
+    """Lazy import helper for redact_message_input_output_from_logging to avoid loading at import time."""
+    global _redact_message_input_output_from_logging_func
+    if _redact_message_input_output_from_logging_func is None:
+        from litellm.litellm_core_utils.redact_messages import redact_message_input_output_from_logging as _redact_message_input_output_from_logging_func
+        if "redact_message_input_output_from_logging" not in globals():
+            globals()["redact_message_input_output_from_logging"] = _redact_message_input_output_from_logging_func
+    return _redact_message_input_output_from_logging_func
+
 
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
@@ -1378,7 +1452,7 @@ def client(original_function):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
-        logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
+        logging_obj: Optional["LiteLLMLoggingObject"] = kwargs.get(
             "litellm_logging_obj", None
         )
 
@@ -1645,7 +1719,7 @@ def client(original_function):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
-        logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
+        logging_obj: Optional["LiteLLMLoggingObject"] = kwargs.get(
             "litellm_logging_obj", None
         )
         _llm_caching_handler = _get_llm_caching_handler()(
@@ -8474,7 +8548,7 @@ def should_run_mock_completion(
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import for convert_dict_to_response functions and get_api_base to allow imports from utils."""
+    """Lazy import for various functions and classes to allow imports from utils."""
     if name == "LiteLLMResponseObjectHandler":
         return _get_litellm_response_object_handler()
     if name == "_handle_invalid_parallel_tool_calls":
@@ -8487,4 +8561,16 @@ def __getattr__(name: str) -> Any:
         return _get_convert_to_streaming_response_async()
     if name == "get_api_base":
         return _get_api_base()
+    if name == "get_formatted_prompt":
+        return _get_formatted_prompt()
+    if name == "get_response_headers":
+        return _get_response_headers_func_helper()
+    if name == "ResponseMetadata":
+        return _get_response_metadata()
+    if name == "_parse_content_for_reasoning":
+        return _get_parse_content_for_reasoning()
+    if name == "LiteLLMLoggingObject":
+        return _get_litellm_logging_object()
+    if name == "redact_message_input_output_from_logging":
+        return _get_redact_message_input_output_from_logging()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
