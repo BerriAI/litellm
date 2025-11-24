@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.utils import CallTypesLiteral
 
 from .base import AzureGuardrailBase
 
@@ -114,17 +115,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         user_api_key_dict: "UserAPIKeyAuth",
         cache: Any,
         data: Dict[str, Any],
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[Dict[str, Any]]:
         """
         Pre-call hook to scan user prompts before sending to LLM.

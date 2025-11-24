@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
 from litellm.router import Router
+from litellm.types.utils import CallTypesLiteral
 from litellm.utils import get_formatted_prompt
 
 
@@ -220,14 +221,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "acompletion",
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[bool]:
         self.print_verbose(
             f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}"
