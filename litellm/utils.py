@@ -66,9 +66,8 @@ import litellm.litellm_core_utils.json_validation_rule
 # litellm.llms.gemini is imported lazily when needed to avoid loading at import time
 # import litellm.llms.gemini
 from litellm._uuid import uuid
-from litellm.caching._internal_lru_cache import lru_cache_wrapper
-from litellm.caching.caching import DualCache
-from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+# CachingHandlerResponse and LLMCachingHandler are imported lazily when needed to avoid loading at import time
+# from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_EMBEDDING_PARAM_VALUES,
@@ -1129,6 +1128,8 @@ _openai_pydantic = None
 _openai_response_format = None
 _original_error = None
 _audio_utils_module = None
+_caching_handler_response_class = None
+_llm_caching_handler_class = None
 
 def _get_openai_module():
     """Lazy import helper for openai module to avoid loading at module import time."""
@@ -1171,6 +1172,20 @@ def _get_audio_utils_module():
     if _audio_utils_module is None:
         from litellm.litellm_core_utils.audio_utils import utils as _audio_utils_module
     return _audio_utils_module
+
+def _get_caching_handler_response():
+    """Lazy import helper for CachingHandlerResponse to avoid loading at import time."""
+    global _caching_handler_response_class
+    if _caching_handler_response_class is None:
+        from litellm.caching.caching_handler import CachingHandlerResponse as _caching_handler_response_class
+    return _caching_handler_response_class
+
+def _get_llm_caching_handler():
+    """Lazy import helper for LLMCachingHandler to avoid loading at import time."""
+    global _llm_caching_handler_class
+    if _llm_caching_handler_class is None:
+        from litellm.caching.caching_handler import LLMCachingHandler as _llm_caching_handler_class
+    return _llm_caching_handler_class
 
 
 def client(original_function):  # noqa: PLR0915
@@ -1235,7 +1250,7 @@ def client(original_function):  # noqa: PLR0915
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
-            _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
+            _llm_caching_handler = _get_llm_caching_handler()(
                 original_function=original_function,
                 request_kwargs=kwargs,
                 start_time=start_time,
@@ -1290,7 +1305,7 @@ def client(original_function):  # noqa: PLR0915
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 verbose_logger.debug("INSIDE CHECKING SYNC CACHE")
-                caching_handler_response: CachingHandlerResponse = (
+                caching_handler_response = _get_caching_handler_response()(
                     _llm_caching_handler._sync_get_cache(
                         model=model or "",
                         original_function=original_function,
@@ -1526,7 +1541,7 @@ def client(original_function):  # noqa: PLR0915
             print_verbose(
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
-            _caching_handler_response: Optional[CachingHandlerResponse] = (
+            _caching_handler_response: Optional[Any] = (
                 await _llm_caching_handler._async_get_cache(
                     model=model or "",
                     original_function=original_function,
