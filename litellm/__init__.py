@@ -1271,6 +1271,8 @@ from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
+from .llms.anthropic.skills.transformation import AnthropicSkillsConfig
+from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
 from .llms.gradient_ai.chat.transformation import GradientAIConfig
 
@@ -1404,6 +1406,16 @@ from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
+from .skills.main import (
+    create_skill,
+    acreate_skill,
+    list_skills,
+    alist_skills,
+    get_skill,
+    aget_skill,
+    delete_skill,
+    adelete_skill,
+)
 from .containers.main import *
 from .ocr.main import *
 from .search.main import *
