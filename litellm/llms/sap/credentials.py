@@ -192,6 +192,7 @@ def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] 
     """
     config = init_conf(profile)
     env = os.environ  # snapshot for testability
+    service_like = None
 
     if not config:
         # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
