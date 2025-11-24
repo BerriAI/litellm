@@ -569,10 +569,18 @@ secret_manager_client: Optional[Any] = (
 )
 _google_kms_resource_name: Optional[str] = None
 _key_management_system: Optional["KeyManagementSystem"] = None
-# KeyManagementSettings must be imported directly because _key_management_settings
-# is accessed during import (in dd_tracing.py via get_secret)
-from litellm.types.secret_managers.main import KeyManagementSettings
-_key_management_settings: "KeyManagementSettings" = KeyManagementSettings()
+# KeyManagementSettings is lazy-loaded via __getattr__ to reduce import-time memory cost
+# _key_management_settings is initialized lazily to avoid import-time dependencies
+def _get_key_management_settings():
+    """Lazy initialization of _key_management_settings to avoid import-time dependencies."""
+    global _key_management_settings
+    if _key_management_settings is None:
+        from ._lazy_imports import _lazy_import_secret_managers
+        KeyManagementSettings = _lazy_import_secret_managers("KeyManagementSettings")
+        _key_management_settings = KeyManagementSettings()
+    return _key_management_settings
+
+_key_management_settings: Optional["KeyManagementSettings"] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
@@ -1423,7 +1431,7 @@ def __getattr__(name: str) -> Any:
         from ._lazy_imports import _lazy_import_ui_sso
         return _lazy_import_ui_sso(name)
     
-    if name == "KeyManagementSystem":
+    if name == "KeyManagementSystem" or name == "KeyManagementSettings":
         from ._lazy_imports import _lazy_import_secret_managers
         return _lazy_import_secret_managers(name)
     
