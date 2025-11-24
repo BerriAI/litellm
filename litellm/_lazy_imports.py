@@ -1249,6 +1249,61 @@ def _lazy_import_main_functions(name: str) -> Any:
 # Module-level cache for hot-path functions to avoid repeated import overhead
 _get_llm_provider_cached: Optional[Callable] = None
 
+# Track which modules have had their public functions bulk-cached
+_batches_functions_cached: bool = False
+
+
+def _lazy_import_batches_functions(name: str) -> Any:
+    """Lazy import for batches module functions - dynamically imports from batches.main.
+    
+    The "lazy" part is about WHEN the module loads (on first attribute access via __getattr__),
+    not WHAT gets loaded. Python's import system doesn't support partial imports, so the entire
+    litellm.batches.main module will be loaded when any batches function is first accessed.
+    
+    Since we're loading the entire module anyway, we optimize by caching all public functions
+    at once on first access, so subsequent accesses are direct (no __getattr__ overhead).
+    """
+    global _batches_functions_cached
+    _globals = _get_litellm_globals()
+    
+    # Fast path: if already cached, return directly
+    if name in _globals:
+        return _globals[name]
+    
+    # Check if module is already loaded to avoid re-importing
+    batches_module_name = "litellm.batches.main"
+    batches_module = sys.modules.get(batches_module_name)
+    
+    if batches_module is None:
+        # Import the entire module (this executes all module-level code)
+        # The laziness is that this happens on first access, not at __init__.py import time
+        try:
+            batches_module = importlib.import_module(batches_module_name)
+        except ImportError as e:
+            raise AttributeError(f"Failed to lazy import {name!r} from litellm.batches.main: {e}") from e
+    
+    # Bulk cache all public functions on first access (only once, tracked by flag)
+    if not _batches_functions_cached:
+        _batches_public_functions = {
+            "create_batch", "acreate_batch", "retrieve_batch", "aretrieve_batch",
+            "list_batches", "alist_batches", "cancel_batch", "acancel_batch",
+        }
+        for func_name in _batches_public_functions:
+            if hasattr(batches_module, func_name):
+                _globals[func_name] = getattr(batches_module, func_name)
+        _batches_functions_cached = True
+        # Fast path: if the requested function was just cached, return it directly
+        if name in _globals:
+            return _globals[name]
+    
+    # Retrieve the specific function/attribute from the loaded module
+    try:
+        attr = getattr(batches_module, name)
+        _globals[name] = attr  # Cache it (in case it wasn't in the public list)
+        return attr
+    except AttributeError:
+        raise AttributeError(f"module 'litellm.batches.main' has no attribute {name!r}")
+
 
 def get_cached_llm_provider() -> Callable:
     """

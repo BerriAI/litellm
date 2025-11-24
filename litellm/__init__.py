@@ -1275,7 +1275,8 @@ from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
-from .batches.main import *
+# batches.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .batches.main import *
 from .images.main import *
 from .videos.main import *
 from .batch_completion.main import *  # type: ignore
@@ -1767,6 +1768,20 @@ def __getattr__(name: str) -> Any:
     if name in {"NvidiaNimConfig", "nvidiaNimConfig"}:
         from ._lazy_imports import _lazy_import_nvidia_nim_configs
         return _lazy_import_nvidia_nim_configs(name)
+    
+    # Lazy-load batches module functions to reduce import-time memory cost
+    # This handles create_batch, acreate_batch, retrieve_batch, aretrieve_batch,
+    # list_batches, alist_batches, cancel_batch, acancel_batch from batches.main
+    _batches_function_names = {
+        "create_batch", "acreate_batch", "retrieve_batch", "aretrieve_batch",
+        "list_batches", "alist_batches", "cancel_batch", "acancel_batch",
+    }
+    if name in _batches_function_names:
+        from ._lazy_imports import _lazy_import_batches_functions
+        try:
+            return _lazy_import_batches_functions(name)
+        except AttributeError:
+            pass
     
     # Lazy-load main module functions and classes to reduce import-time memory cost
     # This handles completion, acompletion, embedding, aembedding, text_completion,
