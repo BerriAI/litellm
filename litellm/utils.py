@@ -163,9 +163,10 @@ from litellm.litellm_core_utils.rules import Rules
 _get_modified_max_tokens = None
 _default_encoding = None
 _tiktoken_encoding_type = None
-from litellm.llms.base_llm.google_genai.transformation import (
-    BaseGoogleGenAIGenerateContentConfig,
-)
+# BaseGoogleGenAIGenerateContentConfig is imported lazily when needed to avoid loading at import time
+# from litellm.llms.base_llm.google_genai.transformation import (
+#     BaseGoogleGenAIGenerateContentConfig,
+# )
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
@@ -315,6 +316,9 @@ from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 # LiteLLMLoggingObject is lazy-loaded to reduce import-time memory cost
 if TYPE_CHECKING:
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+    from litellm.llms.base_llm.google_genai.transformation import (
+        BaseGoogleGenAIGenerateContentConfig,
+    )
     from litellm.litellm_core_utils.redact_messages import (
         LiteLLMLoggingObject
     )
@@ -8231,7 +8235,7 @@ class ProviderConfigManager:
     def get_provider_google_genai_generate_content_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseGoogleGenAIGenerateContentConfig]:
+    ) -> Optional["BaseGoogleGenAIGenerateContentConfig"]:
         if litellm.LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.google_genai.transformation import (
                 GoogleGenAIConfig,
