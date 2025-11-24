@@ -7389,6 +7389,38 @@ class BaseLLMHTTPHandler:
     ########## SKILLS API HANDLERS ##########################
     #########################################################
 
+    def _prepare_skill_multipart_request(
+        self,
+        request_body: Dict,
+        headers: dict,
+    ) -> tuple[Optional[Dict], Optional[list]]:
+        """
+        Helper to prepare multipart/form-data request for skills API.
+        
+        Args:
+            request_body: Request body containing files and other fields
+            headers: Request headers
+            
+        Returns:
+            Tuple of (data_dict, files_list) for multipart request, or (None, None) if no files
+        """
+        if "files" not in request_body or not request_body["files"]:
+            return None, None
+            
+        # Remove content-type header if present - httpx will set it automatically for multipart
+        if "content-type" in headers:
+            del headers["content-type"]
+        
+        # Prepare files for multipart upload
+        files = []
+        for file_obj in request_body["files"]:
+            files.append(("files[]", file_obj))
+        
+        # Prepare data (non-file fields)
+        data = {k: v for k, v in request_body.items() if k != "files"}
+        
+        return data, files
+
     def create_skill_handler(
         self,
         url: str,
@@ -7438,9 +7470,20 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.post(
-                url=url, headers=headers, json=request_body, timeout=timeout
+            # Check if files are present - use multipart/form-data
+            data, files = self._prepare_skill_multipart_request(
+                request_body=request_body, headers=headers
             )
+            
+            if files is not None:
+                response = sync_httpx_client.post(
+                    url=url, headers=headers, data=data, files=files, timeout=timeout
+                )
+            else:
+                # No files - send as JSON
+                response = sync_httpx_client.post(
+                    url=url, headers=headers, json=request_body, timeout=timeout
+                )
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -7487,9 +7530,20 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(
-                url=url, headers=headers, json=request_body, timeout=timeout
+            # Check if files are present - use multipart/form-data
+            data, files = self._prepare_skill_multipart_request(
+                request_body=request_body, headers=headers
             )
+            
+            if files is not None:
+                response = await async_httpx_client.post(
+                    url=url, headers=headers, data=data, files=files, timeout=timeout
+                )
+            else:
+                # No files - send as JSON
+                response = await async_httpx_client.post(
+                    url=url, headers=headers, json=request_body, timeout=timeout
+                )
         except Exception as e:
             raise self._handle_error(
                 e=e,
