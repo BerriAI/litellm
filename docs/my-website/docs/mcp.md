@@ -569,7 +569,7 @@ mcp_servers:
 ### How It Works
 
 1. **Tool-specific filtering**: Each tool can have its own list of allowed parameters
-2. **Flexible naming**: Tool names can be specified with or without the server prefix (e.g., both `"getpetbyid"` and `"my_api_mcp-getpetbyid"` work)
+2. **Flexible naming**: Tool names can be specified with or without the server prefix (e.g., both `"getpetbyid"` and `"my_api_mcp--getpetbyid"` work)
 3. **Whitelist approach**: Only parameters in the allowed list are permitted
 4. **Unlisted tools**: If `allowed_params` is not set, all parameters are allowed
 5. **Error handling**: Requests with disallowed parameters receive a 403 error with details about which parameters are allowed
