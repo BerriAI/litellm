@@ -457,6 +457,11 @@ const sidebars = {
           label: "Integrate as a Model Provider",
         },
         {
+          type: "doc",
+          id: "provider_registration/add_model_pricing",
+          label: "Add Model Pricing & Context Window",
+        },
+        {
           type: "category",
           label: "OpenAI",
           items: [
