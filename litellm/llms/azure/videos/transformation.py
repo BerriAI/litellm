@@ -57,20 +57,18 @@ class AzureVideoConfig(OpenAIVideoConfig):
         model: str,
         api_key: Optional[str] = None,
     ) -> dict:
-        api_key = (
-            api_key
-            or litellm.api_key
-            or litellm.azure_key
-            or get_secret_str("AZURE_OPENAI_API_KEY")
-            or get_secret_str("AZURE_API_KEY")
+        """
+        Validate Azure environment and set up authentication headers.
+        Uses _base_validate_azure_environment to properly handle credentials from litellm_credential_name.
+        """
+        
+        # Use the base Azure validation method which properly handles:
+        # 1. Credentials from litellm_credential_name via litellm_params
+        # 2. Sets the correct "api-key" header (not "Authorization: Bearer")
+        return BaseAzureLLM._base_validate_azure_environment(
+            headers=headers, 
+            litellm_params=None
         )
-
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
-        )
-        return headers
 
     def get_complete_url(
         self,
