@@ -1274,9 +1274,12 @@ from .proxy.proxy_cli import run_server
 from .batch_completion.main import *  # type: ignore
 # Note: rerank_api.main is lazy-loaded via __getattr__ to reduce import-time memory cost
 # from .rerank_api.main import *
-from .llms.anthropic.experimental_pass_through.messages.handler import *
-from .responses.main import *
-from .containers.main import *
+# Note: anthropic experimental_pass_through.messages.handler is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .llms.anthropic.experimental_pass_through.messages.handler import *
+# Note: responses.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .responses.main import *
+# Note: containers.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .containers.main import *
 from .ocr.main import *
 from .search.main import *
 from .realtime_api.main import _arealtime
@@ -1491,6 +1494,44 @@ def __getattr__(name: str) -> Any:
     if name in _rerank_functions:
         from .rerank_api import main as _rerank_main
         _func = getattr(_rerank_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load anthropic experimental pass-through functions to reduce import-time memory cost
+    _anthropic_experimental_functions = {
+        "anthropic_messages", "anthropic_messages_handler", "validate_anthropic_api_metadata",
+    }
+    if name in _anthropic_experimental_functions:
+        from .llms.anthropic.experimental_pass_through.messages import handler as _anthropic_handler
+        _func = getattr(_anthropic_handler, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load responses functions to reduce import-time memory cost
+    _responses_functions = {
+        "responses", "aresponses",
+        "delete_responses", "adelete_responses",
+        "get_responses", "aget_responses",
+        "list_input_items", "alist_input_items",
+        "cancel_responses", "acancel_responses",
+        "aresponses_api_with_mcp", "mock_responses_api_response",
+    }
+    if name in _responses_functions:
+        from .responses import main as _responses_main
+        _func = getattr(_responses_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load container functions to reduce import-time memory cost
+    _container_functions = {
+        "create_container", "acreate_container",
+        "delete_container", "adelete_container",
+        "list_containers", "alist_containers",
+        "retrieve_container", "aretrieve_container",
+    }
+    if name in _container_functions:
+        from .containers import main as _containers_main
+        _func = getattr(_containers_main, name)
         globals()[name] = _func
         return _func
     
