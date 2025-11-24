@@ -46,6 +46,7 @@ if TYPE_CHECKING:
         ChatCompletionImageObject,
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
+        ResponseText,
     )
 
 
@@ -234,6 +235,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         cast(List[Dict[str, Any]], value)
                     )
                 )
+            elif key == "response_format":
+                # Convert chat completion response_format to Responses API text parameter
+                text_param = self._map_response_format_to_text_param(
+                    response_format=value
+                )
+                if text_param is not None:
+                    responses_api_request["text"] = text_param
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
             elif key == "metadata":
@@ -679,6 +687,68 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         }
 
         return status_mapping.get(status, "stop")
+    
+    def _map_response_format_to_text_param(
+        self,
+        response_format: Optional[Dict[str, Any]],
+        text: Optional["ResponseText"] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Convert Chat Completion response_format parameter to Responses API text parameter.
+
+        Chat Completion response_format structure:
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "schema_name",
+                "schema": {...},
+                "strict": True
+            }
+        }
+
+        Responses API text parameter structure:
+        {
+            "format": {
+                "type": "json_schema",
+                "name": "schema_name",
+                "schema": {...},
+                "strict": True
+            }
+        }
+        """
+        if response_format is None or text is not None:
+            return text
+
+        if not isinstance(response_format, dict):
+            return text
+
+        format_type = response_format.get("type")
+
+        if format_type == "json_schema":
+            json_schema = response_format.get("json_schema", {})
+            if isinstance(json_schema, dict):
+                return {
+                    "format": {
+                        "type": "json_schema",
+                        "name": json_schema.get("name", "response_schema"),
+                        "schema": json_schema.get("schema", {}),
+                        "strict": json_schema.get("strict", False),
+                    }
+                }
+        elif format_type == "json_object":
+            return {
+                "format": {
+                    "type": "json_object"
+                }
+            }
+        elif format_type == "text":
+            return {
+                "format": {
+                    "type": "text"
+                }
+            }
+
+        return text
 
 
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):

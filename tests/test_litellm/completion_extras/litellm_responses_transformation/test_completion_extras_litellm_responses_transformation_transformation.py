@@ -444,3 +444,248 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("previous_response_id") == "resp_abc"
 
     print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
+
+
+def test_map_response_format_to_text_param_json_schema():
+    """Test conversion of response_format with json_schema type to Responses API text parameter"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "my_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                },
+                "required": ["name"],
+            },
+            "strict": True,
+        },
+    }
+
+    result = handler._map_response_format_to_text_param(response_format=response_format)
+
+    assert result is not None
+    assert "format" in result
+    assert result["format"]["type"] == "json_schema"
+    assert result["format"]["name"] == "my_schema"
+    assert result["format"]["schema"]["type"] == "object"
+    assert result["format"]["strict"] is True
+
+
+def test_map_response_format_to_text_param_json_object():
+    """Test conversion of response_format with json_object type to Responses API text parameter"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    response_format = {"type": "json_object"}
+
+    result = handler._map_response_format_to_text_param(response_format=response_format)
+
+    assert result is not None
+    assert "format" in result
+    assert result["format"]["type"] == "json_object"
+
+
+def test_map_response_format_to_text_param_text():
+    """Test conversion of response_format with text type to Responses API text parameter"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    response_format = {"type": "text"}
+
+    result = handler._map_response_format_to_text_param(response_format=response_format)
+
+    assert result is not None
+    assert "format" in result
+    assert result["format"]["type"] == "text"
+
+
+def test_map_response_format_to_text_param_none():
+    """Test that None response_format returns None"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    result = handler._map_response_format_to_text_param(response_format=None)
+
+    assert result is None
+
+
+def test_map_response_format_to_text_param_with_existing_text():
+    """Test that existing text parameter takes precedence over response_format"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    response_format = {"type": "json_object"}
+    existing_text = {"format": {"type": "json_schema", "name": "existing"}}
+
+    result = handler._map_response_format_to_text_param(
+        response_format=response_format, text=existing_text
+    )
+
+    # Should return existing text, not convert response_format
+    assert result == existing_text
+    assert result["format"]["name"] == "existing"
+
+
+def test_map_response_format_to_text_param_invalid_dict():
+    """Test that invalid response_format dict returns None"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Missing type field
+    response_format = {"json_schema": {"name": "test"}}
+
+    result = handler._map_response_format_to_text_param(response_format=response_format)
+
+    assert result is None
+
+
+def test_map_response_format_to_text_param_invalid_type():
+    """Test that non-dict response_format returns None"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Pass a string instead of dict
+    result = handler._map_response_format_to_text_param(response_format="invalid")
+
+    assert result is None
+
+
+def test_transform_request_with_response_format_json_schema():
+    """Test that transform_request correctly converts response_format to text parameter"""
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [{"role": "user", "content": "Return JSON with name and age"}]
+    optional_params = {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "person_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "age": {"type": "integer"},
+                    },
+                },
+                "strict": False,
+            },
+        },
+        "temperature": 0.7,
+    }
+    litellm_params = {}
+    headers = {}
+    logging_obj = Mock()
+
+    result = handler.transform_request(
+        model="gpt-4",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=logging_obj,
+    )
+
+    # Verify response_format was converted to text parameter
+    assert "text" in result
+    assert result["text"]["format"]["type"] == "json_schema"
+    assert result["text"]["format"]["name"] == "person_schema"
+    assert result["text"]["format"]["strict"] is False
+
+    # Verify other params are still present
+    assert result["temperature"] == 0.7
+
+    # Verify response_format is not in the result (it was converted)
+    assert "response_format" not in result
+
+
+def test_transform_request_with_response_format_json_object():
+    """Test that transform_request correctly converts json_object response_format"""
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [{"role": "user", "content": "Return JSON"}]
+    optional_params = {"response_format": {"type": "json_object"}}
+    litellm_params = {}
+    headers = {}
+    logging_obj = Mock()
+
+    result = handler.transform_request(
+        model="gpt-4",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=logging_obj,
+    )
+
+    # Verify response_format was converted to text parameter
+    assert "text" in result
+    assert result["text"]["format"]["type"] == "json_object"
+
+
+def test_transform_request_with_response_format_none():
+    """Test that transform_request handles None response_format gracefully"""
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {"response_format": None, "temperature": 0.7}
+    litellm_params = {}
+    headers = {}
+    logging_obj = Mock()
+
+    result = handler.transform_request(
+        model="gpt-4",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=logging_obj,
+    )
+
+    # Verify text parameter is not added when response_format is None
+    assert "text" not in result
+    assert result["temperature"] == 0.7
