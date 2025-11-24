@@ -111,7 +111,11 @@ async def test_run_guardrail_posts_payload(
 
     captured = {}
 
-    def fake_process(response_json: dict, data: Optional[dict] = None) -> None:
+    def fake_process(
+        response_json: dict,
+        data: Optional[dict] = None,
+        hook_type: Optional[GuardrailEventHooks] = None,
+    ) -> None:
         captured["response"] = response_json
 
     monkeypatch.setattr(grayswan_guardrail, "_process_grayswan_response", fake_process)
