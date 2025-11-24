@@ -480,18 +480,17 @@ class GraySwanGuardrail(CustomGuardrail):
         ipi = detection.get("ipi", False)
 
         message_parts = [
-            "Content was flagged by Gray Swan Guardrail",
-            f"Violation Score: {violation_score:.2f}",
+            f"Sorry I can't help with that. According to the Gray Swan Cygnal Guardrail, this request has a violation score of {violation_score:.2f}.",
         ]
 
         if violated_rules:
-            message_parts.append(f"Violated Rules: {', '.join(map(str, violated_rules))}")
+            message_parts.append(f"It was violating the rule(s): {', '.join(map(str, violated_rules))}.")
 
         if mutation:
-            message_parts.append("Mutation Detected: Yes")
+            message_parts.append("Mutation effort to make the harmful intention disguised was DETECTED.")
 
         if ipi:
-            message_parts.append("Indirect Prompt Injection Detected: Yes")
+            message_parts.append("Indirect Prompt Injection was DETECTED.")
 
         return "\n".join(message_parts)
 
