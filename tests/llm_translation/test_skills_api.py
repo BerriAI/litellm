@@ -133,7 +133,7 @@ class BaseSkillsAPITest(ABC):
         litellm.set_verbose = True
 
         print(f"\n=== Testing list_skills ===")
-        print(f"API Key: {api_key[:10]}...")
+        print("API Key: [REDACTED]")
         print(f"API Base: {api_base}")
         
         response = litellm.list_skills(
