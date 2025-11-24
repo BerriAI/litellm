@@ -125,7 +125,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         headers = {"Authorization": f"Bearer {access_token}"}
 
         # Get async HTTP client
-        from litellm import LlmProviders
+        from litellm.types.utils import LlmProviders
 
         async_client = get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI)
 

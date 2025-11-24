@@ -43,27 +43,31 @@ from os.path import abspath, dirname, join
 import aiohttp
 import dotenv
 import httpx
-import openai
-import tiktoken
+# openai is imported lazily when needed to avoid loading it at import time (see _get_openai_module helper)
+# tiktoken is imported lazily when needed to avoid loading it at import time
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
-from openai.lib import _parsing, _pydantic
-from openai.types.chat.completion_create_params import ResponseFormat
+# openai submodules are imported lazily when needed to avoid loading openai at import time
+# from openai.lib import _parsing, _pydantic
+# from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel
-from tiktoken import Encoding
+# Encoding is imported lazily when needed to avoid loading tiktoken at import time
 from tokenizers import Tokenizer
 
 import litellm
-import litellm._service_logger  # for storing API inputs, outputs, and metadata
+# litellm._service_logger is imported lazily when needed to avoid loading at import time
+# import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
-import litellm.litellm_core_utils.audio_utils.utils
+# litellm.litellm_core_utils.audio_utils.utils is imported lazily when needed to avoid loading at import time
+# import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
-import litellm.llms
-import litellm.llms.gemini
+# litellm.llms is imported lazily when needed via submodule imports to avoid loading at import time
+# import litellm.llms
+# litellm.llms.gemini is imported lazily when needed to avoid loading at import time
+# import litellm.llms.gemini
 from litellm._uuid import uuid
-from litellm.caching._internal_lru_cache import lru_cache_wrapper
-from litellm.caching.caching import DualCache
-from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+# CachingHandlerResponse and LLMCachingHandler are imported lazily when needed to avoid loading at import time
+# from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_EMBEDDING_PARAM_VALUES,
@@ -96,7 +100,7 @@ from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.default_encoding import encoding
+# default_encoding is imported lazily when needed to avoid loading tiktoken at import time
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
@@ -140,7 +144,12 @@ from litellm.litellm_core_utils.redact_messages import (
 )
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
+# get_modified_max_tokens is imported lazily when needed to avoid loading token_counter
+# (which imports default_encoding and tiktoken) at import time
+# Cached after first import to avoid repeated import overhead
+_get_modified_max_tokens = None
+_default_encoding = None
+_tiktoken_encoding_type = None
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
@@ -207,20 +216,28 @@ from litellm.types.utils import (
     all_litellm_params,
 )
 
-try:
-    # Python 3.9+
-    with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
-        "anthropic_tokenizer.json"
-    ).open("r", encoding="utf-8") as f:
-        json_data = json.load(f)
-except (ImportError, AttributeError, TypeError):
-    with resources.open_text(
-        "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
-    ) as f:
-        json_data = json.load(f)
+# claude_json_str is lazy-loaded to reduce import-time memory cost
+# It's only loaded when _return_huggingface_tokenizer is called for older Anthropic models
+_claude_json_str_cache: "str | None" = None
 
-# Convert to str (if necessary)
-claude_json_str = json.dumps(json_data)
+def _get_claude_json_str() -> str:
+    """Lazy load the Anthropic tokenizer JSON string - caches after first load."""
+    global _claude_json_str_cache
+    if _claude_json_str_cache is None:
+        try:
+            # Python 3.9+
+            with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
+                "anthropic_tokenizer.json"
+            ).open("r", encoding="utf-8") as f:
+                json_data = json.load(f)
+        except (ImportError, AttributeError, TypeError):
+            with resources.open_text(
+                "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
+            ) as f:
+                json_data = json.load(f)
+        # Convert to str (if necessary)
+        _claude_json_str_cache = json.dumps(json_data)
+    return _claude_json_str_cache
 import importlib.metadata
 from typing import (
     TYPE_CHECKING,
@@ -239,7 +256,26 @@ from typing import (
     get_args,
 )
 
-from openai import OpenAIError as OriginalError
+# Helper function for lazy importing and caching - must be defined after typing imports
+def _lazy_import_and_cache(cache_var_name: str, import_func: Callable[[], Any]) -> Any:
+    """
+    Helper function for lazy importing and caching modules to avoid repeated import overhead.
+    
+    Args:
+        cache_var_name: Name of the global variable to cache the imported object
+        import_func: Function that performs the import and returns the object
+    
+    Returns:
+        The cached imported object
+    """
+    cache = globals().get(cache_var_name)
+    if cache is None:
+        cache = import_func()
+        globals()[cache_var_name] = cache
+    return cache
+
+# OriginalError is imported lazily when needed to avoid loading openai at import time
+# from openai import OpenAIError as OriginalError
 
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
@@ -261,7 +297,10 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+# BaseFilesConfig is lazy-loaded to reduce import-time memory cost
+# It's only needed when get_provider_files_config is called
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -305,7 +344,9 @@ from .exceptions import (
     UnprocessableEntityError,
     UnsupportedParamsError,
 )
-from .proxy._types import AllowedModelRegion, KeyManagementSystem
+# AllowedModelRegion and KeyManagementSystem are lazy-loaded to reduce import-time memory cost
+if TYPE_CHECKING:
+    from .proxy._types import AllowedModelRegion, KeyManagementSystem
 from .types.llms.openai import (
     ChatCompletionDeltaToolCallChunk,
     ChatCompletionToolCallChunk,
@@ -789,7 +830,7 @@ def function_setup(  # noqa: PLR0915
         ):
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
             file_checksum = (
-                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_name(
+                _get_audio_utils_module().get_audio_file_name(
                     file_obj=_file_obj
                 )
             )
@@ -1027,7 +1068,7 @@ def post_call_processing(
                                             json_response_format = optional_params[
                                                 "response_format"
                                             ]
-                                        elif _parsing._completions.is_basemodel_type(
+                                        elif _get_openai_parsing()._completions.is_basemodel_type(
                                             optional_params["response_format"]  # type: ignore
                                         ):
                                             json_response_format = (
@@ -1078,6 +1119,73 @@ def post_call_processing(
 
     except Exception as e:
         raise e
+
+
+# Lazy import helper for openai module to avoid loading at import time
+_openai_module = None
+_openai_parsing = None
+_openai_pydantic = None
+_openai_response_format = None
+_original_error = None
+_audio_utils_module = None
+_caching_handler_response_class = None
+_llm_caching_handler_class = None
+
+def _get_openai_module():
+    """Lazy import helper for openai module to avoid loading at module import time."""
+    global _openai_module
+    if _openai_module is None:
+        import openai as _openai_module
+    return _openai_module
+
+def _get_openai_parsing():
+    """Lazy import helper for openai.lib._parsing to avoid loading openai at import time."""
+    global _openai_parsing
+    if _openai_parsing is None:
+        from openai.lib import _parsing as _openai_parsing
+    return _openai_parsing
+
+def _get_openai_pydantic():
+    """Lazy import helper for openai.lib._pydantic to avoid loading openai at import time."""
+    global _openai_pydantic
+    if _openai_pydantic is None:
+        from openai.lib import _pydantic as _openai_pydantic
+    return _openai_pydantic
+
+def _get_openai_response_format():
+    """Lazy import helper for ResponseFormat to avoid loading openai at import time."""
+    global _openai_response_format
+    if _openai_response_format is None:
+        from openai.types.chat.completion_create_params import ResponseFormat as _openai_response_format
+    return _openai_response_format
+
+def _get_original_error():
+    """Lazy import helper for OpenAIError to avoid loading openai at import time."""
+    global _original_error
+    if _original_error is None:
+        from openai import OpenAIError as _original_error
+    return _original_error
+
+def _get_audio_utils_module():
+    """Lazy import helper for audio_utils.utils to avoid loading at import time."""
+    global _audio_utils_module
+    if _audio_utils_module is None:
+        from litellm.litellm_core_utils.audio_utils import utils as _audio_utils_module
+    return _audio_utils_module
+
+def _get_caching_handler_response():
+    """Lazy import helper for CachingHandlerResponse to avoid loading at import time."""
+    global _caching_handler_response_class
+    if _caching_handler_response_class is None:
+        from litellm.caching.caching_handler import CachingHandlerResponse as _caching_handler_response_class
+    return _caching_handler_response_class
+
+def _get_llm_caching_handler():
+    """Lazy import helper for LLMCachingHandler to avoid loading at import time."""
+    global _llm_caching_handler_class
+    if _llm_caching_handler_class is None:
+        from litellm.caching.caching_handler import LLMCachingHandler as _llm_caching_handler_class
+    return _llm_caching_handler_class
 
 
 def client(original_function):  # noqa: PLR0915
@@ -1142,7 +1250,7 @@ def client(original_function):  # noqa: PLR0915
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
-            _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
+            _llm_caching_handler = _get_llm_caching_handler()(
                 original_function=original_function,
                 request_kwargs=kwargs,
                 start_time=start_time,
@@ -1197,7 +1305,7 @@ def client(original_function):  # noqa: PLR0915
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 verbose_logger.debug("INSIDE CHECKING SYNC CACHE")
-                caching_handler_response: CachingHandlerResponse = (
+                caching_handler_response = _get_caching_handler_response()(
                     _llm_caching_handler._sync_get_cache(
                         model=model or "",
                         original_function=original_function,
@@ -1235,6 +1343,12 @@ def client(original_function):  # noqa: PLR0915
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
                     user_max_tokens = kwargs.get("max_tokens")
+                    # Import get_modified_max_tokens lazily and cache it to avoid repeated import overhead
+                    # This avoids loading token_counter (which imports default_encoding and tiktoken) at import time
+                    get_modified_max_tokens = _lazy_import_and_cache(
+                        "_get_modified_max_tokens",
+                        lambda: __import__("litellm.litellm_core_utils.token_counter", fromlist=["get_modified_max_tokens"]).get_modified_max_tokens
+                    )
                     modified_max_tokens = get_modified_max_tokens(
                         model=model,
                         base_model=base_model,
@@ -1353,9 +1467,9 @@ def client(original_function):  # noqa: PLR0915
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
-                        isinstance(e, openai.APIError)
-                        or isinstance(e, openai.Timeout)
-                        or isinstance(e, openai.APIConnectionError)
+                        isinstance(e, _get_openai_module().APIError)
+                        or isinstance(e, _get_openai_module().Timeout)
+                        or isinstance(e, _get_openai_module().APIConnectionError)
                     ):
                         kwargs["num_retries"] = num_retries
                         return litellm.completion_with_retries(*args, **kwargs)
@@ -1427,7 +1541,7 @@ def client(original_function):  # noqa: PLR0915
             print_verbose(
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
-            _caching_handler_response: Optional[CachingHandlerResponse] = (
+            _caching_handler_response: Optional[Any] = (
                 await _llm_caching_handler._async_get_cache(
                     model=model or "",
                     original_function=original_function,
@@ -1472,6 +1586,12 @@ def client(original_function):  # noqa: PLR0915
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
                     user_max_tokens = kwargs.get("max_tokens")
+                    # Import get_modified_max_tokens lazily and cache it to avoid repeated import overhead
+                    # This avoids loading token_counter (which imports default_encoding and tiktoken) at import time
+                    get_modified_max_tokens = _lazy_import_and_cache(
+                        "_get_modified_max_tokens",
+                        lambda: __import__("litellm.litellm_core_utils.token_counter", fromlist=["get_modified_max_tokens"]).get_modified_max_tokens
+                    )
                     modified_max_tokens = get_modified_max_tokens(
                         model=model,
                         base_model=base_model,
@@ -1614,10 +1734,10 @@ def client(original_function):  # noqa: PLR0915
                         kwargs["num_retries"] = num_retries
                         kwargs["original_function"] = original_function
                         if isinstance(
-                            e, openai.RateLimitError
+                            e, _get_openai_module().RateLimitError
                         ):  # rate limiting specific error
                             kwargs["retry_strategy"] = "exponential_backoff_retry"
-                        elif isinstance(e, openai.APIError):  # generic api error
+                        elif isinstance(e, _get_openai_module().APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
                         return await litellm.acompletion_with_retries(*args, **kwargs)
                     except Exception:
@@ -1743,6 +1863,12 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
 
 
 def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
+    # Import encoding lazily and cache it to avoid repeated import overhead
+    # This avoids loading tiktoken at import time
+    encoding = _lazy_import_and_cache(
+        "_default_encoding",
+        lambda: __import__("litellm.litellm_core_utils.default_encoding", fromlist=["encoding"]).encoding
+    )
     return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
@@ -1755,7 +1881,7 @@ def _return_huggingface_tokenizer(model: str) -> Optional[SelectTokenizerRespons
         return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
     # anthropic
     elif model in litellm.anthropic_models and "claude-3" not in model:
-        claude_tokenizer = Tokenizer.from_str(claude_json_str)
+        claude_tokenizer = Tokenizer.from_str(_get_claude_json_str())
         return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
     # llama2
     elif "llama-2" in model.lower() or "replicate" in model.lower():
@@ -1782,6 +1908,12 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc: The encoded text.
     """
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
+    # Import Encoding lazily and cache it to avoid repeated import overhead
+    # This avoids loading tiktoken at import time
+    Encoding = _lazy_import_and_cache(
+        "_tiktoken_encoding_type",
+        lambda: __import__("tiktoken", fromlist=["Encoding"]).Encoding
+    )
     if isinstance(tokenizer_json["tokenizer"], Encoding):
         enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
     else:
@@ -4302,7 +4434,7 @@ def _get_model_region(
     return litellm_params.region_name
 
 
-def _infer_model_region(litellm_params: LiteLLM_Params) -> Optional[AllowedModelRegion]:
+def _infer_model_region(litellm_params: LiteLLM_Params) -> Optional["AllowedModelRegion"]:
     """
     Infer if a model is in the EU or US region
 
@@ -5798,6 +5930,12 @@ def prompt_token_calculator(model, messages):
         anthropic_obj = Anthropic()
         num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
+        # Import encoding lazily and cache it to avoid repeated import overhead
+        # This avoids loading tiktoken at import time
+        encoding = _lazy_import_and_cache(
+            "_default_encoding",
+            lambda: __import__("litellm.litellm_core_utils.default_encoding", fromlist=["encoding"]).encoding
+        )
         num_tokens = len(encoding.encode(text))
     return num_tokens
 
@@ -5809,7 +5947,7 @@ def valid_model(model):
             model in litellm.open_ai_chat_completion_models
             or model in litellm.open_ai_text_completion_models
         ):
-            openai.models.retrieve(model)
+            _get_openai_module().models.retrieve(model)
         else:
             messages = [{"role": "user", "content": "Hello World"}]
             litellm.completion(model=model, messages=messages)
@@ -7489,7 +7627,7 @@ class ProviderConfigManager:
     def get_provider_files_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseFilesConfig]:
+    ) -> Optional["BaseFilesConfig"]:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.files.transformation import (
                 GoogleAIStudioFilesHandler,  # experimental approach, to reduce bloat on __init__.py

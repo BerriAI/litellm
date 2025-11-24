@@ -10,8 +10,8 @@ from typing import Any, Callable, Optional, Union
 import httpx
 
 import litellm
-from litellm import LlmProviders
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+from litellm.types.utils import LlmProviders
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig

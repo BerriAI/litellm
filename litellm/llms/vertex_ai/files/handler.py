@@ -4,7 +4,6 @@ from typing import Any, Coroutine, Optional, Tuple, Union
 
 import httpx
 
-from litellm import LlmProviders
 from litellm.integrations.gcs_bucket.gcs_bucket_base import (
     GCSBucketBase,
     GCSLoggingConfig,
@@ -17,6 +16,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
 )
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.utils import LlmProviders
 
 from .transformation import VertexAIJsonlFilesTransformation
 

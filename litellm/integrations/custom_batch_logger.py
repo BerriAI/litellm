@@ -10,6 +10,8 @@ from typing import List, Optional
 
 import litellm
 from litellm._logging import verbose_logger
+# Import CustomLogger lazily to break circular dependency:
+# custom_logger -> caching.caching -> gcs_cache -> gcs_bucket_base -> custom_batch_logger -> custom_logger
 from litellm.integrations.custom_logger import CustomLogger
 
 

@@ -21,20 +21,16 @@ from typing import (
     get_args,
     TYPE_CHECKING,
 )
-from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
-from litellm.types.integrations.datadog import DatadogInitParams
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
-from litellm.caching.llm_caching_handler import LLMClientCache
-from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
-from litellm.types.utils import (
-    ImageObject,
-    BudgetConfig,
-    all_litellm_params,
-    all_litellm_params as _litellm_completion_params,
-    CredentialItem,
-    PriorityReservationDict,
-)  # maintain backwards compatibility for root param.
+if TYPE_CHECKING:
+    from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
+    from litellm.types.integrations.datadog import DatadogInitParams
+    from litellm.types.prompts.init_prompts import PromptSpec
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry, VectorStoreIndexRegistry
+# HTTP handlers are lazy-loaded to reduce import-time memory cost
+# from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+# Caching classes are lazy-loaded to reduce import-time memory cost
+# from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
+
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -81,49 +77,180 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.integrations.dotprompt import (
-    global_prompt_manager,
-    global_prompt_directory,
-    set_global_prompt_directory,
-)
-from litellm.types.guardrails import GuardrailItem
-from litellm.types.secret_managers.main import (
-    KeyManagementSystem,
-    KeyManagementSettings,
-)
-from litellm.types.proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams,
-    LiteLLM_UpperboundKeyGenerateParams,
-)
-from litellm.types.utils import (
-    StandardKeyGenerationConfig,
-    LlmProviders,
-    SearchProviders,
-)
-from litellm.types.utils import PriorityReservationSettings
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
-import httpx
+# Note: LlmProviders and PriorityReservationSettings are lazy-loaded via __getattr__ to reduce import-time memory cost
+if TYPE_CHECKING:
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
+    from litellm.types.guardrails import GuardrailItem
+    from litellm.types.utils import CredentialItem, BudgetConfig, PriorityReservationDict, StandardKeyGenerationConfig, LlmProviders, PriorityReservationSettings
+    from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams, LiteLLM_UpperboundKeyGenerateParams
+    from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
+    from litellm.llms.openai_like.chat.handler import OpenAILikeChatConfig
+    from litellm.llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
+    from litellm.llms.galadriel.chat.transformation import GaladrielChatConfig
+    from litellm.llms.github.chat.transformation import GithubChatConfig
+    from litellm.llms.compactifai.chat.transformation import CompactifAIChatConfig
+    from litellm.llms.empower.chat.transformation import EmpowerChatConfig
+    from litellm.llms.featherless_ai.chat.transformation import FeatherlessAIConfig
+    from litellm.llms.cerebras.chat import CerebrasConfig
+    from litellm.llms.baseten.chat import BasetenConfig
+    from litellm.llms.sambanova.chat import SambanovaConfig
+    from litellm.llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
+    from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+    from litellm.llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
+    from litellm.llms.friendliai.chat.transformation import FriendliaiChatConfig
+    from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
+    from litellm.llms.xai.chat.transformation import XAIChatConfig
+    from litellm.llms.xai.common_utils import XAIModelInfo
+    from litellm.llms.aiml.chat.transformation import AIMLChatConfig
+    from litellm.llms.volcengine.chat.transformation import VolcEngineChatConfig
+    from litellm.llms.codestral.completion.transformation import CodestralTextCompletionConfig
+    from litellm.llms.azure.azure import AzureOpenAIError, AzureOpenAIAssistantsAPIConfig
+    from litellm.llms.heroku.chat.transformation import HerokuChatConfig
+    from litellm.llms.cometapi.chat.transformation import CometAPIConfig
+    from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+    from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+    from litellm.llms.azure.completion.transformation import AzureOpenAITextConfig
+    from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+    from litellm.llms.llamafile.chat.transformation import LlamafileChatConfig
+    from litellm.llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
+    from litellm.llms.vllm.completion.transformation import VLLMConfig
+    from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+    from litellm.llms.lm_studio.chat.transformation import LMStudioChatConfig
+    from litellm.llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
+    from litellm.llms.nscale.chat.transformation import NscaleConfig
+    from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
+    from litellm.llms.watsonx.completion.transformation import IBMWatsonXAIConfig
+    from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+    from litellm.llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+    from litellm.llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig
+    from litellm.llms.nebius.chat.transformation import NebiusConfig
+    from litellm.llms.wandb.chat.transformation import WandbConfig
+    from litellm.llms.dashscope.chat.transformation import DashScopeChatConfig
+    from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
+    from litellm.llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
+    from litellm.llms.v0.chat.transformation import V0ChatConfig
+    from litellm.llms.oci.chat.transformation import OCIChatConfig
+    from litellm.llms.morph.chat.transformation import MorphChatConfig
+    from litellm.llms.lambda_ai.chat.transformation import LambdaAIChatConfig
+    from litellm.llms.hyperbolic.chat.transformation import HyperbolicChatConfig
+    from litellm.llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
+    from litellm.llms.ovhcloud.chat.transformation import OVHCloudChatConfig
+    from litellm.llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
+    from litellm.llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
+    from litellm.llms.lemonade.chat.transformation import LemonadeChatConfig
+    from litellm.llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
+    from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
+    from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.databricks.chat.transformation import DatabricksConfig
+    from litellm.llms.predibase.chat.transformation import PredibaseConfig
+    from litellm.llms.replicate.chat.transformation import ReplicateConfig
+    from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
+    from litellm.llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
+    from litellm.llms.oobabooga.chat.transformation import OobaboogaConfig
+    from litellm.llms.maritalk import MaritalkConfig
+    from litellm.llms.datarobot.chat.transformation import DataRobotConfig
+    from litellm.llms.groq.stt.transformation import GroqSTTConfig
+    from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
+    from litellm.llms.triton.completion.transformation import TritonConfig
+    from litellm.llms.triton.embedding.transformation import TritonEmbeddingConfig
+    from litellm.llms.clarifai.chat.transformation import ClarifaiConfig
+    from litellm.llms.ai21.chat.transformation import AI21ChatConfig
+    from litellm.llms.meta_llama.chat.transformation import LlamaAPIConfig
+    from litellm.llms.together_ai.chat import TogetherAIConfig
+    from litellm.llms.cloudflare.chat.transformation import CloudflareChatConfig
+    from litellm.llms.novita.chat.transformation import NovitaConfig
+    from litellm.llms.nlp_cloud.chat.handler import NLPCloudConfig
+    from litellm.llms.petals.completion.transformation import PetalsConfig
+    from litellm.llms.ollama.chat.transformation import OllamaChatConfig
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
+    from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
+    from litellm.llms.cohere.chat.transformation import CohereChatConfig
+    from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
+    from litellm.llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
+    from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+    from litellm.llms.groq.chat.transformation import GroqChatConfig
+    from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+    from litellm.llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig
+    from litellm.llms.infinity.embedding.transformation import InfinityEmbeddingConfig
+    from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+    from litellm.llms.mistral.chat.transformation import MistralConfig
+    from litellm.llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
+    from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
+    from litellm.llms.cohere.rerank_v2.transformation import CohereRerankV2Config
+    from litellm.llms.azure_ai.rerank.transformation import AzureAIRerankConfig
+    from litellm.llms.infinity.rerank.transformation import InfinityRerankConfig
+    from litellm.llms.jina_ai.rerank.transformation import JinaAIRerankConfig
+    from litellm.llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
+    from litellm.llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
+    from litellm.llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
+    from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig
+    from litellm.llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import VertexAILlama3Config
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import VertexAIAi21Config
+    from litellm.llms.bedrock.chat.invoke_handler import AmazonCohereChatConfig
+    from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config
+    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.llms.deprecated_providers.palm import PalmConfig
+    from litellm.llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
+    from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+    from litellm.llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
+    from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
+    from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
+    from litellm.llms.gradient_ai.chat.transformation import GradientAIConfig
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+    from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+    from litellm.llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig
+    from litellm.llms.nvidia_nim.chat.transformation import NvidiaNimConfig
+# Note: httpx is lazy-loaded to reduce import-time memory cost
 import dotenv
-from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
+# Note: register_async_client_cleanup is lazy-loaded to reduce import-time memory cost
+# It will be called lazily when async functions are first accessed
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
 
-# Register async client cleanup to prevent resource leaks
-register_async_client_cleanup()
+# Lazy initialization flag for async client cleanup registration
+# The actual registration is handled in _lazy_imports._ensure_async_client_cleanup_registered()
+# and is called when async functions are first accessed
+_async_client_cleanup_registered: bool = False
 ####################################################
 if set_verbose:
     _turn_on_debug()
 ####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
-CALLBACK_TYPES = Union[str, Callable, CustomLogger]
+CALLBACK_TYPES = Union[str, Callable, "CustomLogger"]
 input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
-logging_callback_manager = LoggingCallbackManager()
+_logging_callback_manager_instance: Optional[Any] = None
+
+class _LazyLoggingCallbackManagerWrapper:
+    """Wrapper to lazy-load LoggingCallbackManager instance."""
+    def _get_instance(self) -> Any:
+        """Lazy initialization of logging_callback_manager."""
+        global _logging_callback_manager_instance
+        if _logging_callback_manager_instance is None:
+            from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
+            _logging_callback_manager_instance = LoggingCallbackManager()
+        return _logging_callback_manager_instance
+    
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get_instance(), name)
+
+logging_callback_manager: Any = _LazyLoggingCallbackManagerWrapper()
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -172,7 +299,7 @@ _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
 callbacks: List[
-    Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
+    Union[Callable, _custom_logger_compatible_callbacks_literal, "CustomLogger"]
 ] = []
 initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
@@ -188,13 +315,13 @@ generic_api_use_v1: Optional[bool] = (
     False  # if you want to use v1 generic api logged payload
 )
 argilla_transformation_object: Optional[Dict[str, Any]] = None
-_async_input_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_input_callback: List[Union[str, Callable, "CustomLogger"]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_success_callback: List[Union[str, Callable, "CustomLogger"]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
@@ -279,7 +406,22 @@ disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
-in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
+_in_memory_llm_clients_cache_instance: Optional[Any] = None
+
+class _LazyLLMClientCacheWrapper:
+    """Wrapper to lazy-load LLMClientCache instance."""
+    def _get_instance(self) -> Any:
+        """Lazy initialization of in_memory_llm_clients_cache."""
+        global _in_memory_llm_clients_cache_instance
+        if _in_memory_llm_clients_cache_instance is None:
+            from litellm.caching.llm_caching_handler import LLMClientCache
+            _in_memory_llm_clients_cache_instance = LLMClientCache()
+        return _in_memory_llm_clients_cache_instance
+    
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get_instance(), name)
+
+in_memory_llm_clients_cache: Any = _LazyLLMClientCacheWrapper()
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
@@ -287,9 +429,9 @@ AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the lates
 ### DEFAULT WATSONX API VERSION ###
 WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
-COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: COHERE_EMBEDDING_INPUT_TYPES = "search_document"
+COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: "COHERE_EMBEDDING_INPUT_TYPES" = "search_document"
 ### CREDENTIALS ###
-credential_list: List[CredentialItem] = []
+credential_list: List["CredentialItem"] = []
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -299,12 +441,12 @@ llamaguard_unsafe_content_categories: Optional[str] = None
 blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
-guardrail_name_config_map: Dict[str, GuardrailItem] = {}
+guardrail_name_config_map: Dict[str, "GuardrailItem"] = {}
 include_cost_in_streaming_usage: bool = False
 ### PROMPTS ####
-from litellm.types.prompts.init_prompts import PromptSpec
-
-prompt_name_config_map: Dict[str, PromptSpec] = {}
+# Note: PromptSpec is lazy-loaded to reduce import-time memory cost
+# Type annotation uses string to enable lazy loading
+prompt_name_config_map: Dict[str, "PromptSpec"] = {}
 
 ##################
 ### PREVIEW FEATURES ###
@@ -325,7 +467,7 @@ caching: bool = (
 caching_with_models: bool = (
     False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
-cache: Optional[Cache] = (
+cache: Optional["Cache"] = (  # type: ignore[name-defined]
     None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 )
 default_in_memory_ttl: Optional[float] = None
@@ -348,8 +490,9 @@ error_logs: Dict = {}
 add_function_to_prompt: bool = (
     False  # if function calling not supported by api, append function call details to system prompt
 )
-client_session: Optional[httpx.Client] = None
-aclient_session: Optional[httpx.AsyncClient] = None
+# Type annotations use strings to enable lazy loading of httpx
+client_session: Optional["httpx.Client"] = None
+aclient_session: Optional["httpx.AsyncClient"] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
@@ -358,22 +501,22 @@ model_cost_map_url: str = os.getenv(
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
-datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
-datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
+datadog_llm_observability_params: Optional[Union["DatadogLLMObsInitParams", Dict]] = None
+datadog_params: Optional[Union["DatadogInitParams", Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
-upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
-key_generation_settings: Optional[StandardKeyGenerationConfig] = None
+upperbound_key_generate_params: Optional["LiteLLM_UpperboundKeyGenerateParams"] = None
+key_generation_settings: Optional["StandardKeyGenerationConfig"] = None
 default_internal_user_params: Optional[Dict] = None
-default_team_params: Optional[Union[DefaultTeamSSOParams, Dict]] = None
+default_team_params: Optional[Union["DefaultTeamSSOParams", Dict]] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
 max_ui_session_budget: Optional[float] = 10  # $10 USD budgets for UI Chat sessions
 internal_user_budget_duration: Optional[str] = None
-tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
+tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
 disable_end_user_cost_tracking: Optional[bool] = None
@@ -393,10 +536,7 @@ public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #######
-priority_reservation: Optional[Dict[str, Union[float, PriorityReservationDict]]] = None
-priority_reservation_settings: "PriorityReservationSettings" = (
-    PriorityReservationSettings()
-)
+priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 
 
 ######## Networking Settings ########
@@ -411,10 +551,8 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
-module_level_aclient = AsyncHTTPHandler(
-    timeout=request_timeout, client_alias="module level aclient"
-)
-module_level_client = HTTPHandler(timeout=request_timeout)
+# module_level_aclient and module_level_client are lazy-loaded to reduce import-time memory cost
+# They are created on first access via __getattr__
 
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
@@ -433,14 +571,27 @@ secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 )
 _google_kms_resource_name: Optional[str] = None
-_key_management_system: Optional[KeyManagementSystem] = None
-_key_management_settings: KeyManagementSettings = KeyManagementSettings()
+_key_management_system: Optional["KeyManagementSystem"] = None
+# KeyManagementSettings is lazy-loaded via __getattr__ to reduce import-time memory cost
+# _key_management_settings is initialized lazily to avoid import-time dependencies
+def _get_key_management_settings():
+    """Lazy initialization of _key_management_settings to avoid import-time dependencies."""
+    global _key_management_settings
+    if _key_management_settings is None:
+        from ._lazy_imports import _lazy_import_secret_managers
+        KeyManagementSettings = _lazy_import_secret_managers("KeyManagementSettings")
+        _key_management_settings = KeyManagementSettings()
+    return _key_management_settings
+
+_key_management_settings: Optional["KeyManagementSettings"] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+# model_cost is lazy-loaded to reduce import-time memory cost
+# It will be loaded on first access via __getattr__
+_model_cost_cached: Optional[Dict[str, Any]] = None
+_models_initialized: bool = False
 
-model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = (
     {}
 )  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -599,8 +750,22 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
+def _get_model_cost() -> Dict[str, Any]:
+    """
+    Get cached model_cost with lazy loading.
+    This ensures model_cost is loaded only when needed.
+    """
+    global _model_cost_cached
+    if _model_cost_cached is None:
+        from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+        _model_cost_cached = get_model_cost_map(url=model_cost_map_url)
+    return _model_cost_cached
+
+
 def add_known_models():
-    for key, value in model_cost.items():
+    # Use cached model_cost to ensure it's loaded
+    _model_cost = _get_model_cost()
+    for key, value in _model_cost.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
             key
         ):
@@ -802,7 +967,7 @@ def add_known_models():
             docker_model_runner_models.add(key)
 
 
-add_known_models()
+# add_known_models() is now lazy-loaded - called when model_cost is first accessed
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 
 # this is maintained for Exception Mapping
@@ -909,7 +1074,6 @@ model_list = list(
 
 model_list_set = set(model_list)
 
-provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
 
 
 models_by_provider: dict = {
@@ -1038,335 +1202,39 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 ####### VIDEO GENERATION MODELS ###################
 openai_video_generation_models = ["sora-2"]
 
-from .timeout import timeout
-from .cost_calculator import completion_cost
-from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
-from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
-from .utils import (
-    client,
-    exception_type,
-    get_optional_params,
-    get_response_string,
-    token_counter,
-    create_pretrained_tokenizer,
-    create_tokenizer,
-    supports_function_calling,
-    supports_web_search,
-    supports_url_context,
-    supports_response_schema,
-    supports_parallel_function_calling,
-    supports_vision,
-    supports_audio_input,
-    supports_audio_output,
-    supports_system_messages,
-    supports_reasoning,
-    get_litellm_params,
-    acreate,
-    get_max_tokens,
-    get_model_info,
-    register_prompt_template,
-    validate_environment,
-    check_valid_key,
-    register_model,
-    encode,
-    decode,
-    _calculate_retry_after,
-    _should_retry,
-    get_supported_openai_params,
-    get_api_base,
-    get_first_chars_messages,
-    ModelResponse,
-    ModelResponseStream,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-    get_provider_fields,
-    ModelResponseListIterator,
-    get_valid_models,
-)
-
-ALL_LITELLM_RESPONSE_TYPES = [
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-]
-
-from .llms.bytez.chat.transformation import BytezChatConfig
-from .llms.custom_llm import CustomLLM
-from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-from .llms.openai_like.chat.handler import OpenAILikeChatConfig
-from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
-from .llms.galadriel.chat.transformation import GaladrielChatConfig
-from .llms.github.chat.transformation import GithubChatConfig
-from .llms.compactifai.chat.transformation import CompactifAIChatConfig
-from .llms.empower.chat.transformation import EmpowerChatConfig
-from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
-from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
-from .llms.oobabooga.chat.transformation import OobaboogaConfig
-from .llms.maritalk import MaritalkConfig
-from .llms.openrouter.chat.transformation import OpenrouterConfig
-from .llms.datarobot.chat.transformation import DataRobotConfig
-from .llms.anthropic.chat.transformation import AnthropicConfig
-from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.groq.stt.transformation import GroqSTTConfig
-from .llms.anthropic.completion.transformation import AnthropicTextConfig
-from .llms.triton.completion.transformation import TritonConfig
-from .llms.triton.completion.transformation import TritonGenerateConfig
-from .llms.triton.completion.transformation import TritonInferConfig
-from .llms.triton.embedding.transformation import TritonEmbeddingConfig
-from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
-from .llms.databricks.chat.transformation import DatabricksConfig
-from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
-from .llms.predibase.chat.transformation import PredibaseConfig
-from .llms.replicate.chat.transformation import ReplicateConfig
-from .llms.snowflake.chat.transformation import SnowflakeConfig
-from .llms.cohere.rerank.transformation import CohereRerankConfig
-from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
-from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
-from .llms.infinity.rerank.transformation import InfinityRerankConfig
-from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
-from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
-from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
-from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
-from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
-from .llms.clarifai.chat.transformation import ClarifaiConfig
-from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
-from .llms.meta_llama.chat.transformation import LlamaAPIConfig
-from .llms.anthropic.experimental_pass_through.messages.transformation import (
-    AnthropicMessagesConfig,
-)
-from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeMessagesConfig,
-)
-from .llms.together_ai.chat import TogetherAIConfig
-from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
-from .llms.cloudflare.chat.transformation import CloudflareChatConfig
-from .llms.novita.chat.transformation import NovitaConfig
-from .llms.deprecated_providers.palm import (
-    PalmConfig,
-)  # here to prevent breaking changes
-from .llms.nlp_cloud.chat.handler import NLPCloudConfig
-from .llms.petals.completion.transformation import PetalsConfig
-from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
-from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexGeminiConfig,
-    VertexGeminiConfig as VertexAIConfig,
-)
-from .llms.gemini.common_utils import GeminiModelInfo
-from .llms.gemini.chat.transformation import (
-    GoogleAIStudioGeminiConfig,
-    GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
-)
+# Note: timeout is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: get_llm_provider is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: remove_index_from_tool_calls is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
+# (which imports tiktoken) at import time
+# Note: TritonGenerateConfig and TritonInferConfig are lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: GeminiModelInfo is lazy-loaded via __getattr__ to reduce import-time memory cost
 
 
-from .llms.vertex_ai.vertex_embeddings.transformation import (
-    VertexAITextEmbeddingConfig,
-)
-
-vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
-
-from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
-    VertexAIAnthropicConfig,
-)
-from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
-    VertexAILlama3Config,
-)
-from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
-    VertexAIAi21Config,
-)
-from .llms.ollama.chat.transformation import OllamaChatConfig
-from .llms.ollama.completion.transformation import OllamaConfig
-from .llms.sagemaker.completion.transformation import SagemakerConfig
-from .llms.sagemaker.chat.transformation import SagemakerChatConfig
-from .llms.bedrock.chat.invoke_handler import (
-    AmazonCohereChatConfig,
-    bedrock_tool_name_mappings,
-)
-
-from .llms.bedrock.common_utils import (
-    AmazonBedrockGlobalConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import (
-    AmazonAI21Config,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
-    AmazonInvokeNovaConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
-    AmazonQwen3Config,
-)
-from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
-    AmazonAnthropicConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
-    AmazonCohereConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import (
-    AmazonLlamaConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import (
-    AmazonDeepSeekR1Config,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import (
-    AmazonMistralConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import (
-    AmazonTitanConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
-    AmazonInvokeConfig,
-)
-
-from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
-from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
-from .llms.bedrock.image.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
-from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
-from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
-    AmazonTitanMultimodalEmbeddingG1Config,
-)
-from .llms.bedrock.embed.amazon_titan_v2_transformation import (
-    AmazonTitanV2Config,
-)
-from .llms.cohere.chat.transformation import CohereChatConfig
-from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig
-from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
-from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
-    TwelveLabsMarengoEmbeddingConfig,
-)
-from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
-from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
-from .llms.deepinfra.chat.transformation import DeepInfraConfig
-from .llms.deepgram.audio_transcription.transformation import (
-    DeepgramAudioTranscriptionConfig,
-)
-from .llms.topaz.common_utils import TopazModelInfo
-from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
-from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
-from .llms.groq.chat.transformation import GroqChatConfig
-from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
-from .llms.voyage.embedding.transformation_contextual import (
-    VoyageContextualEmbeddingConfig,
-)
-from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
-from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
-from .llms.mistral.chat.transformation import MistralConfig
-from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
-from .llms.azure.responses.o_series_transformation import (
-    AzureOpenAIOSeriesResponsesAPIConfig,
-)
-from .llms.xai.responses.transformation import XAIResponsesAPIConfig
-from .llms.litellm_proxy.responses.transformation import (
-    LiteLLMProxyResponsesAPIConfig,
-)
-from .llms.openai.chat.o_series_transformation import (
-    OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
-    OpenAIOSeriesConfig,
-)
-
-from .llms.gradient_ai.chat.transformation import GradientAIConfig
-
-openaiOSeriesConfig = OpenAIOSeriesConfig()
-from .llms.openai.chat.gpt_transformation import (
-    OpenAIGPTConfig,
-)
-from .llms.openai.chat.gpt_5_transformation import (
-    OpenAIGPT5Config,
-)
-from .llms.openai.transcriptions.whisper_transformation import (
-    OpenAIWhisperAudioTranscriptionConfig,
-)
-from .llms.openai.transcriptions.gpt_transformation import (
-    OpenAIGPTAudioTranscriptionConfig,
-)
-
-openAIGPTConfig = OpenAIGPTConfig()
-from .llms.openai.chat.gpt_audio_transformation import (
-    OpenAIGPTAudioConfig,
-)
-
-openAIGPTAudioConfig = OpenAIGPTAudioConfig()
-openAIGPT5Config = OpenAIGPT5Config()
-
-from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
-from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
-
-nvidiaNimConfig = NvidiaNimConfig()
-nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
-
-from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
-from .llms.cerebras.chat import CerebrasConfig
-from .llms.baseten.chat import BasetenConfig
-from .llms.sambanova.chat import SambanovaConfig
-from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
-from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
-from .llms.fireworks_ai.audio_transcription.transformation import (
-    FireworksAIAudioTranscriptionConfig,
-)
-from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
-    FireworksAIEmbeddingConfig,
-)
-from .llms.friendliai.chat.transformation import FriendliaiChatConfig
-from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
-from .llms.xai.chat.transformation import XAIChatConfig
-from .llms.xai.common_utils import XAIModelInfo
-from .llms.aiml.chat.transformation import AIMLChatConfig
-from .llms.volcengine.chat.transformation import (
-    VolcEngineChatConfig as VolcEngineConfig,
-)
-from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
-from .llms.azure.azure import (
-    AzureOpenAIError,
-    AzureOpenAIAssistantsAPIConfig,
-)
-from .llms.heroku.chat.transformation import HerokuChatConfig
-from .llms.cometapi.chat.transformation import CometAPIConfig
-from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
-from .llms.azure.completion.transformation import AzureOpenAITextConfig
-from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
-from .llms.llamafile.chat.transformation import LlamafileChatConfig
-from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
-from .llms.vllm.completion.transformation import VLLMConfig
-from .llms.deepseek.chat.transformation import DeepSeekChatConfig
-from .llms.lm_studio.chat.transformation import LMStudioChatConfig
-from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
-from .llms.nscale.chat.transformation import NscaleConfig
-from .llms.perplexity.chat.transformation import PerplexityChatConfig
-from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
-from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
-from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
-from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
-from .llms.github_copilot.chat.transformation import GithubCopilotConfig
-from .llms.github_copilot.responses.transformation import (
-    GithubCopilotResponsesAPIConfig,
-)
-from .llms.nebius.chat.transformation import NebiusConfig
-from .llms.wandb.chat.transformation import WandbConfig
-from .llms.dashscope.chat.transformation import DashScopeChatConfig
-from .llms.moonshot.chat.transformation import MoonshotChatConfig
-from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
-from .llms.v0.chat.transformation import V0ChatConfig
-from .llms.oci.chat.transformation import OCIChatConfig
-from .llms.morph.chat.transformation import MorphChatConfig
-from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
-from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
-from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
-from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
-from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
-from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
-from .llms.lemonade.chat.transformation import LemonadeChatConfig
-from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
-from .main import *  # type: ignore
+# Note: VertexAITextEmbeddingConfig and vertexAITextEmbeddingConfig are lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: TwelveLabsMarengoEmbeddingConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: OpenAIImageVariationConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: DeepgramAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: TopazModelInfo is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: TopazImageVariationConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: OpenAIResponsesAPIConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: XAIResponsesAPIConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: LiteLLMProxyResponsesAPIConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: OpenAIWhisperAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: OpenAIGPTAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: NvidiaNimEmbeddingConfig and nvidiaNimEmbeddingConfig are lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: FireworksAIAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+# Note: FireworksAIEmbeddingConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
+from .utils import client
+# main module functions are lazy-loaded to reduce import-time memory cost
+# from .main import *  # type: ignore
+# However, get_secret functions must be imported directly as they're used during module initialization
+from .secret_managers.main import get_secret, get_secret_str, get_secret_bool
+# ModelResponse, token_counter, print_verbose, and CustomStreamWrapper must be imported directly
+# as they're used during module initialization or in type annotations
+from .types.utils import ModelResponse
+from .utils import token_counter, print_verbose
+from .litellm_core_utils.streaming_handler import CustomStreamWrapper
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
@@ -1395,52 +1263,70 @@ from .exceptions import (
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
-from .router import Router
-from .assistants.main import *
-from .batches.main import *
-from .images.main import *
-from .videos.main import *
-from .batch_completion.main import *  # type: ignore
-from .rerank_api.main import *
-from .llms.anthropic.experimental_pass_through.messages.handler import *
-from .responses.main import *
-from .containers.main import *
-from .ocr.main import *
-from .search.main import *
-from .realtime_api.main import _arealtime
-from .fine_tuning.main import *
-from .files.main import *
-from .vector_store_files.main import (
-    acreate as avector_store_file_create,
-    adelete as avector_store_file_delete,
-    alist as avector_store_file_list,
-    aretrieve as avector_store_file_retrieve,
-    aretrieve_content as avector_store_file_content,
-    aupdate as avector_store_file_update,
-    create as vector_store_file_create,
-    delete as vector_store_file_delete,
-    list as vector_store_file_list,
-    retrieve as vector_store_file_retrieve,
-    retrieve_content as vector_store_file_content,
-    update as vector_store_file_update,
-)
+# Note: Router is lazy-loaded via __getattr__ to reduce import-time memory cost
+# assistants.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .assistants.main import *
+# batches.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .batches.main import *
+# Note: images.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .images.main import *
+# Note: videos.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .videos.main import *
+# Note: batch_completion.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .batch_completion.main import *  # type: ignore
+# Note: rerank_api.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .rerank_api.main import *
+# Note: anthropic experimental_pass_through.messages.handler is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .llms.anthropic.experimental_pass_through.messages.handler import *
+# Note: responses.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .responses.main import *
+# Note: containers.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .containers.main import *
+# Note: ocr.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .ocr.main import *
+# Note: search.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .search.main import *
+# Note: _arealtime is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .realtime_api.main import _arealtime
+# Note: fine_tuning.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .fine_tuning.main import *
+# Note: files.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .files.main import *
+# Note: vector_store_files.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .vector_store_files.main import (
+#     acreate as avector_store_file_create,
+#     adelete as avector_store_file_delete,
+#     alist as avector_store_file_list,
+#     aretrieve as avector_store_file_retrieve,
+#     aretrieve_content as avector_store_file_content,
+#     aupdate as avector_store_file_update,
+#     create as vector_store_file_create,
+#     delete as vector_store_file_delete,
+#     list as vector_store_file_list,
+#     retrieve as vector_store_file_retrieve,
+#     retrieve_content as vector_store_file_content,
+#     update as vector_store_file_update,
+# )
 from .scheduler import *
-from .cost_calculator import response_cost_calculator, cost_per_token
+# Note: response_cost_calculator and cost_per_token are imported lazily via __getattr__ 
+# to avoid loading cost_calculator.py at import time
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
-import litellm.anthropic_interface as anthropic
+# Note: anthropic_interface is lazy-loaded via __getattr__ to reduce import-time memory cost
+# import litellm.anthropic_interface as anthropic
 
 adapters: List[AdapterItem] = []
 
 ### Vector Store Registry ###
-from .vector_stores.vector_store_registry import (
-    VectorStoreRegistry,
-    VectorStoreIndexRegistry,
-)
+# Note: VectorStoreRegistry and VectorStoreIndexRegistry are lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .vector_stores.vector_store_registry import (
+#     VectorStoreRegistry,
+#     VectorStoreIndexRegistry,
+# )
 
-vector_store_registry: Optional[VectorStoreRegistry] = None
-vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
+vector_store_registry: Optional["VectorStoreRegistry"] = None
+vector_store_index_registry: Optional["VectorStoreIndexRegistry"] = None
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
@@ -1459,8 +1345,10 @@ global_disable_no_log_param: bool = False
 from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
 
 ### PASSTHROUGH ###
-from .passthrough import allm_passthrough_route, llm_passthrough_route
-from .google_genai import agenerate_content
+# Note: passthrough functions are lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .passthrough import allm_passthrough_route, llm_passthrough_route
+# Note: agenerate_content is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .google_genai import agenerate_content
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Dict[str, Any]] = None
@@ -1480,3 +1368,788 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_gitlab_config
     global_gitlab_config = config
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import for cost_calculator, litellm_logging, and utils functions."""
+    if name == "model_cost":
+        global _models_initialized
+        _model_cost = _get_model_cost()
+        # Initialize model lists on first access to model_cost (only once)
+        if not _models_initialized:
+            add_known_models()
+            _models_initialized = True
+        globals()["model_cost"] = _model_cost
+        return _model_cost
+    
+    # Lazy load timeout decorator to reduce import-time memory cost
+    if name == "timeout":
+        from .timeout import timeout as _timeout
+        globals()["timeout"] = _timeout
+        return _timeout
+    
+    if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
+        from ._lazy_imports import _lazy_import_cost_calculator
+        return _lazy_import_cost_calculator(name)
+    
+    if name in {"Logging", "modify_integration"}:
+        from ._lazy_imports import _lazy_import_litellm_logging
+        return _lazy_import_litellm_logging(name)
+    
+    # Lazy load utils functions
+    _utils_names = {
+        "exception_type", "get_optional_params", "get_response_string", "token_counter",
+        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+        "supports_web_search", "supports_url_context", "supports_response_schema",
+        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+        "supports_audio_output", "supports_system_messages", "supports_reasoning",
+        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+        "register_prompt_template", "validate_environment", "check_valid_key",
+        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+        "ModelResponseListIterator", "get_valid_models",
+    }
+    if name in _utils_names:
+        from ._lazy_imports import _lazy_import_utils
+        return _lazy_import_utils(name)
+    
+    # Lazy-load encoding to avoid loading tiktoken at import time
+    if name == "encoding":
+        from litellm.litellm_core_utils.default_encoding import encoding as _encoding
+        globals()["encoding"] = _encoding
+        return _encoding
+    
+    # Lazy-load get_llm_provider to reduce import-time memory cost
+    if name == "get_llm_provider":
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider as _get_llm_provider
+        globals()["get_llm_provider"] = _get_llm_provider
+        return _get_llm_provider
+    
+    # Lazy-load HTTP handlers to reduce import-time memory cost
+    if name in {"module_level_aclient", "module_level_client", "AsyncHTTPHandler", "HTTPHandler"}:
+        from ._lazy_imports import _lazy_import_http_handlers
+        return _lazy_import_http_handlers(name)
+    
+    # Lazy-load caching classes to reduce import-time memory cost
+    if name in {"Cache", "DualCache", "RedisCache", "InMemoryCache", "LLMClientCache"}:
+        from ._lazy_imports import _lazy_import_caching
+        return _lazy_import_caching(name)
+    
+    # Lazy-load types.utils to reduce import-time memory cost
+    _types_utils_names = {
+        "ImageObject", "BudgetConfig", "all_litellm_params", "_litellm_completion_params",
+        "CredentialItem", "PriorityReservationDict", "StandardKeyGenerationConfig",
+        "LlmProviders", "SearchProviders", "PriorityReservationSettings",
+    }
+    if name in _types_utils_names:
+        from ._lazy_imports import _lazy_import_types_utils
+        return _lazy_import_types_utils(name)
+    
+    if name in {"DefaultTeamSSOParams", "LiteLLM_UpperboundKeyGenerateParams"}:
+        from ._lazy_imports import _lazy_import_ui_sso
+        return _lazy_import_ui_sso(name)
+    
+    if name == "KeyManagementSystem" or name == "KeyManagementSettings":
+        from ._lazy_imports import _lazy_import_secret_managers
+        return _lazy_import_secret_managers(name)
+    
+    # Lazy load httpx to reduce import-time memory cost
+    if name == "httpx":
+        import httpx as _httpx
+        globals()["httpx"] = _httpx
+        return _httpx
+    
+    # Lazy load PromptSpec to reduce import-time memory cost
+    if name == "PromptSpec":
+        from .types.prompts.init_prompts import PromptSpec as _PromptSpec
+        globals()["PromptSpec"] = _PromptSpec
+        return _PromptSpec
+    
+    # Lazy load Router to reduce import-time memory cost
+    if name == "Router":
+        from .router import Router as _Router
+        globals()["Router"] = _Router
+        return _Router
+    
+    # Lazy load image functions to reduce import-time memory cost
+    _image_functions = {
+        "image_generation", "aimage_generation",
+        "image_variation", "aimage_variation",
+        "image_edit", "aimage_edit",
+    }
+    if name in _image_functions:
+        from .images import main as _images_main
+        _func = getattr(_images_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load video functions to reduce import-time memory cost
+    _video_functions = {
+        "video_generation", "avideo_generation",
+        "video_content", "avideo_content",
+        "video_list", "avideo_list",
+        "video_status", "avideo_status",
+        "video_remix", "avideo_remix",
+    }
+    if name in _video_functions:
+        from .videos import main as _videos_main
+        _func = getattr(_videos_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load rerank functions to reduce import-time memory cost
+    _rerank_functions = {
+        "rerank", "arerank",
+    }
+    if name in _rerank_functions:
+        from .rerank_api import main as _rerank_main
+        _func = getattr(_rerank_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load anthropic experimental pass-through functions to reduce import-time memory cost
+    _anthropic_experimental_functions = {
+        "anthropic_messages", "anthropic_messages_handler", "validate_anthropic_api_metadata",
+    }
+    if name in _anthropic_experimental_functions:
+        from .llms.anthropic.experimental_pass_through.messages import handler as _anthropic_handler
+        _func = getattr(_anthropic_handler, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load responses functions to reduce import-time memory cost
+    _responses_functions = {
+        "responses", "aresponses",
+        "delete_responses", "adelete_responses",
+        "get_responses", "aget_responses",
+        "list_input_items", "alist_input_items",
+        "cancel_responses", "acancel_responses",
+        "aresponses_api_with_mcp", "mock_responses_api_response",
+    }
+    if name in _responses_functions:
+        from .responses import main as _responses_main
+        _func = getattr(_responses_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load container functions to reduce import-time memory cost
+    _container_functions = {
+        "create_container", "acreate_container",
+        "delete_container", "adelete_container",
+        "list_containers", "alist_containers",
+        "retrieve_container", "aretrieve_container",
+    }
+    if name in _container_functions:
+        from .containers import main as _containers_main
+        _func = getattr(_containers_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load OCR functions to reduce import-time memory cost
+    _ocr_functions = {
+        "ocr", "aocr",
+    }
+    if name in _ocr_functions:
+        from .ocr import main as _ocr_main
+        _func = getattr(_ocr_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load search functions to reduce import-time memory cost
+    _search_functions = {
+        "search", "asearch",
+    }
+    if name in _search_functions:
+        from .search import main as _search_main
+        _func = getattr(_search_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load _arealtime to reduce import-time memory cost
+    if name == "_arealtime":
+        from .realtime_api import main as _realtime_main
+        _func = getattr(_realtime_main, "_arealtime")
+        globals()["_arealtime"] = _func
+        return _func
+    
+    # Lazy load fine-tuning functions to reduce import-time memory cost
+    _fine_tuning_functions = {
+        "create_fine_tuning_job", "acreate_fine_tuning_job",
+        "cancel_fine_tuning_job", "acancel_fine_tuning_job",
+        "list_fine_tuning_jobs", "alist_fine_tuning_jobs",
+        "retrieve_fine_tuning_job", "aretrieve_fine_tuning_job",
+    }
+    if name in _fine_tuning_functions:
+        from .fine_tuning import main as _fine_tuning_main
+        _func = getattr(_fine_tuning_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load files functions to reduce import-time memory cost
+    _files_functions = {
+        "create_file", "acreate_file",
+        "file_retrieve", "afile_retrieve",
+        "file_delete", "afile_delete",
+        "file_list", "afile_list",
+        "file_content", "afile_content",
+    }
+    if name in _files_functions:
+        from .files import main as _files_main
+        _func = getattr(_files_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load batch_completion functions to reduce import-time memory cost
+    _batch_completion_functions = {
+        "batch_completion", "batch_completion_models", "batch_completion_models_all_responses",
+    }
+    if name in _batch_completion_functions:
+        from .batch_completion import main as _batch_completion_main
+        _func = getattr(_batch_completion_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load vector_store_files functions to reduce import-time memory cost
+    _vector_store_files_mapping = {
+        "avector_store_file_create": "acreate",
+        "avector_store_file_delete": "adelete",
+        "avector_store_file_list": "alist",
+        "avector_store_file_retrieve": "aretrieve",
+        "avector_store_file_content": "aretrieve_content",
+        "avector_store_file_update": "aupdate",
+        "vector_store_file_create": "create",
+        "vector_store_file_delete": "delete",
+        "vector_store_file_list": "list",
+        "vector_store_file_retrieve": "retrieve",
+        "vector_store_file_content": "retrieve_content",
+        "vector_store_file_update": "update",
+    }
+    if name in _vector_store_files_mapping:
+        from .vector_store_files import main as _vector_store_files_main
+        _original_name = _vector_store_files_mapping[name]
+        _func = getattr(_vector_store_files_main, _original_name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load anthropic module to reduce import-time memory cost
+    if name == "anthropic":
+        from . import anthropic_interface as _anthropic_module
+        globals()["anthropic"] = _anthropic_module
+        return _anthropic_module
+    
+    # Lazy load VectorStoreRegistry to reduce import-time memory cost
+    if name == "VectorStoreRegistry":
+        from .vector_stores.vector_store_registry import VectorStoreRegistry as _VectorStoreRegistry
+        globals()["VectorStoreRegistry"] = _VectorStoreRegistry
+        return _VectorStoreRegistry
+    
+    # Lazy load VectorStoreIndexRegistry to reduce import-time memory cost
+    if name == "VectorStoreIndexRegistry":
+        from .vector_stores.vector_store_registry import VectorStoreIndexRegistry as _VectorStoreIndexRegistry
+        globals()["VectorStoreIndexRegistry"] = _VectorStoreIndexRegistry
+        return _VectorStoreIndexRegistry
+    
+    # Lazy load passthrough functions to reduce import-time memory cost
+    _passthrough_functions = {
+        "allm_passthrough_route", "llm_passthrough_route",
+    }
+    if name in _passthrough_functions:
+        from .passthrough import main as _passthrough_main
+        _func = getattr(_passthrough_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load agenerate_content to reduce import-time memory cost
+    if name == "agenerate_content":
+        from .google_genai import agenerate_content as _agenerate_content
+        globals()["agenerate_content"] = _agenerate_content
+        return _agenerate_content
+    
+    # Lazy load CreateFileRequest to reduce import-time memory cost
+    if name == "CreateFileRequest":
+        from .types.llms.openai import CreateFileRequest as _CreateFileRequest
+        globals()["CreateFileRequest"] = _CreateFileRequest
+        return _CreateFileRequest
+    
+    if name == "provider_list":
+        from ._lazy_imports import _lazy_import_types_utils
+        LlmProviders = _lazy_import_types_utils("LlmProviders")
+        provider_list_val = list(LlmProviders)
+        globals()["provider_list"] = provider_list_val
+        return provider_list_val
+    
+    if name == "priority_reservation_settings":
+        from ._lazy_imports import _lazy_import_types_utils
+        PriorityReservationSettings = _lazy_import_types_utils("PriorityReservationSettings")
+        prs_val = PriorityReservationSettings()
+        globals()["priority_reservation_settings"] = prs_val
+        return prs_val
+    
+    # Lazy-load logging integrations to avoid circular imports
+    if name in {"CustomLogger", "LoggingCallbackManager"}:
+        from ._lazy_imports import _lazy_import_logging_integrations
+        return _lazy_import_logging_integrations(name)
+    
+    # Lazy-load dotprompt imports to avoid circular imports
+    if name in {"global_prompt_manager", "global_prompt_directory", "set_global_prompt_directory"}:
+        from ._lazy_imports import _lazy_import_dotprompt
+        return _lazy_import_dotprompt(name)
+    
+    # Lazy-load type-related items to reduce import-time memory cost
+    if name in {"COHERE_EMBEDDING_INPUT_TYPES", "GuardrailItem"}:
+        from ._lazy_imports import _lazy_import_type_items
+        return _lazy_import_type_items(name)
+    
+    # Lazy-load core helpers to reduce import-time memory cost
+    if name == "remove_index_from_tool_calls":
+        from ._lazy_imports import _lazy_import_core_helpers
+        return _lazy_import_core_helpers(name)
+    
+    # Lazy-load BytezChatConfig to reduce import-time memory cost
+    if name == "BytezChatConfig":
+        from .llms.bytez.chat.transformation import BytezChatConfig as _BytezChatConfig
+        globals()["BytezChatConfig"] = _BytezChatConfig
+        return _BytezChatConfig
+    
+    # Lazy-load CustomLLM to reduce import-time memory cost
+    if name == "CustomLLM":
+        from .llms.custom_llm import CustomLLM as _CustomLLM
+        globals()["CustomLLM"] = _CustomLLM
+        return _CustomLLM
+    
+    # Lazy-load AmazonConverseConfig to reduce import-time memory cost
+    if name == "AmazonConverseConfig":
+        from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig as _AmazonConverseConfig
+        globals()["AmazonConverseConfig"] = _AmazonConverseConfig
+        return _AmazonConverseConfig
+    
+    # Lazy-load OpenAI-like configs to reduce import-time memory cost
+    if name in {"OpenAILikeChatConfig", "AiohttpOpenAIChatConfig"}:
+        from ._lazy_imports import _lazy_import_openai_like_configs
+        return _lazy_import_openai_like_configs(name)
+    
+    # Lazy-load small provider chat configs to reduce import-time memory cost
+    if name in {"GaladrielChatConfig", "GithubChatConfig", "CompactifAIChatConfig", "EmpowerChatConfig", "FeatherlessAIConfig", "CerebrasConfig", "BasetenConfig", "SambanovaConfig", "FireworksAIConfig", "FriendliaiChatConfig", "XAIChatConfig", "AIMLChatConfig", "VolcEngineConfig", "VolcEngineChatConfig", "HerokuChatConfig", "CometAPIConfig", "HostedVLLMChatConfig", "LlamafileChatConfig", "LiteLLMProxyChatConfig", "DeepSeekChatConfig", "LMStudioChatConfig", "NscaleConfig", "PerplexityChatConfig", "IBMWatsonXChatConfig", "GithubCopilotConfig", "NebiusConfig", "WandbConfig", "DashScopeChatConfig", "MoonshotChatConfig", "DockerModelRunnerChatConfig", "V0ChatConfig", "OCIChatConfig", "MorphChatConfig", "LambdaAIChatConfig", "HyperbolicChatConfig", "VercelAIGatewayConfig", "OVHCloudChatConfig", "LemonadeChatConfig"}:
+        from ._lazy_imports import _lazy_import_small_provider_chat_configs
+        return _lazy_import_small_provider_chat_configs(name)
+    
+    # Lazy-load HuggingFace configs to reduce import-time memory cost
+    if name in {"HuggingFaceChatConfig", "HuggingFaceEmbeddingConfig"}:
+        from ._lazy_imports import _lazy_import_huggingface_configs
+        return _lazy_import_huggingface_configs(name)
+    
+    # Lazy-load OpenrouterConfig to reduce import-time memory cost
+    if name == "OpenrouterConfig":
+        from .llms.openrouter.chat.transformation import OpenrouterConfig as _OpenrouterConfig
+        globals()["OpenrouterConfig"] = _OpenrouterConfig
+        return _OpenrouterConfig
+    
+    # Lazy-load Anthropic configs to reduce import-time memory cost
+    if name in {"AnthropicConfig", "AnthropicTextConfig", "AnthropicMessagesConfig"}:
+        from ._lazy_imports import _lazy_import_anthropic_configs
+        return _lazy_import_anthropic_configs(name)
+    
+    # Lazy-load data platform configs to reduce import-time memory cost
+    if name in {"DatabricksConfig", "PredibaseConfig", "SnowflakeConfig"}:
+        from ._lazy_imports import _lazy_import_data_platform_configs
+        return _lazy_import_data_platform_configs(name)
+    
+    # Lazy-load ReplicateConfig to reduce import-time memory cost
+    if name == "ReplicateConfig":
+        from .llms.replicate.chat.transformation import ReplicateConfig as _ReplicateConfig
+        globals()["ReplicateConfig"] = _ReplicateConfig
+        return _ReplicateConfig
+    
+    # Lazy-load OobaboogaConfig to reduce import-time memory cost
+    if name == "OobaboogaConfig":
+        from .llms.oobabooga.chat.transformation import OobaboogaConfig as _OobaboogaConfig
+        globals()["OobaboogaConfig"] = _OobaboogaConfig
+        return _OobaboogaConfig
+    
+    # Lazy-load MaritalkConfig to reduce import-time memory cost
+    if name == "MaritalkConfig":
+        from .llms.maritalk import MaritalkConfig as _MaritalkConfig
+        globals()["MaritalkConfig"] = _MaritalkConfig
+        return _MaritalkConfig
+    
+    # Lazy-load DataRobotConfig to reduce import-time memory cost
+    if name == "DataRobotConfig":
+        from .llms.datarobot.chat.transformation import DataRobotConfig as _DataRobotConfig
+        globals()["DataRobotConfig"] = _DataRobotConfig
+        return _DataRobotConfig
+    
+    # Lazy-load GroqSTTConfig to reduce import-time memory cost
+    if name == "GroqSTTConfig":
+        from .llms.groq.stt.transformation import GroqSTTConfig as _GroqSTTConfig
+        globals()["GroqSTTConfig"] = _GroqSTTConfig
+        return _GroqSTTConfig
+    
+    # Lazy-load Triton configs to reduce import-time memory cost
+    if name in {"TritonConfig", "TritonEmbeddingConfig", "TritonGenerateConfig", "TritonInferConfig"}:
+        from ._lazy_imports import _lazy_import_triton_configs
+        return _lazy_import_triton_configs(name)
+    
+    # Lazy-load ClarifaiConfig to reduce import-time memory cost
+    if name == "ClarifaiConfig":
+        from .llms.clarifai.chat.transformation import ClarifaiConfig as _ClarifaiConfig
+        globals()["ClarifaiConfig"] = _ClarifaiConfig
+        return _ClarifaiConfig
+    
+    # Lazy-load AI21 configs to reduce import-time memory cost
+    if name in {"AI21ChatConfig", "AI21Config"}:
+        from ._lazy_imports import _lazy_import_ai21_configs
+        return _lazy_import_ai21_configs(name)
+    
+    # Lazy-load LlamaAPIConfig to reduce import-time memory cost
+    if name == "LlamaAPIConfig":
+        from .llms.meta_llama.chat.transformation import LlamaAPIConfig as _LlamaAPIConfig
+        globals()["LlamaAPIConfig"] = _LlamaAPIConfig
+        return _LlamaAPIConfig
+    
+    # Lazy-load TogetherAIConfig to reduce import-time memory cost
+    if name == "TogetherAIConfig":
+        from .llms.together_ai.chat import TogetherAIConfig as _TogetherAIConfig
+        globals()["TogetherAIConfig"] = _TogetherAIConfig
+        return _TogetherAIConfig
+    
+    # Lazy-load CloudflareChatConfig to reduce import-time memory cost
+    if name == "CloudflareChatConfig":
+        from .llms.cloudflare.chat.transformation import CloudflareChatConfig as _CloudflareChatConfig
+        globals()["CloudflareChatConfig"] = _CloudflareChatConfig
+        return _CloudflareChatConfig
+    
+    # Lazy-load NovitaConfig to reduce import-time memory cost
+    if name == "NovitaConfig":
+        from .llms.novita.chat.transformation import NovitaConfig as _NovitaConfig
+        globals()["NovitaConfig"] = _NovitaConfig
+        return _NovitaConfig
+    
+    # Lazy-load NLPCloudConfig to reduce import-time memory cost
+    if name == "NLPCloudConfig":
+        from .llms.nlp_cloud.chat.handler import NLPCloudConfig as _NLPCloudConfig
+        globals()["NLPCloudConfig"] = _NLPCloudConfig
+        return _NLPCloudConfig
+    
+    # Lazy-load PetalsConfig to reduce import-time memory cost
+    if name == "PetalsConfig":
+        from .llms.petals.completion.transformation import PetalsConfig as _PetalsConfig
+        globals()["PetalsConfig"] = _PetalsConfig
+        return _PetalsConfig
+    
+    # Lazy-load Ollama configs to reduce import-time memory cost
+    if name in {"OllamaChatConfig", "OllamaConfig"}:
+        from ._lazy_imports import _lazy_import_ollama_configs
+        return _lazy_import_ollama_configs(name)
+    
+    # Lazy-load Sagemaker configs to reduce import-time memory cost
+    if name in {"SagemakerConfig", "SagemakerChatConfig"}:
+        from ._lazy_imports import _lazy_import_sagemaker_configs
+        return _lazy_import_sagemaker_configs(name)
+    
+    # Lazy-load Cohere chat configs to reduce import-time memory cost
+    if name in {"CohereChatConfig", "CohereV2ChatConfig"}:
+        from ._lazy_imports import _lazy_import_cohere_chat_configs
+        return _lazy_import_cohere_chat_configs(name)
+    
+    # Lazy-load OpenAIConfig to reduce import-time memory cost
+    if name == "OpenAIConfig":
+        from .llms.openai.openai import OpenAIConfig as _OpenAIConfig
+        globals()["OpenAIConfig"] = _OpenAIConfig
+        return _OpenAIConfig
+    
+    # Lazy-load miscellaneous transformation configs to reduce import-time memory cost
+    _misc_transformation_config_names = {
+        "DeepInfraConfig", "GroqChatConfig", "VoyageEmbeddingConfig",
+        "InfinityEmbeddingConfig", "AzureAIStudioConfig", "MistralConfig",
+        "SambaNovaEmbeddingConfig", "FireworksAITextCompletionConfig",
+        "JinaAIEmbeddingConfig", "CodestralTextCompletionConfig",
+        "VLLMConfig", "IBMWatsonXAIConfig", "LmStudioEmbeddingConfig",
+        "IBMWatsonXEmbeddingConfig", "OVHCloudEmbeddingConfig",
+        "CometAPIEmbeddingConfig", "SnowflakeEmbeddingConfig",
+    }
+    if name in _misc_transformation_config_names:
+        from ._lazy_imports import _lazy_import_misc_transformation_configs
+        return _lazy_import_misc_transformation_configs(name)
+    
+    # Lazy-load VertexAITextEmbeddingConfig and vertexAITextEmbeddingConfig to reduce import-time memory cost
+    if name == "VertexAITextEmbeddingConfig":
+        from .llms.vertex_ai.vertex_embeddings.transformation import VertexAITextEmbeddingConfig as _VertexAITextEmbeddingConfig
+        globals()["VertexAITextEmbeddingConfig"] = _VertexAITextEmbeddingConfig
+        return _VertexAITextEmbeddingConfig
+    
+    if name == "vertexAITextEmbeddingConfig":
+        from .llms.vertex_ai.vertex_embeddings.transformation import VertexAITextEmbeddingConfig
+        _vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
+        globals()["vertexAITextEmbeddingConfig"] = _vertexAITextEmbeddingConfig
+        return _vertexAITextEmbeddingConfig
+    
+    # Lazy-load TwelveLabsMarengoEmbeddingConfig to reduce import-time memory cost
+    if name == "TwelveLabsMarengoEmbeddingConfig":
+        from .llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig as _TwelveLabsMarengoEmbeddingConfig
+        globals()["TwelveLabsMarengoEmbeddingConfig"] = _TwelveLabsMarengoEmbeddingConfig
+        return _TwelveLabsMarengoEmbeddingConfig
+    
+    # Lazy-load NvidiaNimEmbeddingConfig and nvidiaNimEmbeddingConfig to reduce import-time memory cost
+    if name == "NvidiaNimEmbeddingConfig":
+        from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig as _NvidiaNimEmbeddingConfig
+        globals()["NvidiaNimEmbeddingConfig"] = _NvidiaNimEmbeddingConfig
+        return _NvidiaNimEmbeddingConfig
+    
+    if name == "nvidiaNimEmbeddingConfig":
+        from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
+        _nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
+        globals()["nvidiaNimEmbeddingConfig"] = _nvidiaNimEmbeddingConfig
+        return _nvidiaNimEmbeddingConfig
+    
+    # Lazy-load XAIModelInfo to reduce import-time memory cost
+    if name == "XAIModelInfo":
+        from .llms.xai.common_utils import XAIModelInfo as _XAIModelInfo
+        globals()["XAIModelInfo"] = _XAIModelInfo
+        return _XAIModelInfo
+    
+    # Lazy-load GeminiModelInfo to reduce import-time memory cost
+    if name == "GeminiModelInfo":
+        from .llms.gemini.common_utils import GeminiModelInfo as _GeminiModelInfo
+        globals()["GeminiModelInfo"] = _GeminiModelInfo
+        return _GeminiModelInfo
+    
+    # Lazy-load TopazModelInfo to reduce import-time memory cost
+    if name == "TopazModelInfo":
+        from .llms.topaz.common_utils import TopazModelInfo as _TopazModelInfo
+        globals()["TopazModelInfo"] = _TopazModelInfo
+        return _TopazModelInfo
+    
+    # Lazy-load TopazImageVariationConfig to reduce import-time memory cost
+    if name == "TopazImageVariationConfig":
+        from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as _TopazImageVariationConfig
+        globals()["TopazImageVariationConfig"] = _TopazImageVariationConfig
+        return _TopazImageVariationConfig
+    
+    # Lazy-load OpenAIImageVariationConfig to reduce import-time memory cost
+    if name == "OpenAIImageVariationConfig":
+        from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig as _OpenAIImageVariationConfig
+        globals()["OpenAIImageVariationConfig"] = _OpenAIImageVariationConfig
+        return _OpenAIImageVariationConfig
+    
+    # Lazy-load DeepgramAudioTranscriptionConfig to reduce import-time memory cost
+    if name == "DeepgramAudioTranscriptionConfig":
+        from .llms.deepgram.audio_transcription.transformation import DeepgramAudioTranscriptionConfig as _DeepgramAudioTranscriptionConfig
+        globals()["DeepgramAudioTranscriptionConfig"] = _DeepgramAudioTranscriptionConfig
+        return _DeepgramAudioTranscriptionConfig
+    
+    # Lazy-load OpenAIResponsesAPIConfig to reduce import-time memory cost
+    if name == "OpenAIResponsesAPIConfig":
+        from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig as _OpenAIResponsesAPIConfig
+        globals()["OpenAIResponsesAPIConfig"] = _OpenAIResponsesAPIConfig
+        return _OpenAIResponsesAPIConfig
+    
+    # Lazy-load XAIResponsesAPIConfig to reduce import-time memory cost
+    if name == "XAIResponsesAPIConfig":
+        from .llms.xai.responses.transformation import XAIResponsesAPIConfig as _XAIResponsesAPIConfig
+        globals()["XAIResponsesAPIConfig"] = _XAIResponsesAPIConfig
+        return _XAIResponsesAPIConfig
+    
+    # Lazy-load LiteLLMProxyResponsesAPIConfig to reduce import-time memory cost
+    if name == "LiteLLMProxyResponsesAPIConfig":
+        from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as _LiteLLMProxyResponsesAPIConfig
+        globals()["LiteLLMProxyResponsesAPIConfig"] = _LiteLLMProxyResponsesAPIConfig
+        return _LiteLLMProxyResponsesAPIConfig
+    
+    # Lazy-load OpenAIWhisperAudioTranscriptionConfig to reduce import-time memory cost
+    if name == "OpenAIWhisperAudioTranscriptionConfig":
+        from .llms.openai.transcriptions.whisper_transformation import OpenAIWhisperAudioTranscriptionConfig as _OpenAIWhisperAudioTranscriptionConfig
+        globals()["OpenAIWhisperAudioTranscriptionConfig"] = _OpenAIWhisperAudioTranscriptionConfig
+        return _OpenAIWhisperAudioTranscriptionConfig
+    
+    # Lazy-load OpenAIGPTAudioTranscriptionConfig to reduce import-time memory cost
+    if name == "OpenAIGPTAudioTranscriptionConfig":
+        from .llms.openai.transcriptions.gpt_transformation import OpenAIGPTAudioTranscriptionConfig as _OpenAIGPTAudioTranscriptionConfig
+        globals()["OpenAIGPTAudioTranscriptionConfig"] = _OpenAIGPTAudioTranscriptionConfig
+        return _OpenAIGPTAudioTranscriptionConfig
+    
+    # Lazy-load FireworksAIAudioTranscriptionConfig to reduce import-time memory cost
+    if name == "FireworksAIAudioTranscriptionConfig":
+        from .llms.fireworks_ai.audio_transcription.transformation import FireworksAIAudioTranscriptionConfig as _FireworksAIAudioTranscriptionConfig
+        globals()["FireworksAIAudioTranscriptionConfig"] = _FireworksAIAudioTranscriptionConfig
+        return _FireworksAIAudioTranscriptionConfig
+    
+    # Lazy-load FireworksAIEmbeddingConfig to reduce import-time memory cost
+    if name == "FireworksAIEmbeddingConfig":
+        from .llms.fireworks_ai.embed.fireworks_ai_transformation import FireworksAIEmbeddingConfig as _FireworksAIEmbeddingConfig
+        globals()["FireworksAIEmbeddingConfig"] = _FireworksAIEmbeddingConfig
+        return _FireworksAIEmbeddingConfig
+    
+    # Lazy-load Azure OpenAI configs to reduce import-time memory cost
+    if name in {"AzureOpenAIConfig", "AzureOpenAIGPT5Config", "AzureOpenAITextConfig", "AzureOpenAIAssistantsAPIConfig"}:
+        from ._lazy_imports import _lazy_import_azure_openai_configs
+        return _lazy_import_azure_openai_configs(name)
+    
+    # Lazy-load AzureOpenAIError to reduce import-time memory cost
+    if name == "AzureOpenAIError":
+        from .llms.azure.azure import AzureOpenAIError as _AzureOpenAIError
+        globals()["AzureOpenAIError"] = _AzureOpenAIError
+        return _AzureOpenAIError
+    
+    # Lazy-load rerank configs to reduce import-time memory cost
+    _rerank_config_names = {
+        "HuggingFaceRerankConfig", "CohereRerankConfig", "CohereRerankV2Config",
+        "AzureAIRerankConfig", "InfinityRerankConfig", "JinaAIRerankConfig",
+        "DeepinfraRerankConfig", "HostedVLLMRerankConfig", "NvidiaNimRerankConfig",
+        "VertexAIRerankConfig",
+    }
+    if name in _rerank_config_names:
+        from ._lazy_imports import _lazy_import_rerank_configs
+        return _lazy_import_rerank_configs(name)
+    
+    # Lazy-load TogetherAITextCompletionConfig to reduce import-time memory cost
+    if name == "TogetherAITextCompletionConfig":
+        from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig as _TogetherAITextCompletionConfig
+        globals()["TogetherAITextCompletionConfig"] = _TogetherAITextCompletionConfig
+        return _TogetherAITextCompletionConfig
+    
+    # Lazy-load Vertex AI configs to reduce import-time memory cost
+    _vertex_ai_config_names = {
+        "VertexGeminiConfig", "VertexAIConfig", "GoogleAIStudioGeminiConfig",
+        "GeminiConfig", "VertexAIAnthropicConfig", "VertexAILlama3Config",
+        "VertexAIAi21Config",
+    }
+    if name in _vertex_ai_config_names:
+        from ._lazy_imports import _lazy_import_vertex_ai_configs
+        return _lazy_import_vertex_ai_configs(name)
+    
+    # Lazy-load Amazon Bedrock configs to reduce import-time memory cost
+    _amazon_bedrock_config_names = {
+        "AmazonCohereChatConfig", "AmazonBedrockGlobalConfig", "AmazonAI21Config",
+        "AmazonAnthropicConfig", "AmazonAnthropicClaudeConfig", "AmazonTitanG1Config",
+        "AmazonTitanMultimodalEmbeddingG1Config", "AmazonTitanV2Config",
+        "BedrockCohereEmbeddingConfig",
+    }
+    if name in _amazon_bedrock_config_names:
+        from ._lazy_imports import _lazy_import_amazon_bedrock_configs
+        return _lazy_import_amazon_bedrock_configs(name)
+    
+    # Lazy-load AnthropicModelInfo to reduce import-time memory cost
+    if name == "AnthropicModelInfo":
+        from .llms.anthropic.common_utils import AnthropicModelInfo as _AnthropicModelInfo
+        globals()["AnthropicModelInfo"] = _AnthropicModelInfo
+        return _AnthropicModelInfo
+    
+    # Lazy-load deprecated provider configs to reduce import-time memory cost
+    if name in {"PalmConfig", "AlephAlphaConfig"}:
+        from ._lazy_imports import _lazy_import_deprecated_provider_configs
+        return _lazy_import_deprecated_provider_configs(name)
+    
+    # Lazy-load bedrock_tool_name_mappings to reduce import-time memory cost
+    if name == "bedrock_tool_name_mappings":
+        from .llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings as _bedrock_tool_name_mappings
+        globals()["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
+        return _bedrock_tool_name_mappings
+    
+    # Lazy-load AmazonInvokeConfig to reduce import-time memory cost
+    if name == "AmazonInvokeConfig":
+        from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig as _AmazonInvokeConfig
+        globals()["AmazonInvokeConfig"] = _AmazonInvokeConfig
+        return _AmazonInvokeConfig
+    
+    # Lazy-load MistralEmbeddingConfig to reduce import-time memory cost
+    if name == "MistralEmbeddingConfig":
+        from .llms.openai.openai import MistralEmbeddingConfig as _MistralEmbeddingConfig
+        globals()["MistralEmbeddingConfig"] = _MistralEmbeddingConfig
+        return _MistralEmbeddingConfig
+    
+    # Lazy-load OpenAITextCompletionConfig to reduce import-time memory cost
+    if name == "OpenAITextCompletionConfig":
+        from .llms.openai.completion.transformation import OpenAITextCompletionConfig as _OpenAITextCompletionConfig
+        globals()["OpenAITextCompletionConfig"] = _OpenAITextCompletionConfig
+        return _OpenAITextCompletionConfig
+    
+    # Lazy-load VoyageContextualEmbeddingConfig to reduce import-time memory cost
+    if name == "VoyageContextualEmbeddingConfig":
+        from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as _VoyageContextualEmbeddingConfig
+        globals()["VoyageContextualEmbeddingConfig"] = _VoyageContextualEmbeddingConfig
+        return _VoyageContextualEmbeddingConfig
+    
+    # Lazy-load Azure Responses API configs to reduce import-time memory cost
+    if name in {"AzureOpenAIResponsesAPIConfig", "AzureOpenAIOSeriesResponsesAPIConfig", "GithubCopilotResponsesAPIConfig"}:
+        from ._lazy_imports import _lazy_import_azure_responses_configs
+        return _lazy_import_azure_responses_configs(name)
+    
+    # Lazy-load OpenAI O-Series configs to reduce import-time memory cost
+    if name in {"OpenAIOSeriesConfig", "OpenAIO1Config", "openaiOSeriesConfig"}:
+        from ._lazy_imports import _lazy_import_openai_o_series_configs
+        return _lazy_import_openai_o_series_configs(name)
+    
+    # Lazy-load AzureOpenAIO1Config to reduce import-time memory cost
+    if name == "AzureOpenAIO1Config":
+        from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config as _AzureOpenAIO1Config
+        globals()["AzureOpenAIO1Config"] = _AzureOpenAIO1Config
+        return _AzureOpenAIO1Config
+    
+    # Lazy-load GradientAIConfig to reduce import-time memory cost
+    if name == "GradientAIConfig":
+        from .llms.gradient_ai.chat.transformation import GradientAIConfig as _GradientAIConfig
+        globals()["GradientAIConfig"] = _GradientAIConfig
+        return _GradientAIConfig
+    
+    # Lazy-load OpenAI GPT configs to reduce import-time memory cost
+    _openai_gpt_config_names = {
+        "OpenAIGPTConfig", "openAIGPTConfig", "OpenAIGPT5Config",
+        "openAIGPT5Config", "OpenAIGPTAudioConfig", "openAIGPTAudioConfig",
+    }
+    if name in _openai_gpt_config_names:
+        from ._lazy_imports import _lazy_import_openai_gpt_configs
+        return _lazy_import_openai_gpt_configs(name)
+    
+    # Lazy-load NvidiaNim configs to reduce import-time memory cost
+    if name in {"NvidiaNimConfig", "nvidiaNimConfig"}:
+        from ._lazy_imports import _lazy_import_nvidia_nim_configs
+        return _lazy_import_nvidia_nim_configs(name)
+    
+    # Lazy-load batches module functions to reduce import-time memory cost
+    # This handles create_batch, acreate_batch, retrieve_batch, aretrieve_batch,
+    # list_batches, alist_batches, cancel_batch, acancel_batch from batches.main
+    _batches_function_names = {
+        "create_batch", "acreate_batch", "retrieve_batch", "aretrieve_batch",
+        "list_batches", "alist_batches", "cancel_batch", "acancel_batch",
+    }
+    if name in _batches_function_names:
+        from ._lazy_imports import _lazy_import_batches_functions
+        try:
+            return _lazy_import_batches_functions(name)
+        except AttributeError:
+            pass
+    
+    # Lazy-load assistants module functions to reduce import-time memory cost
+    # This handles aget_assistants, get_assistants, acreate_assistants, create_assistants,
+    # adelete_assistant, delete_assistant, acreate_thread, create_thread,
+    # aget_thread, get_thread, a_add_message, add_message,
+    # aget_messages, get_messages, arun_thread_stream, arun_thread,
+    # run_thread_stream, run_thread from assistants.main
+    _assistants_function_names = {
+        "aget_assistants", "get_assistants", "acreate_assistants", "create_assistants",
+        "adelete_assistant", "delete_assistant", "acreate_thread", "create_thread",
+        "aget_thread", "get_thread", "a_add_message", "add_message",
+        "aget_messages", "get_messages", "arun_thread_stream", "arun_thread",
+        "run_thread_stream", "run_thread",
+    }
+    if name in _assistants_function_names:
+        from ._lazy_imports import _lazy_import_assistants_functions
+        try:
+            return _lazy_import_assistants_functions(name)
+        except AttributeError:
+            pass
+    
+    # Lazy-load main module functions and classes to reduce import-time memory cost
+    # This handles completion, acompletion, embedding, aembedding, text_completion,
+    # atext_completion, moderation, amoderation, transcription, atranscription,
+    # speech, aspeech, health_check, ahealth_check, LiteLLM, Chat, Completions,
+    # AsyncCompletions, and other public exports from main.py
+    from ._lazy_imports import _lazy_import_main_functions
+    try:
+        return _lazy_import_main_functions(name)
+    except AttributeError:
+        pass
+    
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -287,6 +287,12 @@ class KeyManagementEventHooks:
 
     @staticmethod
     def _get_secret_name(secret_name: str) -> str:
+        # Ensure _key_management_settings is initialized (lazy initialization)
+        if litellm._key_management_settings is None:
+            from litellm._lazy_imports import _lazy_import_secret_managers
+            KeyManagementSettings = _lazy_import_secret_managers("KeyManagementSettings")
+            litellm._key_management_settings = KeyManagementSettings()
+        
         if litellm._key_management_settings.prefix_for_stored_virtual_keys.endswith(
             "/"
         ):

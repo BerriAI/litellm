@@ -3,8 +3,8 @@
 from typing import Any, Optional, cast
 
 import litellm
-from litellm import get_llm_provider
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm._lazy_imports import get_cached_llm_provider
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret_str
@@ -55,6 +55,8 @@ async def _arealtime(
 
     litellm_params_dict = get_litellm_params(**kwargs)
 
+    # Use cached get_llm_provider for hot-path performance
+    get_llm_provider = get_cached_llm_provider()
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,
         api_base=api_base,

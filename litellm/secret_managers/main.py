@@ -85,6 +85,12 @@ def get_secret(  # noqa: PLR0915
     secret_name: str,
     default_value: Optional[Union[str, bool]] = None,
 ):
+    # Lazy initialize _key_management_settings if needed
+    if litellm._key_management_settings is None:
+        from litellm._lazy_imports import _lazy_import_secret_managers
+        KeyManagementSettings = _lazy_import_secret_managers("KeyManagementSettings")
+        litellm._key_management_settings = KeyManagementSettings()
+    
     key_management_system = litellm._key_management_system
     key_management_settings = litellm._key_management_settings
     secret = None
