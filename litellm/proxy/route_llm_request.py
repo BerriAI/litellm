@@ -36,6 +36,10 @@ ROUTE_ENDPOINT_MAPPING = {
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
     "adelete_container": "/containers/{container_id}",
+    "acreate_skill": "/skills",
+    "alist_skills": "/skills",
+    "aget_skill": "/skills/{skill_id}",
+    "adelete_skill": "/skills/{skill_id}",
 }
 
 
@@ -126,6 +130,10 @@ async def route_request(
         "alist_containers",
         "aretrieve_container",
         "adelete_container",
+        "acreate_skill",
+        "alist_skills",
+        "aget_skill",
+        "adelete_skill",
     ],
 ):
     """
