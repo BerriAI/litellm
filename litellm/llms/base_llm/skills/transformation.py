@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import httpx
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic_skills import (
     CreateSkillRequest,
     DeleteSkillResponse,
@@ -229,4 +230,17 @@ class BaseSkillsAPIConfig(ABC):
             DeleteSkillResponse object
         """
         pass
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict,
+    ) -> Exception:
+        """Get appropriate error class for the provider."""
+        return BaseLLMException(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )
 
