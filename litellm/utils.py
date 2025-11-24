@@ -155,7 +155,8 @@ from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_s
 #     redact_message_input_output_from_logging,
 # )
 from litellm.litellm_core_utils.rules import Rules
-from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+# CustomStreamWrapper is imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 # get_modified_max_tokens is imported lazily when needed to avoid loading token_counter
 # (which imports default_encoding and tiktoken) at import time
 # Cached after first import to avoid repeated import overhead
@@ -1406,6 +1407,19 @@ def _get_redact_message_input_output_from_logging():
         if "redact_message_input_output_from_logging" not in globals():
             globals()["redact_message_input_output_from_logging"] = _redact_message_input_output_from_logging_func
     return _redact_message_input_output_from_logging_func
+
+# Cached lazy import helper for CustomStreamWrapper
+_custom_stream_wrapper_class = None
+
+def _get_custom_stream_wrapper():
+    """Lazy import helper for CustomStreamWrapper to avoid loading at import time."""
+    global _custom_stream_wrapper_class
+    if _custom_stream_wrapper_class is None:
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper as _custom_stream_wrapper_class
+        # Make it available at module level for imports from utils
+        if "CustomStreamWrapper" not in globals():
+            globals()["CustomStreamWrapper"] = _custom_stream_wrapper_class
+    return _custom_stream_wrapper_class
 
 
 def client(original_function):  # noqa: PLR0915
@@ -8573,4 +8587,6 @@ def __getattr__(name: str) -> Any:
         return _get_litellm_logging_object()
     if name == "redact_message_input_output_from_logging":
         return _get_redact_message_input_output_from_logging()
+    if name == "CustomStreamWrapper":
+        return _get_custom_stream_wrapper()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
