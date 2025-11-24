@@ -55,7 +55,8 @@ from pydantic import BaseModel
 from tokenizers import Tokenizer
 
 import litellm
-import litellm._service_logger  # for storing API inputs, outputs, and metadata
+# litellm._service_logger is imported lazily when needed to avoid loading at import time
+# import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
