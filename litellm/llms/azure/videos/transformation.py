@@ -2,9 +2,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
-from litellm.secret_managers.main import get_secret_str
 from litellm.llms.azure.common_utils import BaseAzureLLM
-import litellm
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
