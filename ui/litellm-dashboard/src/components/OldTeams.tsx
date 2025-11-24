@@ -1145,6 +1145,9 @@ const Teams: React.FC<TeamProps> = ({
                       <Select2.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select2.Option>
+                      <Select2.Option key="no-default-models" value="no-default-models">
+                        No Default Models
+                      </Select2.Option>
                       {modelsToPick.map((model) => (
                         <Select2.Option key={model} value={model}>
                           {getModelDisplayName(model)}
