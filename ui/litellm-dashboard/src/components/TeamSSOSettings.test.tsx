@@ -1,7 +1,6 @@
-import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderWithProviders, waitFor } from "../../tests/test-utils";
 import { screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../tests/test-utils";
 import TeamSSOSettings from "./TeamSSOSettings";
 import * as networking from "./networking";
 
