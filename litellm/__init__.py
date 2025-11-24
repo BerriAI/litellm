@@ -75,7 +75,7 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.types.utils import LlmProviders, PriorityReservationSettings
+# Note: LlmProviders and PriorityReservationSettings are lazy-loaded via __getattr__ to reduce import-time memory cost
 if TYPE_CHECKING:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
@@ -1430,11 +1430,15 @@ def __getattr__(name: str) -> Any:
         return _lazy_import_secret_managers(name)
     
     if name == "provider_list":
+        from ._lazy_imports import _lazy_import_types_utils
+        LlmProviders = _lazy_import_types_utils("LlmProviders")
         provider_list_val = list(LlmProviders)
         globals()["provider_list"] = provider_list_val
         return provider_list_val
     
     if name == "priority_reservation_settings":
+        from ._lazy_imports import _lazy_import_types_utils
+        PriorityReservationSettings = _lazy_import_types_utils("PriorityReservationSettings")
         prs_val = PriorityReservationSettings()
         globals()["priority_reservation_settings"] = prs_val
         return prs_val

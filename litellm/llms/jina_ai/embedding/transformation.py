@@ -11,7 +11,7 @@ from typing import List, Optional, Tuple, Union, cast
 
 import httpx
 
-from litellm import LlmProviders
+from litellm.types.utils import LlmProviders
 from litellm.secret_managers.main import get_secret_str
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm import BaseEmbeddingConfig

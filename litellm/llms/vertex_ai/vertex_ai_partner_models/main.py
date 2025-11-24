@@ -6,7 +6,7 @@ from typing import Callable, Optional, Union
 import httpx  # type: ignore
 
 import litellm
-from litellm import LlmProviders
+from litellm.types.utils import LlmProviders
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.utils import ModelResponse
 

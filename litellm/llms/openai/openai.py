@@ -28,8 +28,8 @@ from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
-from litellm import LlmProviders
 from litellm._logging import verbose_logger
+from litellm.types.utils import LlmProviders
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
