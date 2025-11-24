@@ -131,7 +131,8 @@ from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_s
 #     convert_to_streaming_response,
 #     convert_to_streaming_response_async,
 # )
-from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+# get_api_base is imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
     get_formatted_prompt,
 )
@@ -1318,6 +1319,19 @@ def _get_convert_to_streaming_response_async():
     if "convert_to_streaming_response_async" not in globals():
         globals()["convert_to_streaming_response_async"] = _convert_dict_to_response_module.convert_to_streaming_response_async
     return _convert_dict_to_response_module.convert_to_streaming_response_async
+
+# Cached lazy import helper for get_api_base
+_get_api_base_func = None
+
+def _get_api_base():
+    """Lazy import helper for get_api_base to avoid loading at import time."""
+    global _get_api_base_func
+    if _get_api_base_func is None:
+        from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base as _get_api_base_func
+        # Make it available at module level for imports from utils
+        if "get_api_base" not in globals():
+            globals()["get_api_base"] = _get_api_base_func
+    return _get_api_base_func
 
 
 def client(original_function):  # noqa: PLR0915
@@ -8460,7 +8474,7 @@ def should_run_mock_completion(
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import for convert_dict_to_response functions to allow imports from utils."""
+    """Lazy import for convert_dict_to_response functions and get_api_base to allow imports from utils."""
     if name == "LiteLLMResponseObjectHandler":
         return _get_litellm_response_object_handler()
     if name == "_handle_invalid_parallel_tool_calls":
@@ -8471,4 +8485,6 @@ def __getattr__(name: str) -> Any:
         return _get_convert_to_streaming_response()
     if name == "convert_to_streaming_response_async":
         return _get_convert_to_streaming_response_async()
+    if name == "get_api_base":
+        return _get_api_base()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
