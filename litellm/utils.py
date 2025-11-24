@@ -123,13 +123,14 @@ from litellm.litellm_core_utils.get_litellm_params import (
 #     get_supported_openai_params,
 # )
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    LiteLLMResponseObjectHandler,
-    _handle_invalid_parallel_tool_calls,
-    convert_to_model_response_object,
-    convert_to_streaming_response,
-    convert_to_streaming_response_async,
-)
+# convert_dict_to_response functions are imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+#     LiteLLMResponseObjectHandler,
+#     _handle_invalid_parallel_tool_calls,
+#     convert_to_model_response_object,
+#     convert_to_streaming_response,
+#     convert_to_streaming_response_async,
+# )
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
     get_formatted_prompt,
@@ -1267,6 +1268,56 @@ def _get_supported_openai_params():
     if _get_supported_openai_params_func is None:
         from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params as _get_supported_openai_params_func
     return _get_supported_openai_params_func
+
+# Cached lazy import helpers for convert_dict_to_response module
+_convert_dict_to_response_module = None
+
+def _get_litellm_response_object_handler():
+    """Lazy import helper for LiteLLMResponseObjectHandler to avoid loading at import time."""
+    global _convert_dict_to_response_module
+    if _convert_dict_to_response_module is None:
+        from litellm.litellm_core_utils.llm_response_utils import convert_dict_to_response as _convert_dict_to_response_module
+    # Make it available at module level for imports from utils
+    if "LiteLLMResponseObjectHandler" not in globals():
+        globals()["LiteLLMResponseObjectHandler"] = _convert_dict_to_response_module.LiteLLMResponseObjectHandler
+    return _convert_dict_to_response_module.LiteLLMResponseObjectHandler
+
+def _get_handle_invalid_parallel_tool_calls():
+    """Lazy import helper for _handle_invalid_parallel_tool_calls to avoid loading at import time."""
+    global _convert_dict_to_response_module
+    if _convert_dict_to_response_module is None:
+        from litellm.litellm_core_utils.llm_response_utils import convert_dict_to_response as _convert_dict_to_response_module
+    if "_handle_invalid_parallel_tool_calls" not in globals():
+        globals()["_handle_invalid_parallel_tool_calls"] = _convert_dict_to_response_module._handle_invalid_parallel_tool_calls
+    return _convert_dict_to_response_module._handle_invalid_parallel_tool_calls
+
+def _get_convert_to_model_response_object():
+    """Lazy import helper for convert_to_model_response_object to avoid loading at import time."""
+    global _convert_dict_to_response_module
+    if _convert_dict_to_response_module is None:
+        from litellm.litellm_core_utils.llm_response_utils import convert_dict_to_response as _convert_dict_to_response_module
+    # Make it available at module level for imports from utils
+    if "convert_to_model_response_object" not in globals():
+        globals()["convert_to_model_response_object"] = _convert_dict_to_response_module.convert_to_model_response_object
+    return _convert_dict_to_response_module.convert_to_model_response_object
+
+def _get_convert_to_streaming_response():
+    """Lazy import helper for convert_to_streaming_response to avoid loading at import time."""
+    global _convert_dict_to_response_module
+    if _convert_dict_to_response_module is None:
+        from litellm.litellm_core_utils.llm_response_utils import convert_dict_to_response as _convert_dict_to_response_module
+    if "convert_to_streaming_response" not in globals():
+        globals()["convert_to_streaming_response"] = _convert_dict_to_response_module.convert_to_streaming_response
+    return _convert_dict_to_response_module.convert_to_streaming_response
+
+def _get_convert_to_streaming_response_async():
+    """Lazy import helper for convert_to_streaming_response_async to avoid loading at import time."""
+    global _convert_dict_to_response_module
+    if _convert_dict_to_response_module is None:
+        from litellm.litellm_core_utils.llm_response_utils import convert_dict_to_response as _convert_dict_to_response_module
+    if "convert_to_streaming_response_async" not in globals():
+        globals()["convert_to_streaming_response_async"] = _convert_dict_to_response_module.convert_to_streaming_response_async
+    return _convert_dict_to_response_module.convert_to_streaming_response_async
 
 
 def client(original_function):  # noqa: PLR0915
@@ -3673,7 +3724,7 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
-    supported_params = get_supported_openai_params(
+    supported_params = _get_supported_openai_params()(
         model=model, custom_llm_provider=custom_llm_provider
     )
     if supported_params is None:
@@ -8406,3 +8457,18 @@ def should_run_mock_completion(
     if mock_response or mock_tool_calls or mock_timeout:
         return True
     return False
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import for convert_dict_to_response functions to allow imports from utils."""
+    if name == "LiteLLMResponseObjectHandler":
+        return _get_litellm_response_object_handler()
+    if name == "_handle_invalid_parallel_tool_calls":
+        return _get_handle_invalid_parallel_tool_calls()
+    if name == "convert_to_model_response_object":
+        return _get_convert_to_model_response_object()
+    if name == "convert_to_streaming_response":
+        return _get_convert_to_streaming_response()
+    if name == "convert_to_streaming_response_async":
+        return _get_convert_to_streaming_response_async()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
