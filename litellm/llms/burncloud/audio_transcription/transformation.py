@@ -29,8 +29,9 @@ class BurnCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> str:
         if api_base is None:
             api_base = get_secret_str("BURNCLOUD_API_BASE")
+
         # Remove trailing slashes and ensure clean base URL
-        api_base = api_base.rstrip("/")
+        api_base = api_base.rstrip("/") if api_base else api_base
 
         # if endswith "/v1"
         if api_base and api_base.endswith("/v1"):

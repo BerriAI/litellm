@@ -1,3 +1,4 @@
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from io import BufferedReader
 from typing import cast
@@ -77,8 +78,10 @@ class BurnCloudVideoConfig(BaseVideoConfig):
     ) -> str:
         if api_base is None:
             api_base = get_secret_str("BURNCLOUD_API_BASE")
+
         # Remove trailing slashes and ensure clean base URL
-        api_base = api_base.rstrip("/")
+        api_base = api_base.rstrip("/") if api_base else api_base
+
         # if endswith "/v1"
         if api_base and api_base.endswith("/v1"):
             api_base = f"{api_base}/videos"
@@ -174,6 +177,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
 
         return url, data
 
+    @abstractmethod
     def transform_video_remix_request(
             self,
             video_id: str,
@@ -193,6 +197,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
         """Transform the BurnCloud video content download response."""
         return raw_response.content
 
+    @abstractmethod
     def transform_video_remix_response(
             self,
             raw_response: httpx.Response,
@@ -201,6 +206,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
     ) -> VideoObject:
         pass
 
+    @abstractmethod
     def transform_video_list_request(
             self,
             api_base: str,
@@ -213,6 +219,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         pass
 
+    @abstractmethod
     def transform_video_list_response(
             self,
             raw_response: httpx.Response,
@@ -221,6 +228,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
     ) -> Dict[str,str]:
         pass
 
+    @abstractmethod
     def transform_video_delete_request(
             self,
             video_id: str,
@@ -230,6 +238,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         pass
 
+    @abstractmethod
     def transform_video_delete_response(
             self,
             raw_response: httpx.Response,
