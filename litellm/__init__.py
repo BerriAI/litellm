@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
     from litellm.types.integrations.datadog import DatadogInitParams
     from litellm.types.prompts.init_prompts import PromptSpec
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry, VectorStoreIndexRegistry
 # HTTP handlers are lazy-loaded to reduce import-time memory cost
 # from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 # Caching classes are lazy-loaded to reduce import-time memory cost
@@ -1318,13 +1319,14 @@ from .types.adapter import AdapterItem
 adapters: List[AdapterItem] = []
 
 ### Vector Store Registry ###
-from .vector_stores.vector_store_registry import (
-    VectorStoreRegistry,
-    VectorStoreIndexRegistry,
-)
+# Note: VectorStoreRegistry and VectorStoreIndexRegistry are lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .vector_stores.vector_store_registry import (
+#     VectorStoreRegistry,
+#     VectorStoreIndexRegistry,
+# )
 
-vector_store_registry: Optional[VectorStoreRegistry] = None
-vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
+vector_store_registry: Optional["VectorStoreRegistry"] = None
+vector_store_index_registry: Optional["VectorStoreIndexRegistry"] = None
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
@@ -1343,8 +1345,10 @@ global_disable_no_log_param: bool = False
 from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
 
 ### PASSTHROUGH ###
-from .passthrough import allm_passthrough_route, llm_passthrough_route
-from .google_genai import agenerate_content
+# Note: passthrough functions are lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .passthrough import allm_passthrough_route, llm_passthrough_route
+# Note: agenerate_content is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .google_genai import agenerate_content
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Dict[str, Any]] = None
@@ -1634,6 +1638,34 @@ def __getattr__(name: str) -> Any:
         from . import anthropic_interface as _anthropic_module
         globals()["anthropic"] = _anthropic_module
         return _anthropic_module
+    
+    # Lazy load VectorStoreRegistry to reduce import-time memory cost
+    if name == "VectorStoreRegistry":
+        from .vector_stores.vector_store_registry import VectorStoreRegistry as _VectorStoreRegistry
+        globals()["VectorStoreRegistry"] = _VectorStoreRegistry
+        return _VectorStoreRegistry
+    
+    # Lazy load VectorStoreIndexRegistry to reduce import-time memory cost
+    if name == "VectorStoreIndexRegistry":
+        from .vector_stores.vector_store_registry import VectorStoreIndexRegistry as _VectorStoreIndexRegistry
+        globals()["VectorStoreIndexRegistry"] = _VectorStoreIndexRegistry
+        return _VectorStoreIndexRegistry
+    
+    # Lazy load passthrough functions to reduce import-time memory cost
+    _passthrough_functions = {
+        "allm_passthrough_route", "llm_passthrough_route",
+    }
+    if name in _passthrough_functions:
+        from .passthrough import main as _passthrough_main
+        _func = getattr(_passthrough_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load agenerate_content to reduce import-time memory cost
+    if name == "agenerate_content":
+        from .google_genai import agenerate_content as _agenerate_content
+        globals()["agenerate_content"] = _agenerate_content
+        return _agenerate_content
     
     if name == "provider_list":
         from ._lazy_imports import _lazy_import_types_utils
