@@ -1209,7 +1209,7 @@ from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
 # Note: OpenAIImageVariationConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: DeepgramAudioTranscriptionConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 # Note: TopazModelInfo is lazy-loaded via __getattr__ to reduce import-time memory cost
-from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
+# Note: TopazImageVariationConfig is lazy-loaded via __getattr__ to reduce import-time memory cost
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.xai.responses.transformation import XAIResponsesAPIConfig
 from .llms.litellm_proxy.responses.transformation import (
@@ -1652,6 +1652,12 @@ def __getattr__(name: str) -> Any:
         from .llms.topaz.common_utils import TopazModelInfo as _TopazModelInfo
         globals()["TopazModelInfo"] = _TopazModelInfo
         return _TopazModelInfo
+    
+    # Lazy-load TopazImageVariationConfig to reduce import-time memory cost
+    if name == "TopazImageVariationConfig":
+        from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as _TopazImageVariationConfig
+        globals()["TopazImageVariationConfig"] = _TopazImageVariationConfig
+        return _TopazImageVariationConfig
     
     # Lazy-load OpenAIImageVariationConfig to reduce import-time memory cost
     if name == "OpenAIImageVariationConfig":
