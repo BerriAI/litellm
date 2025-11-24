@@ -1194,8 +1194,7 @@ from .timeout import timeout
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
 # (which imports tiktoken) at import time
 # Note: TritonGenerateConfig and TritonInferConfig are lazy-loaded via __getattr__ to reduce import-time memory cost
-
-from .llms.gemini.common_utils import GeminiModelInfo
+# Note: GeminiModelInfo is lazy-loaded via __getattr__ to reduce import-time memory cost
 
 
 from .llms.vertex_ai.vertex_embeddings.transformation import (
@@ -1642,6 +1641,12 @@ def __getattr__(name: str) -> Any:
         from .llms.xai.common_utils import XAIModelInfo as _XAIModelInfo
         globals()["XAIModelInfo"] = _XAIModelInfo
         return _XAIModelInfo
+    
+    # Lazy-load GeminiModelInfo to reduce import-time memory cost
+    if name == "GeminiModelInfo":
+        from .llms.gemini.common_utils import GeminiModelInfo as _GeminiModelInfo
+        globals()["GeminiModelInfo"] = _GeminiModelInfo
+        return _GeminiModelInfo
     
     # Lazy-load Azure OpenAI configs to reduce import-time memory cost
     if name in {"AzureOpenAIConfig", "AzureOpenAIGPT5Config", "AzureOpenAITextConfig", "AzureOpenAIAssistantsAPIConfig"}:
