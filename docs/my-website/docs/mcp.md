@@ -252,6 +252,8 @@ mcp_servers:
 
 - **Strands (STDIO)** – [watch tutorial](https://screen.studio/share/ruv4D73F)
 
+> Add it from the UI
+
 ```json title="strands-mcp" showLineNumbers
 {
   "mcpServers": {
@@ -266,6 +268,18 @@ mcp_servers:
     }
   }
 }
+```
+
+> config.yml
+
+```yaml title="config.yml – strands MCP" showLineNumbers
+mcp_servers:
+  strands_mcp:
+    transport: "stdio"
+    command: "uvx"
+    args: ["strands-agents-mcp-server"]
+    env:
+      FASTMCP_LOG_LEVEL: "INFO"
 ```
 
 
