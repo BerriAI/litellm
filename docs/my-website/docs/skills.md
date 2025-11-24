@@ -361,30 +361,43 @@ Examples and best practices...
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Skill identifier (lowercase, numbers, hyphens only) |
+| `name` | Yes | Skill identifier (lowercase, numbers, hyphens only). Must match the directory name. |
 | `description` | Yes | Brief description of the skill |
 | `license` | No | License type (e.g., MIT, Apache-2.0) |
 | `allowed-tools` | No | List of Claude tools this skill can use |
 | `metadata` | No | Additional custom metadata |
 
+**Important:** The `name` field must exactly match your skill directory name. For example, if your directory is `test-skill`, the frontmatter must have `name: test-skill`.
+
 ### File Structure
 
 **Option 1: ZIP file structure**
 
+Skills must be packaged with a top-level directory matching the skill name:
+
 ```
 test-skill.zip
-└── test-skill/         # Top-level folder (name must match skill name)
-    └── SKILL.md        # Required skill definition
+└── test-skill/         # Top-level folder (name must match skill name in SKILL.md)
+    └── SKILL.md        # Required skill definition file
 ```
+
+All files must be in the same top-level directory, and `SKILL.md` must be at the root of that directory.
 
 **Option 2: Direct SKILL.md upload**
 
-When uploading SKILL.md directly, include the skill name in the filename parameter:
+When uploading `SKILL.md` directly (without creating a ZIP), you must include the skill directory path in the filename parameter to preserve the required structure:
+
 ```bash
+# The filename parameter must include the skill directory path
 -F "files[]=@test-skill/SKILL.md;filename=test-skill/SKILL.md"
 ```
 
-**Important:** The folder name (in ZIP or filename path) must match the `name` in SKILL.md frontmatter.
+This tells the API that `SKILL.md` belongs to the `test-skill` directory.
+
+**Important Requirements:**
+- The folder name (in ZIP or filename path) **must exactly match** the `name` field in SKILL.md frontmatter
+- `SKILL.md` must be in the root of the skill directory (not in a subdirectory)
+- All additional files must be in the same skill directory
 
 ## **Response Format**
 
