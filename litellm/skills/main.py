@@ -11,7 +11,6 @@ from typing import Any, Coroutine, Dict, List, Optional, Union
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig

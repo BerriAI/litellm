@@ -2,7 +2,7 @@
 Anthropic Skills API configuration and transformations
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import httpx
 
