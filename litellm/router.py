@@ -4435,6 +4435,15 @@ class Router:
                     return response
 
                 except Exception as e:
+                    # raises an exception if this error should not be retries
+                    self.should_retry_this_error(
+                        error=e,
+                        healthy_deployments=_healthy_deployments,
+                        all_deployments=_all_deployments,
+                        context_window_fallbacks=context_window_fallbacks,
+                        regular_fallbacks=fallbacks,
+                        content_policy_fallbacks=content_policy_fallbacks,
+                    )
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
