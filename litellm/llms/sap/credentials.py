@@ -193,10 +193,11 @@ def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] 
     config = init_conf(profile)
     env = os.environ  # snapshot for testability
 
-    # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
-    service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
-        VCAP_AICORE_SERVICE_NAME
-    )
+    if not config:
+        # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
+        service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
+            VCAP_AICORE_SERVICE_NAME
+        )
 
     out: Dict[str, str] = {}
     for cred in CREDENTIAL_VALUES:
