@@ -5094,6 +5094,55 @@ async def completion(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
+    except PassthroughResponseException as e:
+        # Guardrail flagged content in passthrough mode - return 200 with violation message
+        _data = e.request_data
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+
+        if _data.get("stream", None) is not None and _data["stream"] is True:
+            _text_response = litellm.ModelResponse()
+            _text_response.choices[0].text = e.message
+            _text_response.model = e.model  # type: ignore
+            _usage = litellm.Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
+            _text_response.usage = _usage  # type: ignore
+            _iterator = litellm.utils.ModelResponseIterator(
+                model_response=_text_response, convert_to_delta=True
+            )
+            _streaming_response = litellm.TextCompletionStreamWrapper(
+                completion_stream=_iterator,
+                model=e.model,
+            )
+
+            selected_data_generator = select_data_generator(
+                response=_streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+                status_code=200,  # Return 200 for passthrough mode
+            )
+        else:
+            _response = litellm.TextCompletionResponse()
+            _response.choices[0].text = e.message
+            _response.model = e.model  # type: ignore
+            _usage = litellm.Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
+            _response.usage = _usage  # type: ignore
+            return _response
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
