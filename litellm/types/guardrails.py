@@ -55,6 +55,7 @@ class SupportedGuardrailIntegrations(Enum):
     ENKRYPTAI = "enkryptai"
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
+    PROMPT_SECURITY = "prompt_security"
 
 
 class Role(Enum):
