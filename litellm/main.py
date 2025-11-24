@@ -55,7 +55,8 @@ import litellm
 # client must be imported from litellm as it's a decorator used at function definition time
 from litellm import client
 # Other utils are imported directly to avoid circular imports
-from litellm.utils import exception_type, get_litellm_params, get_optional_params
+# exception_type is imported lazily when needed to avoid loading at import time
+from litellm.utils import get_litellm_params, get_optional_params
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -74,6 +75,11 @@ def _get_realtime_health_check():
     """Lazy import helper for _realtime_health_check to avoid loading at module import time."""
     from litellm.realtime_api.main import _realtime_health_check as _func
     return _func
+
+def _get_exception_type():
+    """Lazy import helper for exception_type to avoid loading at module import time."""
+    from litellm.utils import _get_exception_type as _get_exception_type_func
+    return _get_exception_type_func()
 
 # Lazy initialization for azure_audio_transcriptions
 _azure_audio_transcriptions = None
@@ -1109,7 +1115,7 @@ async def acompletion(
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
+        raise _get_exception_type()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
@@ -1128,7 +1134,7 @@ async def _async_streaming(response, model, custom_llm_provider, args):
             yield line
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
+        raise _get_exception_type()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
@@ -4267,7 +4273,7 @@ def completion(  # type: ignore # noqa: PLR0915
         return response
     except Exception as e:
         ## Map to OpenAI Exception
-        raise exception_type(
+        raise _get_exception_type()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
@@ -4394,7 +4400,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
+        raise _get_exception_type()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
@@ -5360,7 +5366,7 @@ def embedding(  # noqa: PLR0915
             original_response=str(e),
         )
         ## Map to OpenAI Exception
-        raise exception_type(
+        raise _get_exception_type()(
             model=model,
             original_exception=e,
             custom_llm_provider=custom_llm_provider,
@@ -5434,7 +5440,7 @@ async def atext_completion(
             return text_completion_response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
+        raise _get_exception_type()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
@@ -5973,7 +5979,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
+        raise _get_exception_type()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
@@ -6230,7 +6236,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         return response  # type: ignore
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
-        raise exception_type(
+        raise _get_exception_type()(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
