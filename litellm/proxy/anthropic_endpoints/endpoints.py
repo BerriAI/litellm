@@ -78,10 +78,11 @@ async def anthropic_response(  # noqa: PLR0915
         )
 
         # Create Anthropic-formatted response with violation message
+        import uuid
         from litellm.types.utils import AnthropicMessagesResponse
 
         _anthropic_response = AnthropicMessagesResponse(
-            id=f"msg_{litellm.utils.generate_random_id()}",
+            id=f"msg_{str(uuid.uuid4())}",
             type="message",
             role="assistant",
             content=[{"type": "text", "text": e.message}],
