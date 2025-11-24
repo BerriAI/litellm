@@ -3,6 +3,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
+    Dict,
     List,
     Literal,
     Optional,
@@ -128,6 +129,39 @@ class LiteLLMAnthropicMessagesAdapter:
         pass
 
     ### FOR [BETA] `/v1/messages` endpoint support
+
+    def _extract_signature_from_tool_call(
+        self, tool_call: Any
+    ) -> Optional[str]:
+        """
+        Extract signature from a tool call's provider_specific_fields.
+        Only checks provider_specific_fields, not thinking blocks.
+        """
+        signature = None
+        
+        if hasattr(tool_call, "provider_specific_fields") and tool_call.provider_specific_fields:
+            if "thought_signature" in tool_call.provider_specific_fields:
+                signature = tool_call.provider_specific_fields["thought_signature"]
+        elif (
+            hasattr(tool_call.function, "provider_specific_fields")
+            and tool_call.function.provider_specific_fields
+        ):
+            if "thought_signature" in tool_call.function.provider_specific_fields:
+                signature = tool_call.function.provider_specific_fields["thought_signature"]
+        
+        return signature
+
+    def _extract_signature_from_tool_use_content(
+        self, content: Dict[str, Any]
+    ) -> Optional[str]:
+        """
+        Extract signature from a tool_use content block's provider_specific_fields.
+        """
+        provider_specific_fields = content.get("provider_specific_fields", {})
+        if provider_specific_fields:
+            return provider_specific_fields.get("signature")
+        return None
+
 
     def translatable_anthropic_params(self) -> List:
         """
@@ -263,10 +297,18 @@ class LiteLLMAnthropicMessagesAdapter:
                                 else:
                                     assistant_message_str += content.get("text", "")
                             elif content.get("type") == "tool_use":
-                                function_chunk = ChatCompletionToolCallFunctionChunk(
-                                    name=content.get("name", ""),
-                                    arguments=json.dumps(content.get("input", {})),
-                                )
+                                function_chunk: ChatCompletionToolCallFunctionChunk = {
+                                    "name": content.get("name", ""),
+                                    "arguments": json.dumps(content.get("input", {})),
+                                }
+                                signature = self._extract_signature_from_tool_use_content(content)
+                                
+                                if signature:
+                                    provider_specific_fields: Dict[str, Any] = (
+                                        function_chunk.get("provider_specific_fields") or {}
+                                    )
+                                    provider_specific_fields["thought_signature"] = signature
+                                    function_chunk["provider_specific_fields"] = provider_specific_fields
 
                                 tool_calls.append(
                                     ChatCompletionAssistantToolCall(
@@ -512,18 +554,27 @@ class LiteLLMAnthropicMessagesAdapter:
                 and len(choice.message.tool_calls) > 0
             ):
                 for tool_call in choice.message.tool_calls:
-                    new_content.append(
-                        AnthropicResponseContentBlockToolUse(
-                            type="tool_use",
-                            id=tool_call.id,
-                            name=tool_call.function.name or "",
-                            input=(
-                                json.loads(tool_call.function.arguments)
-                                if tool_call.function.arguments
-                                else {}
-                            ),
-                        )
+                    # Extract signature from provider_specific_fields only
+                    signature = self._extract_signature_from_tool_call(tool_call)
+                    
+                    provider_specific_fields = {}
+                    if signature:
+                        provider_specific_fields["signature"] = signature
+                    
+                    tool_use_block = AnthropicResponseContentBlockToolUse(
+                        type="tool_use",
+                        id=tool_call.id,
+                        name=tool_call.function.name or "",
+                        input=(
+                            json.loads(tool_call.function.arguments)
+                            if tool_call.function.arguments
+                            else {}
+                        ),
                     )
+                    # Add provider_specific_fields if signature is present
+                    if provider_specific_fields:
+                        tool_use_block.provider_specific_fields = provider_specific_fields
+                    new_content.append(tool_use_block)
             # Handle text content
             elif choice.message.content is not None:
                 new_content.append(

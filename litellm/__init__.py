@@ -389,6 +389,7 @@ disable_add_prefix_to_prompt: bool = (
 disable_copilot_system_to_assistant: bool = (
     False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 )
+public_mcp_servers: Optional[List[str]] = None
 public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
@@ -424,6 +425,7 @@ fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
 allowed_fails: int = 3
+allow_dynamic_callback_disabling: bool = True
 num_retries_per_request: Optional[int] = (
     None  # for the request overall (incl. fallbacks + model retries)
 )
@@ -564,6 +566,7 @@ wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
 lemonade_models: Set = set()
+docker_model_runner_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -802,6 +805,8 @@ def add_known_models():
             ovhcloud_embedding_models.add(key)
         elif value.get("litellm_provider") == "lemonade":
             lemonade_models.add(key)
+        elif value.get("litellm_provider") == "docker_model_runner":
+            docker_model_runner_models.add(key)
 
 
 add_known_models()
@@ -906,6 +911,7 @@ model_list = list(
     | wandb_models
     | ovhcloud_models
     | lemonade_models
+    | docker_model_runner_models
     | set(clarifai_models)
 )
 
@@ -1353,10 +1359,14 @@ from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
+from .llms.github_copilot.responses.transformation import (
+    GithubCopilotResponsesAPIConfig,
+)
 from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
+from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
 from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
@@ -1367,6 +1377,7 @@ from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
 from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
 from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
+from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients

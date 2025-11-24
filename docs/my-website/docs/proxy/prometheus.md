@@ -14,11 +14,12 @@ If you're using the LiteLLM CLI with `litellm --config proxy_config.yaml` then y
 Add this to your proxy config.yaml 
 ```yaml
 model_list:
- - model_name: gpt-4o
+  - model_name: gpt-4o
     litellm_params:
       model: gpt-4o
 litellm_settings:
-  callbacks: ["prometheus"]
+  callbacks:
+    - prometheus
 ```
 
 Start the proxy
