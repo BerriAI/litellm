@@ -2652,6 +2652,7 @@ class LlmProviders(str, Enum):
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
     LEMONADE = "lemonade"
+    AMAZON_NOVA = "amazon-nova"
 
 
 # Create a set of all provider values for quick lookup

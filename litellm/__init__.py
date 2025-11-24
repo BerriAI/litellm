@@ -260,6 +260,7 @@ heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
+amazon_nova_api_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
