@@ -268,9 +268,9 @@ async def convert_upload_files_to_file_data(
             else:
                 data[key] = value
         elif hasattr(value, "read"):
-            # Single UploadFile object - read and convert
+            # Single UploadFile object - read and convert to list for consistency
             file_content = await value.read()
-            data[key] = (value.filename, file_content, value.content_type)
+            data[key] = [(value.filename, file_content, value.content_type)]
         else:
             # Regular form field
             data[key] = value

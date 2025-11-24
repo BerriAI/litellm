@@ -2,7 +2,7 @@
 Anthropic Skills API configuration and transformations
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
@@ -124,7 +124,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         url = self.get_complete_url(api_base=api_base, endpoint="skills")
         
         # Build query parameters
-        query_params = {}
+        query_params: Dict[str, Any] = {}
         if "limit" in list_params and list_params["limit"]:
             query_params["limit"] = list_params["limit"]
         if "page" in list_params and list_params["page"]:
