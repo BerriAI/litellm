@@ -168,7 +168,7 @@ def test_process_response_passthrough_raises_exception_in_pre_call() -> None:
             response_json, data, GuardrailEventHooks.pre_call
         )
 
-    assert "Content was flagged by Gray Swan Guardrail" in exc.value.message
+    assert "Gray Swan Cygnal Guardrail" in exc.value.message
     assert exc.value.model == "gpt-4"
     assert exc.value.detection_info["violation_score"] == 0.8
     assert exc.value.detection_info["violated_rules"] == [1, 2]
@@ -198,7 +198,7 @@ def test_process_response_passthrough_raises_exception_in_during_call() -> None:
             response_json, data, GuardrailEventHooks.during_call
         )
 
-    assert "Content was flagged by Gray Swan Guardrail" in exc.value.message
+    assert "Gray Swan Cygnal Guardrail" in exc.value.message
     assert exc.value.model == "gpt-4"
 
 
@@ -287,8 +287,11 @@ def test_format_violation_message() -> None:
 
     message = guardrail._format_violation_message(detections)
 
-    assert "Content was flagged by Gray Swan Guardrail" in message
-    assert "Violation Score: 0.85" in message
-    assert "Violated Rules: 1, 3, 5" in message
-    assert "Mutation Detected: Yes" in message
-    assert "Indirect Prompt Injection" not in message or "No" not in message
+    # Check new message format
+    assert "Sorry I can't help with that" in message
+    assert "Gray Swan Cygnal Guardrail" in message
+    assert "violation score of 0.85" in message
+    assert "violating the rule(s): 1, 3, 5" in message
+    assert "Mutation effort to make the harmful intention disguised was DETECTED" in message
+    # IPI should not be in message since it's False
+    assert "Indirect Prompt Injection was DETECTED" not in message
