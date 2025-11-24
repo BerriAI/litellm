@@ -10,7 +10,10 @@ from fastapi import APIRouter, Depends, Request, Response
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import get_form_data
+from litellm.proxy.common_utils.http_parsing_utils import (
+    convert_upload_files_to_file_data,
+    get_form_data,
+)
 from litellm.types.llms.anthropic_skills import (
     DeleteSkillResponse,
     ListSkillsResponse,
@@ -37,22 +40,27 @@ async def create_skill(
     
     Requires `?beta=true` query parameter.
     
+    Model-based routing (for multi-account support):
+    - Pass model via header: `x-litellm-model: claude-account-1`
+    - Pass model via query: `?model=claude-account-1`
+    - Pass model via form field: `model=claude-account-1`
+    
     Example usage:
     ```bash
-    # With query param
-    curl -X POST "http://localhost:4000/v1/skills?beta=true&custom_llm_provider=anthropic" \
+    # Basic usage
+    curl -X POST "http://localhost:4000/v1/skills?beta=true" \
       -H "Content-Type: multipart/form-data" \
       -H "Authorization: Bearer your-key" \
       -F "display_title=My Skill" \
       -F "files[]=@skill.zip"
     
-    # Or with form field
+    # With model-based routing
     curl -X POST "http://localhost:4000/v1/skills?beta=true" \
       -H "Content-Type: multipart/form-data" \
       -H "Authorization: Bearer your-key" \
+      -H "x-litellm-model: claude-account-1" \
       -F "display_title=My Skill" \
-      -F "files[]=@skill.zip" \
-      -F "custom_llm_provider=anthropic"
+      -F "files[]=@skill.zip"
     ```
     
     Returns: Skill object with id, display_title, etc.
@@ -71,11 +79,21 @@ async def create_skill(
         version,
     )
 
-    # Read form data
-    data = await get_form_data(request)
+    # Read form data and convert UploadFile objects to file data tuples
+    form_data = await get_form_data(request)
+    data = await convert_upload_files_to_file_data(form_data)
+    
+    # Extract model for routing (header > query > body)
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    
     
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -90,7 +108,7 @@ async def create_skill(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=data.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -127,17 +145,21 @@ async def list_skills(
     
     Requires `?beta=true` query parameter.
     
+    Model-based routing (for multi-account support):
+    - Pass model via header: `x-litellm-model: claude-account-1`
+    - Pass model via query: `?model=claude-account-1`
+    - Pass model via body: `{"model": "claude-account-1"}`
+    
     Example usage:
     ```bash
-    # With query params
-    curl "http://localhost:4000/v1/skills?beta=true&limit=10&custom_llm_provider=anthropic" \
+    # Basic usage
+    curl "http://localhost:4000/v1/skills?beta=true&limit=10" \
       -H "Authorization: Bearer your-key"
     
-    # Or with request body
-    curl -X GET "http://localhost:4000/v1/skills?beta=true" \
+    # With model-based routing
+    curl "http://localhost:4000/v1/skills?beta=true&limit=10" \
       -H "Authorization: Bearer your-key" \
-      -H "Content-Type: application/json" \
-      -d '{"limit": 10, "custom_llm_provider": "anthropic"}'
+      -H "x-litellm-model: claude-account-1"
     ```
     
     Returns: ListSkillsResponse with list of skills
@@ -168,6 +190,15 @@ async def list_skills(
     if "before_id" not in data and before_id is not None:
         data["before_id"] = before_id
     
+    # Extract model for routing (header > query > body)
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
     # Set custom_llm_provider: body > query param > default
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
@@ -185,7 +216,7 @@ async def list_skills(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=data.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -220,17 +251,21 @@ async def get_skill(
     
     Requires `?beta=true` query parameter.
     
+    Model-based routing (for multi-account support):
+    - Pass model via header: `x-litellm-model: claude-account-1`
+    - Pass model via query: `?model=claude-account-1`
+    - Pass model via body: `{"model": "claude-account-1"}`
+    
     Example usage:
     ```bash
-    # With query param
-    curl "http://localhost:4000/v1/skills/skill_123?beta=true&custom_llm_provider=anthropic" \
+    # Basic usage
+    curl "http://localhost:4000/v1/skills/skill_123?beta=true" \
       -H "Authorization: Bearer your-key"
     
-    # Or with request body
-    curl -X GET "http://localhost:4000/v1/skills/skill_123?beta=true" \
+    # With model-based routing
+    curl "http://localhost:4000/v1/skills/skill_123?beta=true" \
       -H "Authorization: Bearer your-key" \
-      -H "Content-Type: application/json" \
-      -d '{"custom_llm_provider": "anthropic"}'
+      -H "x-litellm-model: claude-account-1"
     ```
     
     Returns: Skill object
@@ -256,6 +291,15 @@ async def get_skill(
     # Set skill_id from path parameter
     data["skill_id"] = skill_id
     
+    # Extract model for routing (header > query > body)
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
     # Set custom_llm_provider: body > query param > default
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
@@ -273,7 +317,7 @@ async def get_skill(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=data.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -310,17 +354,21 @@ async def delete_skill(
     
     Note: Anthropic does not allow deleting skills with existing versions.
     
+    Model-based routing (for multi-account support):
+    - Pass model via header: `x-litellm-model: claude-account-1`
+    - Pass model via query: `?model=claude-account-1`
+    - Pass model via body: `{"model": "claude-account-1"}`
+    
     Example usage:
     ```bash
-    # With query param
-    curl -X DELETE "http://localhost:4000/v1/skills/skill_123?beta=true&custom_llm_provider=anthropic" \
+    # Basic usage
+    curl -X DELETE "http://localhost:4000/v1/skills/skill_123?beta=true" \
       -H "Authorization: Bearer your-key"
     
-    # Or with request body
+    # With model-based routing
     curl -X DELETE "http://localhost:4000/v1/skills/skill_123?beta=true" \
       -H "Authorization: Bearer your-key" \
-      -H "Content-Type: application/json" \
-      -d '{"custom_llm_provider": "anthropic"}'
+      -H "x-litellm-model: claude-account-1"
     ```
     
     Returns: DeleteSkillResponse with type="skill_deleted"
@@ -346,6 +394,15 @@ async def delete_skill(
     # Set skill_id from path parameter
     data["skill_id"] = skill_id
     
+    # Extract model for routing (header > query > body)
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
     # Set custom_llm_provider: body > query param > default
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
@@ -363,7 +420,7 @@ async def delete_skill(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=data.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
