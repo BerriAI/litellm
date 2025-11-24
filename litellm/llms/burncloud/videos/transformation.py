@@ -249,6 +249,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
         """
         Transform the BurnCloud video retrieve request.
         """
+
         # Extract the original video_id (remove provider encoding if present)
         original_video_id = extract_original_video_id(video_id)
 
