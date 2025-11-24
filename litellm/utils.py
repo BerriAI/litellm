@@ -84,7 +84,8 @@ from litellm.constants import (
 )
 # CustomGuardrail is imported lazily when needed to avoid loading at import time
 # from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.integrations.custom_logger import CustomLogger
+# CustomLogger is imported lazily when needed to avoid loading at import time
+# from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_store_integrations.base_vector_store import (
     BaseVectorStore,
 )
@@ -509,7 +510,7 @@ def _add_custom_logger_callback_to_specific_event(
 
 
 def _custom_logger_class_exists_in_success_callbacks(
-    callback_class: CustomLogger,
+    callback_class: "CustomLogger",
 ) -> bool:
     """
     Returns True if an instance of the custom logger exists in litellm.success_callback or litellm._async_success_callback
@@ -525,7 +526,7 @@ def _custom_logger_class_exists_in_success_callbacks(
 
 
 def _custom_logger_class_exists_in_failure_callbacks(
-    callback_class: CustomLogger,
+    callback_class: "CustomLogger",
 ) -> bool:
     """
     Returns True if an instance of the custom logger exists in litellm.failure_callback or litellm._async_failure_callback
@@ -582,7 +583,7 @@ def load_credentials_from_list(kwargs: dict):
 
 
 def get_dynamic_callbacks(
-    dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]],
+    dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]],
 ) -> List:
     returned_callbacks = litellm.callbacks.copy()
     if dynamic_callbacks:
@@ -611,7 +612,7 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+        dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
             kwargs.pop("callbacks", None)
         )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
@@ -712,16 +713,16 @@ def function_setup(  # noqa: PLR0915
                 litellm.failure_callback.pop(index)
         ### DYNAMIC CALLBACKS ###
         dynamic_success_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         dynamic_async_success_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         dynamic_failure_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         dynamic_async_failure_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         if kwargs.get("success_callback", None) is not None and isinstance(
             kwargs["success_callback"], list
@@ -984,7 +985,7 @@ async def async_pre_call_deployment_hook(kwargs: Dict[str, Any], call_type: str)
     modified_kwargs = kwargs.copy()
 
     for callback in litellm.callbacks:
-        if isinstance(callback, CustomLogger):
+        if isinstance(callback, _get_custom_logger()):
             result = await callback.async_pre_call_deployment_hook(
                 modified_kwargs, typed_call_type
             )
@@ -1006,7 +1007,7 @@ async def async_post_call_success_deployment_hook(
         typed_call_type = None  # unknown call type
 
     for callback in litellm.callbacks:
-        if isinstance(callback, CustomLogger):
+        if isinstance(callback, _get_custom_logger()):
             result = await callback.async_post_call_success_deployment_hook(
                 request_data, cast(LLMResponseTypes, response), typed_call_type
             )
@@ -1132,6 +1133,7 @@ _audio_utils_module = None
 _caching_handler_response_class = None
 _llm_caching_handler_class = None
 _custom_guardrail_class = None
+_custom_logger_class = None
 
 def _get_openai_module():
     """Lazy import helper for openai module to avoid loading at module import time."""
@@ -1195,6 +1197,13 @@ def _get_custom_guardrail():
     if _custom_guardrail_class is None:
         from litellm.integrations.custom_guardrail import CustomGuardrail as _custom_guardrail_class
     return _custom_guardrail_class
+
+def _get_custom_logger():
+    """Lazy import helper for CustomLogger to avoid loading at import time."""
+    global _custom_logger_class
+    if _custom_logger_class is None:
+        from litellm.integrations.custom_logger import CustomLogger as _custom_logger_class
+    return _custom_logger_class
 
 
 def client(original_function):  # noqa: PLR0915
@@ -7667,7 +7676,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_vector_store_config(
         provider: LlmProviders,
-    ) -> Optional[CustomLogger]:
+    ) -> Optional["CustomLogger"]:
         from litellm.integrations.vector_store_integrations.bedrock_vector_store import (
             BedrockVectorStore,
         )
