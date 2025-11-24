@@ -1200,11 +1200,7 @@ openai_video_generation_models = ["sora-2"]
 # Note: GeminiModelInfo is lazy-loaded via __getattr__ to reduce import-time memory cost
 
 
-from .llms.vertex_ai.vertex_embeddings.transformation import (
-    VertexAITextEmbeddingConfig,
-)
-
-vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
+# Note: VertexAITextEmbeddingConfig and vertexAITextEmbeddingConfig are lazy-loaded via __getattr__ to reduce import-time memory cost
 
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
@@ -1637,6 +1633,18 @@ def __getattr__(name: str) -> Any:
     if name in _misc_transformation_config_names:
         from ._lazy_imports import _lazy_import_misc_transformation_configs
         return _lazy_import_misc_transformation_configs(name)
+    
+    # Lazy-load VertexAITextEmbeddingConfig and vertexAITextEmbeddingConfig to reduce import-time memory cost
+    if name == "VertexAITextEmbeddingConfig":
+        from .llms.vertex_ai.vertex_embeddings.transformation import VertexAITextEmbeddingConfig as _VertexAITextEmbeddingConfig
+        globals()["VertexAITextEmbeddingConfig"] = _VertexAITextEmbeddingConfig
+        return _VertexAITextEmbeddingConfig
+    
+    if name == "vertexAITextEmbeddingConfig":
+        from .llms.vertex_ai.vertex_embeddings.transformation import VertexAITextEmbeddingConfig
+        _vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
+        globals()["vertexAITextEmbeddingConfig"] = _vertexAITextEmbeddingConfig
+        return _vertexAITextEmbeddingConfig
     
     # Lazy-load XAIModelInfo to reduce import-time memory cost
     if name == "XAIModelInfo":
