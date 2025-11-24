@@ -150,12 +150,6 @@ from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_s
 #     _parse_content_for_reasoning,
 # )
 # LiteLLMLoggingObject and redact_message_input_output_from_logging are imported lazily when needed
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.redact_messages import (
-        LiteLLMLoggingObject
-    )
-else:
-    LiteLLMLoggingObject = None  # Will be lazy-loaded when needed
 # from litellm.litellm_core_utils.redact_messages import (
 #     LiteLLMLoggingObject,
 #     redact_message_input_output_from_logging,
@@ -317,8 +311,14 @@ from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 # BaseFilesConfig is lazy-loaded to reduce import-time memory cost
 # It's only needed when get_provider_files_config is called
+# LiteLLMLoggingObject is lazy-loaded to reduce import-time memory cost
 if TYPE_CHECKING:
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+    from litellm.litellm_core_utils.redact_messages import (
+        LiteLLMLoggingObject
+    )
+else:
+    LiteLLMLoggingObject = None  # Will be lazy-loaded when needed
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
