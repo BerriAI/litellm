@@ -19,7 +19,7 @@ from litellm.types.llms.vertex_ai import (
     ResponseSupervisedTuningSpec,
     ResponseTuningJob,
 )
-from litellm.types.utils import LiteLLMFineTuningJob
+from litellm.types.utils import LiteLLMFineTuningJob, LlmProviders
 
 
 class VertexFineTuningAPI(VertexLLM):
@@ -30,7 +30,7 @@ class VertexFineTuningAPI(VertexLLM):
     def __init__(self) -> None:
         super().__init__()
         self.async_handler = get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.VERTEX_AI,
+            llm_provider=LlmProviders.VERTEX_AI,
             params={"timeout": 600.0},
         )
 

@@ -1267,7 +1267,8 @@ from .proxy.proxy_cli import run_server
 # from .assistants.main import *
 # batches.main is lazy-loaded via __getattr__ to reduce import-time memory cost
 # from .batches.main import *
-from .images.main import *
+# Note: images.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .images.main import *
 from .videos.main import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
@@ -1454,6 +1455,18 @@ def __getattr__(name: str) -> Any:
         from .router import Router as _Router
         globals()["Router"] = _Router
         return _Router
+    
+    # Lazy load image functions to reduce import-time memory cost
+    _image_functions = {
+        "image_generation", "aimage_generation",
+        "image_variation", "aimage_variation",
+        "image_edit", "aimage_edit",
+    }
+    if name in _image_functions:
+        from .images import main as _images_main
+        _func = getattr(_images_main, name)
+        globals()[name] = _func
+        return _func
     
     if name == "provider_list":
         from ._lazy_imports import _lazy_import_types_utils
