@@ -5,6 +5,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM supports all anthropic models.
 
 - `claude-sonnet-4-5-20250929`
+- `claude-opus-4-5-20251101`
 - `claude-opus-4-1-20250805`
 - `claude-4` (`claude-opus-4-20250514`, `claude-sonnet-4-20250514`)
 - `claude-3.7` (`claude-3-7-sonnet-20250219`)
@@ -60,7 +61,8 @@ LiteLLM supports Anthropic's [structured outputs feature](https://platform.claud
 ### Supported Models
 - `sonnet-4-5` or `sonnet-4.5` (all Sonnet 4.5 variants)
 - `opus-4-1` or `opus-4.1` (all Opus 4.1 variants)
-
+  - `opus-4-5` or `opus-4.5` (all Opus 4.5 variants)
+  
 ### Example Usage
 
 <Tabs>
