@@ -36,6 +36,7 @@ from litellm.types.llms.openai import (
     OpenAIFilesPurpose,
 )
 from litellm.types.utils import (
+    CallTypesLiteral,
     LiteLLMBatch,
     LiteLLMFineTuningJob,
     LLMResponseTypes,
@@ -152,7 +153,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "status": file_object.status,
                 },
                 "update": {},  # don't do anything if it already exists
-            }
+            },
         )
 
     async def get_unified_file_id(
@@ -224,9 +225,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 where={"unified_object_id": unified_object_id}
             )
         )
+
         if managed_object:
             return managed_object.created_by == user_id
-        return False
+        return True  # don't raise error if managed object is not found
 
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
@@ -271,28 +273,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: Dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "acreate_batch",
-            "aretrieve_batch",
-            "acreate_file",
-            "afile_list",
-            "afile_delete",
-            "afile_content",
-            "acreate_fine_tuning_job",
-            "aretrieve_fine_tuning_job",
-            "alist_fine_tuning_jobs",
-            "acancel_fine_tuning_job",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Union[Exception, str, Dict, None]:
         """
         - Detect litellm_proxy/ file_id
@@ -315,6 +296,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         file_ids, user_api_key_dict.parent_otel_span
                     )
 
+                    data["model_file_id_mapping"] = model_file_id_mapping
+        elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
+            # Handle managed files in responses API input
+            input_data = data.get("input")
+            if input_data:
+                file_ids = self.get_file_ids_from_responses_input(input_data)
+                if file_ids:
+                    model_file_id_mapping = await self.get_model_file_id_mapping(
+                        file_ids, user_api_key_dict.parent_otel_span
+                    )
                     data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.afile_content.value:
             retrieve_file_id = cast(Optional[str], data.get("file_id"))
@@ -472,6 +463,47 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 file_ids.append(file_id)
         return file_ids
 
+    def get_file_ids_from_responses_input(
+        self, input: Union[str, List[Dict[str, Any]]]
+    ) -> List[str]:
+        """
+        Gets file ids from responses API input.
+        
+        The input can be:
+        - A string (no files)
+        - A list of input items, where each item can have:
+          - type: "input_file" with file_id
+          - content: a list that can contain items with type: "input_file" and file_id
+        """
+        file_ids: List[str] = []
+        
+        if isinstance(input, str):
+            return file_ids
+        
+        if not isinstance(input, list):
+            return file_ids
+        
+        for item in input:
+            if not isinstance(item, dict):
+                continue
+            
+            # Check for direct input_file type
+            if item.get("type") == "input_file":
+                file_id = item.get("file_id")
+                if file_id:
+                    file_ids.append(file_id)
+            
+            # Check for input_file in content array
+            content = item.get("content")
+            if isinstance(content, list):
+                for content_item in content:
+                    if isinstance(content_item, dict) and content_item.get("type") == "input_file":
+                        file_id = content_item.get("file_id")
+                        if file_id:
+                            file_ids.append(file_id)
+        
+        return file_ids
+
     async def get_model_file_id_mapping(
         self, file_ids: List[str], litellm_parent_otel_span: Span
     ) -> dict:
@@ -497,7 +529,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         for file_id in file_ids:
             ## CHECK IF FILE ID IS MANAGED BY LITELM
             is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
-
             if is_base64_unified_file_id:
                 litellm_managed_file_ids.append(file_id)
 
@@ -508,6 +539,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 unified_file_object = await self.get_unified_file_id(
                     file_id, litellm_parent_otel_span
                 )
+
                 if unified_file_object:
                     file_id_mapping[file_id] = unified_file_object.model_mappings
 
@@ -783,18 +815,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Router,
         **data: Dict,
     ) -> OpenAIFileObject:
-        file_id = convert_b64_uid_to_unified_uid(file_id)
+
+        # file_id = convert_b64_uid_to_unified_uid(file_id)
         model_file_id_mapping = await self.get_model_file_id_mapping(
             [file_id], litellm_parent_otel_span
         )
+
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
-            for model_id, file_id in specific_model_file_id_mapping.items():
-                await llm_router.afile_delete(model=model_id, file_id=file_id, **data)  # type: ignore
+            for model_id, model_file_id in specific_model_file_id_mapping.items():
+                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span
         )
+
         if stored_file_object:
             return stored_file_object
         else:
@@ -815,6 +850,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_file_id_mapping
             or await self.get_model_file_id_mapping([file_id], litellm_parent_otel_span)
         )
+
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
 
         if specific_model_file_id_mapping:

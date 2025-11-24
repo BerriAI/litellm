@@ -18,6 +18,7 @@ Cygnal returns a `violation` score between `0` and `1` (higher means more likely
 
 ```bash
 export GRAYSWAN_API_KEY="your-grayswan-key"
+export GRAYSWAN_API_BASE="https://api.grayswan.ai"
 ```
 
 ### 2. Configure `config.yaml`
@@ -37,6 +38,7 @@ guardrails:
       guardrail: grayswan
       mode: [pre_call, post_call]            # monitor both input and output
       api_key: os.environ/GRAYSWAN_API_KEY
+      api_base: os.environ/GRAYSWAN_API_BASE  # optional
       optional_params:
         on_flagged_action: monitor             # or "block"
         violation_threshold: 0.5               # score >= threshold is flagged
@@ -140,8 +142,8 @@ Provides the strongest enforcement by inspecting both prompts and responses.
 |---------------------------------------|-----------------|-------------|
 | `api_key`                             | string          | Gray Swan Cygnal API key. Reads from `GRAYSWAN_API_KEY` if omitted. |
 | `mode`                                | string or list  | Guardrail stages (`pre_call`, `during_call`, `post_call`). |
-| `optional_params.on_flagged_action`   | string          | `monitor` (log only) or `block` (raise `HTTPException`). |
+| `optional_params.on_flagged_action`   | string          | `monitor` (log only), `block` (raise `HTTPException`), or `passthrough` (include detection info in response without blocking). |
 | `.optional_params.violation_threshold`| number (0-1)    | Scores at or above this value are considered violations. |
-| `optional_params.reasoning_mode`      | string          | `off`, `hybrid`, or `thinking`. Enables Cygnal’s reasoning capabilities. |
+| `optional_params.reasoning_mode`      | string          | `off`, `hybrid`, or `thinking`. Enables Cygnal's reasoning capabilities. |
 | `optional_params.categories`          | object          | Map of custom category names to descriptions. |
 | `optional_params.policy_id`           | string          | Gray Swan policy identifier. |

@@ -1,10 +1,10 @@
 import json
-from litellm._uuid import uuid
 from typing import Any, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 
 import litellm
+from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -102,15 +102,15 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "prompt_truncate_length",
             "context_length_exceeded_behavior",
         ]
-        
+
         # Only add tools for models that support function calling
         if supports_function_calling(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tools")
-        
+
         # Only add tool_choice for models that explicitly support it
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
-        
+
         return supported_params
 
     def map_openai_params(
@@ -246,7 +246,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        if not model.startswith("accounts/"):
+        if not model.startswith("accounts/") and "#" not in model:
             model = f"accounts/fireworks/models/{model}"
         messages = self._transform_messages_helper(
             messages=messages, model=model, litellm_params=litellm_params

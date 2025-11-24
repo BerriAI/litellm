@@ -64,7 +64,25 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartType:
+def _map_openai_detail_to_media_resolution(
+    detail: Optional[str],
+) -> Optional[Literal["low", "medium", "high"]]:
+    """
+    Map OpenAI's "detail" parameter to Gemini's "media_resolution" parameter.
+    """
+    if detail == "low":
+        return "low"
+    elif detail == "high":
+        return "high"
+    # "auto" or None means let the model decide, so we don't set media_resolution
+    return None
+
+
+def _process_gemini_image(
+    image_url: str, 
+    format: Optional[str] = None,
+    media_resolution: Optional[Literal["low", "medium", "high"]] = None,
+) -> PartType:
     """
     Given an image URL, return the appropriate PartType for Gemini
     """
@@ -99,8 +117,19 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             # https links for unsupported mime types and base64 images
             image = convert_to_anthropic_image_obj(image_url, format=format)
-            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
-            return PartType(inline_data=_blob)
+            _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
+            if media_resolution is not None:
+                _blob["media_resolution"] = media_resolution
+            
+            # Convert snake_case keys to camelCase for JSON serialization
+            # The TypedDict uses snake_case, but the API expects camelCase
+            _blob_dict = dict(_blob)
+            if "media_resolution" in _blob_dict:
+                _blob_dict["mediaResolution"] = _blob_dict.pop("media_resolution")
+            if "mime_type" in _blob_dict:
+                _blob_dict["mimeType"] = _blob_dict.pop("mime_type")
+            
+            return PartType(inline_data=cast(BlobType, _blob_dict))
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
         raise e
@@ -166,6 +195,7 @@ def check_if_part_exists_in_parts(
 
 def _gemini_convert_messages_with_history(  # noqa: PLR0915
     messages: List[AllMessageValues],
+    model: Optional[str] = None,
 ) -> List[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -205,13 +235,18 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             element = cast(ChatCompletionImageObject, element)
                             img_element = element
                             format: Optional[str] = None
+                            media_resolution: Optional[Literal["low", "medium", "high"]] = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
                                 format = img_element["image_url"].get("format")
+                                detail = img_element["image_url"].get("detail")
+                                media_resolution = _map_openai_detail_to_media_resolution(detail)
                             else:
                                 image_url = img_element["image_url"]
                             _part = _process_gemini_image(
-                                image_url=image_url, format=format
+                                image_url=image_url, 
+                                format=format,
+                                media_resolution=media_resolution,
                             )
                             _parts.append(_part)
                         elif element["type"] == "input_audio":
@@ -250,7 +285,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 )
                             try:
                                 _part = _process_gemini_image(
-                                    image_url=passed_file, format=format
+                                    image_url=passed_file, 
+                                    format=format,
                                 )
                                 _parts.append(_part)
                             except Exception:
@@ -263,7 +299,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif (
                     _message_content is not None
                     and isinstance(_message_content, str)
-                    and len(_message_content) > 0
                 ):
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
@@ -335,9 +370,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif (
                     _message_content is not None
                     and isinstance(_message_content, str)
-                    and _message_content
                 ):
-                    assistant_text = _message_content  # either string or none
+                    assistant_text = _message_content
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL
@@ -346,7 +380,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     or assistant_msg.get("function_call") is not None
                 ):  # support assistant tool invoke conversion
                     gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
-                        assistant_msg
+                        assistant_msg, model=model
                     )
                     ## check if gemini_tool_call already exists in assistant_content
                     for gemini_tool_call_part in gemini_tool_call_parts:
@@ -450,11 +484,11 @@ def _transform_request_body(
     try:
         if custom_llm_provider == "gemini":
             content = litellm.GoogleAIStudioGeminiConfig()._transform_messages(
-                messages=messages
+                messages=messages, model=model
             )
         else:
             content = litellm.VertexGeminiConfig()._transform_messages(
-                messages=messages
+                messages=messages, model=model
             )
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
@@ -475,7 +509,7 @@ def _transform_request_body(
                 labels = {k: v for k, v in rm.items() if isinstance(v, str)}
 
         filtered_params = {
-            k: v for k, v in optional_params.items() if k in config_fields
+            k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))
         }
 
         generation_config: Optional[GenerationConfig] = GenerationConfig(

@@ -585,7 +585,7 @@ class LiteLLMProxyRequestSetup:
                 if user_api_key_dict.budget_reset_at
                 else None
             ),
-            user_api_key_auth_metadata=None,
+            user_api_key_auth_metadata=user_api_key_dict.metadata,
         )
         return user_api_key_logged_metadata
 
@@ -667,6 +667,12 @@ class LiteLLMProxyRequestSetup:
                     tags_to_add=key_metadata["tags"],
                 )
             )
+        if "disable_global_guardrails" in key_metadata and isinstance(
+            key_metadata["disable_global_guardrails"], bool
+        ):
+            data[_metadata_variable_name]["disable_global_guardrails"] = key_metadata[
+                "disable_global_guardrails"
+            ]
         if "spend_logs_metadata" in key_metadata and isinstance(
             key_metadata["spend_logs_metadata"], dict
         ):
@@ -893,6 +899,22 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             data["metadata"]
         )
 
+    # Parse litellm_metadata if it's a string (e.g., from multipart/form-data or extra_body)
+    if "litellm_metadata" in data and data["litellm_metadata"] is not None:
+        if isinstance(data["litellm_metadata"], str):
+            parsed_litellm_metadata = safe_json_loads(data["litellm_metadata"])
+            if not isinstance(parsed_litellm_metadata, dict):
+                verbose_proxy_logger.warning(
+                    f"Failed to parse 'litellm_metadata' as JSON dict. Received value: {data['litellm_metadata']}"
+                )
+            else:
+                data["litellm_metadata"] = parsed_litellm_metadata
+        # Merge litellm_metadata into the metadata variable (preserving existing values)
+        if isinstance(data["litellm_metadata"], dict):
+            for key, value in data["litellm_metadata"].items():
+                if key not in data[_metadata_variable_name]:
+                    data[_metadata_variable_name][key] = value
+
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
         user_api_key_dict=user_api_key_dict,
@@ -919,6 +941,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             request_tags=data[_metadata_variable_name].get("tags"),
             tags_to_add=team_metadata["tags"],
         )
+    if "disable_global_guardrails" in team_metadata and isinstance(
+        team_metadata["disable_global_guardrails"], bool
+    ):
+        data[_metadata_variable_name]["disable_global_guardrails"] = team_metadata[
+            "disable_global_guardrails"
+        ]
     if "spend_logs_metadata" in team_metadata and isinstance(
         team_metadata["spend_logs_metadata"], dict
     ):
@@ -1052,6 +1080,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
     )
 
+    # Key Model Aliases
+    _update_model_if_key_alias_exists(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     verbose_proxy_logger.debug(
         "[PROXY] returned data from litellm_pre_call_utils: %s", data
     )
@@ -1107,6 +1141,33 @@ def _update_model_if_team_alias_exists(
     return
 
 
+def _update_model_if_key_alias_exists(
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Update the model if the key alias exists
+
+    If an alias map has been set on a key, then we want to make the request with the model the key alias is pointing to
+
+    eg.
+        - user calls `modelAlias`
+        - key.aliases = {
+            "modelAlias": "xai/grok-4-fast-non-reasoning"
+        }
+        - requested_model = "xai/grok-4-fast-non-reasoning"
+    """
+    _model = data.get("model")
+    if (
+        _model
+        and user_api_key_dict.aliases
+        and isinstance(user_api_key_dict.aliases, dict)
+        and _model in user_api_key_dict.aliases
+    ):
+        data["model"] = user_api_key_dict.aliases[_model]
+    return
+
+
 def _get_enforced_params(
     general_settings: Optional[dict], user_api_key_dict: UserAPIKeyAuth
 ) -> Optional[list]:
@@ -1157,7 +1218,7 @@ def _enforced_params_check(
     )
     if enforced_params is None:
         return True
-    if enforced_params is not None and premium_user is not True:
+    if enforced_params and premium_user is not True:
         raise ValueError(
             f"Enforced Params is an Enterprise feature. Enforced Params: {enforced_params}. {CommonProxyErrors.not_premium_user.value}"
         )
@@ -1191,6 +1252,8 @@ def _add_guardrails_from_key_or_team_metadata(
     """
     Helper add guardrails from key or team metadata to request data
 
+    Key guardrails are set first, then team guardrails are appended (without duplicates).
+
     Args:
         key_metadata: The key metadata dictionary to check for guardrails
         team_metadata: The team metadata dictionary to check for guardrails
@@ -1200,14 +1263,30 @@ def _add_guardrails_from_key_or_team_metadata(
     """
     from litellm.proxy.utils import _premium_user_check
 
-    for _management_object_metadata in [key_metadata, team_metadata]:
-        if _management_object_metadata and "guardrails" in _management_object_metadata:
-            if len(_management_object_metadata["guardrails"]) > 0:
-                _premium_user_check()
+    # Initialize guardrails set (avoiding duplicates)
+    combined_guardrails = set()
 
-            data[metadata_variable_name]["guardrails"] = _management_object_metadata[
-                "guardrails"
-            ]
+    # Add key-level guardrails first
+    if key_metadata and "guardrails" in key_metadata:
+        if (
+            isinstance(key_metadata["guardrails"], list)
+            and len(key_metadata["guardrails"]) > 0
+        ):
+            _premium_user_check()
+            combined_guardrails.update(key_metadata["guardrails"])
+
+    # Add team-level guardrails (set automatically handles duplicates)
+    if team_metadata and "guardrails" in team_metadata:
+        if (
+            isinstance(team_metadata["guardrails"], list)
+            and len(team_metadata["guardrails"]) > 0
+        ):
+            _premium_user_check()
+            combined_guardrails.update(team_metadata["guardrails"])
+
+    # Set combined guardrails in metadata as list
+    if combined_guardrails:
+        data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
 
 
 def move_guardrails_to_metadata(
@@ -1229,14 +1308,32 @@ def move_guardrails_to_metadata(
         metadata_variable_name=_metadata_variable_name,
     )
 
-    # Check request-level guardrails
+    #########################################################################################
+    # User's might send "guardrails" in the request body, we need to add them to the request metadata.
+    # Since downstream logic requires "guardrails" to be in the request metadata
+    #########################################################################################
     if "guardrails" in data:
-        data[_metadata_variable_name]["guardrails"] = data["guardrails"]
-        del data["guardrails"]
+        request_body_guardrails = data.pop("guardrails")
+        if "guardrails" in data[_metadata_variable_name] and isinstance(
+            data[_metadata_variable_name]["guardrails"], list
+        ):
+            data[_metadata_variable_name]["guardrails"].extend(request_body_guardrails)
+        else:
+            data[_metadata_variable_name]["guardrails"] = request_body_guardrails
 
+    #########################################################################################
     if "guardrail_config" in data:
-        data[_metadata_variable_name]["guardrail_config"] = data["guardrail_config"]
-        del data["guardrail_config"]
+        request_body_guardrail_config = data.pop("guardrail_config")
+        if "guardrail_config" in data[_metadata_variable_name] and isinstance(
+            data[_metadata_variable_name]["guardrail_config"], dict
+        ):
+            data[_metadata_variable_name]["guardrail_config"].update(
+                request_body_guardrail_config
+            )
+        else:
+            data[_metadata_variable_name][
+                "guardrail_config"
+            ] = request_body_guardrail_config
 
 
 def add_provider_specific_headers_to_request(

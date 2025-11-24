@@ -452,7 +452,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
     try:
         # Your test data
         test_data = {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -463,7 +463,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
 
         mock_acompletion.assert_called_once_with(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -496,19 +496,19 @@ def test_openai_deployments_model_chat_completions_azure(
     try:
         # Your test data
         test_data = {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
             "max_tokens": 10,
         }
 
-        url = "/openai/deployments/azure/gpt-4.1-nano/chat/completions"
+        url = "/openai/deployments/azure/gpt-4.1-mini/chat/completions"
         print(f"testing proxy server with Azure Request {url}")
         response = client_no_auth.post(url, json=test_data)
 
         mock_acompletion.assert_called_once_with(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -545,12 +545,40 @@ def test_embedding(mock_aembedding, client_no_auth):
             "input": ["good morning from litellm"],
         }
 
-        response = client_no_auth.post("/v1/embeddings", json=test_data)
+        async def _pre_call_hook_side_effect(**kwargs):
+            data = kwargs["data"]
+            metadata = {**(data.get("metadata") or {}), "source": "unit-test"}
+            data["metadata"] = metadata
+            proxy_request = {**(data.get("proxy_server_request") or {})}
+            proxy_request["path"] = "/v1/embeddings"
+            data["proxy_server_request"] = proxy_request
+            return data
+
+        async def _post_call_success_side_effect(**kwargs):
+            return kwargs["response"]
+
+        with patch.object(
+            litellm.proxy.proxy_server.proxy_logging_obj,
+            "pre_call_hook",
+            new=AsyncMock(side_effect=_pre_call_hook_side_effect),
+        ) as mock_pre_call_hook, patch.object(
+            litellm.proxy.proxy_server.proxy_logging_obj,
+            "during_call_hook",
+            new=AsyncMock(return_value=None),
+        ) as mock_during_hook, patch.object(
+            litellm.proxy.proxy_server.proxy_logging_obj,
+            "post_call_success_hook",
+            new=AsyncMock(side_effect=_post_call_success_side_effect),
+        ):
+            response = client_no_auth.post("/v1/embeddings", json=test_data)
 
         mock_aembedding.assert_called_once_with(
             model="azure/text-embedding-ada-002",
             input=["good morning from litellm"],
             specific_deployment=True,
+            litellm_call_id=mock.ANY,
+            litellm_logging_obj=mock.ANY,
+            request_timeout=mock.ANY,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
@@ -559,6 +587,19 @@ def test_embedding(mock_aembedding, client_no_auth):
         result = response.json()
         print(len(result["data"][0]["embedding"]))
         assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
+
+        call_metadata = mock_aembedding.call_args.kwargs["metadata"]
+        assert call_metadata.get("source") == "unit-test"
+
+        pre_call_kwargs = mock_pre_call_hook.await_args_list[0].kwargs
+        assert (
+            pre_call_kwargs.get("call_type") == "aembedding"
+        ), f"expected pre_call_hook to receive call_type='aembedding', got {pre_call_kwargs.get('call_type')}"
+
+        during_call_kwargs = mock_during_hook.await_args_list[0].kwargs
+        assert (
+            during_call_kwargs.get("call_type") == "embeddings"
+        ), f"expected during_call_hook to receive call_type='embeddings', got {during_call_kwargs.get('call_type')}"
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
@@ -579,11 +620,15 @@ def test_bedrock_embedding(mock_aembedding, client_no_auth):
         mock_aembedding.assert_called_once_with(
             model="amazon-embeddings",
             input=["good morning from litellm"],
+            litellm_call_id=mock.ANY,
+            litellm_logging_obj=mock.ANY,
+            request_timeout=mock.ANY,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
         )
         assert response.status_code == 200
+        print(response.status_code, response.text)
         result = response.json()
         print(len(result["data"][0]["embedding"]))
         assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
@@ -908,6 +953,8 @@ async def test_get_team_redis(client_no_auth):
 
     redis_cache = RedisCache()
 
+    from fastapi import HTTPException
+
     with patch.object(
         redis_cache,
         "async_get_cache",
@@ -921,7 +968,7 @@ async def test_get_team_redis(client_no_auth):
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=AsyncMock(),
             )
-        except Exception as e:
+        except HTTPException:
             pass
 
         mock_client.assert_called_once()
@@ -1322,7 +1369,7 @@ async def test_add_callback_via_key(prisma_client):
     try:
         # Your test data
         test_data = {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -1416,7 +1463,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
     request._url = URL(url="/chat/completions")
 
     test_data = {
-        "model": "azure/gpt-4.1-nano",
+        "model": "azure/gpt-4.1-mini",
         "messages": [
             {"role": "user", "content": "write 1 sentence poem"},
         ],
@@ -1431,7 +1478,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
 
     data = {
         "data": {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [{"role": "user", "content": "write 1 sentence poem"}],
             "max_tokens": 10,
             "mock_response": "Hello world",
@@ -1531,7 +1578,7 @@ async def test_disable_fallbacks_by_key(disable_fallbacks_set):
 
     key_metadata = {"disable_fallbacks": disable_fallbacks_set}
     existing_data = {
-        "model": "azure/gpt-4.1-nano",
+        "model": "azure/gpt-4.1-mini",
         "messages": [{"role": "user", "content": "write 1 sentence poem"}],
     }
     data = LiteLLMProxyRequestSetup.add_key_level_controls(
@@ -1572,7 +1619,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
     request._url = URL(url="/chat/completions")
 
     test_data = {
-        "model": "azure/gpt-4.1-nano",
+        "model": "azure/gpt-4.1-mini",
         "messages": [
             {"role": "user", "content": "write 1 sentence poem"},
         ],
@@ -1587,7 +1634,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
 
     data = {
         "data": {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [{"role": "user", "content": "write 1 sentence poem"}],
             "max_tokens": 10,
             "mock_response": "Hello world",
@@ -1705,7 +1752,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
     request._url = URL(url="/chat/completions")
 
     test_data = {
-        "model": "azure/gpt-4.1-nano",
+        "model": "azure/gpt-4.1-mini",
         "messages": [
             {"role": "user", "content": "write 1 sentence poem"},
         ],
@@ -1720,7 +1767,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
 
     data = {
         "data": {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [{"role": "user", "content": "write 1 sentence poem"}],
             "max_tokens": 10,
             "mock_response": "Hello world",
@@ -2299,3 +2346,133 @@ def test_get_timeout_from_request():
     }
     timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
     assert timeout == 90.5
+
+
+@pytest.mark.parametrize(
+    "ui_exists, ui_has_content",
+    [
+        (True, True),   # UI path exists and has content
+        (True, False),  # UI path exists but is empty
+        (False, False), # UI path doesn't exist
+    ],
+)
+def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content):
+    """
+    Test the non-root Docker UI path detection logic.
+    
+    Tests that when LITELLM_NON_ROOT is set to "true":
+    - If UI path exists and has content, it should be used
+    - If UI path doesn't exist or is empty, proper error logging occurs
+    """
+    import tempfile
+    import shutil
+    from unittest.mock import MagicMock
+    
+    # Create a temporary directory to act as /tmp/litellm_ui
+    test_ui_path = tmp_path / "litellm_ui"
+    
+    if ui_exists:
+        test_ui_path.mkdir(parents=True, exist_ok=True)
+        if ui_has_content:
+            # Create some dummy files to simulate built UI
+            (test_ui_path / "index.html").write_text("<html></html>")
+            (test_ui_path / "app.js").write_text("console.log('test');")
+    
+    # Mock the environment variable and os.path operations
+    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
+    
+    # Create a mock logger to capture log messages
+    mock_logger = MagicMock()
+    
+    # We need to reimport or reload the relevant code section
+    # Since this is module-level code, we'll test the logic directly
+    ui_path = None
+    non_root_ui_path = str(test_ui_path)
+    
+    # Simulate the logic from proxy_server.py lines 909-920
+    if os.getenv("LITELLM_NON_ROOT", "").lower() == "true":
+        if os.path.exists(non_root_ui_path) and os.listdir(non_root_ui_path):
+            mock_logger.info(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
+            mock_logger.info(f"UI files found: {len(os.listdir(non_root_ui_path))} items")
+            ui_path = non_root_ui_path
+        else:
+            mock_logger.error(f"UI not found at {non_root_ui_path}. UI will not be available.")
+            mock_logger.error(f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}")
+    
+    # Verify behavior based on test parameters
+    if ui_exists and ui_has_content:
+        # UI should be found and used
+        assert ui_path == non_root_ui_path
+        assert mock_logger.info.call_count == 2
+        mock_logger.info.assert_any_call(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
+        # Verify the second info call mentions the number of items
+        info_calls = [call[0][0] for call in mock_logger.info.call_args_list]
+        assert any("UI files found:" in call and "items" in call for call in info_calls)
+        assert mock_logger.error.call_count == 0
+    else:
+        # UI should not be found, error should be logged
+        assert ui_path is None
+        assert mock_logger.error.call_count == 2
+        mock_logger.error.assert_any_call(f"UI not found at {non_root_ui_path}. UI will not be available.")
+        # Verify the second error call has path existence info
+        error_calls = [call[0][0] for call in mock_logger.error.call_args_list]
+        assert any("Path exists:" in call for call in error_calls)
+        assert mock_logger.info.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_update_config_success_callback_normalization():
+    """
+    Ensure success_callback values are normalized to lowercase when updating config.
+    This prevents delete_callback (which searches lowercase) from failing on mixed case inputs like 'SQS'.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import ConfigYAML
+
+    # Ensure feature is enabled and prisma_client is set
+    setattr(proxy_server, "store_model_in_db", True)
+    setattr(proxy_server, "proxy_logging_obj", MagicMock())
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_config = MagicMock()
+            self.db.litellm_config.upsert = AsyncMock()
+
+        # proxy_server.update_config expects this to be sync returning a dict
+        def jsonify_object(self, obj):
+            return obj
+
+    setattr(proxy_server, "prisma_client", MockPrisma())
+
+    class MockProxyConfig:
+        def __init__(self):
+            self.saved_config = None
+
+        async def get_config(self):
+            # Existing config has one lowercase callback already
+            return {"litellm_settings": {"success_callback": ["langfuse"]}}
+
+        async def save_config(self, new_config: dict):
+            self.saved_config = new_config
+
+        async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):
+            return None
+
+    mock_proxy_config = MockProxyConfig()
+    setattr(proxy_server, "proxy_config", mock_proxy_config)
+
+    # Update config with mixed-case callbacks - expect normalization to lowercase
+    config_update = ConfigYAML(litellm_settings={"success_callback": ["SQS", "sQs"]})
+    await proxy_server.update_config(config_update)
+
+    saved = mock_proxy_config.saved_config
+    assert saved is not None, "save_config was not called"
+    callbacks = saved["litellm_settings"]["success_callback"]
+
+    # Deduped and normalized
+    assert "sqs" in callbacks
+    assert "SQS" not in callbacks
+    assert "sQs" not in callbacks
+    # Existing callback should still be present
+    assert "langfuse" in callbacks

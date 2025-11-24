@@ -857,3 +857,152 @@ def test_get_token_url():
     assert "/v1/" in url
 
     pass
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_routes_partner_models():
+    """
+    Test that VertexAITokenCounter correctly routes partner models (Claude, Mistral, etc.)
+    to the partner models token counter instead of the Gemini token counter.
+    """
+    from unittest.mock import AsyncMock, patch
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.types.utils import TokenCountResponse
+
+    token_counter = VertexAITokenCounter()
+
+    # Mock the partner models handler
+    with patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels.count_tokens"
+    ) as mock_partner_count_tokens:
+        mock_partner_count_tokens.return_value = {
+            "input_tokens": 42,
+            "tokenizer_used": "vertex_ai_partner_models",
+        }
+
+        # Test with a Claude model (partner model)
+        result = await token_counter.count_tokens(
+            model_to_use="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                }
+            },
+            request_model="vertex_ai/claude-3-5-sonnet-20241022",
+        )
+
+        # Verify partner models handler was called
+        assert mock_partner_count_tokens.called
+        assert result is not None
+        assert isinstance(result, TokenCountResponse)
+        assert result.total_tokens == 42
+        assert result.tokenizer_type == "vertex_ai_partner_models"
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_routes_gemini_models():
+    """
+    Test that VertexAITokenCounter correctly routes Gemini models
+    to the Gemini token counter (not partner models).
+    """
+    from unittest.mock import AsyncMock, patch
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.types.utils import TokenCountResponse
+
+    token_counter = VertexAITokenCounter()
+
+    # Mock the Gemini handler (different import path)
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
+    ) as mock_gemini_count_tokens:
+        mock_gemini_count_tokens.return_value = {
+            "totalTokens": 50,
+            "tokenizer_used": "gemini",
+        }
+
+        # Test with a Gemini model (not a partner model)
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                }
+            },
+            request_model="vertex_ai/gemini-1.5-pro",
+        )
+
+        # Verify Gemini handler was called
+        assert mock_gemini_count_tokens.called
+        assert result is not None
+        assert isinstance(result, TokenCountResponse)
+        assert result.total_tokens == 50
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_partner_model_detection():
+    """
+    Test that VertexAIPartnerModels.is_vertex_partner_model correctly identifies
+    partner models (Claude, Mistral, Llama, etc.).
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    # Test Claude models (should be detected as partner model)
+    assert VertexAIPartnerModels.is_vertex_partner_model("claude-3-5-sonnet-20241022")
+    assert VertexAIPartnerModels.is_vertex_partner_model("claude-3-opus-20240229")
+    assert VertexAIPartnerModels.is_vertex_partner_model("claude-3-haiku-20240307")
+
+    # Test Mistral models
+    assert VertexAIPartnerModels.is_vertex_partner_model("mistral-large-2407")
+    assert VertexAIPartnerModels.is_vertex_partner_model("mistral-7b-instruct-v0.3")
+
+    # Test Meta/Llama models
+    assert VertexAIPartnerModels.is_vertex_partner_model("meta/llama-3.1-405b")
+    # Test Minimax models
+    assert VertexAIPartnerModels.is_vertex_partner_model("minimaxai/minimax-m2-maas")
+    # Test Moonshot models
+    assert VertexAIPartnerModels.is_vertex_partner_model(
+        "moonshotai/kimi-k2-thinking-maas"
+    )
+
+    # Test Gemini models (should NOT be detected as partner model)
+    assert not VertexAIPartnerModels.is_vertex_partner_model("gemini-1.5-pro")
+    assert not VertexAIPartnerModels.is_vertex_partner_model("gemini-1.0-pro")
+    assert not VertexAIPartnerModels.is_vertex_partner_model("gemini-pro-vision")
+
+    # Test other non-partner models
+    assert not VertexAIPartnerModels.is_vertex_partner_model("text-bison-001")
+    assert not VertexAIPartnerModels.is_vertex_partner_model("chat-bison-001")
+
+
+def test_vertex_ai_minimax_uses_openai_handler():
+    """
+    Ensure Minimax partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "minimaxai/minimax-m2-maas"
+    )
+
+
+def test_vertex_ai_moonshot_uses_openai_handler():
+    """
+    Ensure Moonshot partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "moonshotai/kimi-k2-thinking-maas"
+    )

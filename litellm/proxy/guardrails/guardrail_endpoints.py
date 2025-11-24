@@ -10,10 +10,14 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
+    ApplyGuardrailRequest,
+    ApplyGuardrailResponse,
     BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
@@ -560,8 +564,7 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
         guardrail_name = result.get("guardrail_name", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
-                guardrail_id=guardrail_id,
+            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
             )
             verbose_proxy_logger.info(
@@ -626,11 +629,13 @@ async def get_guardrail_info(guardrail_id: str):
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
+    from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
+        guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
         result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
@@ -638,6 +643,7 @@ async def get_guardrail_info(guardrail_id: str):
             result = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(
                 guardrail_id=guardrail_id
             )
+            guardrail_definition_location = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
         if result is None:
             raise HTTPException(
@@ -665,6 +671,7 @@ async def get_guardrail_info(guardrail_id: str):
             guardrail_info=dict(result.get("guardrail_info") or {}),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
+            guardrail_definition_location=guardrail_definition_location,
         )
     except HTTPException as e:
         raise e
@@ -685,18 +692,129 @@ async def get_guardrail_ui_settings():
     - Supported entities for guardrails
     - Supported modes for guardrails
     - PII entity categories for UI organization
+    - Content filter settings (patterns and categories)
     """
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
+        PATTERN_CATEGORIES,
+        get_pattern_metadata,
+    )
+
     # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
     category_maps = []
     for category, entities in PII_ENTITY_CATEGORIES_MAP.items():
-        category_maps.append({"category": category, "entities": entities})
+        category_maps.append({
+            "category": category.value,
+            "entities": [entity.value for entity in entities]
+        })
 
     return GuardrailUIAddGuardrailSettings(
-        supported_entities=list(PiiEntityType),
-        supported_actions=list(PiiAction),
-        supported_modes=list(GuardrailEventHooks),
+        supported_entities=[entity.value for entity in PiiEntityType],
+        supported_actions=[action.value for action in PiiAction],
+        supported_modes=[mode.value for mode in GuardrailEventHooks],
         pii_entity_categories=category_maps,
+        content_filter_settings={
+            "prebuilt_patterns": get_pattern_metadata(),
+            "pattern_categories": list(PATTERN_CATEGORIES.keys()),
+            "supported_actions": ["BLOCK", "MASK"],
+        },
     )
+
+
+@router.post(
+    "/guardrails/validate_blocked_words_file",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def validate_blocked_words_file(request: Dict[str, str]):
+    """
+    Validate a blocked_words YAML file content.
+    
+    Args:
+        request: Dictionary with 'file_content' key containing the YAML string
+    
+    Returns:
+        Dictionary with 'valid' boolean and either 'message'/'errors' depending on result
+    
+    Example Request:
+    ```json
+    {
+        "file_content": "blocked_words:\\n  - keyword: \\"test\\"\\n    action: \\"BLOCK\\""
+    }
+    ```
+    
+    Example Success Response:
+    ```json
+    {
+        "valid": true,
+        "message": "Valid YAML file with 2 blocked words"
+    }
+    ```
+    
+    Example Error Response:
+    ```json
+    {
+        "valid": false,
+        "errors": ["Entry 0: missing 'action' field"]
+    }
+    ```
+    """
+    import yaml
+    
+    try:
+        file_content = request.get("file_content", "")
+        if not file_content:
+            return {
+                "valid": False,
+                "error": "No file content provided"
+            }
+        
+        data = yaml.safe_load(file_content)
+        
+        if not isinstance(data, dict) or "blocked_words" not in data:
+            return {
+                "valid": False,
+                "error": "Invalid format: file must contain 'blocked_words' key with a list"
+            }
+        
+        blocked_words_list = data["blocked_words"]
+        if not isinstance(blocked_words_list, list):
+            return {
+                "valid": False,
+                "error": "'blocked_words' must be a list"
+            }
+        
+        # Validate each entry
+        errors = []
+        for idx, word_data in enumerate(blocked_words_list):
+            if not isinstance(word_data, dict):
+                errors.append(f"Entry {idx}: must be an object")
+                continue
+            
+            if "keyword" not in word_data:
+                errors.append(f"Entry {idx}: missing 'keyword' field")
+            elif not isinstance(word_data["keyword"], str):
+                errors.append(f"Entry {idx}: 'keyword' must be a string")
+                
+            if "action" not in word_data:
+                errors.append(f"Entry {idx}: missing 'action' field")
+            elif word_data["action"] not in ["BLOCK", "MASK"]:
+                errors.append(f"Entry {idx}: action must be 'BLOCK' or 'MASK', got '{word_data['action']}'")
+            
+            if "description" in word_data and not isinstance(word_data["description"], str):
+                errors.append(f"Entry {idx}: 'description' must be a string")
+        
+        if errors:
+            return {"valid": False, "errors": errors}
+        
+        return {
+            "valid": True,
+            "message": f"Valid YAML file with {len(blocked_words_list)} blocked word(s)"
+        }
+    except yaml.YAMLError as e:
+        return {"valid": False, "error": f"Invalid YAML syntax: {str(e)}"}
+    except Exception as e:
+        verbose_proxy_logger.exception("Error validating blocked words file")
+        return {"valid": False, "error": f"Validation error: {str(e)}"}
 
 
 def _get_field_type_from_annotation(field_annotation: Any) -> str:
@@ -1056,3 +1174,37 @@ async def get_provider_specific_params():
             provider_params[guardrail_name] = fields
 
     return provider_params
+
+@router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
+@router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
+async def apply_guardrail(
+    request: ApplyGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Apply a guardrail to text input and return the processed result.
+    
+    This endpoint allows testing guardrails by applying them to custom text inputs.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+    
+    try:
+        active_guardrail: Optional[
+            CustomGuardrail
+        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+            guardrail_name=request.guardrail_name
+        )
+        if active_guardrail is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
+            )
+
+        response_text = await active_guardrail.apply_guardrail(
+            text=request.text, language=request.language, entities=request.entities
+        )
+
+        return ApplyGuardrailResponse(response_text=response_text)
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+

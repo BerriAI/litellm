@@ -1,20 +1,107 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, get_args
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
 from litellm.types.vector_stores import (
+    VECTOR_STORE_OPENAI_PARAMS,
     LiteLLM_ManagedVectorStore,
+    LiteLLM_ManagedVectorStoreIndex,
     LiteLLM_ManagedVectorStoreListResponse,
     LiteLLM_VectorStoreConfig,
+    VectorStoreToolParams,
 )
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 else:
     PrismaClient = Any
+
+class VectorStoreIndexRegistry:
+    def __init__(
+        self, vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = []
+    ):
+        self.vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = (
+            vector_store_indexes
+        )
+
+    def get_vector_store_indexes(self) -> List[LiteLLM_ManagedVectorStoreIndex]:
+        """
+        Returns the vector store indexes
+        """
+        return self.vector_store_indexes
+
+    def get_vector_store_index_by_name(
+        self, vector_store_index_name: str
+    ) -> Optional[LiteLLM_ManagedVectorStoreIndex]:
+        """
+        Returns the vector store index by name
+        """
+        for vector_store_index in self.vector_store_indexes:
+            if vector_store_index.index_name == vector_store_index_name:
+                return vector_store_index
+        return None
+
+    def upsert_vector_store_index(
+        self, vector_store_index: LiteLLM_ManagedVectorStoreIndex
+    ):
+        """
+        Adds a vector store index to the registry.
+
+        If it already exists, it will be updated.
+        """
+        for i, _vector_store_index in enumerate[LiteLLM_ManagedVectorStoreIndex](
+            self.vector_store_indexes
+        ):
+            if _vector_store_index.index_name == vector_store_index.index_name:
+                self.vector_store_indexes[i] = vector_store_index
+                return
+        self.vector_store_indexes.append(vector_store_index)
+
+    def delete_vector_store_index(self, vector_store_index: str):
+        """
+        Deletes a vector store index from the registry
+        """
+        self.vector_store_indexes = [
+            index for index in self.vector_store_indexes if index != vector_store_index
+        ]
+
+    def is_vector_store_index(self, vector_store_index_name: str) -> bool:
+        """
+        Returns True if the vector store index is in the registry
+        """
+        for vector_store_index in self.vector_store_indexes:
+            if vector_store_index.index_name == vector_store_index_name:
+                return True
+        return False
+
+    #########################################################
+    ########### DB management helpers for vector stores ###########
+    #########################################################
+
+    @staticmethod
+    async def _get_vector_store_indexes_from_db(
+        prisma_client: Optional[PrismaClient],
+    ) -> List[LiteLLM_ManagedVectorStoreIndex]:
+        """
+        Get vector stores from the database
+        """
+        vector_stores_from_db: List[LiteLLM_ManagedVectorStoreIndex] = []
+        if prisma_client is not None:
+            _vector_stores_from_db = (
+                await prisma_client.db.litellm_managedvectorstoreindextable.find_many(
+                    order={"created_at": "desc"},
+                )
+            )
+            for vector_store in _vector_stores_from_db:
+                _dict_vector_store = dict(vector_store)
+                _litellm_managed_vector_store = LiteLLM_ManagedVectorStoreIndex(
+                    **_dict_vector_store
+                )
+                vector_stores_from_db.append(_litellm_managed_vector_store)
+        return vector_stores_from_db
 
 
 class VectorStoreRegistry:
@@ -23,6 +110,20 @@ class VectorStoreRegistry:
         self.vector_store_ids_to_vector_store_map: Dict[
             str, LiteLLM_ManagedVectorStore
         ] = {}
+
+    def _extract_tool_params(self, tool: Dict) -> VectorStoreToolParams:
+        """
+        Extract supported parameters from a tool definition.
+        
+        Dynamically extracts all parameters defined in VECTOR_STORE_OPENAI_PARAMS.
+        """
+        # Get the list of supported param names from the Literal type
+        supported_params = get_args(VECTOR_STORE_OPENAI_PARAMS)
+        
+        # Extract only the params that exist in the tool
+        kwargs = {param: tool.get(param) for param in supported_params if param in tool}
+        
+        return VectorStoreToolParams(**kwargs)
 
     def get_vector_store_ids_to_run(
         self, non_default_params: Dict, tools: Optional[List[Dict]] = None
@@ -44,62 +145,53 @@ class VectorStoreRegistry:
 
         return vector_store_ids
 
-    def pop_vector_store_ids_to_run(
-        self, non_default_params: Dict, tools: Optional[List[Dict]] = None
-    ) -> List[str]:
-        """
-        Pops the vector store ids from the non_default_params and tools
-        """
-        vector_store_ids: List[str] = []
-
-        # 1. check if vector_store_ids is provided in the non_default_params
-        vector_store_ids = non_default_params.pop("vector_store_ids", None) or []
-
-        # 2. check if vector_store_ids is provided as a tool in the request
-        vector_store_ids = self.get_and_pop_recognised_vector_store_tools(
-            tools=tools,
-            vector_store_ids=vector_store_ids,
-        )
-
-        return vector_store_ids
-
     def get_and_pop_recognised_vector_store_tools(
-        self, tools: Optional[List[Dict]] = None, vector_store_ids: List[str] = []
-    ) -> List[str]:
+        self, tools: Optional[List[Dict]] = None, vector_store_ids: Optional[List[str]] = None
+    ) -> Dict[str, VectorStoreToolParams]:
         """
-        Returns and pops the vector store ids from the tool calls
-
-        It only pops the recognised vector store tools from the tools list.
-
+        Returns and pops recognized vector store tools from the tools list.
+        
         Args:
-            tools: The tools to pop the vector store ids from
-            vector_store_ids: The list of vector store IDs the user provided
-
+            tools: The tools to extract and remove vector store IDs from
+            vector_store_ids: Mutable list to append found vector_store_ids to
+        
         Returns:
-            The vector store ids that were popped
+            Dict mapping vector_store_id to its extracted tool parameters
         """
-        if tools:
-            tools_to_remove: List[int] = []
-            for i, tool in enumerate(tools):
-                tool_vector_store_ids: List[str] = tool.get("vector_store_ids", [])
-                if len(tool_vector_store_ids) == 0:
-                    continue
-                # remove the tool if all vector_store_ids are recognised in the registry
-                recognised = all(
-                    any(vs.get("vector_store_id") == vs_id for vs in self.vector_stores)
-                    for vs_id in tool_vector_store_ids
-                )
-                if recognised:
-                    tools_to_remove.append(i)
-                    vector_store_ids.extend(tool_vector_store_ids)
-
-            # remove recognised tools from the original list
-            remove_items_at_indices(
-                items=tools,
-                indices=tools_to_remove,
+        params_by_id: Dict[str, VectorStoreToolParams] = {}
+        
+        if not tools:
+            return params_by_id
+        
+        if vector_store_ids is None:
+            vector_store_ids = []
+        
+        tools_to_remove: List[int] = []
+        
+        for i, tool in enumerate(tools):
+            tool_vector_store_ids = tool.get("vector_store_ids", [])
+            if not tool_vector_store_ids:
+                continue
+            
+            # Check if all vector_store_ids are recognized in the registry
+            recognised = all(
+                any(vs.get("vector_store_id") == vs_id for vs in self.vector_stores)
+                for vs_id in tool_vector_store_ids
             )
-
-        return vector_store_ids
+            
+            if recognised:
+                tools_to_remove.append(i)
+                vector_store_ids.extend(tool_vector_store_ids)
+                
+                # Extract and store params for each vector store
+                tool_params = self._extract_tool_params(tool)
+                for vs_id in tool_vector_store_ids:
+                    params_by_id[vs_id] = tool_params
+        
+        # Remove recognized tools from the original list
+        remove_items_at_indices(items=tools, indices=tools_to_remove)
+        
+        return params_by_id
 
     def get_vector_store_to_run(
         self, non_default_params: Dict, tools: Optional[List[Dict]] = None
@@ -139,22 +231,60 @@ class VectorStoreRegistry:
                 return vector_store
         return None
 
+    def get_litellm_managed_vector_store_from_registry_by_name(
+        self, vector_store_name: str
+    ) -> Optional[LiteLLM_ManagedVectorStore]:
+        """
+        Returns the vector store from the registry by name
+        """
+        for vector_store in self.vector_stores:
+            if vector_store.get("vector_store_name") == vector_store_name:
+                return vector_store
+        return None
+
     def pop_vector_stores_to_run(
         self, non_default_params: Dict, tools: Optional[List[Dict]] = None
     ) -> List[LiteLLM_ManagedVectorStore]:
         """
-        Pops the vector stores to run
-
-        Primary function to use for vector store pre call hook
+        Pops the vector stores to run with their tool parameters merged.
+        
+        Primary function to use for vector store pre call hook.
+        
+        Args:
+            non_default_params: Parameters dict to pop vector_store_ids from
+            tools: Optional list of tools to extract vector store params from
+        
+        Returns:
+            List of vector stores with tool parameters merged into litellm_params
         """
-        vector_store_ids = self.pop_vector_store_ids_to_run(
-            non_default_params=non_default_params, tools=tools
+        # Pop vector_store_ids from params
+        vector_store_ids: List[str] = non_default_params.pop("vector_store_ids", None) or []
+        
+        # Extract params from tools and collect IDs
+        params_by_id = self.get_and_pop_recognised_vector_store_tools(
+            tools=tools,
+            vector_store_ids=vector_store_ids
         )
+        
         vector_stores_to_run: List[LiteLLM_ManagedVectorStore] = []
+        
         for vector_store_id in vector_store_ids:
             for vector_store in self.vector_stores:
                 if vector_store.get("vector_store_id") == vector_store_id:
-                    vector_stores_to_run.append(vector_store)
+                    # Create a copy to avoid modifying the registry
+                    vector_store_copy = vector_store.copy()
+                    
+                    # Merge tool params if they exist
+                    if vector_store_id in params_by_id:
+                        existing_params = vector_store_copy.get("litellm_params", {}) or {}
+                        tool_params_dict = params_by_id[vector_store_id].to_dict()
+                        # Tool params take precedence over existing params
+                        tool_params_dict.update(existing_params)
+                        vector_store_copy["litellm_params"] = tool_params_dict
+                    
+                    vector_stores_to_run.append(vector_store_copy)
+                    break
+        
         return vector_stores_to_run
 
     def _get_vector_store_ids_from_tool_calls(

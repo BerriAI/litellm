@@ -34,7 +34,7 @@ import litellm
     "model, api_key, api_base",
     [
         (
-            "azure/azure-tts",
+            "azure/tts",
             os.getenv("AZURE_SWEDEN_API_KEY"),
             os.getenv("AZURE_SWEDEN_API_BASE"),
         ),
@@ -44,6 +44,7 @@ import litellm
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
+    litellm._turn_on_debug()
     speech_file_path = Path(__file__).parent / "speech.mp3"
 
     if sync_mode:
@@ -335,7 +336,7 @@ async def test_azure_ava_tts_async():
     """
     litellm._turn_on_debug()
     api_key = os.getenv("AZURE_TTS_API_KEY")
-    api_base = "https://eastus.tts.speech.microsoft.com"
+    api_base = os.getenv("AZURE_TTS_API_BASE")
     
 
     speech_file_path = Path(__file__).parent / "azure_speech.mp3"
@@ -372,6 +373,60 @@ async def test_azure_ava_tts_async():
         assert speech_file_path.stat().st_size > 0
         
         print(f"Azure TTS audio saved to: {speech_file_path}")
+
+        # assert response cost is greater than 0
+        print("Response cost: ", response._hidden_params["response_cost"])
+        assert response._hidden_params["response_cost"] > 0
+    
+    except Exception as e:
+        pytest.fail(f"Test failed with exception: {str(e)}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_runwayml_tts_async():
+    """
+    Test RunwayML Text-to-Speech with real API request.
+    """
+    litellm._turn_on_debug()
+    api_key = os.getenv("RUNWAYML_API_KEY")
+    api_base = os.getenv("RUNWAYML_API_BASE")
+    
+
+    speech_file_path = Path(__file__).parent / "runwayml_speech.mp3"
+    
+    try:
+        response = await litellm.aspeech(
+            model="runwayml/eleven_multilingual_v2",
+            voice="Rachel",
+            input="Yuneng is gone, we miss him so much I hope he has a good coffee",
+            api_base=api_base,
+            api_key=api_key,
+            response_format="mp3",
+            speed=1.0,
+        )
+
+        # Assert the response is HttpxBinaryResponseContent
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
+        
+        assert isinstance(response, HttpxBinaryResponseContent)
+        
+        # Get the binary content
+        binary_content = response.content
+        assert len(binary_content) > 0
+        
+        # MP3 files start with these magic bytes
+        # ID3 tag or MPEG sync word
+        assert binary_content[:3] == b"ID3" or binary_content[:2] == b"\xff\xfb" or binary_content[:2] == b"\xff\xf3"
+        
+        # Write to file
+        response.stream_to_file(speech_file_path)
+        
+        # Verify file was created and has content
+        assert speech_file_path.exists()
+        assert speech_file_path.stat().st_size > 0
+        
+        print(f"RunwayML TTS audio saved to: {speech_file_path}")
 
         # assert response cost is greater than 0
         print("Response cost: ", response._hidden_params["response_cost"])

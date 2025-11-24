@@ -12,6 +12,7 @@ from typing import (
     Optional,
     Type,
     Union,
+    cast,
 )
 
 import httpx
@@ -37,10 +38,13 @@ from litellm.types.llms.openai import (
     ToolChoice,
     ToolParam,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    update_responses_input_with_model_file_ids,
+)
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.types.llms.openai import ResponseText
+    from litellm.types.llms.openai import ResponseText  # type: ignore
 else:
     ResponseText = str  # Fallback for ResponseText import
 from litellm.types.responses.main import *
@@ -52,9 +56,7 @@ if TYPE_CHECKING:
 else:
     MCPTool = Any
 
-from .streaming_iterator import (
-    BaseResponsesAPIStreamingIterator,
-)
+from .streaming_iterator import BaseResponsesAPIStreamingIterator
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -169,11 +171,12 @@ async def aresponses_api_with_mcp(
     user_api_key_auth = kwargs.get("user_api_key_auth")
 
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
-    original_mcp_tools = (
-        await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
-            user_api_key_auth=user_api_key_auth,
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-        )
+    (
+        original_mcp_tools,
+        tool_server_map,
+    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+        user_api_key_auth=user_api_key_auth,
+        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         original_mcp_tools
@@ -212,7 +215,6 @@ async def aresponses_api_with_mcp(
     if stream and mcp_tools_with_litellm_proxy:
         # Generate MCP discovery events using the already processed tools
         from litellm._uuid import uuid
-
         from litellm.responses.mcp.mcp_streaming_iterator import (
             create_mcp_list_tools_events,
         )
@@ -233,6 +235,7 @@ async def aresponses_api_with_mcp(
             mcp_discovery_events=mcp_discovery_events,
             call_params=call_params,
             previous_response_id=previous_response_id,
+            tool_server_map=tool_server_map,
             **kwargs,
         )
 
@@ -277,7 +280,9 @@ async def aresponses_api_with_mcp(
                 "user_api_key_auth"
             )
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-                tool_calls=tool_calls, user_api_key_auth=user_api_key_auth
+                tool_server_map=tool_server_map,
+                tool_calls=tool_calls,
+                user_api_key_auth=user_api_key_auth,
             )
 
             if tool_results:
@@ -323,13 +328,18 @@ async def aresponses_api_with_mcp(
                     )
 
                     final_response = MCPEnhancedStreamingIterator(
-                        base_iterator=final_response, mcp_events=tool_execution_events
+                        tool_server_map=tool_server_map,
+                        base_iterator=final_response,
+                        mcp_events=tool_execution_events,
                     )
 
                 # Add custom output elements to the final response (for non-streaming)
                 elif isinstance(final_response, ResponsesAPIResponse):
                     # Fetch MCP tools again for output elements (without OpenAI transformation)
-                    mcp_tools_for_output = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+                    (
+                        mcp_tools_for_output,
+                        _,
+                    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
                         user_api_key_auth=user_api_key_auth,
                         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
                     )
@@ -513,7 +523,7 @@ def responses(
     )
 
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aresponses", False) is True
 
@@ -549,6 +559,13 @@ def responses(
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
+        
+        #########################################################
+        # Update input with provider-specific file IDs if managed files are used
+        #########################################################
+        input = cast(Union[str, ResponseInputParam], update_responses_input_with_model_file_ids(input=input))
+        local_vars["input"] = input
+        
         #########################################################
         # Native MCP Responses API
         #########################################################
@@ -583,11 +600,11 @@ def responses(
             )
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         local_vars.update(kwargs)
@@ -626,8 +643,9 @@ def responses(
             user=user,
             optional_params=dict(responses_api_request_params),
             litellm_params={
-                "litellm_call_id": litellm_call_id,
                 **responses_api_request_params,
+                "litellm_call_id": litellm_call_id,
+                "metadata": metadata,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -650,6 +668,7 @@ def responses(
                 model=model, stream=stream, custom_llm_provider=custom_llm_provider
             ),
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            shared_session=kwargs.get("shared_session"),
         )
 
         # Update the responses_api_response_id with the model_id
@@ -779,11 +798,11 @@ def delete_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if responses_api_provider_config is None:
@@ -817,6 +836,7 @@ def delete_responses(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
         )
 
         return response
@@ -958,11 +978,11 @@ def get_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if responses_api_provider_config is None:
@@ -996,6 +1016,7 @@ def get_responses(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
         )
 
         # Update the responses_api_response_id with the model_id
@@ -1114,11 +1135,11 @@ def list_input_items(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if responses_api_provider_config is None:
@@ -1150,6 +1171,7 @@ def list_input_items(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
         )
 
         return response
@@ -1271,11 +1293,11 @@ def cancel_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if responses_api_provider_config is None:
@@ -1309,6 +1331,7 @@ def cancel_responses(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            shared_session=kwargs.get("shared_session"),
         )
 
         return response

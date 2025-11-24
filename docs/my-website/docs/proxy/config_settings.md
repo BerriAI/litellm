@@ -101,6 +101,7 @@ general_settings:
   disable_retry_on_max_parallel_request_limit_error: boolean  # turn off retries when max parallel request limit is reached
   disable_reset_budget: boolean  # turn off reset budget scheduled task
   disable_adding_master_key_hash_to_db: boolean  # turn off storing master key hash in db, for spend tracking
+  disable_responses_id_security: boolean  # turn off response ID security checks that prevent users from accessing other users' responses
   enable_jwt_auth: boolean  # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
   enforce_user_param: boolean  # requires all openai endpoint requests to have a 'user' param
   allowed_routes: ["route1", "route2"]  # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
@@ -197,6 +198,7 @@ router_settings:
 | disable_retry_on_max_parallel_request_limit_error | boolean | If true, turns off retries when max parallel request limit is reached |
 | disable_reset_budget | boolean | If true, turns off reset budget scheduled task |
 | disable_adding_master_key_hash_to_db | boolean | If true, turns off storing master key hash in db |
+| disable_responses_id_security | boolean | If true, disables response ID security checks that prevent users from accessing response IDs from other users. When false (default), response IDs are encrypted with user information to ensure users can only access their own responses. Applies to /v1/responses endpoints |
 | enable_jwt_auth | boolean | allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims. [Doc on JWT Tokens](token_auth) |
 | enforce_user_param | boolean | If true, requires all OpenAI endpoint requests to have a 'user' param. [Doc on call hooks](call_hooks)|
 | allowed_routes | array of strings | List of allowed proxy API routes a user can access [Doc on controlling allowed routes](enterprise#control-available-public-private-routes)|
@@ -230,7 +232,7 @@ router_settings:
 | max_response_size_mb | int | The maximum size for responses in MB. LLM Responses above this size will not be sent. |
 | proxy_budget_rescheduler_min_time | int | The minimum time (in seconds) to wait before checking db for budget resets. **Default is 597 seconds** |
 | proxy_budget_rescheduler_max_time | int | The maximum time (in seconds) to wait before checking db for budget resets. **Default is 605 seconds** |
-| proxy_batch_write_at | int | Time (in seconds) to wait before batch writing spend logs to the db. **Default is 10 seconds** |
+| proxy_batch_write_at | int | Time (in seconds) to wait before batch writing spend logs to the db. **Default is 30 seconds** |
 | proxy_batch_polling_interval | int | Time (in seconds) to wait before polling a batch, to check if it's completed. **Default is 6000 seconds (1 hour)** |
 | alerting_args | dict | Args for Slack Alerting [Doc on Slack Alerting](./alerting.md) |
 | custom_key_generate | str | Custom function for key generation [Doc on custom key generation](./virtual_keys.md#custom--key-generate) |
@@ -359,6 +361,10 @@ router_settings:
 | AIOHTTP_TRUST_ENV | Flag to enable aiohttp trust environment. When this is set to True, aiohttp will respect HTTP(S)_PROXY env vars. **Default is False**
 | AIOHTTP_TTL_DNS_CACHE | DNS cache time-to-live for aiohttp in seconds. **Default is 300**
 | ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
+| APSCHEDULER_COALESCE | Whether to combine multiple pending executions of a job into one. **Default is False**
+| APSCHEDULER_MAX_INSTANCES | Maximum number of concurrent instances of each job. **Default is 1**
+| APSCHEDULER_MISFIRE_GRACE_TIME | Grace time in seconds for misfired jobs. **Default is 1**
+| APSCHEDULER_REPLACE_EXISTING | Whether to replace existing jobs with the same ID. **Default is False**
 | ARIZE_API_KEY | API key for Arize platform integration
 | ARIZE_SPACE_KEY | Space key for Arize platform
 | ARGILLA_BATCH_SIZE | Batch size for Argilla logging
@@ -390,10 +396,11 @@ router_settings:
 | AZURE_CERTIFICATE_PASSWORD | Password for Azure OpenAI certificate
 | AZURE_CLIENT_ID | Client ID for Azure services
 | AZURE_CLIENT_SECRET | Client secret for Azure services
-| AZURE_CODE_INTERPRETER_COST_PER_SESSION | Cost per session for Azure Code Interpreter service
 | AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS | Input cost per 1K tokens for Azure Computer Use service
 | AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS | Output cost per 1K tokens for Azure Computer Use service
 | AZURE_DEFAULT_RESPONSES_API_VERSION | Version of the Azure Default Responses API being used. Default is "preview"
+| AZURE_DOCUMENT_INTELLIGENCE_API_VERSION | API version for Azure Document Intelligence service
+| AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI | Default DPI (dots per inch) setting for Azure Document Intelligence service
 | AZURE_TENANT_ID | Tenant ID for Azure Active Directory
 | AZURE_USERNAME | Username for Azure services, use in conjunction with AZURE_PASSWORD for azure ad token with basic username/password workflow
 | AZURE_PASSWORD | Password for Azure services, use in conjunction with AZURE_USERNAME for azure ad token with basic username/password workflow
@@ -424,6 +431,12 @@ router_settings:
 | CLOUDZERO_MAX_FETCHED_DATA_RECORDS | Maximum number of data records to fetch from CloudZero
 | CLOUDZERO_TIMEZONE | Timezone for date handling (default: UTC)
 | CONFIG_FILE_PATH | File path for configuration file
+| CYBERARK_ACCOUNT | CyberArk account name for secret management
+| CYBERARK_API_BASE | Base URL for CyberArk API
+| CYBERARK_API_KEY | API key for CyberArk secret management service
+| CYBERARK_CLIENT_CERT | Path to client certificate for CyberArk authentication
+| CYBERARK_CLIENT_KEY | Path to client key for CyberArk authentication
+| CYBERARK_USERNAME | Username for CyberArk authentication
 | CONFIDENT_API_KEY | API key for DeepEval integration
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
@@ -440,9 +453,15 @@ router_settings:
 | DAYS_IN_A_MONTH | Days in a month for calculation purposes. Default is 28
 | DAYS_IN_A_WEEK | Days in a week for calculation purposes. Default is 7
 | DAYS_IN_A_YEAR | Days in a year for calculation purposes. Default is 365
+| DYNAMOAI_API_KEY | API key for DynamoAI Guardrails service
+| DYNAMOAI_API_BASE | Base URL for DynamoAI API. Default is https://api.dynamo.ai
+| DYNAMOAI_MODEL_ID | Model ID for DynamoAI tracking/logging purposes
+| DYNAMOAI_POLICY_IDS | Comma-separated list of DynamoAI policy IDs to apply
 | DD_BASE_URL | Base URL for Datadog integration
 | DATADOG_BASE_URL | (Alternative to DD_BASE_URL) Base URL for Datadog integration
 | _DATADOG_BASE_URL | (Alternative to DD_BASE_URL) Base URL for Datadog integration
+| DD_AGENT_HOST | Hostname or IP of DataDog agent (e.g., "localhost"). When set, logs are sent to agent instead of direct API
+| DD_AGENT_PORT | Port of DataDog agent for log intake. Default is 10518
 | DD_API_KEY | API key for Datadog integration
 | DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
 | DD_SOURCE | Source identifier for Datadog logs
@@ -461,6 +480,7 @@ router_settings:
 | DEFAULT_FAILURE_THRESHOLD_PERCENT | Threshold percentage of failures to cool down a deployment. Default is 0.5 (50%)
 | DEFAULT_FLUSH_INTERVAL_SECONDS | Default interval in seconds for flushing operations. Default is 5
 | DEFAULT_HEALTH_CHECK_INTERVAL | Default interval in seconds for health checks. Default is 300 (5 minutes)
+| DEFAULT_HEALTH_CHECK_PROMPT | Default prompt used during health checks for non-image models. Default is "test from litellm"
 | DEFAULT_IMAGE_HEIGHT | Default height for images. Default is 300
 | DEFAULT_IMAGE_TOKEN_COUNT | Default token count for images. Default is 250
 | DEFAULT_IMAGE_WIDTH | Default width for images. Default is 300
@@ -487,6 +507,7 @@ router_settings:
 | DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH | Default minimal reasoning effort thinking budget for Gemini 2.5 Flash. Default is 512
 | DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE | Default minimal reasoning effort thinking budget for Gemini 2.5 Flash Lite. Default is 512
 | DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO | Default minimal reasoning effort thinking budget for Gemini 2.5 Pro. Default is 512
+| DEFAULT_REDIS_MAJOR_VERSION | Default Redis major version to assume when version cannot be determined. Default is 7
 | DEFAULT_REDIS_SYNC_INTERVAL | Default Redis synchronization interval in seconds. Default is 1
 | DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND | Default price per second for Replicate GPU. Default is 0.001400
 | DEFAULT_REPLICATE_POLLING_DELAY_SECONDS | Default delay in seconds for Replicate polling. Default is 1
@@ -498,6 +519,7 @@ router_settings:
 | DEFAULT_SLACK_ALERTING_THRESHOLD | Default threshold for Slack alerting. Default is 300
 | DEFAULT_SOFT_BUDGET | Default soft budget for LiteLLM proxy keys. Default is 50.0
 | DEFAULT_TRIM_RATIO | Default ratio of tokens to trim from prompt end. Default is 0.75
+| DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS | Default duration for video generation in seconds in google. Default is 8
 | DIRECT_URL | Direct URL for service endpoint
 | DISABLE_ADMIN_UI | Toggle to disable the admin UI
 | DISABLE_AIOHTTP_TRANSPORT | Flag to disable aiohttp transport. When this is set to True, litellm will use httpx instead of aiohttp. **Default is False**
@@ -572,9 +594,14 @@ router_settings:
 | HEROKU_API_KEY | API key for Heroku services
 | HF_API_BASE | Base URL for Hugging Face API
 | HCP_VAULT_ADDR | Address for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_APPROLE_MOUNT_PATH | Mount path for AppRole authentication in [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault). Default is "approle"
+| HCP_VAULT_APPROLE_ROLE_ID | Role ID for AppRole authentication in [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_APPROLE_SECRET_ID | Secret ID for AppRole authentication in [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
 | HCP_VAULT_CLIENT_CERT | Path to client certificate for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
 | HCP_VAULT_CLIENT_KEY | Path to client key for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_MOUNT_NAME | Mount name for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
 | HCP_VAULT_NAMESPACE | Namespace for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_PATH_PREFIX | Path prefix for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
 | HCP_VAULT_TOKEN | Token for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
 | HCP_VAULT_CERT_ROLE | Role for [Hashicorp Vault Secret Manager Auth](../secret.md#hashicorp-vault)
 | HELICONE_API_KEY | API key for Helicone service
@@ -585,6 +612,8 @@ router_settings:
 | HUGGINGFACE_API_KEY | API key for Hugging Face API
 | HUMANLOOP_PROMPT_CACHE_TTL_SECONDS | Time-to-live in seconds for cached prompts in Humanloop. Default is 60
 | IAM_TOKEN_DB_AUTH | IAM token for database authentication
+| IBM_GUARDRAILS_API_BASE | Base URL for IBM Guardrails API
+| IBM_GUARDRAILS_AUTH_TOKEN | Authorization bearer token for IBM Guardrails API
 | INITIAL_RETRY_DELAY | Initial delay in seconds for retrying requests. Default is 0.5
 | JITTER | Jitter factor for retry delay calculations. Default is 0.75
 | JSON_LOGS | Enable JSON formatted logging
@@ -626,12 +655,14 @@ router_settings:
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
 | LITELLM_MIGRATION_DIR | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.
 | LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
+| LITELLM_UI_API_DOC_BASE_URL | Optional override for the API Reference base URL (used in sample code/docs) when the admin UI runs on a different host than the proxy. Defaults to `PROXY_BASE_URL` when unset.
 | LITELM_ENVIRONMENT | Environment of LiteLLM Instance, used by logging services. Currently only used by DeepEval.
 | LITELLM_KEY_ROTATION_ENABLED | Enable auto-key rotation for LiteLLM (boolean). Default is false.
 | LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS | Interval in seconds for how often to run job that auto-rotates keys. Default is 86400 (24 hours).
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOG | Enable detailed logging for LiteLLM
+| LITELLM_MODEL_COST_MAP_URL | URL for fetching model cost map data. Default is https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
 | LITELLM_LOG_FILE | File path to write LiteLLM logs to. When set, logs will be written to both console and the specified file
 | LITELLM_LOGGER_NAME | Name for OTEL logger 
 | LITELLM_METER_NAME | Name for OTEL Meter 
@@ -639,6 +670,7 @@ router_settings:
 | LITELLM_OTEL_INTEGRATION_ENABLE_METRICS | Optionally enable emantic metrics for OTEL
 | LITELLM_MASTER_KEY | Master key for proxy authentication
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
+| LITELLM_NON_ROOT | Flag to run LiteLLM in non-root mode for enhanced security in Docker containers
 | LITELLM_RATE_LIMIT_WINDOW_SIZE | Rate limit window size for LiteLLM. Default is 60
 | LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
 | LITELLM_SSL_CIPHERS | SSL/TLS cipher configuration for faster handshakes. Controls cipher suite preferences for OpenSSL connections.
@@ -647,7 +679,14 @@ router_settings:
 | LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
 | LITELM_ENVIRONMENT | Environment for LiteLLM Instance. This is currently only logged to DeepEval to determine the environment for DeepEval integration.
 | LOGFIRE_TOKEN | Token for Logfire logging service
+| LOGGING_WORKER_CONCURRENCY | Maximum number of concurrent coroutine slots for the logging worker on the asyncio event loop. Default is 100. Setting too high will flood the event loop with logging tasks which will lower the overall latency of the requests.
+| LOGGING_WORKER_MAX_QUEUE_SIZE | Maximum size of the logging worker queue. When the queue is full, the worker aggressively clears tasks to make room instead of dropping logs. Default is 50,000
+| LOGGING_WORKER_MAX_TIME_PER_COROUTINE | Maximum time in seconds allowed for each coroutine in the logging worker before timing out. Default is 20.0
+| LOGGING_WORKER_CLEAR_PERCENTAGE | Percentage of the queue to extract when clearing. Default is 50% 
 | MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
+| MAX_ITERATIONS_TO_CLEAR_QUEUE | Maximum number of iterations to attempt when clearing the logging worker queue during shutdown. Default is 200
+| MAX_TIME_TO_CLEAR_QUEUE | Maximum time in seconds to spend clearing the logging worker queue during shutdown. Default is 5.0
+| LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS | Cooldown time in seconds before allowing another aggressive clear operation when the queue is full. Default is 0.5 
 | MAX_STRING_LENGTH_PROMPT_IN_DB | Maximum length for strings in spend logs when sanitizing request bodies. Strings longer than this will be truncated. Default is 1000
 | MAX_IN_MEMORY_QUEUE_FLUSH_COUNT | Maximum count for in-memory queue flush operations. Default is 1000
 | MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES | Maximum length for the long side of high-resolution images. Default is 2000
@@ -662,7 +701,7 @@ router_settings:
 | MAX_TOKEN_TRIMMING_ATTEMPTS | Maximum number of attempts to trim a token message. Default is 10
 | MAXIMUM_TRACEBACK_LINES_TO_LOG | Maximum number of lines to log in traceback in LiteLLM Logs UI. Default is 100
 | MAX_RETRY_DELAY | Maximum delay in seconds for retrying requests. Default is 8.0
-| MAX_LANGFUSE_INITIALIZED_CLIENTS | Maximum number of Langfuse clients to initialize on proxy. Default is 20. This is set since langfuse initializes 1 thread everytime a client is initialized. We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times.
+| MAX_LANGFUSE_INITIALIZED_CLIENTS | Maximum number of Langfuse clients to initialize on proxy. Default is 50. This is set since langfuse initializes 1 thread everytime a client is initialized. We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times.
 | MIN_NON_ZERO_TEMPERATURE | Minimum non-zero temperature value. Default is 0.0001
 | MINIMUM_PROMPT_CACHE_TOKEN_COUNT | Minimum token count for caching a prompt. Default is 1024
 | MISTRAL_API_BASE | Base URL for Mistral API. Default is https://api.mistral.ai
@@ -718,7 +757,7 @@ router_settings:
 | PROMPTLAYER_API_KEY | API key for PromptLayer integration
 | PROXY_ADMIN_ID | Admin identifier for proxy server
 | PROXY_BASE_URL | Base URL for proxy service
-| PROXY_BATCH_WRITE_AT | Time in seconds to wait before batch writing spend logs to the database. Default is 10
+| PROXY_BATCH_WRITE_AT | Time in seconds to wait before batch writing spend logs to the database. Default is 30
 | PROXY_BATCH_POLLING_INTERVAL | Time in seconds to wait before polling a batch, to check if it's completed. Default is 6000s (1 hour)
 | PROXY_BUDGET_RESCHEDULER_MAX_TIME | Maximum time in seconds to wait before checking database for budget resets. Default is 605
 | PROXY_BUDGET_RESCHEDULER_MIN_TIME | Minimum time in seconds to wait before checking database for budget resets. Default is 597
@@ -743,10 +782,15 @@ router_settings:
 | REPLICATE_POLLING_DELAY_SECONDS | Delay in seconds for Replicate polling operations. Default is 0.5
 | REQUEST_TIMEOUT | Timeout in seconds for requests. Default is 6000
 | ROUTER_MAX_FALLBACKS | Maximum number of fallbacks for router. Default is 5
+| RUNWAYML_DEFAULT_API_VERSION | Default API version for RunwayML service. Default is "2024-11-06"
+| RUNWAYML_POLLING_TIMEOUT | Timeout in seconds for RunwayML image generation polling. Default is 600 (10 minutes)
 | SECRET_MANAGER_REFRESH_INTERVAL | Refresh interval in seconds for secret manager. Default is 86400 (24 hours)
 | SEPARATE_HEALTH_APP | If set to '1', runs health endpoints on a separate ASGI app and port. Default: '0'.
 | SEPARATE_HEALTH_PORT | Port for the separate health endpoints app. Only used if SEPARATE_HEALTH_APP=1. Default: 4001.
 | SERVER_ROOT_PATH | Root path for the server application
+| SEND_USER_API_KEY_ALIAS | Flag to send user API key alias to Zscaler AI Guard. Default is False
+| SEND_USER_API_KEY_TEAM_ID | Flag to send user API key team ID to Zscaler AI Guard. Default is False
+| SEND_USER_API_KEY_USER_ID | Flag to send user API key user ID to Zscaler AI Guard. Default is False
 | SET_VERBOSE | Flag to enable verbose logging
 | SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD | Minimum number of requests to consider "reasonable traffic" for single-deployment cooldown logic. Default is 1000
 | SLACK_DAILY_REPORT_FREQUENCY | Frequency of daily Slack reports (e.g., daily, weekly)
@@ -795,3 +839,6 @@ router_settings:
 | COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY | Maximum size for CoroutineChecker in-memory cache. Default is 1000
 | DEFAULT_SHARED_HEALTH_CHECK_TTL | Time-to-live in seconds for cached health check results in shared health check mode. Default is 300 (5 minutes)
 | DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL | Time-to-live in seconds for health check lock in shared health check mode. Default is 60 (1 minute)
+| ZSCALER_AI_GUARD_API_KEY | API key for Zscaler AI Guard service
+| ZSCALER_AI_GUARD_POLICY_ID | Policy ID for Zscaler AI Guard guardrails
+| ZSCALER_AI_GUARD_URL | Base URL for Zscaler AI Guard API. Default is https://api.us1.zseclipse.net/v1/detection/execute-policy

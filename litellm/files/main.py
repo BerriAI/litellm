@@ -158,10 +158,12 @@ def create_file(
                 api_key=optional_params.api_key,
                 logging_obj=logging_obj,
                 _is_async=_is_async,
-                client=client
-                if client is not None
-                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                else None,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
                 timeout=timeout,
             )
         elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
@@ -444,12 +446,14 @@ async def afile_delete(
     """
     try:
         loop = asyncio.get_event_loop()
+        model = kwargs.pop("model", None)
         kwargs["is_async"] = True
 
         # Use a partial function to pass your keyword arguments
         func = partial(
             file_delete,
             file_id,
+            model,
             custom_llm_provider,
             extra_headers,
             extra_body,
@@ -473,7 +477,8 @@ async def afile_delete(
 @client
 def file_delete(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    model: Optional[str] = None,
+    custom_llm_provider: Union[Literal["openai", "azure"], str] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -484,6 +489,13 @@ def file_delete(
     LiteLLM Equivalent of DELETE https://api.openai.com/v1/files
     """
     try:
+        try:
+            if model is not None:
+                _, custom_llm_provider, _, _ = get_llm_provider(
+                    model, custom_llm_provider
+                )
+        except Exception:
+            pass
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params_dict = get_litellm_params(**kwargs)
         ### TIMEOUT LOGIC ###
@@ -569,7 +581,7 @@ def file_delete(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'delete_batch'. Only 'openai' is supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",

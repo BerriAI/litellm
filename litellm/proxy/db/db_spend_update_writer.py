@@ -8,6 +8,7 @@ Module responsible for
 import asyncio
 import json
 import os
+import random
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -341,7 +342,7 @@ class DBSpendUpdateWriter:
     ):
         """
         Update spend for all tags in the request.
-        
+
         Args:
             response_cost: Cost of the request
             request_tags: JSON string of tags list e.g. '["prod-tag", "test-tag"]'
@@ -825,7 +826,14 @@ class DBSpendUpdateWriter:
                             proxy_logging_obj=proxy_logging_obj,
                         )
                     # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
+                    await asyncio.sleep(
+                        # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
+                        # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
+                        # and thus they are more likely to deadlock again.
+                        # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
+                        # repeated deadlocks, and therefore of exceeding the retry limit.
+                        random.uniform(2**i, 2 ** (i + 1))
+                    )
                 except Exception as e:
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
@@ -855,7 +863,7 @@ class DBSpendUpdateWriter:
     ):
         """
         Helper function to update spend for any entity type (team, org, tag, etc).
-        
+
         Args:
             entity_name: Name of entity for logging (e.g., "Team", "Org", "Tag")
             transactions: Dictionary of {entity_id: response_cost}
@@ -867,9 +875,7 @@ class DBSpendUpdateWriter:
         """
         from litellm.proxy.utils import _raise_failed_update_spend_exception
 
-        verbose_proxy_logger.debug(
-            f"{entity_name} Spend transactions: {transactions}"
-        )
+        verbose_proxy_logger.debug(f"{entity_name} Spend transactions: {transactions}")
         if transactions is not None and len(transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -974,8 +980,27 @@ class DBSpendUpdateWriter:
         try:
             for i in range(n_retry_times + 1):
                 try:
+                    # Sort the transactions to minimize the probability of deadlocks by reducing the chance of concurrent
+                    # trasactions locking the same rows/ranges in different orders.
                     transactions_to_process = dict(
-                        list(daily_spend_transactions.items())[:BATCH_SIZE]
+                        sorted(
+                            daily_spend_transactions.items(),
+                            # Normally to avoid deadlocks we would sort by the index, but since we have sprinkled indexes
+                            # on our schema like we're discount Salt Bae, we just sort by all fields that have an index,
+                            # in an ad-hoc (but hopefully sensible) order of indexes. The actual ordering matters less than
+                            # ensuring that all concurrent transactions sort in the same order.
+                            # We could in theory use the dict key, as it contains basically the same fields, but this is more
+                            # robust to future changes in the key format.
+                            # If _update_daily_spend ever gets the ability to write to multiple tables at once, the sorting
+                            # should sort by the table first.
+                            key=lambda x: (
+                                x[1].get("date") or "",
+                                x[1].get(entity_id_field) or "",
+                                x[1].get("api_key") or "",
+                                x[1].get("model") or "",
+                                x[1].get("custom_llm_provider") or "",
+                            ),
+                        )[:BATCH_SIZE]
                     )
 
                     if len(transactions_to_process) == 0:
@@ -1018,7 +1043,8 @@ class DBSpendUpdateWriter:
                                 "model_group": transaction.get("model_group"),
                                 "mcp_namespaced_tool_name": transaction.get(
                                     "mcp_namespaced_tool_name"
-                                ) or "",
+                                )
+                                or "",
                                 "custom_llm_provider": transaction.get(
                                     "custom_llm_provider"
                                 ),
@@ -1040,6 +1066,11 @@ class DBSpendUpdateWriter:
                             if "cache_creation_input_tokens" in transaction:
                                 common_data["cache_creation_input_tokens"] = (
                                     transaction.get("cache_creation_input_tokens", 0)
+                                )
+
+                            if entity_type == "tag" and "request_id" in transaction:
+                                common_data["request_id"] = transaction.get(
+                                    "request_id"
                                 )
 
                             # Create update data structure
@@ -1101,7 +1132,14 @@ class DBSpendUpdateWriter:
                             start_time=start_time,
                             proxy_logging_obj=proxy_logging_obj,
                         )
-                    await asyncio.sleep(2**i)
+                    await asyncio.sleep(
+                        # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
+                        # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
+                        # and thus they are more likely to deadlock again.
+                        # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
+                        # repeated deadlocks, and therefore of exceeding the retry limit.
+                        random.uniform(2**i, 2 ** (i + 1))
+                    )
 
         except Exception as e:
             if "transactions_to_process" in locals():
@@ -1350,7 +1388,7 @@ class DBSpendUpdateWriter:
         for tag in request_tags:
             daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
             daily_transaction = DailyTagSpendTransaction(
-                tag=tag, **base_daily_transaction
+                tag=tag, **base_daily_transaction, request_id=payload["request_id"]
             )
 
             await self.daily_tag_spend_update_queue.add_update(

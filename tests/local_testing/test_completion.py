@@ -132,49 +132,6 @@ def test_null_role_response():
         assert response.choices[0].message.role == "assistant"
 
 
-@pytest.mark.skip(reason="Cohere having RBAC issues")
-def test_completion_azure_command_r():
-    try:
-        litellm._turn_on_debug()
-
-        response = completion(
-            model="azure/command-r-plus",
-            api_base="https://Cohere-command-r-plus-gylpd-serverless.eastus2.inference.ai.azure.com",
-            api_key="AO89xyvmOLLMgoMI7WaiEaP0t6M09itr",
-            messages=[{"role": "user", "content": "What is the meaning of life?"}],
-        )
-
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
-    "api_base",
-    [
-        "https://litellm8397336933.openai.azure.com",
-        "https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2023-03-15-preview",
-    ],
-)
-def test_completion_azure_ai_gpt_4o(api_base):
-    try:
-        litellm.set_verbose = True
-
-        response = completion(
-            model="azure_ai/gpt-4o",
-            api_base=api_base,
-            api_key=os.getenv("AZURE_AI_OPENAI_KEY"),
-            messages=[{"role": "user", "content": "What is the meaning of life?"}],
-        )
-
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
 
 def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
     mock_response = MagicMock()
@@ -455,7 +412,6 @@ def test_completion_claude_3_function_call(model):
     [
         ("gpt-3.5-turbo", None, None),
         ("claude-3-opus-20240229", None, None),
-        ("command-r", None, None),
         ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
         # (
         #     "azure_ai/command-r-plus",
@@ -712,7 +668,7 @@ def encode_image(image_path):
     "model",
     [
         "gpt-4o",
-        "azure/gpt-4.1-nano",
+        "azure/gpt-4.1-mini",
         "anthropic/claude-3-opus-20240229",
     ],
 )  #
@@ -1025,7 +981,7 @@ def test_completion_gpt4_vision():
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                             },
                         },
                     ],
@@ -1746,7 +1702,7 @@ def test_completion_openai():
     "model, api_version",
     [
         # ("gpt-4o-2024-08-06", None),
-        # ("azure/gpt-4.1-nano", None),
+        # ("azure/gpt-4.1-mini", None),
         ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
         # ("azure/gpt-4o-new-test", "2024-08-01-preview"),
     ],
@@ -2417,7 +2373,7 @@ def test_completion_azure_extra_headers():
         litellm.client_session = http_client
         try:
             response = completion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 api_base=os.getenv("AZURE_API_BASE"),
                 api_version="2023-07-01-preview",
@@ -2466,7 +2422,7 @@ def test_completion_azure_ad_token():
         litellm.client_session = http_client
         try:
             response = completion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 azure_ad_token="my-special-token",
             )
@@ -2497,7 +2453,7 @@ def test_completion_azure_key_completion_arg():
         litellm.set_verbose = True
         ## Test azure call
         response = completion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             api_key=old_key,
             logprobs=True,
@@ -2514,8 +2470,6 @@ def test_completion_azure_key_completion_arg():
         pytest.fail(f"Error occurred: {e}")
 
 
-
-
 async def test_re_use_azure_async_client():
     try:
         print("azure gpt-3.5 ASYNC with clie nttest\n\n")
@@ -2530,7 +2484,7 @@ async def test_re_use_azure_async_client():
         ## Test azure call
         for _ in range(3):
             response = await litellm.acompletion(
-                model="azure/gpt-4.1-nano", messages=messages, client=client
+                model="azure/gpt-4.1-mini", messages=messages, client=client
             )
             print(f"response: {response}")
     except Exception as e:
@@ -2577,7 +2531,7 @@ def test_azure_openai_ad_token():
     litellm.input_callback = [tester]
     try:
         response = litellm.completion(
-            model="azure/gpt-4.1-nano",  # e.g. gpt-35-instant
+            model="azure/gpt-4.1-mini",  # e.g. gpt-35-instant
             messages=[
                 {
                     "role": "user",
@@ -2615,7 +2569,7 @@ def test_completion_azure2():
 
         ## Test azure call
         response = completion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             api_base=api_base,
             api_key=api_key,
@@ -2652,7 +2606,7 @@ def test_completion_azure3():
 
         ## Test azure call
         response = completion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             max_tokens=10,
         )
@@ -2700,7 +2654,7 @@ def test_completion_azure_with_litellm_key():
         openai.api_key = "ymca"
 
         response = completion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=messages,
         )
         # Add any assertions here to check the response
@@ -2723,22 +2677,6 @@ def test_completion_azure_with_litellm_key():
 
 # test_completion_azure()
 
-
-def test_completion_azure_deployment_id():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            deployment_id="gpt-4.1-nano",
-            model="gpt-3.5-turbo",
-            messages=messages,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_azure_deployment_id()
 
 import asyncio
 
@@ -3376,31 +3314,6 @@ def test_completion_anyscale_api():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
-# test_completion_anyscale_api()
-def test_azure_cloudflare_api():
-    litellm.set_verbose = True
-    try:
-        messages = [
-            {
-                "role": "user",
-                "content": "How do I output all files in a directory using Python?",
-            },
-        ]
-        response = completion(
-            model="azure/gpt-turbo",
-            messages=messages,
-            base_url=os.getenv("CLOUDFLARE_AZURE_BASE_URL"),
-            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
-        )
-        print(f"response: {response}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-        traceback.print_exc()
-        pass
-
-
-# test_azure_cloudflare_api()
 
 
 @pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
@@ -4041,7 +3954,7 @@ async def test_completion_ai21_chat():
 
 @pytest.mark.parametrize(
     "model",
-    ["gpt-4o", "azure/gpt-4.1-nano"],
+    ["gpt-4o", "azure/gpt-4.1-mini"],
 )
 @pytest.mark.parametrize(
     "stream",
@@ -4063,7 +3976,7 @@ def test_completion_response_ratelimit_headers(model, stream):
     assert "x-ratelimit-remaining-requests" in additional_headers
     assert "x-ratelimit-remaining-tokens" in additional_headers
 
-    if model == "azure/gpt-4.1-nano":
+    if model == "azure/gpt-4.1-mini":
         # Azure OpenAI header
         assert "llm_provider-azureml-model-session" in additional_headers
     if model == "claude-3-sonnet-20240229":
@@ -4357,7 +4270,6 @@ def test_deepseek_reasoning_content_completion():
         pytest.skip("Model is timing out")
 
 
-
 def test_qwen_text_completion():
     # litellm._turn_on_debug()
     resp = litellm.completion(
@@ -4492,3 +4404,37 @@ def test_completion_gpt_4o_empty_str():
             messages=[{"role": "user", "content": ""}],
         )
         assert resp.choices[0].message.content is not None
+
+
+def test_edit_note():
+    litellm.callbacks = ["langfuse_otel"]
+    response = completion(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": "Your only job is to call the edit_note tool with the content specified in the user's message.",
+            },
+            {
+                "role": "user",
+                "content": "Edit the note with the content: 'This is a test note.'",
+            },
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "edit_note",
+                    "description": "Edit the note with the content specified in the user's message.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ],
+    )
+
+    return response

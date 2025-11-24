@@ -10,6 +10,7 @@ export const AUTH_TYPE = {
   API_KEY: "api_key",
   BEARER_TOKEN: "bearer_token",
   BASIC: "basic",
+  OAUTH2: "oauth2",
 };
 
 export const TRANSPORT = {
@@ -32,10 +33,6 @@ export const handleAuth = (authType?: string | null): string => {
   }
 
   return authType;
-};
-
-export const mcpServerHasAuth = (authType?: string | null): boolean => {
-  return handleAuth(authType) !== AUTH_TYPE.NONE;
 };
 
 // Define the structure for tool input schema properties
@@ -139,6 +136,7 @@ export interface MCPServer {
   updated_at: string;
   updated_by: string;
   extra_headers?: string[] | null;
+  static_headers?: Record<string, string> | null;
   status?: "healthy" | "unhealthy" | "unknown";
   last_health_check?: string | null;
   health_check_error?: string | null;

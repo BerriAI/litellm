@@ -1,6 +1,6 @@
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
+from typing import IO, Any, Dict, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
 import httpx
 from openai._legacy_response import (
@@ -453,6 +453,7 @@ class ChatCompletionAudioDelta(TypedDict, total=False):
 class ChatCompletionToolCallFunctionChunk(TypedDict, total=False):
     name: Optional[str]
     arguments: str
+    provider_specific_fields: Optional[Dict[str, Any]]
 
 
 class ChatCompletionAssistantToolCall(TypedDict):
@@ -674,7 +675,9 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
     cache_control: ChatCompletionCachedContent
-    thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]]
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ]
 
 
 class ChatCompletionToolMessage(TypedDict):
@@ -1410,6 +1413,7 @@ class ImageGenerationPartialImageEvent(BaseLiteLLMOpenAIResponseObject):
 
 class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
     """Nested error object within ErrorEvent"""
+
     type: str  # e.g., 'invalid_request_error'
     code: str  # e.g., 'context_length_exceeded'
     message: str
@@ -1472,7 +1476,7 @@ ResponsesAPIStreamingResponse = Annotated[
 ]
 
 
-REASONING_EFFORT = Literal["minimal", "low", "medium", "high"]
+REASONING_EFFORT = Literal["none", "minimal", "low", "medium", "high"]
 
 
 class OpenAIRealtimeStreamSession(TypedDict, total=False):
@@ -1847,3 +1851,90 @@ class OpenAIMcpServerTool(TypedDict, total=False):
     require_approval: str
     allowed_tools: Optional[List[str]]
     headers: Optional[Dict[str, str]]
+
+
+# Video Generation Types
+class CreateVideoRequest(TypedDict, total=False):
+    """
+    CreateVideoRequest for OpenAI video generation API
+
+    Required Params:
+        prompt: str - Text prompt that describes the video to generate
+
+    Optional Params:
+        input_reference: Optional[str] - Optional image reference that guides generation
+        model: Optional[str] - The video generation model to use (defaults to sora-2)
+        seconds: Optional[str] - Clip duration in seconds (defaults to 4 seconds)
+        size: Optional[str] - Output resolution formatted as width x height (defaults to 720x1280)
+        user: Optional[str] - A unique identifier representing your end-user
+        extra_headers: Optional[Dict[str, str]] - Additional headers
+        extra_body: Optional[Dict[str, str]] - Additional body parameters
+        timeout: Optional[float] - Request timeout
+    """
+
+    prompt: Required[str]
+    input_reference: Optional[str]
+    model: Optional[str]
+    seconds: Optional[str]
+    size: Optional[str]
+    user: Optional[str]
+    extra_headers: Optional[Dict[str, str]]
+    extra_body: Optional[Dict[str, str]]
+    timeout: Optional[float]
+
+
+class OpenAIVideoObject(BaseModel):
+    """OpenAI Video Object representing a video generation job."""
+
+    id: str
+    """Unique identifier for the video job."""
+
+    object: Literal["video"]
+    """The object type, which is always 'video'."""
+
+    status: str
+    """Current lifecycle status of the video job."""
+
+    created_at: int
+    """Unix timestamp (seconds) for when the job was created."""
+
+    completed_at: Optional[int] = None
+    """Unix timestamp (seconds) for when the job completed, if finished."""
+
+    expires_at: Optional[int] = None
+    """Unix timestamp (seconds) for when the downloadable assets expire, if set."""
+
+    error: Optional[Dict[str, Any]] = None
+    """Error payload that explains why generation failed, if applicable."""
+
+    progress: Optional[int] = None
+    """Approximate completion percentage for the generation task."""
+
+    remixed_from_video_id: Optional[str] = None
+    """Identifier of the source video if this video is a remix."""
+
+    seconds: Optional[str] = None
+    """Duration of the generated clip in seconds."""
+
+    size: Optional[str] = None
+    """The resolution of the generated video."""
+
+    model: Optional[str] = None
+    """The video generation model that produced the job."""
+
+    _hidden_params: Dict[str, Any] = {}
+
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump(**kwargs)
+        except Exception:
+            return self.dict()

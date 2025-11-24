@@ -48,7 +48,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies
-RUN apk add --no-cache openssl tzdata
+RUN apk add --no-cache openssl tzdata nodejs npm
 
 # Upgrade pip to fix CVE-2025-8869
 RUN pip install --upgrade pip>=24.3.1
@@ -64,6 +64,10 @@ COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+
+# Remove test files and keys from dependencies
+RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
+    find /usr/lib -type d -path "*/tornado/test" -delete
 
 # Install semantic_router and aurelio-sdk using script
 RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh

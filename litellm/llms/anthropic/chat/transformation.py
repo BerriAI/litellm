@@ -12,6 +12,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -29,6 +30,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMcpServerTool,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
+    AnthropicOutputSchema,
     AnthropicSystemMessageContent,
     AnthropicThinkingParam,
     AnthropicWebSearchTool,
@@ -52,10 +54,7 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import (
-    PromptTokensDetailsWrapper,
-    ServerToolUse,
-)
+from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -118,7 +117,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-
         params = [
             "stream",
             "stop",
@@ -379,8 +377,39 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
             )
+        elif reasoning_effort == "minimal":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+            )
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+
+    def _extract_json_schema_from_response_format(
+        self, value: Optional[dict]
+    ) -> Optional[dict]:
+        if value is None:
+            return None
+        json_schema: Optional[dict] = None
+        if "response_schema" in value:
+            json_schema = value["response_schema"]
+        elif "json_schema" in value:
+            json_schema = value["json_schema"]["schema"]
+
+        return json_schema
+
+    def map_response_format_to_anthropic_output_format(
+        self, value: Optional[dict]
+    ) -> Optional[AnthropicOutputSchema]:
+        json_schema: Optional[dict] = self._extract_json_schema_from_response_format(
+            value
+        )
+        if json_schema is None:
+            return None
+        return AnthropicOutputSchema(
+            type="json_schema",
+            schema=json_schema,
+        )
 
     def map_response_format_to_anthropic_tool(
         self, value: Optional[dict], optional_params: dict, is_thinking_enabled: bool
@@ -391,11 +420,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):  # value is a no-op
             return None
 
-        json_schema: Optional[dict] = None
-        if "response_schema" in value:
-            json_schema = value["response_schema"]
-        elif "json_schema" in value:
-            json_schema = value["json_schema"]["schema"]
+        json_schema: Optional[dict] = self._extract_json_schema_from_response_format(
+            value
+        )
+        if json_schema is None:
+            return None
         """
         When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
         - You usually want to provide a single tool
@@ -485,18 +514,37 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "response_format" and isinstance(value, dict):
-                _tool = self.map_response_format_to_anthropic_tool(
-                    value, optional_params, is_thinking_enabled
-                )
-                if _tool is None:
-                    continue
-                if not is_thinking_enabled:
-                    _tool_choice = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
-                    optional_params["tool_choice"] = _tool_choice
+                if any(
+                    substring in model
+                    for substring in {
+                        "sonnet-4.5",
+                        "sonnet-4-5",
+                        "opus-4.1",
+                        "opus-4-1",
+                    }
+                ):
+                    _output_format = (
+                        self.map_response_format_to_anthropic_output_format(value)
+                    )
+                    if _output_format is not None:
+                        optional_params["output_format"] = _output_format
+                else:
+                    _tool = self.map_response_format_to_anthropic_tool(
+                        value, optional_params, is_thinking_enabled
+                    )
+                    if _tool is None:
+                        continue
+                    if not is_thinking_enabled:
+                        _tool_choice = {
+                            "name": RESPONSE_FORMAT_TOOL_NAME,
+                            "type": "tool",
+                        }
+                        optional_params["tool_choice"] = _tool_choice
+
+                    optional_params = self._add_tools_to_optional_params(
+                        optional_params=optional_params, tools=[_tool]
+                    )
                 optional_params["json_mode"] = True
-                optional_params = self._add_tools_to_optional_params(
-                    optional_params=optional_params, tools=[_tool]
-                )
             if (
                 param == "user"
                 and value is not None
@@ -517,6 +565,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[hosted_web_search_tool]
                 )
+            elif param == "extra_headers":
+                optional_params["extra_headers"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
@@ -641,13 +691,42 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
             )
         return tools
-    
-    def update_headers_with_optional_anthropic_beta(self, headers: dict, optional_params: dict) -> dict:
+
+    def _ensure_context_management_beta_header(self, headers: dict) -> None:
+        beta_value = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+        existing_beta = headers.get("anthropic-beta")
+        if existing_beta is None:
+            headers["anthropic-beta"] = beta_value
+            return
+        existing_values = [beta.strip() for beta in existing_beta.split(",")]
+        if beta_value not in existing_values:
+            headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
+
+    def update_headers_with_optional_anthropic_beta(
+        self, headers: dict, optional_params: dict
+    ) -> dict:
         """Update headers with optional anthropic beta."""
+
         _tools = optional_params.get("tools", [])
         for tool in _tools:
-            if tool.get("type", None) and tool.get("type").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_FETCH.value):
-                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+            if tool.get("type", None) and tool.get("type").startswith(
+                ANTHROPIC_HOSTED_TOOLS.WEB_FETCH.value
+            ):
+                headers["anthropic-beta"] = (
+                    ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+                )
+            elif tool.get("type", None) and tool.get("type").startswith(
+                ANTHROPIC_HOSTED_TOOLS.MEMORY.value
+            ):
+                headers["anthropic-beta"] = (
+                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                )
+        if optional_params.get("context_management") is not None:
+            self._ensure_context_management_beta_header(headers)
+        if optional_params.get("output_format") is not None:
+            headers["anthropic-beta"] = (
+                ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value
+            )
         return headers
 
     def transform_request(
@@ -685,7 +764,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     llm_provider="anthropic",
                 )
 
-        headers = self.update_headers_with_optional_anthropic_beta(headers=headers, optional_params=optional_params)
+        headers = self.update_headers_with_optional_anthropic_beta(
+            headers=headers, optional_params=optional_params
+        )
 
         # Separate system prompt from rest of message
         anthropic_system_message_list = self.translate_system_message(messages=messages)
@@ -955,13 +1036,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ):
                 text_content = prefix_prompt + text_content
 
+            context_management: Optional[Dict] = completion_response.get(
+                "context_management"
+            )
+
+            provider_specific_fields: Dict[str, Any] = {
+                "citations": citations,
+                "thinking_blocks": thinking_blocks,
+            }
+            if context_management is not None:
+                provider_specific_fields["context_management"] = context_management
+
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,
-                provider_specific_fields={
-                    "citations": citations,
-                    "thinking_blocks": thinking_blocks,
-                },
+                provider_specific_fields=provider_specific_fields,
                 thinking_blocks=thinking_blocks,
                 reasoning_content=reasoning_content,
             )
@@ -993,6 +1082,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
+
+        context_management_response = completion_response.get("context_management")
+        if context_management_response is not None:
+            _hidden_params["context_management"] = context_management_response
+            try:
+                model_response.__dict__["context_management"] = (
+                    context_management_response
+                )
+            except Exception:
+                pass
 
         model_response._hidden_params = _hidden_params
 

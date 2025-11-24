@@ -33,7 +33,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
     import backoff
@@ -81,6 +81,9 @@ from litellm.proxy.db.create_views import (
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+    UnifiedLLMGuardrails,
+)
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
@@ -105,6 +108,9 @@ if TYPE_CHECKING:
     Span = Union[_Span, Any]
 else:
     Span = Any
+
+
+unified_guardrail = UnifiedLLMGuardrails()
 
 
 def print_verbose(print_statement):
@@ -392,41 +398,17 @@ class ProxyLogging:
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
         for callback in litellm.callbacks:
             if isinstance(callback, str):
+
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                     cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
+
                 if callback is None:
                     continue
-            if callback not in litellm.input_callback:
-                litellm.input_callback.append(callback)  # type: ignore
-            if callback not in litellm.success_callback:
-                litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
-            if callback not in litellm.failure_callback:
-                litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
-            if callback not in litellm._async_success_callback:
-                litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
-            if callback not in litellm._async_failure_callback:
-                litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
-            if callback not in litellm.service_callback:
-                litellm.service_callback.append(callback)  # type: ignore
 
-        if (
-            len(litellm.input_callback) > 0
-            or len(litellm.success_callback) > 0
-            or len(litellm.failure_callback) > 0
-        ):
-            callback_list = list(
-                set(
-                    litellm.input_callback
-                    + litellm.success_callback
-                    + litellm.failure_callback
-                )
-            )
-            litellm.litellm_core_utils.litellm_logging.set_callbacks(
-                callback_list=callback_list
-            )
+            litellm.logging_callback_manager.add_litellm_callback(callback)
 
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
@@ -785,24 +767,70 @@ class ProxyLogging:
                 raise HTTPException(status_code=400, detail={"error": response})
         return data
 
+    async def _process_guardrail_callback(
+        self,
+        callback: CustomGuardrail,
+        data: dict,
+        user_api_key_dict: Optional[UserAPIKeyAuth],
+        call_type: CallTypesLiteral,
+    ) -> Optional[dict]:
+        """
+        Process a guardrail callback during pre-call hook.
+
+        Args:
+            callback: The CustomGuardrail callback to process
+            data: The request data dictionary
+            user_api_key_dict: User API key authentication details
+            call_type: The type of API call being made
+
+        Returns:
+            Updated data dictionary if guardrail passes, None if guardrail should be skipped
+        """
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        # Determine the event type based on call type
+        event_type = GuardrailEventHooks.pre_call
+        if call_type == "mcp_call":
+            event_type = GuardrailEventHooks.pre_mcp_call
+
+        # Check if the guardrail should run for this request
+        if callback.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return None
+
+        # Execute the appropriate guardrail hook
+        if "apply_guardrail" in type(callback).__dict__:
+            # Use unified guardrail for callbacks with apply_guardrail method
+            data["guardrail_to_apply"] = callback
+            response = await unified_guardrail.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,  # type: ignore
+                cache=self.call_details["user_api_key_cache"],
+                data=data,  # type: ignore
+                call_type=call_type,  # type: ignore
+            )
+        else:
+            # Use the callback's own async_pre_call_hook method
+            response = await callback.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,  # type: ignore
+                cache=self.call_details["user_api_key_cache"],
+                data=data,  # type: ignore
+                call_type=call_type,  # type: ignore
+            )
+
+        # Process the response if one was returned
+        if response is not None:
+            data = await self.process_pre_call_hook_response(
+                response=response, data=data, call_type=call_type
+            )
+
+        return data
+
     # The actual implementation of the function
     @overload
     async def pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: None,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> None:
         pass
 
@@ -811,18 +839,7 @@ class ProxyLogging:
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> dict:
         pass
 
@@ -830,18 +847,7 @@ class ProxyLogging:
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: Optional[dict],
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[dict]:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -864,6 +870,7 @@ class ProxyLogging:
             Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None)
         )
         prompt_id = data.get("prompt_id", None)
+        prompt_version = data.get("prompt_version", None)
 
         ## PROMPT TEMPLATE CHECK ##
         if (
@@ -871,12 +878,28 @@ class ProxyLogging:
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion")
         ):
+            from litellm.proxy.prompts.prompt_endpoints import (
+                construct_versioned_prompt_id,
+                get_latest_version_prompt_id,
+            )
             from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
 
+            # If no version is specified, find the latest version
+            if prompt_version is None:
+                lookup_prompt_id = get_latest_version_prompt_id(
+                    prompt_id=prompt_id,
+                    all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS,
+                )
+            else:
+                # Construct versioned prompt_id if prompt_version is provided
+                lookup_prompt_id = construct_versioned_prompt_id(
+                    prompt_id=prompt_id, version=prompt_version
+                )
+
             custom_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
-                prompt_id
+                lookup_prompt_id
             )
-            prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+            prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(lookup_prompt_id)
             litellm_prompt_id: Optional[str] = None
             if prompt_spec is not None:
                 litellm_prompt_id = prompt_spec.litellm_params.prompt_id
@@ -911,29 +934,20 @@ class ProxyLogging:
                     )
                 else:
                     _callback = callback  # type: ignore
-                if _callback is not None and isinstance(_callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
-                    event_type = GuardrailEventHooks.pre_call
-                    if call_type == "mcp_call":
-                        event_type = GuardrailEventHooks.pre_mcp_call
-
-                    if (
-                        _callback.should_run_guardrail(data=data, event_type=event_type)
-                        is not True
-                    ):
-                        continue
-
-                    response = await _callback.async_pre_call_hook(
+                if (
+                    _callback is not None
+                    and isinstance(_callback, CustomGuardrail)
+                    and data is not None
+                ):
+                    result = await self._process_guardrail_callback(
+                        callback=_callback,
+                        data=data,
                         user_api_key_dict=user_api_key_dict,
-                        cache=self.call_details["user_api_key_cache"],
-                        data=data,  # type: ignore
                         call_type=call_type,
                     )
-                    if response is not None:
-                        data = await self.process_pre_call_hook_response(
-                            response=response, data=data, call_type=call_type
-                        )
+                    if result is None:
+                        continue
+                    data = result
 
                 elif (
                     _callback is not None
@@ -949,7 +963,7 @@ class ProxyLogging:
                         user_api_key_dict=user_api_key_dict,
                         cache=self.call_details["user_api_key_cache"],
                         data=data,  # type: ignore
-                        call_type=call_type,
+                        call_type=call_type,  # type: ignore
                     )
                     if response is not None:
                         data = await self.process_pre_call_hook_response(
@@ -977,62 +991,64 @@ class ProxyLogging:
         self,
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
-        call_type: Literal[
-            "completion",
-            "responses",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "mcp_call",
-        ],
+        call_type: CallTypesLiteral,
     ):
         """
-        Runs the CustomGuardrail's async_moderation_hook()
+        Runs the CustomGuardrail's async_moderation_hook() in parallel
         """
+        # Step 1: Collect all guardrail tasks to run in parallel
+        guardrail_tasks = []
+
         for callback in litellm.callbacks:
-            try:
-                if isinstance(callback, CustomGuardrail):
-                    ################################################################
-                    # Check if guardrail should be run for GuardrailEventHooks.during_call hook
-                    ################################################################
+            if isinstance(callback, CustomGuardrail):
+                ################################################################
+                # Check if guardrail should be run for GuardrailEventHooks.during_call hook
+                ################################################################
 
-                    # V1 implementation - backwards compatibility
-                    if callback.event_hook is None and hasattr(
-                        callback, "moderation_check"
-                    ):
-                        if callback.moderation_check == "pre_call":  # type: ignore
-                            return
-                    else:
-                        # Main - V2 Guardrails implementation
-                        from litellm.types.guardrails import GuardrailEventHooks
+                # V1 implementation - backwards compatibility
+                if callback.event_hook is None and hasattr(
+                    callback, "moderation_check"
+                ):
+                    if callback.moderation_check == "pre_call":  # type: ignore
+                        return
+                else:
+                    # Main - V2 Guardrails implementation
+                    from litellm.types.guardrails import GuardrailEventHooks
 
-                        event_type = GuardrailEventHooks.during_call
-                        if call_type == "mcp_call":
-                            event_type = GuardrailEventHooks.during_mcp_call
-
-                        if (
-                            callback.should_run_guardrail(
-                                data=data, event_type=event_type
-                            )
-                            is not True
-                        ):
-                            continue
-                    # Convert user_api_key_dict to proper format for async_moderation_hook
+                    event_type = GuardrailEventHooks.during_call
                     if call_type == "mcp_call":
-                        user_api_key_auth_dict = (
-                            self._convert_user_api_key_auth_to_dict(user_api_key_dict)
-                        )
-                    else:
-                        user_api_key_auth_dict = user_api_key_dict
+                        event_type = GuardrailEventHooks.during_mcp_call
 
-                    await callback.async_moderation_hook(
+                    if (
+                        callback.should_run_guardrail(data=data, event_type=event_type)
+                        is not True
+                    ):
+                        continue
+                # Convert user_api_key_dict to proper format for async_moderation_hook
+                if call_type == "mcp_call":
+                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
+                        user_api_key_dict
+                    )
+                else:
+                    user_api_key_auth_dict = user_api_key_dict
+
+                # Add task to list for parallel execution
+                guardrail_tasks.append(
+                    callback.async_moderation_hook(
                         data=data,
                         user_api_key_dict=user_api_key_auth_dict,  # type: ignore
-                        call_type=call_type,
+                        call_type=call_type,  # type: ignore
                     )
+                )
+
+        # Step 2: Run all guardrail tasks in parallel
+        if guardrail_tasks:
+            try:
+                await asyncio.gather(*guardrail_tasks)
             except Exception as e:
+                # If any guardrail raises an exception, it will propagate here
                 raise e
+
         return data
 
     async def failed_tracking_alert(
@@ -1424,6 +1440,7 @@ class ProxyLogging:
 
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
+
                 if (
                     callback.should_run_guardrail(
                         data=data, event_type=GuardrailEventHooks.post_call
@@ -1432,14 +1449,29 @@ class ProxyLogging:
                 ):
                     continue
 
-                await callback.async_post_call_success_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    data=data,
-                    response=response,
-                )
+                guardrail_response: Optional[Any] = None
+                if "apply_guardrail" in type(callback).__dict__:
+                    data["guardrail_to_apply"] = callback
+                    guardrail_response = (
+                        await unified_guardrail.async_post_call_success_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            response=response,
+                        )
+                    )
+                else:
+                    guardrail_response = await callback.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    )
+
+                if guardrail_response is not None:
+                    response = guardrail_response
 
             ############ Handle CustomLogger ###############################
             #################################################################
+
             for callback in other_callbacks:
                 await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
@@ -2150,6 +2182,7 @@ class PrismaClient:
                             t.team_alias AS team_alias,
                             t.metadata AS team_metadata,
                             t.members_with_roles AS team_members_with_roles,
+                            t.object_permission_id AS team_object_permission_id,
                             t.organization_id as org_id,
                             tm.spend AS team_member_spend,
                             m.aliases AS team_model_aliases,
@@ -2158,12 +2191,18 @@ class PrismaClient:
                             b.tpm_limit AS litellm_budget_table_tpm_limit,
                             b.rpm_limit AS litellm_budget_table_rpm_limit,
                             b.model_max_budget as litellm_budget_table_model_max_budget,
-                            b.soft_budget as litellm_budget_table_soft_budget
+                            b.soft_budget as litellm_budget_table_soft_budget,
+                            o.metadata as organization_metadata,
+                            b2.max_budget as organization_max_budget,
+                            b2.tpm_limit as organization_tpm_limit,
+                            b2.rpm_limit as organization_rpm_limit
                         FROM "LiteLLM_VerificationToken" AS v
                         LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
                         LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b ON v.budget_id = b.budget_id
+                        LEFT JOIN "LiteLLM_OrganizationTable" AS o ON v.organization_id = o.organization_id
+                        LEFT JOIN "LiteLLM_BudgetTable" AS b2 ON o.budget_id = b2.budget_id
                         WHERE v.token = '{token}'
                     """
 
@@ -3615,6 +3654,16 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
     return is_in_list
 
 
+def is_known_vector_store_index(index_name: str) -> bool:
+    """
+    Returns True if the vector store index is in the llm_router vector store indexes
+    """
+
+    if litellm.vector_store_index_registry is None:
+        return False
+    return index_name in litellm.vector_store_index_registry.get_vector_store_indexes()
+
+
 def join_paths(base_path: str, route: str) -> str:
     # Remove trailing slashes from base_path and leading slashes from route
     base_path = base_path.rstrip("/")
@@ -3628,8 +3677,14 @@ def join_paths(base_path: str, route: str) -> str:
     if not route:
         return base_path
 
-    # Join with single slash
-    return f"{base_path}/{route}"
+    # Check if base_path already ends with the route to avoid duplication
+    if base_path.endswith(f"/{route}"):
+        final_path = base_path
+    else:
+        # Join with single slash
+        final_path = f"{base_path}/{route}"
+
+    return final_path
 
 
 def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
@@ -3972,3 +4027,178 @@ def validate_model_access(
                 model_id
             ),
         )
+
+
+def _path_matches_pattern(path: str, pattern: str) -> bool:
+    """Check if a path matches a pattern (supporting * wildcard for list indices)."""
+    path_parts = path.split(".")
+    pattern_parts = pattern.split(".")
+
+    if len(path_parts) != len(pattern_parts):
+        return False
+
+    for path_part, pattern_part in zip(path_parts, pattern_parts):
+        if pattern_part == "*":
+            # Wildcard matches any numeric index
+            if not path_part.isdigit():
+                return False
+        elif path_part != pattern_part:
+            return False
+
+    return True
+
+
+def _build_preserved_paths(
+    data: Any, current_path: str, preserve_fields: List[str], preserved_paths: set
+) -> None:
+    """Iteratively build set of paths that should be preserved."""
+    # Use a stack to avoid recursion: (data, path)
+    stack = [(data, current_path)]
+
+    while stack:
+        current_data, current_path_str = stack.pop()
+
+        if isinstance(current_data, dict):
+            for key, value in current_data.items():
+                new_path = f"{current_path_str}.{key}" if current_path_str else key
+
+                # Check if this path matches any preserve pattern
+                for pattern in preserve_fields:
+                    if _path_matches_pattern(new_path, pattern):
+                        preserved_paths.add(new_path)
+
+                if isinstance(value, (dict, list)):
+                    stack.append((value, new_path))
+
+        elif isinstance(current_data, list):
+            for idx, item in enumerate(current_data):
+                new_path = f"{current_path_str}.{idx}" if current_path_str else str(idx)
+                if isinstance(item, (dict, list)):
+                    stack.append((item, new_path))
+
+
+def _remove_none_except_preserved(
+    data: Any, current_path: str, preserved_paths: set
+) -> Any:
+    """Iteratively remove None values except for preserved paths."""
+    if not isinstance(data, (dict, list)):
+        return data
+
+    # Use a stack for iterative processing: (data, path, is_first_visit)
+    # We'll process in a way that allows us to build the result bottom-up
+    stack = [(data, current_path, True)]  # (data, path, is_first_visit)
+    results_map: dict[int, Any] = {}  # Maps id(data) -> processed result
+
+    while stack:
+        current_data, current_path_str, is_first_visit = stack.pop()
+
+        if is_first_visit:
+            # First visit - mark for revisit and add children to stack
+            stack.append((current_data, current_path_str, False))
+
+            if isinstance(current_data, dict):
+                # Add children in reverse order so they're processed in correct order
+                for key in reversed(list(current_data.keys())):
+                    value = current_data[key]
+                    new_path = f"{current_path_str}.{key}" if current_path_str else key
+
+                    if isinstance(value, (dict, list)):
+                        stack.append((value, new_path, True))
+
+            elif isinstance(current_data, list):
+                # Add children in reverse order
+                for idx in reversed(range(len(current_data))):
+                    item = current_data[idx]
+                    new_path = (
+                        f"{current_path_str}.{idx}" if current_path_str else str(idx)
+                    )
+
+                    if isinstance(item, (dict, list)):
+                        stack.append((item, new_path, True))
+        else:
+            # Second visit - children are processed, build result
+            result: Union[dict[str, Any], list[Any]]
+            if isinstance(current_data, dict):
+                result = {}
+                for key, value in current_data.items():
+                    new_path = f"{current_path_str}.{key}" if current_path_str else key
+
+                    if value is None:
+                        if new_path in preserved_paths:
+                            result[key] = None
+                    elif isinstance(value, (dict, list)):
+                        processed = results_map.get(id(value))
+                        if (
+                            processed is not None
+                            and processed != {}
+                            and processed != []
+                        ):
+                            result[key] = processed
+                    else:
+                        result[key] = value
+
+                results_map[id(current_data)] = result
+
+            elif isinstance(current_data, list):
+                result = []
+                for idx, item in enumerate(current_data):
+                    new_path = (
+                        f"{current_path_str}.{idx}" if current_path_str else str(idx)
+                    )
+
+                    if item is None:
+                        if new_path in preserved_paths:
+                            result.append(None)
+                    elif isinstance(item, (dict, list)):
+                        processed = results_map.get(id(item))
+                        if processed is not None:
+                            result.append(processed)
+                    else:
+                        result.append(item)
+
+                results_map[id(current_data)] = result
+
+    return results_map.get(id(data), data)
+
+
+def model_dump_with_preserved_fields(
+    obj: Any,
+    preserve_fields: Optional[List[str]] = None,
+    exclude_unset: bool = True,
+) -> Dict[str, Any]:
+    """
+    Serialize a Pydantic model to a dictionary while preserving specific fields even if they are None.
+
+    This function is useful when you need to maintain API compatibility where certain fields
+    must always be present in the response (e.g., message.content in OpenAI API responses).
+
+    Args:
+        obj: The Pydantic BaseModel instance to serialize
+        preserve_fields: List of field paths to preserve even if None (e.g., ["choices.*.message.content"])
+        exclude_unset: Whether to exclude fields that were not explicitly set
+
+    Returns:
+        Dictionary representation with None values excluded except for preserved fields
+
+    Example:
+        >>> result = model_dump_with_preserved_fields(
+        ...     response,
+        ...     preserve_fields=["choices.*.message.content", "choices.*.message.role"]
+        ... )
+    """
+    if preserve_fields is None:
+        preserve_fields = [
+            "choices.*.message.content",
+            "choices.*.message.role",
+            "choices.*.delta.content",
+        ]
+
+    # First, get the full dump without excluding None values
+    full_dump = obj.model_dump(exclude_none=False, exclude_unset=exclude_unset)
+
+    # Build the set of preserved paths
+    preserved_paths: set = set()
+    _build_preserved_paths(full_dump, "", preserve_fields, preserved_paths)
+
+    # Remove None values except for preserved paths
+    return _remove_none_except_preserved(full_dump, "", preserved_paths)

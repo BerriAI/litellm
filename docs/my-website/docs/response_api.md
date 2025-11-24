@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# /responses [Beta]
+# /responses
 
 
 LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
@@ -17,7 +17,7 @@ Requests to /chat/completions may be bridged here automatically when the provide
 | Image Generation Streaming | ✅ | Progressive image generation with partial images (1-3) |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
-| Guardrails | ✅ | |
+| Guardrails | ✅ | Applies to input and output text (non-streaming only) |
 | Supported operations | Create a response, Get a response, Delete a response | |
 | Supported LiteLLM Versions | 1.63.8+ | |
 | Supported LLM providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai` etc. |
@@ -698,6 +698,32 @@ for event in response:
 
 </TabItem>
 </Tabs>
+
+## Response ID Security
+
+By default, LiteLLM Proxy prevents users from accessing other users' response IDs.
+
+This is done by encrypting the response ID with the user ID, enabling users to only access their own response IDs.
+
+Trying to access someone else's response ID returns 403:
+
+```json
+{
+  "error": {
+    "message": "Forbidden. The response id is not associated with the user, who this key belongs to.",
+    "code": 403
+  }
+}
+```
+
+To disable this, set `disable_responses_id_security: true`:
+
+```yaml
+general_settings:
+  disable_responses_id_security: true
+```
+
+This allows any user to access any response ID.
 
 ## Supported Responses API Parameters
 

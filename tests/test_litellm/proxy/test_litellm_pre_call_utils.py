@@ -15,6 +15,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,
     _get_enforced_params,
+    _update_model_if_key_alias_exists,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
 )
@@ -1119,3 +1120,180 @@ def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchan
     )
     assert result is user_api_key_dict
     assert user_api_key_dict.user_id is None
+
+
+def test_get_sanitized_user_information_from_key_includes_guardrails_metadata():
+    """
+    Test that get_sanitized_user_information_from_key includes guardrails field from key metadata in the returned payload
+    """
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key-hash",
+        key_alias="test-alias",
+        user_id="test-user",
+        metadata={"guardrails": ["presidio", "aporia"], "other_field": "value"},
+    )
+
+    result = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+
+    assert result["user_api_key_auth_metadata"] is not None
+    assert "guardrails" in result["user_api_key_auth_metadata"]
+    assert result["user_api_key_auth_metadata"]["guardrails"] == ["presidio", "aporia"]
+    assert result["user_api_key_auth_metadata"]["other_field"] == "value"
+
+
+@pytest.mark.asyncio
+async def test_team_guardrails_append_to_key_guardrails():
+    """
+    Test that team guardrails are appended to key guardrails instead of overriding them.
+    Team guardrails should only be added if they are not already present in key guardrails.
+    """
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={"guardrails": ["key-guardrail-1", "key-guardrail-2"]},
+        team_metadata={"guardrails": ["team-guardrail-1", "key-guardrail-1"]},
+    )
+
+    with patch("litellm.proxy.utils._premium_user_check"):
+        updated_data = await add_litellm_data_to_request(
+            data=data,
+            request=request_mock,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    metadata = updated_data.get("metadata", {})
+    guardrails = metadata.get("guardrails", [])
+    
+    assert "key-guardrail-1" in guardrails
+    assert "key-guardrail-2" in guardrails
+    assert "team-guardrail-1" in guardrails
+    assert guardrails.count("key-guardrail-1") == 1
+
+
+@pytest.mark.asyncio
+async def test_request_guardrails_do_not_override_key_guardrails():
+    """
+    Test that request-level guardrails do not override key-level guardrails.
+
+    Key guardrails should be preserved when request contains guardrails (including empty array).
+    """
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={"guardrails": ["key-guardrail-1"]},
+        team_metadata={},
+    )
+    
+    # Test case: Request with empty guardrails should not result in empty guardrails
+    data_with_empty = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+        "guardrails": [],
+    }
+
+    with patch("litellm.proxy.utils._premium_user_check"):
+        updated_data_empty = await add_litellm_data_to_request(
+            data=data_with_empty,
+            request=request_mock,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    _metadata = updated_data_empty.get("metadata", {})
+    requested_guardrails = _metadata.get("guardrails", [])
+    
+    assert "guardrails" not in updated_data_empty
+    assert "key-guardrail-1" in requested_guardrails
+    assert len(requested_guardrails) == 1
+
+
+def test_update_model_if_key_alias_exists():
+    """
+    Test that _update_model_if_key_alias_exists properly updates the model when a key alias exists.
+    """
+    # Test case 1: Key alias exists and matches model
+    data = {"model": "modelAlias", "messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={"modelAlias": "xai/grok-4-fast-non-reasoning"},
+    )
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert data["model"] == "xai/grok-4-fast-non-reasoning"
+
+    # Test case 2: Key alias doesn't exist
+    data = {"model": "unknown-model", "messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={"modelAlias": "xai/grok-4-fast-non-reasoning"},
+    )
+    original_model = data["model"]
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert data["model"] == original_model  # Should remain unchanged
+
+    # Test case 3: Model is None
+    data = {"model": None, "messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={"modelAlias": "xai/grok-4-fast-non-reasoning"},
+    )
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert data["model"] is None  # Should remain None
+
+    # Test case 4: Model key doesn't exist in data
+    data = {"messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={"modelAlias": "xai/grok-4-fast-non-reasoning"},
+    )
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert "model" not in data  # Should not add model if it doesn't exist
+
+    # Test case 5: Multiple aliases, matching one
+    data = {"model": "alias1", "messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={
+            "alias1": "model1",
+            "alias2": "model2",
+            "alias3": "model3",
+        },
+    )
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert data["model"] == "model1"
+
+    # Test case 6: Empty aliases dict
+    data = {"model": "modelAlias", "messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key", aliases={})
+    original_model = data["model"]
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert data["model"] == original_model  # Should remain unchanged

@@ -51,7 +51,7 @@ def _get_spend_logs_metadata(
     vector_store_request_metadata: Optional[
         List[StandardLoggingVectorStoreRequest]
     ] = None,
-    guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
     cold_storage_object_key: Optional[str] = None,
@@ -142,6 +142,61 @@ def get_spend_logs_id(
     return id
 
 
+def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> dict:
+    """
+    Extract usage information for OCR/AOCR calls.
+
+    OCR responses use usage_info (with pages_processed) instead of token-based usage.
+
+    Args:
+        response_obj: The raw response object (can be dict, BaseModel, or other)
+        response_obj_dict: Dictionary representation of the response object
+
+    Returns:
+        A dict with prompt_tokens=0, completion_tokens=0, total_tokens=0,
+        and pages_processed from usage_info.
+    """
+    usage_info = None
+
+    # Try to extract usage_info from dict
+    if isinstance(response_obj_dict, dict) and "usage_info" in response_obj_dict:
+        usage_info = response_obj_dict.get("usage_info")
+
+    # Try to extract usage_info from object attributes if not found in dict
+    if not usage_info and hasattr(response_obj, "usage_info"):
+        usage_info = response_obj.usage_info
+        if hasattr(usage_info, "model_dump"):
+            usage_info = usage_info.model_dump()
+        elif hasattr(usage_info, "__dict__"):
+            usage_info = vars(usage_info)
+
+    # For OCR, we track pages instead of tokens
+    if usage_info is not None:
+        # Handle dict or object with attributes
+        if isinstance(usage_info, dict):
+            result = {
+                "prompt_tokens": 0,  # OCR doesn't use traditional tokens
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
+            # Add all fields from usage_info, including pages_processed
+            for key, value in usage_info.items():
+                result[key] = value
+            # Ensure pages_processed exists
+            if "pages_processed" not in result:
+                result["pages_processed"] = 0
+            return result
+        else:
+            return {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "pages_processed": 0,
+            }
+    else:
+        return {}
+
+
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
@@ -149,26 +204,33 @@ def get_logging_payload(  # noqa: PLR0915
 
     if kwargs is None:
         kwargs = {}
-    if response_obj is None or (
-        not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict)
-    ):
+
+    if response_obj is None:
         response_obj = {}
+    elif not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict):
+        response_obj = {"result": str(response_obj)}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
     metadata = get_litellm_metadata_from_kwargs(kwargs)
     completion_start_time = kwargs.get("completion_start_time", end_time)
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
-    usage = cast(dict, response_obj).get("usage", None) or {}
-    if isinstance(usage, litellm.Usage):
-        usage = dict(usage)
 
+    # Convert response_obj to dict first
     if isinstance(response_obj, dict):
         response_obj_dict = response_obj
     elif isinstance(response_obj, BaseModel):
         response_obj_dict = response_obj.model_dump()
     else:
         response_obj_dict = {}
+
+    # Handle OCR responses which use usage_info instead of usage
+    if call_type in ["ocr", "aocr"]:
+        usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
+    else:
+        usage = cast(dict, response_obj).get("usage", None) or {}
+        if isinstance(usage, litellm.Usage):
+            usage = dict(usage)
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
     standard_logging_payload = cast(
@@ -211,8 +273,8 @@ def get_logging_payload(  # noqa: PLR0915
         end_user_id = end_user_id or standard_logging_payload["metadata"].get(
             "user_api_key_end_user_id"
         )
-    else:
-        api_key = ""
+    # BUG FIX: Don't overwrite api_key when standard_logging_payload is None
+    # The api_key was already extracted from metadata (line 243) and hashed (lines 256-259)
     request_tags = (
         json.dumps(metadata.get("tags", []))
         if isinstance(metadata.get("tags", []), list)
@@ -588,7 +650,21 @@ def _get_response_for_spend_logs_payload(
     if payload is None:
         return "{}"
     if _should_store_prompts_and_responses_in_spend_logs():
-        return json.dumps(payload.get("response", {}))
+        response_obj: Any = payload.get("response")
+        if response_obj is None:
+            return "{}"
+
+        sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
+            {"response": response_obj}
+        )
+
+        sanitized_response = sanitized_wrapper.get("response", response_obj)
+
+        if sanitized_response is None:
+            return "{}"
+        if isinstance(sanitized_response, str):
+            return sanitized_response
+        return safe_dumps(sanitized_response)
     return "{}"
 
 

@@ -28,21 +28,33 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "[Beta] Guardrails",
+      label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        {
+          type: "category",
+          "label": "Contributing to Guardrails",
+          items: [
+            "adding_provider/simple_guardrail_tutorial",
+            "adding_provider/adding_guardrail_support",
+          ]
+        },
+        "proxy/guardrails/test_playground",
         ...[
           "proxy/guardrails/aim_security",
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",
           "proxy/guardrails/enkryptai",
+          "proxy/guardrails/ibm_guardrails",
           "proxy/guardrails/grayswan",
           "proxy/guardrails/lasso_security",
+          "proxy/guardrails/litellm_content_filter",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
           "proxy/guardrails/noma_security",
+          "proxy/guardrails/dynamoai",
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pillar_security",
@@ -52,7 +64,8 @@ const sidebars = {
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/prompt_injection",
           "proxy/guardrails/tool_permission",
-          "proxy/guardrails/javelin",
+          "proxy/guardrails/zscaler_ai_guard",
+          "proxy/guardrails/javelin"
         ].sort(),
       ],
     },
@@ -69,6 +82,7 @@ const sidebars = {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
+        "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
         "proxy/prompt_management"
@@ -124,18 +138,23 @@ const sidebars = {
             "proxy/release_cycle",
           ],
         },
-        "proxy/demo",
+        {
+          "type": "link",
+          "label": "Demo LiteLLM Cloud",
+          "href": "https://www.litellm.ai/cloud"
+        },
         {
           type: "category",
           label: "Admin UI",
           items: [
+            "proxy/ui",
             "proxy/admin_ui_sso",
             "proxy/custom_root_ui",
             "proxy/custom_sso",
-            "proxy/model_hub",
+            "proxy/ai_hub",
+            "proxy/model_compare_ui",
             "proxy/public_teams",
             "proxy/self_serve",
-            "proxy/ui",
             "proxy/ui/bulk_edit_users",
             "proxy/ui_credentials",
             "tutorials/scim_litellm",
@@ -170,7 +189,6 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
   "proxy/enterprise",
-  "proxy/management_cli",
         {
           type: "category",
           label: "Authentication",
@@ -182,17 +200,7 @@ const sidebars = {
             "proxy/cli_sso",
             "proxy/custom_auth",
             "proxy/ip_address",
-            "proxy/email",
             "proxy/multiple_admins",
-          ],
-        },
-        {
-          type: "category",
-          label: "Spend Tracking",
-          items: [
-            "proxy/cost_tracking",
-            "proxy/custom_pricing",
-            "proxy/billing",
           ],
         },
         {
@@ -218,6 +226,7 @@ const sidebars = {
             "proxy/rules",
           ]
         },
+        "proxy/management_cli",
         {
           type: "link",
           label: "Load Balancing, Routing, Fallbacks",
@@ -230,7 +239,8 @@ const sidebars = {
             "proxy/dynamic_logging",
             "proxy/logging",
             "proxy/logging_spec",
-            "proxy/team_logging"
+            "proxy/team_logging",
+            "proxy/email",
           ],
         },
         {
@@ -249,7 +259,9 @@ const sidebars = {
           type: "category",
           label: "Model Access",
           items: [
+            "proxy/model_access_guide",
             "proxy/model_access",
+            "proxy/model_access_groups",
             "proxy/team_model_add"
           ]
         },
@@ -257,9 +269,27 @@ const sidebars = {
           type: "category",
           label: "Secret Managers",
           items: [
-            "secret",
+            "secret_managers/overview",
+            "secret_managers/aws_secret_manager",
+            "secret_managers/aws_kms",
+            "secret_managers/azure_key_vault",
+            "secret_managers/cyberark",
+            "secret_managers/google_secret_manager",
+            "secret_managers/google_kms",
+            "secret_managers/hashicorp_vault",
+            "secret_managers/custom_secret_manager",
             "oidc"
           ]
+        },
+        {
+          type: "category",
+          label: "Spend Tracking",
+          items: [
+            "proxy/cost_tracking",
+            "proxy/custom_pricing",
+            "proxy/sync_models_github",
+            "proxy/billing",
+          ],
         },
       ]
     },
@@ -291,6 +321,7 @@ const sidebars = {
             "proxy/managed_batches",
           ]
         },
+        "containers",
         {
           type: "category",
           label: "/chat/completions",
@@ -338,6 +369,8 @@ const sidebars = {
             "image_variations",
           ]
         },
+        "videos",
+        "vector_store_files",
         {
           type: "category",
           label: "/mcp - Model Context Protocol",
@@ -372,6 +405,7 @@ const sidebars = {
               items: [
                 "pass_through/vertex_ai",
                 "pass_through/vertex_ai_live_websocket",
+                "pass_through/vertex_ai_search_datastores",
               ]
             },
             "pass_through/vllm",
@@ -392,12 +426,15 @@ const sidebars = {
             "search/parallel_ai",
             "search/google_pse",
             "search/dataforseo",
+            "search/firecrawl",
+            "search/searxng",
           ]
         },
         {
           type: "category",
           label: "/vector_stores",
           items: [
+            "vector_stores/create",
             "vector_stores/search",
           ]
         },
@@ -420,12 +457,18 @@ const sidebars = {
           label: "Integrate as a Model Provider",
         },
         {
+          type: "doc",
+          id: "provider_registration/add_model_pricing",
+          label: "Add Model Pricing & Context Window",
+        },
+        {
           type: "category",
           label: "OpenAI",
           items: [
             "providers/openai",
             "providers/openai/responses_api",
             "providers/openai/text_to_speech",
+            "providers/openai/videos",
           ]
         },
         "providers/text_completion_openai",
@@ -438,6 +481,7 @@ const sidebars = {
             "providers/azure/azure_responses",
             "providers/azure/azure_embedding",
             "providers/azure/azure_speech",
+            "providers/azure/videos",
           ]
         },
         {
@@ -446,8 +490,11 @@ const sidebars = {
           items: [
             "providers/azure_ai",
             "providers/azure_ocr",
+            "providers/azure_document_intelligence",
             "providers/azure_ai_speech",
             "providers/azure_ai_img",
+            "providers/azure_ai_vector_stores",
+            "providers/azure_ai/azure_ai_vector_stores_passthrough",
           ]
         },
         {
@@ -455,10 +502,12 @@ const sidebars = {
           label: "Vertex AI",
           items: [
             "providers/vertex",
+            "providers/vertex_ai/videos",
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
             "providers/vertex_image",
             "providers/vertex_batch",
+            "providers/vertex_ocr",
           ]
         },
         {
@@ -466,6 +515,7 @@ const sidebars = {
           label: "Google AI Studio",
           items: [
             "providers/gemini",
+            "providers/gemini/videos",
             "providers/google_ai_studio/files",
             "providers/google_ai_studio/image_gen",
             "providers/google_ai_studio/realtime",
@@ -479,17 +529,47 @@ const sidebars = {
           items: [
             "providers/bedrock",
             "providers/bedrock_embedding",
+            "providers/bedrock_image_gen",
+            "providers/bedrock_rerank",
+            "providers/bedrock_agentcore",
             "providers/bedrock_agents",
             "providers/bedrock_batches",
             "providers/bedrock_vector_store",
           ]
         },
         "providers/litellm_proxy",
-        "providers/meta_llama",
-        "providers/mistral",
+        "providers/ai21",
+        "providers/aiml",
+        "providers/aleph_alpha",
+        "providers/anyscale",
+        "providers/baseten",
+        "providers/bytez",
+        "providers/cerebras",
+        "providers/clarifai",
+        "providers/cloudflare_workers",
         "providers/codestral",
         "providers/cohere",
-        "providers/anyscale",
+        "providers/cometapi",
+        "providers/compactifai",
+        "providers/custom_llm_server",
+        "providers/dashscope",
+        "providers/databricks",
+        "providers/datarobot",
+        "providers/deepgram",
+        "providers/deepinfra",
+        "providers/deepseek",
+        "providers/docker_model_runner",
+        "providers/elevenlabs",
+        "providers/fal_ai",
+        "providers/featherless_ai",
+        "providers/fireworks_ai",
+        "providers/friendliai",
+        "providers/galadriel",
+        "providers/github",
+        "providers/github_copilot",
+        "providers/gradient_ai",
+        "providers/groq",
+        "providers/heroku",
         {
           type: "category",
           label: "HuggingFace",
@@ -499,10 +579,21 @@ const sidebars = {
           ]
         },
         "providers/hyperbolic",
-        "providers/databricks",
-        "providers/deepgram",
-        "providers/watsonx",
-        "providers/predibase",
+        "providers/infinity",
+        "providers/jina_ai",
+        "providers/lambda_ai",
+        "providers/lemonade",
+        "providers/llamafile",
+        "providers/lm_studio",
+        "providers/meta_llama",
+        "providers/milvus_vector_stores",
+        "providers/mistral",
+        "providers/moonshot",
+        "providers/morph",
+        "providers/nebius",
+        "providers/nlp_cloud",
+        "providers/novita",
+        { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         {
           type: "category",
           label: "Nvidia NIM",
@@ -511,64 +602,37 @@ const sidebars = {
             "providers/nvidia_nim_rerank",
           ]
         },
-        { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
-        "providers/xai",
-        "providers/moonshot",
-        "providers/lm_studio",
-        "providers/cerebras",
-        "providers/volcano",
-        "providers/triton-inference-server",
+        "providers/oci",
         "providers/ollama",
+        "providers/openrouter",
+        "providers/ovhcloud",
         "providers/perplexity",
-        "providers/friendliai",
-        "providers/galadriel",
-        "providers/topaz",
-        "providers/groq",
-        "providers/deepseek",
-        "providers/elevenlabs",
-        "providers/fireworks_ai",
-        "providers/clarifai",
-        "providers/compactifai",
-        "providers/lemonade",
-        "providers/vllm",
-        "providers/llamafile",
-        "providers/infinity",
-        "providers/xinference",
-        "providers/aiml",
-        "providers/cloudflare_workers",
-        "providers/deepinfra",
-        "providers/github",
-        "providers/github_copilot",
-        "providers/ai21",
-        "providers/nlp_cloud",
+        "providers/petals",
+        "providers/predibase",
         "providers/recraft",
         "providers/replicate",
+        {
+          type: "category",
+          label: "RunwayML",
+          items: [
+            "providers/runwayml/images",
+            "providers/runwayml/videos",
+          ]
+        },
+        "providers/sambanova",
+        "providers/snowflake",
         "providers/togetherai",
+        "providers/topaz",
+        "providers/triton-inference-server",
         "providers/v0",
         "providers/vercel_ai_gateway",
-        "providers/morph",
-        "providers/lambda_ai",
-        "providers/novita",
+        "providers/vllm",
+        "providers/volcano",
         "providers/voyage",
-        "providers/jina_ai",
-        "providers/aleph_alpha",
-        "providers/baseten",
-        "providers/openrouter",
-        "providers/sambanova",
-        "providers/custom_llm_server",
-        "providers/petals",
-        "providers/snowflake",
-        "providers/gradient_ai",
-        "providers/featherless_ai",
-        "providers/nebius",
-        "providers/dashscope",
-        "providers/bytez",
-        "providers/heroku",
-        "providers/oci",
-        "providers/datarobot",
-        "providers/ovhcloud",  
         "providers/wandb_inference",
-        "providers/cometapi",
+        "providers/watsonx",
+        "providers/xai",
+        "providers/xinference",
       ],
     },
     {
@@ -672,6 +736,7 @@ const sidebars = {
         "tutorials/prompt_caching",
         "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
+        "tutorials/presidio_pii_masking",
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
         "tutorials/claude_responses_api",
@@ -704,7 +769,8 @@ const sidebars = {
           label: "Adding Providers",
           items: [
             "adding_provider/directory_structure",
-            "adding_provider/new_rerank_provider"],
+            "adding_provider/new_rerank_provider",
+          ]
         },
         "extras/contributing",
         "contributing",
@@ -730,6 +796,7 @@ const sidebars = {
           },
           items: [
             "projects/smolagents",
+            "projects/mini-swe-agent",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",

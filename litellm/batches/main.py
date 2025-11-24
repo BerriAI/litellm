@@ -231,10 +231,12 @@ def create_batch(
                 api_key=optional_params.api_key,
                 logging_obj=litellm_logging_obj,
                 _is_async=_is_async,
-                client=client
-                if client is not None
-                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                else None,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
                 timeout=timeout,
                 model=model,
             )
@@ -617,10 +619,12 @@ def retrieve_batch(
                     function_id="batch_retrieve",
                 ),
                 _is_async=_is_async,
-                client=client
-                if client is not None
-                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                else None,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
                 timeout=timeout,
                 model=model,
             )
@@ -807,6 +811,7 @@ def list_batches(
 
 async def acancel_batch(
     batch_id: str,
+    model: Optional[str] = None,
     custom_llm_provider: Literal["openai", "azure"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
@@ -821,11 +826,13 @@ async def acancel_batch(
     try:
         loop = asyncio.get_event_loop()
         kwargs["acancel_batch"] = True
+        model = kwargs.pop("model", None)
 
         # Use a partial function to pass your keyword arguments
         func = partial(
             cancel_batch,
             batch_id,
+            model,
             custom_llm_provider,
             metadata,
             extra_headers,
@@ -848,7 +855,8 @@ async def acancel_batch(
 
 def cancel_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    model: Optional[str] = None,
+    custom_llm_provider: Union[Literal["openai", "azure"], str] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -860,6 +868,17 @@ def cancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
+
+        try:
+            if model is not None:
+                _, custom_llm_provider, _, _ = get_llm_provider(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                )
+        except Exception as e:
+            verbose_logger.exception(
+                f"litellm.batches.main.py::cancel_batch() - Error inferring custom_llm_provider - {str(e)}"
+            )
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params = get_litellm_params(
             custom_llm_provider=custom_llm_provider,
@@ -971,3 +990,86 @@ def cancel_batch(
         return response
     except Exception as e:
         raise e
+
+
+def _handle_async_invoke_status(
+    batch_id: str, aws_region_name: str, logging_obj=None, **kwargs
+) -> "LiteLLMBatch":
+    """
+    Handle async invoke status check for AWS Bedrock.
+
+    Args:
+        batch_id: The async invoke ARN
+        aws_region_name: AWS region name
+        **kwargs: Additional parameters
+
+    Returns:
+        dict: Status information including status, output_file_id (S3 URL), etc.
+    """
+    import asyncio
+
+    from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+
+    async def _async_get_status():
+        # Create embedding handler instance
+        embedding_handler = BedrockEmbedding()
+
+        # Get the status of the async invoke job
+        status_response = await embedding_handler._get_async_invoke_status(
+            invocation_arn=batch_id,
+            aws_region_name=aws_region_name,
+            logging_obj=logging_obj,
+            **kwargs,
+        )
+
+        # Transform response to a LiteLLMBatch object
+        from litellm.types.utils import LiteLLMBatch
+
+        result = LiteLLMBatch(
+            id=status_response["invocationArn"],
+            object="batch",
+            status=status_response["status"],
+            created_at=status_response["submitTime"],
+            in_progress_at=status_response["lastModifiedTime"],
+            completed_at=status_response.get("endTime"),
+            failed_at=(
+                status_response.get("endTime")
+                if status_response["status"] == "failed"
+                else None
+            ),
+            request_counts=BatchRequestCounts(
+                total=1,
+                completed=1 if status_response["status"] == "completed" else 0,
+                failed=1 if status_response["status"] == "failed" else 0,
+            ),
+            metadata=dict(
+                **{
+                    "output_file_id": status_response["outputDataConfig"][
+                        "s3OutputDataConfig"
+                    ]["s3Uri"],
+                    "failure_message": status_response.get("failureMessage") or "",
+                    "model_arn": status_response["modelArn"],
+                }
+            ),
+            completion_window="24h",
+            endpoint="/v1/embeddings",
+            input_file_id="",
+        )
+
+        return result
+
+    # Since this function is called from within an async context via run_in_executor,
+    # we need to create a new event loop in a thread to avoid conflicts
+    import concurrent.futures
+
+    def run_in_thread():
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            return new_loop.run_until_complete(_async_get_status())
+        finally:
+            new_loop.close()
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(run_in_thread)
+        return future.result()

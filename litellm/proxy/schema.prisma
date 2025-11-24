@@ -54,6 +54,19 @@ model LiteLLM_ProxyModelTable {
   updated_by String
 }
 
+
+// Agents on proxy
+model LiteLLM_AgentsTable {
+  agent_id String @id @default(uuid())
+  agent_name String @unique
+  litellm_params Json?
+  agent_card_params Json
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+}
+
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
     organization_alias  String
@@ -174,6 +187,7 @@ model LiteLLM_MCPServerTable {
   url          String?
   transport    String         @default("sse")
   auth_type    String?        
+  credentials  Json?          @default("{}")
   created_at   DateTime?      @default(now()) @map("created_at")
   created_by   String?
   updated_at   DateTime?      @default(now()) @updatedAt @map("updated_at")
@@ -182,6 +196,7 @@ model LiteLLM_MCPServerTable {
   mcp_access_groups String[]
   allowed_tools String[]      @default([])
   extra_headers String[]    @default([])
+  static_headers Json?        @default("{}")
   // Health check status
   status       String?        @default("unknown")
   last_health_check DateTime?
@@ -449,6 +464,7 @@ model LiteLLM_DailyTeamSpend {
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
+  request_id          String?
   tag                 String?   
   date                String
   api_key             String   
@@ -545,11 +561,15 @@ model LiteLLM_GuardrailsTable {
 // Prompt table for storing prompt configurations
 model LiteLLM_PromptTable {
   id String @id @default(uuid())
-  prompt_id String @unique
+  prompt_id String
+  version Int @default(1)
   litellm_params Json
   prompt_info Json?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+
+  @@unique([prompt_id, version])
+  @@index([prompt_id])
 }
 
 model LiteLLM_HealthCheckTable {
@@ -570,4 +590,41 @@ model LiteLLM_HealthCheckTable {
   @@index([model_name])
   @@index([checked_at])
   @@index([status])
+}
+
+// Search Tools table for storing search tool configurations
+model LiteLLM_SearchToolsTable {
+  search_tool_id String @id @default(uuid())
+  search_tool_name String @unique
+  litellm_params Json
+  search_tool_info Json?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+// SSO configuration table
+model LiteLLM_SSOConfig {
+  id String @id @default("sso_config")
+  sso_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model LiteLLM_ManagedVectorStoreIndexTable {
+  id String @id @default(uuid())
+  index_name String @unique
+  litellm_params Json
+  index_info Json?
+  created_at DateTime @default(now())
+  created_by String?
+  updated_at DateTime @updatedAt
+  updated_by String?
+}
+
+// Cache configuration table
+model LiteLLM_CacheConfig {
+  id String @id @default("cache_config")
+  cache_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 }

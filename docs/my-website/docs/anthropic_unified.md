@@ -10,14 +10,14 @@ Use LiteLLM to call all your LLM APIs in the Anthropic `v1/messages` format.
 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
-| Cost Tracking | ✅ |  |
-| Logging | ✅ | works across all integrations |
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
 | Streaming | ✅ | |
-| Fallbacks | ✅ | between supported models |
-| Loadbalancing | ✅ | between supported models |
-| Guardrails | ✅ | |
-| Support llm providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai`, etc. |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input and output text (non-streaming only) |
+| Supported Providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai`, etc. |
 
 ## Usage 
 ---

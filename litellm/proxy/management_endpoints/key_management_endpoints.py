@@ -24,8 +24,15 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
-from litellm.constants import LENGTH_OF_LITELLM_GENERATED_KEY, UI_SESSION_TOKEN_TEAM_ID
+from litellm.constants import (
+    LENGTH_OF_LITELLM_GENERATED_KEY,
+    LITELLM_PROXY_ADMIN_NAME,
+    UI_SESSION_TOKEN_TEAM_ID,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy._experimental.mcp_server.db import (
+    rotate_mcp_server_credentials_master_key,
+)
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
@@ -33,6 +40,7 @@ from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
     get_key_object,
+    get_org_object,
     get_team_object,
 )
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
@@ -550,6 +558,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 field_name=field,
                 value=getattr(data, field),
             )
+            delattr(data, field)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if getattr(data, field, None) is not None:
@@ -613,6 +622,27 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             },
         )
 
+    # check org key limits - done here to handle inheriting org id from team
+    if data.organization_id is not None:
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        if prisma_client:
+            org_table = await get_org_object(
+                org_id=data.organization_id,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
+            if org_table is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Organization not found for organization_id={data.organization_id}",
+                )
+            await _check_org_key_limits(
+                org_table=org_table,
+                data=data,
+                prisma_client=prisma_client,
+            )
+
     response = await generate_key_helper_fn(
         request_type="key", **data_json, table_name="key"
     )
@@ -639,16 +669,28 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     return response
 
 
-def check_team_key_model_specific_limits(
+def _check_key_model_specific_limits(
     keys: List[LiteLLM_VerificationToken],
-    team_table: LiteLLM_TeamTableCachedObj,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    entity_rpm_limit: Optional[int],
+    entity_tpm_limit: Optional[int],
+    entity_model_rpm_limit_dict: Dict[str, int],
+    entity_model_tpm_limit_dict: Dict[str, int],
+    entity_type: str,  # "team" or "organization"
 ) -> None:
     """
-    Check if the team key is allocating model specific limits. If so, raise an error if we're overallocating.
+    Generic function to check if a key is allocating model specific limits.
+    Raises an error if we're overallocating.
     """
-    if data.model_rpm_limit is None and data.model_tpm_limit is None:
+    model_rpm_limit = getattr(data, "model_rpm_limit", None) or (
+        data.metadata.get("model_rpm_limit", None) if data.metadata else None
+    )
+    model_tpm_limit = getattr(data, "model_tpm_limit", None) or (
+        data.metadata.get("model_tpm_limit", None) if data.metadata else None
+    )
+    if model_rpm_limit is None and model_tpm_limit is None:
         return
+
     # get total model specific tpm/rpm limit
     model_specific_rpm_limit: Dict[str, int] = {}
     model_specific_tpm_limit: Dict[str, int] = {}
@@ -664,59 +706,115 @@ def check_team_key_model_specific_limits(
                 model_specific_tpm_limit[model] = (
                     model_specific_tpm_limit.get(model, 0) + tpm_limit
                 )
-    if data.model_rpm_limit is not None:
-        for model, rpm_limit in data.model_rpm_limit.items():
+
+    if model_rpm_limit is not None:
+        for model, rpm_limit in model_rpm_limit.items():
             if (
-                team_table.rpm_limit is not None
+                entity_rpm_limit is not None
                 and model_specific_rpm_limit.get(model, 0) + rpm_limit
-                > team_table.rpm_limit
+                > entity_rpm_limit
             ):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than team RPM limit={team_table.rpm_limit}",
+                    detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_rpm_limit}",
                 )
-            elif team_table.metadata and team_table.metadata.get("model_rpm_limit"):
-                team_model_specific_rpm_limit_dict = team_table.metadata.get(
-                    "model_rpm_limit", {}
-                )
-                team_model_specific_rpm_limit = team_model_specific_rpm_limit_dict.get(
-                    model
-                )
+            elif entity_model_rpm_limit_dict:
+                entity_model_specific_rpm_limit = entity_model_rpm_limit_dict.get(model)
                 if (
-                    model_specific_rpm_limit.get(model, 0) + rpm_limit
-                    > team_model_specific_rpm_limit
+                    entity_model_specific_rpm_limit
+                    and model_specific_rpm_limit.get(model, 0) + rpm_limit
+                    > entity_model_specific_rpm_limit
                 ):
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than team RPM limit={team_model_specific_rpm_limit}",
+                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_model_specific_rpm_limit}",
                     )
-    if data.model_tpm_limit is not None:
-        for model, tpm_limit in data.model_tpm_limit.items():
+
+    if model_tpm_limit is not None:
+        for model, tpm_limit in model_tpm_limit.items():
             if (
-                team_table.tpm_limit is not None
+                entity_tpm_limit is not None
                 and model_specific_tpm_limit.get(model, 0) + tpm_limit
-                > team_table.tpm_limit
+                > entity_tpm_limit
             ):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than team TPM limit={team_table.tpm_limit}",
+                    detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_tpm_limit}",
                 )
-            elif team_table.metadata and team_table.metadata.get("model_tpm_limit"):
-                team_model_specific_tpm_limit_dict = team_table.metadata.get(
-                    "model_tpm_limit", {}
-                )
-                team_model_specific_tpm_limit = team_model_specific_tpm_limit_dict.get(
-                    model
-                )
+            elif entity_model_tpm_limit_dict:
+                entity_model_specific_tpm_limit = entity_model_tpm_limit_dict.get(model)
                 if (
-                    team_model_specific_tpm_limit
+                    entity_model_specific_tpm_limit
                     and model_specific_tpm_limit.get(model, 0) + tpm_limit
-                    > team_model_specific_tpm_limit
+                    > entity_model_specific_tpm_limit
                 ):
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than team TPM limit={team_model_specific_tpm_limit}",
+                        detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_model_specific_tpm_limit}",
                     )
+
+
+def _check_key_rpm_tpm_limits(
+    keys: List[LiteLLM_VerificationToken],
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    entity_rpm_limit: Optional[int],
+    entity_tpm_limit: Optional[int],
+    entity_type: str,  # "team" or "organization"
+) -> None:
+    """
+    Generic function to check if a key is allocating rpm/tpm limits.
+    Raises an error if we're overallocating.
+    """
+    if keys is not None and len(keys) > 0:
+        allocated_tpm = sum(key.tpm_limit for key in keys if key.tpm_limit is not None)
+        allocated_rpm = sum(key.rpm_limit for key in keys if key.rpm_limit is not None)
+    else:
+        allocated_tpm = 0
+        allocated_rpm = 0
+
+    if (
+        data.tpm_limit is not None
+        and entity_tpm_limit is not None
+        and data.tpm_limit + allocated_tpm > entity_tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allocated TPM limit={allocated_tpm} + Key TPM limit={data.tpm_limit} is greater than {entity_type} TPM limit={entity_tpm_limit}",
+        )
+    if (
+        data.rpm_limit is not None
+        and entity_rpm_limit is not None
+        and data.rpm_limit + allocated_rpm > entity_rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allocated RPM limit={allocated_rpm} + Key RPM limit={data.rpm_limit} is greater than {entity_type} RPM limit={entity_rpm_limit}",
+        )
+
+
+def check_team_key_model_specific_limits(
+    keys: List[LiteLLM_VerificationToken],
+    team_table: LiteLLM_TeamTableCachedObj,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+) -> None:
+    """
+    Check if the team key is allocating model specific limits. If so, raise an error if we're overallocating.
+    """
+    entity_model_rpm_limit_dict = {}
+    entity_model_tpm_limit_dict = {}
+    if team_table.metadata:
+        entity_model_rpm_limit_dict = team_table.metadata.get("model_rpm_limit", {})
+        entity_model_tpm_limit_dict = team_table.metadata.get("model_tpm_limit", {})
+
+    _check_key_model_specific_limits(
+        keys=keys,
+        data=data,
+        entity_rpm_limit=team_table.rpm_limit,
+        entity_tpm_limit=team_table.tpm_limit,
+        entity_model_rpm_limit_dict=entity_model_rpm_limit_dict,
+        entity_model_tpm_limit_dict=entity_model_tpm_limit_dict,
+        entity_type="team",
+    )
 
 
 def check_team_key_rpm_tpm_limits(
@@ -727,30 +825,13 @@ def check_team_key_rpm_tpm_limits(
     """
     Check if the team key is allocating rpm/tpm limits. If so, raise an error if we're overallocating.
     """
-    if keys is not None and len(keys) > 0:
-        allocated_tpm = sum(key.tpm_limit for key in keys if key.tpm_limit is not None)
-        allocated_rpm = sum(key.rpm_limit for key in keys if key.rpm_limit is not None)
-    else:
-        allocated_tpm = 0
-        allocated_rpm = 0
-    if (
-        data.tpm_limit is not None
-        and team_table.tpm_limit is not None
-        and data.tpm_limit + allocated_tpm > team_table.tpm_limit
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Allocated TPM limit={allocated_tpm} + Key TPM limit={data.tpm_limit} is greater than team TPM limit={team_table.tpm_limit}",
-        )
-    if (
-        data.rpm_limit is not None
-        and team_table.rpm_limit is not None
-        and data.rpm_limit + allocated_rpm > team_table.rpm_limit
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Allocated RPM limit={allocated_rpm} + Key RPM limit={data.rpm_limit} is greater than team RPM limit={team_table.rpm_limit}",
-        )
+    _check_key_rpm_tpm_limits(
+        keys=keys,
+        data=data,
+        entity_rpm_limit=team_table.rpm_limit,
+        entity_tpm_limit=team_table.tpm_limit,
+        entity_type="team",
+    )
 
 
 async def _check_team_key_limits(
@@ -787,6 +868,105 @@ async def _check_team_key_limits(
     )
 
 
+def check_org_key_model_specific_limits(
+    keys: List[LiteLLM_VerificationToken],
+    org_table: LiteLLM_OrganizationTable,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+) -> None:
+    """
+    Check if the organization key is allocating model specific limits. If so, raise an error if we're overallocating.
+    """
+    # Get org limits from budget table if available
+    entity_rpm_limit = None
+    entity_tpm_limit = None
+    entity_model_rpm_limit_dict = {}
+    entity_model_tpm_limit_dict = {}
+
+    if org_table.litellm_budget_table is not None:
+        entity_rpm_limit = org_table.litellm_budget_table.rpm_limit
+        entity_tpm_limit = org_table.litellm_budget_table.tpm_limit
+
+    if org_table.metadata:
+        entity_model_rpm_limit_dict = org_table.metadata.get("model_rpm_limit", {})
+        entity_model_tpm_limit_dict = org_table.metadata.get("model_tpm_limit", {})
+
+    _check_key_model_specific_limits(
+        keys=keys,
+        data=data,
+        entity_rpm_limit=entity_rpm_limit,
+        entity_tpm_limit=entity_tpm_limit,
+        entity_model_rpm_limit_dict=entity_model_rpm_limit_dict,
+        entity_model_tpm_limit_dict=entity_model_tpm_limit_dict,
+        entity_type="organization",
+    )
+
+
+def check_org_key_rpm_tpm_limits(
+    keys: List[LiteLLM_VerificationToken],
+    org_table: LiteLLM_OrganizationTable,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+) -> None:
+    """
+    Check if the organization key is allocating rpm/tpm limits. If so, raise an error if we're overallocating.
+    """
+    # Get org limits from budget table if available
+    entity_rpm_limit = None
+    entity_tpm_limit = None
+
+    if org_table.litellm_budget_table is not None:
+        entity_rpm_limit = org_table.litellm_budget_table.rpm_limit
+        entity_tpm_limit = org_table.litellm_budget_table.tpm_limit
+
+    _check_key_rpm_tpm_limits(
+        keys=keys,
+        data=data,
+        entity_rpm_limit=entity_rpm_limit,
+        entity_tpm_limit=entity_tpm_limit,
+        entity_type="organization",
+    )
+
+
+async def _check_org_key_limits(
+    org_table: LiteLLM_OrganizationTable,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    prisma_client: PrismaClient,
+) -> None:
+    """
+    Check if the organization key is allocating guaranteed throughput limits. If so, raise an error if we're overallocating.
+
+    Only runs check if tpm_limit_type or rpm_limit_type is "guaranteed_throughput"
+    """
+
+    rpm_limit_type = getattr(data, "rpm_limit_type", None) or (
+        data.metadata.get("rpm_limit_type", None) if data.metadata else None
+    )
+    tpm_limit_type = getattr(data, "tpm_limit_type", None) or (
+        data.metadata.get("tpm_limit_type", None) if data.metadata else None
+    )
+
+    if (
+        tpm_limit_type != "guaranteed_throughput"
+        and rpm_limit_type != "guaranteed_throughput"
+    ):
+        return
+    # get all organization keys
+    # calculate allocated tpm/rpm limit
+    # check if specified tpm/rpm limit is greater than allocated tpm/rpm limit
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"organization_id": org_table.organization_id},
+    )
+    check_org_key_model_specific_limits(
+        keys=keys,
+        org_table=org_table,
+        data=data,
+    )
+    check_org_key_rpm_tpm_limits(
+        keys=keys,
+        org_table=org_table,
+        data=data,
+    )
+
+
 @router.post(
     "/key/generate",
     tags=["key management"],
@@ -813,6 +993,7 @@ async def generate_key_fn(
     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - The user id of the key
+    - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
@@ -824,6 +1005,7 @@ async def generate_key_fn(
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
@@ -846,6 +1028,8 @@ async def generate_key_fn(
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+
 
     Examples:
 
@@ -993,6 +1177,8 @@ async def generate_service_account_key_fn(
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     Examples:
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+
 
     1. Allow users to turn on/off pii masking
 
@@ -1121,7 +1307,6 @@ async def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest],
     existing_key_row: LiteLLM_VerificationToken,
 ):
-
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
@@ -1271,6 +1456,7 @@ async def update_key_fn(
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -1283,6 +1469,8 @@ async def update_key_fn(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
@@ -1966,6 +2154,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
             "model_max_budget": model_max_budget_json,
+            "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
             "created_by": created_by,
@@ -2072,6 +2261,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if request_type == "user":
         # if this is a /user/new request update the key_date with user_data fields
         key_data.update(user_data)
+
     return key_data
 
 
@@ -2341,6 +2531,13 @@ async def _rotate_master_key(
                     where={"param_name": "environment_variables"},
                     data={"param_value": jsonify_object(encrypted_env_vars)},
                 )
+
+    # 4. process MCP server table
+    await rotate_mcp_server_credentials_master_key(
+        prisma_client=prisma_client,
+        touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        new_master_key=new_master_key,
+    )
 
 
 def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:

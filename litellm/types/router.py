@@ -163,9 +163,6 @@ class CredentialLiteLLMParams(BaseModel):
     watsonx_region_name: Optional[str] = None
 
 
-
-
-
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
@@ -208,7 +205,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None
+    s3_encryption_key_id: Optional[str] = None
     gcs_bucket_name: Optional[str] = None
+
+    # Vector Store Params
+    vector_store_id: Optional[str] = None
+    milvus_text_field: Optional[str] = None
 
     def __init__(
         self,
@@ -261,6 +263,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         auto_router_embedding_model: Optional[str] = None,
         # Batch/File API Params
         s3_bucket_name: Optional[str] = None,
+        s3_encryption_key_id: Optional[str] = None,
         gcs_bucket_name: Optional[str] = None,
         **params,
     ):
@@ -607,6 +610,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     LiteLLM params for search tools.
     Search tools don't require a 'model' field like regular deployments.
     """
+
     search_provider: Required[SearchProvider]
     api_key: Optional[str]
     api_base: Optional[str]
@@ -617,7 +621,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
 class SearchToolTypedDict(TypedDict):
     """
     Configuration for a search tool in the router.
-    
+
     Example:
         {
             "search_tool_name": "litellm-search",
@@ -627,6 +631,7 @@ class SearchToolTypedDict(TypedDict):
             }
         }
     """
+
     search_tool_name: Required[str]
     litellm_params: Required[SearchToolLiteLLMParams]
 

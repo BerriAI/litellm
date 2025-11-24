@@ -1,27 +1,29 @@
-import { Layout, Menu } from "antd";
 import {
-  KeyOutlined,
-  PlayCircleOutlined,
-  BlockOutlined,
-  BarChartOutlined,
-  TeamOutlined,
-  BankOutlined,
-  UserOutlined,
-  SettingOutlined,
   ApiOutlined,
   AppstoreOutlined,
-  DatabaseOutlined,
-  FileTextOutlined,
-  LineChartOutlined,
-  SafetyOutlined,
-  ExperimentOutlined,
-  ToolOutlined,
-  TagsOutlined,
+  BankOutlined,
+  BarChartOutlined,
   BgColorsOutlined,
+  BlockOutlined,
+  CreditCardOutlined,
+  DatabaseOutlined,
+  ExperimentOutlined,
+  FileTextOutlined,
+  KeyOutlined,
+  LineChartOutlined,
+  PlayCircleOutlined,
+  RobotOutlined,
+  SafetyOutlined,
+  SearchOutlined,
+  SettingOutlined,
+  TagsOutlined,
+  TeamOutlined,
+  ToolOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
-import { all_admin_roles, rolesWithWriteAccess, internalUserRoles, isAdminRole } from "../utils/roles";
+import { ConfigProvider, Layout, Menu } from "antd";
+import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
 import UsageIndicator from "./usage_indicator";
-import { ConfigProvider } from "antd";
 const { Sider } = Layout;
 
 // Define the props type
@@ -47,71 +49,89 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
   // Note: If a menu item does not have a role, it is visible to all roles.
   const menuItems: MenuItem[] = [
     {
-      key: "1",
+      key: "api-keys",
       page: "api-keys",
       label: "Virtual Keys",
       icon: <KeyOutlined style={{ fontSize: "18px" }} />,
     },
     {
-      key: "3",
+      key: "llm-playground",
       page: "llm-playground",
-      label: "Test Key",
+      label: "Playground",
       icon: <PlayCircleOutlined style={{ fontSize: "18px" }} />,
       roles: rolesWithWriteAccess,
     },
     {
-      key: "2",
+      key: "models",
       page: "models",
       label: "Models + Endpoints",
       icon: <BlockOutlined style={{ fontSize: "18px" }} />,
       roles: rolesWithWriteAccess,
     },
     {
-      key: "12",
+      key: "new_usage",
       page: "new_usage",
       label: "Usage",
       icon: <BarChartOutlined style={{ fontSize: "18px" }} />,
       roles: [...all_admin_roles, ...internalUserRoles],
     },
-    { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined style={{ fontSize: "18px" }} /> },
+    { key: "teams", page: "teams", label: "Teams", icon: <TeamOutlined style={{ fontSize: "18px" }} /> },
     {
-      key: "17",
+      key: "organizations",
       page: "organizations",
       label: "Organizations",
       icon: <BankOutlined style={{ fontSize: "18px" }} />,
       roles: all_admin_roles,
     },
     {
-      key: "5",
+      key: "users",
       page: "users",
       label: "Internal Users",
       icon: <UserOutlined style={{ fontSize: "18px" }} />,
       roles: all_admin_roles,
     },
-    { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined style={{ fontSize: "18px" }} /> },
     {
-      key: "16",
+      key: "budgets",
+      page: "budgets",
+      label: "Budgets",
+      icon: <CreditCardOutlined style={{ fontSize: "18px" }} />,
+      roles: all_admin_roles,
+    },
+    { key: "api_ref", page: "api_ref", label: "API Reference", icon: <ApiOutlined style={{ fontSize: "18px" }} /> },
+    {
+      key: "model-hub-table",
       page: "model-hub-table",
-      label: "Model Hub",
+      label: "AI Hub",
       icon: <AppstoreOutlined style={{ fontSize: "18px" }} />,
     },
-    { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: "18px" }} /> },
+    { key: "logs", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: "18px" }} /> },
     {
-      key: "11",
+      key: "guardrails",
       page: "guardrails",
       label: "Guardrails",
       icon: <SafetyOutlined style={{ fontSize: "18px" }} />,
       roles: all_admin_roles,
     },
     {
-      key: "26",
+      key: "mcp-servers",
+      page: "mcp-servers",
+      label: "MCP Servers",
+      icon: <ToolOutlined style={{ fontSize: "18px" }} />,
+    },
+    {
+      key: "tools",
       page: "tools",
       label: "Tools",
       icon: <ToolOutlined style={{ fontSize: "18px" }} />,
       children: [
-        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: "18px" }} /> },
         {
-          key: "21",
+          key: "search-tools",
+          page: "search-tools",
+          label: "Search Tools",
+          icon: <SearchOutlined style={{ fontSize: "18px" }} />,
+        },
+        {
+          key: "vector-stores",
           page: "vector-stores",
           label: "Vector Stores",
           icon: <DatabaseOutlined style={{ fontSize: "18px" }} />,
@@ -126,35 +146,35 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       icon: <ExperimentOutlined style={{ fontSize: "18px" }} />,
       children: [
         {
-          key: "9",
+          key: "caching",
           page: "caching",
           label: "Caching",
           icon: <DatabaseOutlined style={{ fontSize: "18px" }} />,
           roles: all_admin_roles,
         },
         {
-          key: "25",
+          key: "agents",
+          page: "agents",
+          label: "Agents",
+          icon: <RobotOutlined style={{ fontSize: "18px" }} />,
+          roles: rolesWithWriteAccess,
+        },
+        {
+          key: "prompts",
           page: "prompts",
           label: "Prompts",
           icon: <FileTextOutlined style={{ fontSize: "18px" }} />,
           roles: all_admin_roles,
         },
         {
-          key: "10",
-          page: "budgets",
-          label: "Budgets",
-          icon: <BankOutlined style={{ fontSize: "18px" }} />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "20",
+          key: "transform-request",
           page: "transform-request",
           label: "API Playground",
           icon: <ApiOutlined style={{ fontSize: "18px" }} />,
           roles: [...all_admin_roles, ...internalUserRoles],
         },
         {
-          key: "19",
+          key: "tag-management",
           page: "tag-management",
           label: "Tag Management",
           icon: <TagsOutlined style={{ fontSize: "18px" }} />,
@@ -171,35 +191,35 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       roles: all_admin_roles,
       children: [
         {
-          key: "11",
-          page: "general-settings",
+          key: "router-settings",
+          page: "router-settings",
           label: "Router Settings",
           icon: <SettingOutlined style={{ fontSize: "18px" }} />,
           roles: all_admin_roles,
         },
         {
-          key: "8",
-          page: "settings",
+          key: "logging-and-alerts",
+          page: "logging-and-alerts",
           label: "Logging & Alerts",
           icon: <SettingOutlined style={{ fontSize: "18px" }} />,
           roles: all_admin_roles,
         },
         {
-          key: "13",
+          key: "admin-panel",
           page: "admin-panel",
           label: "Admin Settings",
           icon: <SettingOutlined style={{ fontSize: "18px" }} />,
           roles: all_admin_roles,
         },
         {
-          key: "27",
-          page: "cost-tracking-settings",
+          key: "cost-tracking",
+          page: "cost-tracking",
           label: "Cost Tracking",
           icon: <BarChartOutlined style={{ fontSize: "18px" }} />,
           roles: all_admin_roles,
         },
         {
-          key: "14",
+          key: "ui-theme",
           page: "ui-theme",
           label: "UI Theme",
           icon: <BgColorsOutlined style={{ fontSize: "18px" }} />,
@@ -243,7 +263,7 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
   });
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
+    <Layout>
       <Sider
         theme="light"
         width={220}

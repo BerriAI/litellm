@@ -182,20 +182,20 @@ def _get_cost_breakdown_from_logging_obj(
 ) -> Tuple[Optional[float], Optional[float]]:
     """
     Extract discount information from logging object's cost breakdown.
-    
+
     Returns:
         Tuple of (original_cost, discount_amount)
     """
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
         return None, None
-    
+
     cost_breakdown = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
         return None, None
-    
+
     original_cost = cost_breakdown.get("original_cost")
     discount_amount = cost_breakdown.get("discount_amount")
-    
+
     return original_cost, discount_amount
 
 
@@ -223,12 +223,12 @@ class ProxyBaseLLMRequestProcessing:
     ) -> dict:
         exclude_values = {"", None, "None"}
         hidden_params = hidden_params or {}
-        
+
         # Extract discount info from cost_breakdown if available
         original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=litellm_logging_obj
         )
-        
+
         headers = {
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
@@ -239,8 +239,12 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
             "x-litellm-response-cost": str(response_cost),
-            "x-litellm-response-cost-original": str(original_cost) if original_cost is not None else None,
-            "x-litellm-response-cost-discount-amount": str(discount_amount) if discount_amount is not None else None,
+            "x-litellm-response-cost-original": (
+                str(original_cost) if original_cost is not None else None
+            ),
+            "x-litellm-response-cost-discount-amount": (
+                str(discount_amount) if discount_amount is not None else None
+            ),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
@@ -288,6 +292,7 @@ class ProxyBaseLLMRequestProcessing:
         proxy_config: ProxyConfig,
         route_type: Literal[
             "acompletion",
+            "aembedding",
             "aresponses",
             "_arealtime",
             "aget_responses",
@@ -310,8 +315,23 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_file_create",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_update",
+            "avector_store_file_delete",
             "aocr",
             "asearch",
+            "avideo_generation",
+            "avideo_list",
+            "avideo_status",
+            "avideo_content",
+            "avideo_remix",
+            "acreate_container",
+            "alist_containers",
+            "aretrieve_container",
+            "adelete_container",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -322,6 +342,7 @@ class ProxyBaseLLMRequestProcessing:
         model: Optional[str] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
+
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -357,6 +378,15 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = litellm.model_alias_map[self.data["model"]]
 
+        # Check key-specific aliases
+        if (
+            isinstance(self.data["model"], str)
+            and user_api_key_dict.aliases
+            and isinstance(user_api_key_dict.aliases, dict)
+            and self.data["model"] in user_api_key_dict.aliases
+        ):
+            self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
+
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
@@ -389,6 +419,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_key_dict: UserAPIKeyAuth,
         route_type: Literal[
             "acompletion",
+            "aembedding",
             "aresponses",
             "_arealtime",
             "aget_responses",
@@ -402,8 +433,23 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_file_create",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_update",
+            "avector_store_file_delete",
             "aocr",
             "asearch",
+            "avideo_generation",
+            "avideo_list",
+            "avideo_status",
+            "avideo_content",
+            "avideo_remix",
+            "acreate_container",
+            "alist_containers",
+            "aretrieve_container",
+            "adelete_container",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
@@ -723,7 +769,18 @@ class ProxyBaseLLMRequestProcessing:
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                provider_specific_fields=getattr(e, "provider_specific_fields", None),
                 headers=headers,
+            )
+        elif isinstance(e, httpx.HTTPStatusError):
+            # Handle httpx.HTTPStatusError - extract actual error from response
+            # This matches the original behavior before the refactor in commit 511d435f6f
+            error_body = await e.response.aread()
+            error_text = error_body.decode("utf-8")
+            
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail={"error": error_text},
             )
         error_msg = f"{str(e)}"
         raise ProxyException(
@@ -732,15 +789,18 @@ class ProxyBaseLLMRequestProcessing:
             param=getattr(e, "param", "None"),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )
 
     @staticmethod
     def _get_pre_call_type(
-        route_type: Literal["acompletion", "aresponses"],
-    ) -> Literal["completion", "responses"]:
+        route_type: Literal["acompletion", "aembedding", "aresponses"],
+    ) -> Literal["completion", "embeddings", "responses"]:
         if route_type == "acompletion":
             return "completion"
+        elif route_type == "aembedding":
+            return "embeddings"
         elif route_type == "aresponses":
             return "responses"
 
@@ -780,7 +840,9 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,
@@ -802,7 +864,11 @@ class ProxyBaseLLMRequestProcessing:
 
                 # Inject cost into Anthropic-style SSE usage for /v1/messages for any provider
                 model_name = request_data.get("model", "")
-                chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, model_name)
+                chunk = (
+                    ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                        chunk, model_name
+                    )
+                )
 
                 # Format chunk using helper function
                 yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
@@ -840,52 +906,72 @@ class ProxyBaseLLMRequestProcessing:
     def _process_chunk_with_cost_injection(chunk: Any, model_name: str) -> Any:
         """
         Process a streaming chunk and inject cost information if enabled.
-        
+
         Args:
             chunk: The streaming chunk (dict, str, bytes, or bytearray)
             model_name: Model name for cost calculation
-            
+
         Returns:
             The processed chunk with cost information injected if applicable
         """
         if not getattr(litellm, "include_cost_in_streaming_usage", False):
             return chunk
-            
+
         try:
             if isinstance(chunk, dict):
-                maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(chunk, model_name)
+                maybe_modified = (
+                    ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+                        chunk, model_name
+                    )
+                )
                 if maybe_modified is not None:
                     return maybe_modified
             elif isinstance(chunk, (bytes, bytearray)):
                 # Decode to str, inject, and rebuild as bytes
                 try:
                     s = chunk.decode("utf-8", errors="ignore")
-                    maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(s, model_name)
+                    maybe_mod = (
+                        ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(
+                            s, model_name
+                        )
+                    )
                     if maybe_mod is not None:
-                        return (maybe_mod + ("" if maybe_mod.endswith("\n\n") else "\n\n")).encode("utf-8")
+                        return (
+                            maybe_mod + ("" if maybe_mod.endswith("\n\n") else "\n\n")
+                        ).encode("utf-8")
                 except Exception:
                     pass
             elif isinstance(chunk, str):
                 # Try to parse SSE frame and inject cost into the data line
-                maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(chunk, model_name)
+                maybe_mod = (
+                    ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(
+                        chunk, model_name
+                    )
+                )
                 if maybe_mod is not None:
                     # Ensure trailing frame separator
-                    return maybe_mod if maybe_mod.endswith("\n\n") else (maybe_mod + "\n\n")
+                    return (
+                        maybe_mod
+                        if maybe_mod.endswith("\n\n")
+                        else (maybe_mod + "\n\n")
+                    )
         except Exception:
             # Never break streaming on optional cost injection
             pass
-            
+
         return chunk
-    
+
     @staticmethod
-    def _inject_cost_into_sse_frame_str(frame_str: str, model_name: str) -> Optional[str]:
+    def _inject_cost_into_sse_frame_str(
+        frame_str: str, model_name: str
+    ) -> Optional[str]:
         """
         Inject cost information into an SSE frame string by modifying the JSON in the 'data:' line.
-        
+
         Args:
             frame_str: SSE frame string that may contain multiple lines
             model_name: Model name for cost calculation
-            
+
         Returns:
             Modified SSE frame string with cost injected, or None if no modification needed
         """
@@ -898,7 +984,11 @@ class ProxyBaseLLMRequestProcessing:
                     json_part = stripped_ln.split("data:", 1)[1].strip()
                     if json_part and json_part != "[DONE]":
                         obj = json.loads(json_part)
-                        maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model_name)
+                        maybe_modified = (
+                            ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+                                obj, model_name
+                            )
+                        )
                         if maybe_modified is not None:
                             # Replace just this line with updated JSON using safe_dumps
                             lines[idx] = f"data: {safe_dumps(maybe_modified)}"
@@ -906,23 +996,20 @@ class ProxyBaseLLMRequestProcessing:
             return None
         except Exception:
             return None
-    
+
     @staticmethod
     def _inject_cost_into_usage_dict(obj: dict, model_name: str) -> Optional[dict]:
         """
         Inject cost information into a usage dictionary for message_delta events.
-        
+
         Args:
             obj: Dictionary containing the SSE event data
             model_name: Model name for cost calculation
-            
+
         Returns:
             Modified dictionary with cost injected, or None if no modification needed
         """
-        if (
-            obj.get("type") == "message_delta"
-            and isinstance(obj.get("usage"), dict)
-        ):
+        if obj.get("type") == "message_delta" and isinstance(obj.get("usage"), dict):
             _usage = obj["usage"]
             prompt_tokens = int(_usage.get("input_tokens", 0) or 0)
             completion_tokens = int(_usage.get("output_tokens", 0) or 0)
@@ -938,35 +1025,34 @@ class ProxyBaseLLMRequestProcessing:
             completion_tokens_details = _usage.get("completion_tokens_details")
             prompt_tokens_details = _usage.get("prompt_tokens_details")
 
-            
             usage_kwargs: dict[str, Any] = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
             }
-            
+
             # Add optional named parameters
             if completion_tokens_details is not None:
                 usage_kwargs["completion_tokens_details"] = completion_tokens_details
             if prompt_tokens_details is not None:
                 usage_kwargs["prompt_tokens_details"] = prompt_tokens_details
-            
+
             # Handle web_search_requests by wrapping in ServerToolUse
             if web_search_requests is not None:
                 usage_kwargs["server_tool_use"] = ServerToolUse(
                     web_search_requests=web_search_requests
                 )
-            
+
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = cache_creation_input_tokens
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
-            _mr = ModelResponse(
-                usage=Usage(**usage_kwargs)
-            )
-            
+            _mr = ModelResponse(usage=Usage(**usage_kwargs))
+
             try:
                 cost_val = litellm.completion_cost(
                     completion_response=_mr,
@@ -974,7 +1060,7 @@ class ProxyBaseLLMRequestProcessing:
                 )
             except Exception:
                 cost_val = None
-                
+
             if cost_val is not None:
                 obj.setdefault("usage", {})["cost"] = cost_val
                 return obj
