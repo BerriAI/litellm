@@ -58,7 +58,438 @@ from litellm import client
 from litellm.utils import exception_type, get_litellm_params, get_optional_params
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = None  # Will be lazy-loaded when needed
+
+def _get_litellm_logging_obj() -> Type[Any]:
+    """Lazy import helper for LiteLLMLoggingObj to avoid loading at module import time."""
+    global LiteLLMLoggingObj
+    if LiteLLMLoggingObj is None:
+        from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+        LiteLLMLoggingObj = _LiteLLMLoggingObj
+    return LiteLLMLoggingObj
+
+def _get_realtime_health_check():
+    """Lazy import helper for _realtime_health_check to avoid loading at module import time."""
+    from litellm.realtime_api.main import _realtime_health_check as _func
+    return _func
+
+# Lazy initialization for azure_audio_transcriptions
+_azure_audio_transcriptions = None
+
+def _get_azure_audio_transcriptions():
+    """Lazy initialization helper for azure_audio_transcriptions to avoid loading at module import time."""
+    global _azure_audio_transcriptions
+    if _azure_audio_transcriptions is None:
+        from .llms.azure.audio_transcriptions import AzureAudioTranscription
+        _azure_audio_transcriptions = AzureAudioTranscription()
+    return _azure_audio_transcriptions
+
+def _get_check_dynamic_azure_params():
+    """Lazy import helper for _check_dynamic_azure_params to avoid loading at module import time."""
+    from .llms.azure.azure import _check_dynamic_azure_params as _func
+    return _func
+
+# Lazy initialization for azure_chat_completions
+_azure_chat_completions = None
+
+def _get_azure_chat_completions():
+    """Lazy initialization helper for azure_chat_completions to avoid loading at module import time."""
+    global _azure_chat_completions
+    if _azure_chat_completions is None:
+        from .llms.azure.azure import AzureChatCompletion
+        _azure_chat_completions = AzureChatCompletion()
+    return _azure_chat_completions
+
+# Lazy initialization for azure_o1_chat_completions
+_azure_o1_chat_completions = None
+
+def _get_azure_o1_chat_completions():
+    """Lazy initialization helper for azure_o1_chat_completions to avoid loading at module import time."""
+    global _azure_o1_chat_completions
+    if _azure_o1_chat_completions is None:
+        from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
+        _azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
+    return _azure_o1_chat_completions
+
+# Lazy initialization for azure_ai_embedding
+_azure_ai_embedding = None
+
+def _get_azure_ai_embedding():
+    """Lazy initialization helper for azure_ai_embedding to avoid loading at module import time."""
+    global _azure_ai_embedding
+    if _azure_ai_embedding is None:
+        from .llms.azure_ai.embed import AzureAIEmbedding
+        _azure_ai_embedding = AzureAIEmbedding()
+    return _azure_ai_embedding
+
+# Lazy initialization for bedrock_converse_chat_completion
+_bedrock_converse_chat_completion = None
+
+def _get_bedrock_converse_chat_completion():
+    """Lazy initialization helper for bedrock_converse_chat_completion to avoid loading at module import time."""
+    global _bedrock_converse_chat_completion
+    if _bedrock_converse_chat_completion is None:
+        from .llms.bedrock.chat import BedrockConverseLLM
+        _bedrock_converse_chat_completion = BedrockConverseLLM()
+    return _bedrock_converse_chat_completion
+
+def _get_bedrock_llm():
+    """Lazy import helper for BedrockLLM class to avoid loading at module import time."""
+    from .llms.bedrock.chat import BedrockLLM as _BedrockLLM
+    return _BedrockLLM
+
+# Lazy initialization helpers for all LLM handlers
+_openai_chat_completions = None
+_openai_text_completions = None
+_openai_audio_transcriptions = None
+_openai_image_variations = None
+_groq_chat_completions = None
+_anthropic_chat_completions = None
+_azure_text_completions = None
+_huggingface_embed = None
+_predibase_chat_completions = None
+_codestral_text_completions = None
+_bedrock_embedding = None
+_bedrock_image_generation = None
+_vertex_chat_completion = None
+_vertex_embedding = None
+_vertex_multimodal_embedding = None
+_vertex_image_generation = None
+_google_batch_embeddings = None
+_vertex_partner_models_chat_completion = None
+_vertex_gemma_chat_completion = None
+_vertex_model_garden_chat_completion = None
+_vertex_text_to_speech = None
+_sagemaker_llm = None
+_watsonx_chat_completion = None
+_openai_like_embedding = None
+_openai_like_chat_completion = None
+_databricks_embedding = None
+_base_llm_http_handler = None
+_base_llm_aiohttp_handler = None
+_sagemaker_chat_completion = None
+_bytez_transformation = None
+_heroku_transformation = None
+_oci_transformation = None
+_ovhcloud_transformation = None
+_lemonade_transformation = None
+
+def _get_openai_chat_completions():
+    global _openai_chat_completions
+    if _openai_chat_completions is None:
+        from .llms.openai.openai import OpenAIChatCompletion
+        _openai_chat_completions = OpenAIChatCompletion()
+    return _openai_chat_completions
+
+def _get_openai_text_completions():
+    global _openai_text_completions
+    if _openai_text_completions is None:
+        from .llms.openai.completion.handler import OpenAITextCompletion
+        _openai_text_completions = OpenAITextCompletion()
+    return _openai_text_completions
+
+def _get_openai_audio_transcriptions():
+    global _openai_audio_transcriptions
+    if _openai_audio_transcriptions is None:
+        from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
+        _openai_audio_transcriptions = OpenAIAudioTranscription()
+    return _openai_audio_transcriptions
+
+def _get_openai_image_variations():
+    global _openai_image_variations
+    if _openai_image_variations is None:
+        from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
+        _openai_image_variations = OpenAIImageVariationsHandler()
+    return _openai_image_variations
+
+def _get_groq_chat_completions():
+    global _groq_chat_completions
+    if _groq_chat_completions is None:
+        from .llms.groq.chat.handler import GroqChatCompletion
+        _groq_chat_completions = GroqChatCompletion()
+    return _groq_chat_completions
+
+def _get_anthropic_chat_completions():
+    global _anthropic_chat_completions
+    if _anthropic_chat_completions is None:
+        from .llms.anthropic.chat import AnthropicChatCompletion
+        _anthropic_chat_completions = AnthropicChatCompletion()
+    return _anthropic_chat_completions
+
+def _get_azure_text_completions():
+    global _azure_text_completions
+    if _azure_text_completions is None:
+        from .llms.azure.completion.handler import AzureTextCompletion
+        _azure_text_completions = AzureTextCompletion()
+    return _azure_text_completions
+
+def _get_huggingface_embed():
+    global _huggingface_embed
+    if _huggingface_embed is None:
+        from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
+        _huggingface_embed = HuggingFaceEmbedding()
+    return _huggingface_embed
+
+def _get_predibase_chat_completions():
+    global _predibase_chat_completions
+    if _predibase_chat_completions is None:
+        from .llms.predibase.chat.handler import PredibaseChatCompletion
+        _predibase_chat_completions = PredibaseChatCompletion()
+    return _predibase_chat_completions
+
+def _get_codestral_text_completions():
+    global _codestral_text_completions
+    if _codestral_text_completions is None:
+        from .llms.codestral.completion.handler import CodestralTextCompletion
+        _codestral_text_completions = CodestralTextCompletion()
+    return _codestral_text_completions
+
+def _get_bedrock_embedding():
+    global _bedrock_embedding
+    if _bedrock_embedding is None:
+        from .llms.bedrock.embed.embedding import BedrockEmbedding
+        _bedrock_embedding = BedrockEmbedding()
+    return _bedrock_embedding
+
+def _get_bedrock_image_generation():
+    global _bedrock_image_generation
+    if _bedrock_image_generation is None:
+        from .llms.bedrock.image.image_handler import BedrockImageGeneration
+        _bedrock_image_generation = BedrockImageGeneration()
+    return _bedrock_image_generation
+
+def _get_vertex_chat_completion():
+    global _vertex_chat_completion
+    if _vertex_chat_completion is None:
+        from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+        _vertex_chat_completion = VertexLLM()
+    return _vertex_chat_completion
+
+def _get_vertex_embedding():
+    global _vertex_embedding
+    if _vertex_embedding is None:
+        from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
+        _vertex_embedding = VertexEmbedding()
+    return _vertex_embedding
+
+def _get_vertex_multimodal_embedding():
+    global _vertex_multimodal_embedding
+    if _vertex_multimodal_embedding is None:
+        from .llms.vertex_ai.multimodal_embeddings.embedding_handler import VertexMultimodalEmbedding
+        _vertex_multimodal_embedding = VertexMultimodalEmbedding()
+    return _vertex_multimodal_embedding
+
+def _get_vertex_image_generation():
+    global _vertex_image_generation
+    if _vertex_image_generation is None:
+        from .llms.vertex_ai.image_generation.image_generation_handler import VertexImageGeneration
+        _vertex_image_generation = VertexImageGeneration()
+    return _vertex_image_generation
+
+def _get_google_batch_embeddings():
+    global _google_batch_embeddings
+    if _google_batch_embeddings is None:
+        from .llms.vertex_ai.gemini_embeddings.batch_embed_content_handler import GoogleBatchEmbeddings
+        _google_batch_embeddings = GoogleBatchEmbeddings()
+    return _google_batch_embeddings
+
+def _get_vertex_partner_models_chat_completion():
+    global _vertex_partner_models_chat_completion
+    if _vertex_partner_models_chat_completion is None:
+        from .llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
+        _vertex_partner_models_chat_completion = VertexAIPartnerModels()
+    return _vertex_partner_models_chat_completion
+
+def _get_vertex_gemma_chat_completion():
+    global _vertex_gemma_chat_completion
+    if _vertex_gemma_chat_completion is None:
+        from .llms.vertex_ai.vertex_gemma_models.main import VertexAIGemmaModels
+        _vertex_gemma_chat_completion = VertexAIGemmaModels()
+    return _vertex_gemma_chat_completion
+
+def _get_vertex_model_garden_chat_completion():
+    global _vertex_model_garden_chat_completion
+    if _vertex_model_garden_chat_completion is None:
+        from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
+        _vertex_model_garden_chat_completion = VertexAIModelGardenModels()
+    return _vertex_model_garden_chat_completion
+
+def _get_vertex_text_to_speech():
+    global _vertex_text_to_speech
+    if _vertex_text_to_speech is None:
+        from .llms.vertex_ai.text_to_speech.text_to_speech_handler import VertexTextToSpeechAPI
+        _vertex_text_to_speech = VertexTextToSpeechAPI()
+    return _vertex_text_to_speech
+
+def _get_sagemaker_llm():
+    global _sagemaker_llm
+    if _sagemaker_llm is None:
+        from .llms.sagemaker.completion.handler import SagemakerLLM
+        _sagemaker_llm = SagemakerLLM()
+    return _sagemaker_llm
+
+def _get_watsonx_chat_completion():
+    global _watsonx_chat_completion
+    if _watsonx_chat_completion is None:
+        from .llms.watsonx.chat.handler import WatsonXChatHandler
+        _watsonx_chat_completion = WatsonXChatHandler()
+    return _watsonx_chat_completion
+
+def _get_openai_like_embedding():
+    global _openai_like_embedding
+    if _openai_like_embedding is None:
+        from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
+        _openai_like_embedding = OpenAILikeEmbeddingHandler()
+    return _openai_like_embedding
+
+def _get_openai_like_chat_completion():
+    global _openai_like_chat_completion
+    if _openai_like_chat_completion is None:
+        from .llms.openai_like.chat.handler import OpenAILikeChatHandler
+        _openai_like_chat_completion = OpenAILikeChatHandler()
+    return _openai_like_chat_completion
+
+def _get_databricks_embedding():
+    global _databricks_embedding
+    if _databricks_embedding is None:
+        from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
+        _databricks_embedding = DatabricksEmbeddingHandler()
+    return _databricks_embedding
+
+def _get_base_llm_http_handler():
+    global _base_llm_http_handler
+    if _base_llm_http_handler is None:
+        from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+        _base_llm_http_handler = BaseLLMHTTPHandler()
+    return _base_llm_http_handler
+
+def _get_base_llm_aiohttp_handler():
+    global _base_llm_aiohttp_handler
+    if _base_llm_aiohttp_handler is None:
+        from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
+        _base_llm_aiohttp_handler = BaseLLMAIOHTTPHandler()
+    return _base_llm_aiohttp_handler
+
+def _get_sagemaker_chat_completion():
+    global _sagemaker_chat_completion
+    if _sagemaker_chat_completion is None:
+        from .llms.sagemaker.chat.handler import SagemakerChatHandler
+        _sagemaker_chat_completion = SagemakerChatHandler()
+    return _sagemaker_chat_completion
+
+def _get_bytez_transformation():
+    global _bytez_transformation
+    if _bytez_transformation is None:
+        from .llms.bytez.chat.transformation import BytezChatConfig
+        _bytez_transformation = BytezChatConfig()
+    return _bytez_transformation
+
+def _get_heroku_transformation():
+    global _heroku_transformation
+    if _heroku_transformation is None:
+        from .llms.heroku.chat.transformation import HerokuChatConfig
+        _heroku_transformation = HerokuChatConfig()
+    return _heroku_transformation
+
+def _get_oci_transformation():
+    global _oci_transformation
+    if _oci_transformation is None:
+        from .llms.oci.chat.transformation import OCIChatConfig
+        _oci_transformation = OCIChatConfig()
+    return _oci_transformation
+
+def _get_ovhcloud_transformation():
+    global _ovhcloud_transformation
+    if _ovhcloud_transformation is None:
+        from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
+        _ovhcloud_transformation = OVHCloudChatConfig()
+    return _ovhcloud_transformation
+
+def _get_lemonade_transformation():
+    global _lemonade_transformation
+    if _lemonade_transformation is None:
+        from .llms.lemonade.chat.transformation import LemonadeChatConfig
+        _lemonade_transformation = LemonadeChatConfig()
+    return _lemonade_transformation
+
+# Lazy import helpers for handler functions
+def _get_replicate_chat_completion():
+    """Lazy import helper for replicate_chat_completion function."""
+    from .llms.replicate.chat.handler import completion as _func
+    return _func
+
+def _get_nlp_cloud_chat_completion():
+    """Lazy import helper for nlp_cloud_chat_completion function."""
+    from .llms.nlp_cloud.chat.handler import completion as _func
+    return _func
+
+def _get_get_api_key_from_env():
+    """Lazy import helper for get_api_key_from_env function."""
+    from .llms.gemini.common_utils import get_api_key_from_env as _func
+    return _func
+
+def _get_custom_chat_llm_router():
+    """Lazy import helper for custom_chat_llm_router function."""
+    from .llms.custom_llm import custom_chat_llm_router as _func
+    return _func
+
+def _get_cohere_embed():
+    """Lazy import helper for cohere_embed handler."""
+    from .llms.cohere.embed import handler as _cohere_embed
+    return _cohere_embed
+
+def _get_ollama():
+    """Lazy import helper for ollama handler."""
+    from .llms.ollama.completion import handler as _ollama
+    return _ollama
+
+def _get_oobabooga():
+    """Lazy import helper for oobabooga handler."""
+    from .llms.oobabooga.chat import oobabooga as _func
+    return _func
+
+def _get_petals_handler():
+    """Lazy import helper for petals_handler."""
+    from .llms.petals.completion import handler as _petals_handler
+    return _petals_handler
+
+def _get_vllm_handler():
+    """Lazy import helper for vllm_handler."""
+    from .llms.vllm.completion import handler as _vllm_handler
+    return _vllm_handler
+
+def _get_vertex_ai_non_gemini():
+    """Lazy import helper for vertex_ai_non_gemini."""
+    from .llms.vertex_ai import vertex_ai_non_gemini as _func
+    return _func
+
+def _get_aleph_alpha():
+    """Lazy import helper for aleph_alpha."""
+    from .llms.deprecated_providers import aleph_alpha as _func
+    return _func
+
+def _get_palm():
+    """Lazy import helper for palm."""
+    from .llms.deprecated_providers import palm as _func
+    return _func
+
+def _get_custom_llm():
+    """Lazy import helper for CustomLLM class."""
+    from .llms.custom_llm import CustomLLM as _CustomLLM
+    return _CustomLLM
+
+def _get_clarifai_config():
+    """Lazy import helper for ClarifaiConfig class."""
+    from .llms.clarifai.chat.transformation import ClarifaiConfig as _ClarifaiConfig
+    return _ClarifaiConfig
+
+def _get_ibm_watson_x_mixin():
+    """Lazy import helper for IBMWatsonXMixin class."""
+    from .llms.watsonx.common_utils import IBMWatsonXMixin as _IBMWatsonXMixin
+    return _IBMWatsonXMixin
+
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -77,7 +508,6 @@ from litellm.litellm_core_utils.health_check_utils import (
     _create_health_check_response,
     _filter_model_params,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
@@ -96,7 +526,8 @@ from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
 )
-from litellm.realtime_api.main import _realtime_health_check
+# Note: _realtime_health_check is lazy-loaded when needed to reduce import-time memory cost
+# from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import RawRequestTypedDict, StreamingChoices
@@ -152,63 +583,69 @@ from .litellm_core_utils.prompt_templates.factory import (
 )
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from .llms.anthropic.chat import AnthropicChatCompletion
-from .llms.azure.audio_transcriptions import AzureAudioTranscription
-from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
-from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
-from .llms.azure.completion.handler import AzureTextCompletion
-from .llms.azure_ai.embed import AzureAIEmbedding
-from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
-from .llms.bedrock.embed.embedding import BedrockEmbedding
-from .llms.bedrock.image.image_handler import BedrockImageGeneration
-from .llms.bytez.chat.transformation import BytezChatConfig
-from .llms.clarifai.chat.transformation import ClarifaiConfig
-from .llms.codestral.completion.handler import CodestralTextCompletion
-from .llms.cohere.embed import handler as cohere_embed
-from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
-from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from .llms.custom_llm import CustomLLM, custom_chat_llm_router
-from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
-from .llms.deprecated_providers import aleph_alpha, palm
-from .llms.gemini.common_utils import get_api_key_from_env
-from .llms.groq.chat.handler import GroqChatCompletion
-from .llms.heroku.chat.transformation import HerokuChatConfig
-from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
-from .llms.lemonade.chat.transformation import LemonadeChatConfig
-from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
-from .llms.oci.chat.transformation import OCIChatConfig
-from .llms.ollama.completion import handler as ollama
-from .llms.oobabooga.chat import oobabooga
-from .llms.openai.completion.handler import OpenAITextCompletion
-from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
-from .llms.openai.openai import OpenAIChatCompletion
-from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
-from .llms.openai_like.chat.handler import OpenAILikeChatHandler
-from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
-from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
-from .llms.petals.completion import handler as petals_handler
-from .llms.predibase.chat.handler import PredibaseChatCompletion
-from .llms.replicate.chat.handler import completion as replicate_chat_completion
-from .llms.sagemaker.chat.handler import SagemakerChatHandler
-from .llms.sagemaker.completion.handler import SagemakerLLM
-from .llms.vertex_ai import vertex_ai_non_gemini
-from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
-from .llms.vertex_ai.gemini_embeddings.batch_embed_content_handler import (
-    GoogleBatchEmbeddings,
-)
-from .llms.vertex_ai.image_generation.image_generation_handler import (
-    VertexImageGeneration,
-)
-from .llms.vertex_ai.multimodal_embeddings.embedding_handler import (
-    VertexMultimodalEmbedding,
-)
-from .llms.vertex_ai.text_to_speech.text_to_speech_handler import VertexTextToSpeechAPI
-from .llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
-from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
-from .llms.vertex_ai.vertex_gemma_models.main import VertexAIGemmaModels
-from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
-from .llms.vllm.completion import handler as vllm_handler
-from .llms.watsonx.chat.handler import WatsonXChatHandler
-from .llms.watsonx.common_utils import IBMWatsonXMixin
+# Note: AzureAudioTranscription is lazy-loaded when needed to reduce import-time memory cost
+# from .llms.azure.audio_transcriptions import AzureAudioTranscription
+# Note: AzureChatCompletion and _check_dynamic_azure_params are lazy-loaded when needed to reduce import-time memory cost
+# from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
+# Note: AzureOpenAIO1ChatCompletion is lazy-loaded when needed to reduce import-time memory cost
+# from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
+# Note: All LLM handler imports are lazy-loaded when needed to reduce import-time memory cost
+# from .llms.azure.completion.handler import AzureTextCompletion
+# Note: AzureAIEmbedding is lazy-loaded when needed to reduce import-time memory cost
+# from .llms.azure_ai.embed import AzureAIEmbedding
+# Note: BedrockConverseLLM and BedrockLLM are lazy-loaded when needed to reduce import-time memory cost
+# from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
+# from .llms.bedrock.embed.embedding import BedrockEmbedding
+# from .llms.bedrock.image.image_handler import BedrockImageGeneration
+# from .llms.bytez.chat.transformation import BytezChatConfig
+# from .llms.clarifai.chat.transformation import ClarifaiConfig
+# from .llms.codestral.completion.handler import CodestralTextCompletion
+# from .llms.cohere.embed import handler as cohere_embed
+# from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
+# from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+# from .llms.custom_llm import CustomLLM, custom_chat_llm_router
+# from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
+# from .llms.deprecated_providers import aleph_alpha, palm
+# from .llms.gemini.common_utils import get_api_key_from_env
+# from .llms.groq.chat.handler import GroqChatCompletion
+# from .llms.heroku.chat.transformation import HerokuChatConfig
+# from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
+# from .llms.lemonade.chat.transformation import LemonadeChatConfig
+# from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
+# from .llms.oci.chat.transformation import OCIChatConfig
+# from .llms.ollama.completion import handler as ollama
+# from .llms.oobabooga.chat import oobabooga
+# from .llms.openai.completion.handler import OpenAITextCompletion
+# from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
+# from .llms.openai.openai import OpenAIChatCompletion
+# from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
+# from .llms.openai_like.chat.handler import OpenAILikeChatHandler
+# from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
+# from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
+# from .llms.petals.completion import handler as petals_handler
+# from .llms.predibase.chat.handler import PredibaseChatCompletion
+# from .llms.replicate.chat.handler import completion as replicate_chat_completion
+# from .llms.sagemaker.chat.handler import SagemakerChatHandler
+# from .llms.sagemaker.completion.handler import SagemakerLLM
+# from .llms.vertex_ai import vertex_ai_non_gemini
+# from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+# from .llms.vertex_ai.gemini_embeddings.batch_embed_content_handler import (
+#     GoogleBatchEmbeddings,
+# )
+# from .llms.vertex_ai.image_generation.image_generation_handler import (
+#     VertexImageGeneration,
+# )
+# from .llms.vertex_ai.multimodal_embeddings.embedding_handler import (
+#     VertexMultimodalEmbedding,
+# )
+# from .llms.vertex_ai.text_to_speech.text_to_speech_handler import VertexTextToSpeechAPI
+# from .llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
+# from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
+# from .llms.vertex_ai.vertex_gemma_models.main import VertexAIGemmaModels
+# from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
+# from .llms.vllm.completion import handler as vllm_handler
+# from .llms.watsonx.chat.handler import WatsonXChatHandler
+# from .llms.watsonx.common_utils import IBMWatsonXMixin
 from .types.llms.anthropic import AnthropicThinkingParam
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
@@ -248,47 +685,101 @@ from litellm.utils import (
 )
 
 ####### ENVIRONMENT VARIABLES ###################
-openai_chat_completions = OpenAIChatCompletion()
-openai_text_completions = OpenAITextCompletion()
-openai_audio_transcriptions = OpenAIAudioTranscription()
-openai_image_variations = OpenAIImageVariationsHandler()
-groq_chat_completions = GroqChatCompletion()
-azure_ai_embedding = AzureAIEmbedding()
-anthropic_chat_completions = AnthropicChatCompletion()
-azure_chat_completions = AzureChatCompletion()
-azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
-azure_text_completions = AzureTextCompletion()
-azure_audio_transcriptions = AzureAudioTranscription()
-huggingface_embed = HuggingFaceEmbedding()
-predibase_chat_completions = PredibaseChatCompletion()
-codestral_text_completions = CodestralTextCompletion()
-bedrock_converse_chat_completion = BedrockConverseLLM()
-bedrock_embedding = BedrockEmbedding()
-bedrock_image_generation = BedrockImageGeneration()
-vertex_chat_completion = VertexLLM()
-vertex_embedding = VertexEmbedding()
-vertex_multimodal_embedding = VertexMultimodalEmbedding()
-vertex_image_generation = VertexImageGeneration()
-google_batch_embeddings = GoogleBatchEmbeddings()
-vertex_partner_models_chat_completion = VertexAIPartnerModels()
-vertex_gemma_chat_completion = VertexAIGemmaModels()
-vertex_model_garden_chat_completion = VertexAIModelGardenModels()
-vertex_text_to_speech = VertexTextToSpeechAPI()
-sagemaker_llm = SagemakerLLM()
-watsonx_chat_completion = WatsonXChatHandler()
-openai_like_embedding = OpenAILikeEmbeddingHandler()
-openai_like_chat_completion = OpenAILikeChatHandler()
-databricks_embedding = DatabricksEmbeddingHandler()
-base_llm_http_handler = BaseLLMHTTPHandler()
-base_llm_aiohttp_handler = BaseLLMAIOHTTPHandler()
-sagemaker_chat_completion = SagemakerChatHandler()
-bytez_transformation = BytezChatConfig()
-heroku_transformation = HerokuChatConfig()
-oci_transformation = OCIChatConfig()
-ovhcloud_transformation = OVHCloudChatConfig()
-lemonade_transformation = LemonadeChatConfig()
+# Note: All LLM handler instances are lazy-initialized via helper functions to reduce import-time memory cost
+# openai_chat_completions = OpenAIChatCompletion()
+# openai_text_completions = OpenAITextCompletion()
+# openai_audio_transcriptions = OpenAIAudioTranscription()
+# openai_image_variations = OpenAIImageVariationsHandler()
+# groq_chat_completions = GroqChatCompletion()
+# Note: azure_ai_embedding is lazy-initialized via _get_azure_ai_embedding() to reduce import-time memory cost
+# azure_ai_embedding = AzureAIEmbedding()
+# anthropic_chat_completions = AnthropicChatCompletion()
+# Note: azure_chat_completions is lazy-initialized via _get_azure_chat_completions() to reduce import-time memory cost
+# azure_chat_completions = AzureChatCompletion()
+# Note: azure_o1_chat_completions is lazy-initialized via _get_azure_o1_chat_completions() to reduce import-time memory cost
+# azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
+# azure_text_completions = AzureTextCompletion()
+# Note: azure_audio_transcriptions is lazy-initialized via _get_azure_audio_transcriptions() to reduce import-time memory cost
+# azure_audio_transcriptions = AzureAudioTranscription()
+# huggingface_embed = HuggingFaceEmbedding()
+# predibase_chat_completions = PredibaseChatCompletion()
+# codestral_text_completions = CodestralTextCompletion()
+# Note: bedrock_converse_chat_completion is lazy-initialized via _get_bedrock_converse_chat_completion() to reduce import-time memory cost
+# bedrock_converse_chat_completion = BedrockConverseLLM()
+# bedrock_embedding = BedrockEmbedding()
+# bedrock_image_generation = BedrockImageGeneration()
+# vertex_chat_completion = VertexLLM()
+# vertex_embedding = VertexEmbedding()
+# vertex_multimodal_embedding = VertexMultimodalEmbedding()
+# vertex_image_generation = VertexImageGeneration()
+# google_batch_embeddings = GoogleBatchEmbeddings()
+# vertex_partner_models_chat_completion = VertexAIPartnerModels()
+# vertex_gemma_chat_completion = VertexAIGemmaModels()
+# vertex_model_garden_chat_completion = VertexAIModelGardenModels()
+# vertex_text_to_speech = VertexTextToSpeechAPI()
+# sagemaker_llm = SagemakerLLM()
+# watsonx_chat_completion = WatsonXChatHandler()
+# openai_like_embedding = OpenAILikeEmbeddingHandler()
+# openai_like_chat_completion = OpenAILikeChatHandler()
+# databricks_embedding = DatabricksEmbeddingHandler()
+# base_llm_http_handler = BaseLLMHTTPHandler()
+# base_llm_aiohttp_handler = BaseLLMAIOHTTPHandler()
+# sagemaker_chat_completion = SagemakerChatHandler()
+# bytez_transformation = BytezChatConfig()
+# heroku_transformation = HerokuChatConfig()
+# oci_transformation = OCIChatConfig()
+# ovhcloud_transformation = OVHCloudChatConfig()
+# lemonade_transformation = LemonadeChatConfig()
 
 MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
+
+# Module-level __getattr__ for lazy loading variables (Python 3.7+)
+# This allows other modules to import these variables and they'll be lazy-loaded on first access
+def __getattr__(name: str) -> Any:
+    """Lazy load module-level variables for backward compatibility."""
+    _lazy_vars = {
+        "openai_chat_completions": _get_openai_chat_completions,
+        "openai_text_completions": _get_openai_text_completions,
+        "openai_audio_transcriptions": _get_openai_audio_transcriptions,
+        "openai_image_variations": _get_openai_image_variations,
+        "groq_chat_completions": _get_groq_chat_completions,
+        "anthropic_chat_completions": _get_anthropic_chat_completions,
+        "azure_text_completions": _get_azure_text_completions,
+        "huggingface_embed": _get_huggingface_embed,
+        "predibase_chat_completions": _get_predibase_chat_completions,
+        "codestral_text_completions": _get_codestral_text_completions,
+        "bedrock_embedding": _get_bedrock_embedding,
+        "bedrock_image_generation": _get_bedrock_image_generation,
+        "vertex_chat_completion": _get_vertex_chat_completion,
+        "vertex_embedding": _get_vertex_embedding,
+        "vertex_multimodal_embedding": _get_vertex_multimodal_embedding,
+        "vertex_image_generation": _get_vertex_image_generation,
+        "google_batch_embeddings": _get_google_batch_embeddings,
+        "vertex_partner_models_chat_completion": _get_vertex_partner_models_chat_completion,
+        "vertex_gemma_chat_completion": _get_vertex_gemma_chat_completion,
+        "vertex_model_garden_chat_completion": _get_vertex_model_garden_chat_completion,
+        "vertex_text_to_speech": _get_vertex_text_to_speech,
+        "sagemaker_llm": _get_sagemaker_llm,
+        "watsonx_chat_completion": _get_watsonx_chat_completion,
+        "openai_like_embedding": _get_openai_like_embedding,
+        "openai_like_chat_completion": _get_openai_like_chat_completion,
+        "databricks_embedding": _get_databricks_embedding,
+        "base_llm_http_handler": _get_base_llm_http_handler,
+        "base_llm_aiohttp_handler": _get_base_llm_aiohttp_handler,
+        "sagemaker_chat_completion": _get_sagemaker_chat_completion,
+        "bytez_transformation": _get_bytez_transformation,
+        "heroku_transformation": _get_heroku_transformation,
+        "oci_transformation": _get_oci_transformation,
+        "ovhcloud_transformation": _get_ovhcloud_transformation,
+        "lemonade_transformation": _get_lemonade_transformation,
+    }
+    if name in _lazy_vars:
+        value = _lazy_vars[name]()
+        # Cache the value in module's __dict__ for subsequent accesses
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -464,7 +955,7 @@ async def acompletion(
     #########################################################
     #########################################################
     litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
-    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
+    if isinstance(litellm_logging_obj, _get_litellm_logging_obj()) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=kwargs.get("prompt_id", None),
             non_default_params=kwargs,
@@ -1129,7 +1620,7 @@ def completion(  # type: ignore # noqa: PLR0915
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
 
-    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
+    if isinstance(litellm_logging_obj, _get_litellm_logging_obj()) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=non_default_params
         )
@@ -1400,7 +1891,7 @@ def completion(  # type: ignore # noqa: PLR0915
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
         )
-        cast(LiteLLMLoggingObj, logging).update_environment_variables(
+        cast(_get_litellm_logging_obj(), logging).update_environment_variables(
             model=model,
             user=user,
             optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
@@ -1458,7 +1949,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 isinstance(client, openai.AzureOpenAI)
                 or isinstance(client, openai.AsyncAzureOpenAI)
             ):
-                dynamic_params = _check_dynamic_azure_params(
+                dynamic_params = _get_check_dynamic_azure_params()(
                     azure_client_params={"api_version": api_version},
                     azure_client=client,
                 )
@@ -1506,7 +1997,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
                         optional_params[k] = v
 
-                response = azure_o1_chat_completions.completion(
+                response = _get_azure_o1_chat_completions().completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -1536,7 +2027,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         optional_params[k] = v
 
                 ## COMPLETION CALL
-                response = azure_chat_completions.completion(
+                response = _get_azure_chat_completions().completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -1617,7 +2108,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params[k] = v
 
             ## COMPLETION CALL
-            response = azure_text_completions.completion(
+            response = _get_azure_text_completions().completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -1654,7 +2145,7 @@ def completion(  # type: ignore # noqa: PLR0915
             ## COMPLETION CALL
 
             try:
-                response = base_llm_http_handler.completion(
+                response = _get_base_llm_http_handler().completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -1701,7 +2192,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## COMPLETION CALL
             try:
-                response = base_llm_http_handler.completion(
+                response = _get_base_llm_http_handler().completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -1792,7 +2283,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 prompt = " ".join([message["content"] for message in messages])  # type: ignore
 
             ## COMPLETION CALL
-            _response = openai_text_completions.completion(
+            _response = _get_openai_text_completions().completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -1831,7 +2322,7 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "fireworks_ai":
             ## COMPLETION CALL
             try:
-                response = base_llm_http_handler.completion(
+                response = _get_base_llm_http_handler().completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -1861,7 +2352,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 raise e
         elif custom_llm_provider == "heroku":
             try:
-                response = base_llm_http_handler.completion(
+                response = _get_base_llm_http_handler().completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -1892,7 +2383,7 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "xai":
             ## COMPLETION CALL
             try:
-                response = base_llm_http_handler.completion(
+                response = _get_base_llm_http_handler().completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -1946,7 +2437,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
                     optional_params[k] = v
 
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -1985,7 +2476,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
-            response = base_llm_aiohttp_handler.completion(
+            response = _get_base_llm_aiohttp_handler().completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -2018,7 +2509,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             ## COMPLETION CALL
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -2113,7 +2604,7 @@ def completion(  # type: ignore # noqa: PLR0915
             try:
                 if use_base_llm_http_handler:
 
-                    response = base_llm_http_handler.completion(
+                    response = _get_base_llm_http_handler().completion(
                         model=model,
                         messages=messages,
                         api_base=api_base,
@@ -2133,7 +2624,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         provider_config=provider_config,
                     )
                 else:
-                    response = openai_chat_completions.completion(
+                    response = _get_openai_chat_completions().completion(
                         model=model,
                         messages=messages,
                         headers=headers,
@@ -2181,7 +2672,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.mistral.ai/v1"
             )
 
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -2223,7 +2714,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            model_response = replicate_chat_completion(  # type: ignore
+            model_response = _get_replicate_chat_completion()(  # type: ignore
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -2284,7 +2775,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/complete suffix"
                 )
 
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -2332,7 +2823,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/messages suffix"
                 )
 
-            response = anthropic_chat_completions.completion(
+            response = _get_anthropic_chat_completions().completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -2374,7 +2865,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.nlpcloud.io/v1/gpu/"
             )
 
-            response = nlp_cloud_chat_completion(
+            response = _get_nlp_cloud_chat_completion()(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -2486,7 +2977,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             verbose_logger.debug(f"Model: {model}, API Base: {api_base}")
             verbose_logger.debug(f"Provider Config: {provider_config}")
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -2519,7 +3010,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://chat.maritaca.ai/api"
             )
 
-            model_response = openai_like_chat_completion.completion(
+            model_response = _get_openai_like_chat_completion().completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -2545,7 +3036,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_key
             )
             hf_headers = headers or litellm.headers
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 messages=messages,
                 headers=hf_headers,
@@ -2563,7 +3054,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 stream=stream,
             )
         elif custom_llm_provider == "oci":
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -2588,7 +3079,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = api_base or "https://api.compactif.ai/v1"
 
             ## COMPLETION CALL
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -2608,7 +3099,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif custom_llm_provider == "oobabooga":
             custom_llm_provider = "oobabooga"
-            model_response = oobabooga.completion(
+            model_response = _get_oobabooga().completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -2650,7 +3141,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## COMPLETION CALL
             try:
-                response = base_llm_http_handler.completion(
+                response = _get_base_llm_http_handler().completion(
                     model=model,
                     stream=stream,
                     messages=messages,
@@ -2687,7 +3178,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
 
         elif custom_llm_provider == "datarobot":
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -2750,7 +3241,7 @@ def completion(  # type: ignore # noqa: PLR0915
             data = {"model": model, "messages": messages, **optional_params}
 
             ## COMPLETION CALL
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -2813,7 +3304,7 @@ def completion(  # type: ignore # noqa: PLR0915
             data = {"model": model, "messages": messages, **optional_params}
 
             ## COMPLETION CALL
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -2869,14 +3360,14 @@ def completion(  # type: ignore # noqa: PLR0915
 
             gemini_api_key = (
                 api_key
-                or get_api_key_from_env()
+                or _get_get_api_key_from_env()()
                 or get_secret("PALM_API_KEY")  # older palm api key should also work
                 or litellm.api_key
             )
 
             api_base = api_base or litellm.api_base or get_secret("GEMINI_API_BASE")
             new_params = safe_deep_copy(optional_params or {})
-            response = vertex_chat_completion.completion(  # type: ignore
+            response = _get_vertex_chat_completion().completion(  # type: ignore
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -2925,7 +3416,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             if model_route == VertexAIModelRoute.PARTNER_MODELS:
-                model_response = vertex_partner_models_chat_completion.completion(
+                model_response = _get_vertex_partner_models_chat_completion().completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
@@ -2946,7 +3437,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                 )
             elif model_route == VertexAIModelRoute.GEMINI:
-                model_response = vertex_chat_completion.completion(  # type: ignore
+                model_response = _get_vertex_chat_completion().completion(  # type: ignore
                     model=model,
                     messages=messages,
                     model_response=model_response,
@@ -2969,7 +3460,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
             elif model_route == VertexAIModelRoute.GEMMA:
                 # Vertex Gemma Models with custom prediction endpoint
-                model_response = vertex_gemma_chat_completion.completion(
+                model_response = _get_vertex_gemma_chat_completion().completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
@@ -2991,7 +3482,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
             elif model_route == VertexAIModelRoute.MODEL_GARDEN:
                 # Vertex Model Garden - OpenAI compatible models
-                model_response = vertex_model_garden_chat_completion.completion(
+                model_response = _get_vertex_model_garden_chat_completion().completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
@@ -3069,7 +3560,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("PREDIBASE_API_KEY")
             )
 
-            _model_response = predibase_chat_completions.completion(
+            _model_response = _get_predibase_chat_completions().completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -3109,7 +3600,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 stream=stream
             )
 
-            _model_response = codestral_text_completions.completion(  # type: ignore
+            _model_response = _get_codestral_text_completions().completion(  # type: ignore
                 model=model,
                 messages=messages,
                 model_response=text_completion_model_response,
@@ -3135,7 +3626,7 @@ def completion(  # type: ignore # noqa: PLR0915
             response = _model_response
         elif custom_llm_provider == "sagemaker_chat":
             # boto3 reads keys from .env
-            model_response = base_llm_http_handler.completion(
+            model_response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -3157,7 +3648,7 @@ def completion(  # type: ignore # noqa: PLR0915
             response = model_response
         elif custom_llm_provider == "sagemaker":
             # boto3 reads keys from .env
-            model_response = sagemaker_llm.completion(
+            model_response = _get_sagemaker_llm().completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -3203,7 +3694,7 @@ def completion(  # type: ignore # noqa: PLR0915
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
                 model = model.replace("converse/", "")
-                response = bedrock_converse_chat_completion.completion(
+                response = _get_bedrock_converse_chat_completion().completion(
                     model=model,
                     messages=messages,
                     custom_prompt_dict=custom_prompt_dict,
@@ -3222,7 +3713,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
             elif bedrock_route == "converse_like":
                 model = model.replace("converse_like/", "")
-                response = base_llm_http_handler.completion(
+                response = _get_base_llm_http_handler().completion(
                     model=model,
                     stream=stream,
                     messages=messages,
@@ -3240,7 +3731,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                 )
             else:
-                response = base_llm_http_handler.completion(
+                response = _get_base_llm_http_handler().completion(
                     model=model,
                     stream=stream,
                     messages=messages,
@@ -3258,7 +3749,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                 )
         elif custom_llm_provider == "watsonx":
-            response = watsonx_chat_completion.completion(
+            response = _get_watsonx_chat_completion().completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -3323,7 +3814,7 @@ def completion(  # type: ignore # noqa: PLR0915
             if token is not None:
                 optional_params["token"] = token
 
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -3377,7 +3868,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -3411,7 +3902,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_key
             )
 
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -3432,7 +3923,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
         elif custom_llm_provider == "triton":
             api_base = litellm.api_base or api_base
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -3465,7 +3956,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -3517,7 +4008,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 client = (
                     HTTPHandler(timeout=timeout) if stream is False else None
                 )  # Keep this here, otherwise, the httpx.client closes and streaming is impossible
-                response = base_llm_http_handler.completion(
+                response = _get_base_llm_http_handler().completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -3548,7 +4039,7 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "gradient_ai":
 
             api_base = litellm.api_base or api_base
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 stream=stream,
                 messages=messages,
@@ -3574,7 +4065,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_key
             )
 
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -3602,7 +4093,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_key
             )
 
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -3638,7 +4129,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
             )
 
-            response = base_llm_http_handler.completion(
+            response = _get_base_llm_http_handler().completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -3724,7 +4215,7 @@ def completion(  # type: ignore # noqa: PLR0915
             custom_llm_provider in litellm._custom_providers
         ):  # Assume custom LLM provider
             # Get the Custom Handler
-            custom_handler: Optional[CustomLLM] = None
+            custom_handler: Optional[_get_custom_llm()] = None
             for item in litellm.custom_provider_map:
                 if item["provider"] == custom_llm_provider:
                     custom_handler = item["custom_handler"]
@@ -3735,7 +4226,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
 
             ## ROUTE LLM CALL ##
-            handler_fn = custom_chat_llm_router(
+            handler_fn = _get_custom_chat_llm_router()(
                 async_fn=acompletion, stream=stream, custom_llm=custom_handler
             )
 
@@ -4141,7 +4632,7 @@ def embedding(  # noqa: PLR0915
                 )
 
             ## EMBEDDING CALL
-            response = azure_chat_completions.embedding(
+            response = _get_azure_chat_completions().embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -4192,7 +4683,7 @@ def embedding(  # noqa: PLR0915
             api_version = None
 
             ## EMBEDDING CALL
-            response = openai_chat_completions.embedding(
+            response = _get_openai_chat_completions().embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -4218,7 +4709,7 @@ def embedding(  # noqa: PLR0915
             )  # type: ignore
 
             ## EMBEDDING CALL
-            response = databricks_embedding.embedding(
+            response = _get_databricks_embedding().embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -4253,7 +4744,7 @@ def embedding(  # noqa: PLR0915
                 optional_params["extra_headers"] = extra_headers
 
             ## EMBEDDING CALL
-            response = openai_like_embedding.embedding(
+            response = _get_openai_like_embedding().embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -4279,7 +4770,7 @@ def embedding(  # noqa: PLR0915
             else:
                 headers = {}
 
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -4301,7 +4792,7 @@ def embedding(  # noqa: PLR0915
                 or get_secret("HUGGINGFACE_API_KEY")
                 or litellm.api_key
             )  # type: ignore
-            response = huggingface_embed.embedding(
+            response = _get_huggingface_embed().embedding(
                 model=model,
                 input=input,
                 encoding=encoding,  # type: ignore
@@ -4319,7 +4810,7 @@ def embedding(  # noqa: PLR0915
                 transformed_input = [input]
             else:
                 transformed_input = input
-            response = bedrock_embedding.embeddings(
+            response = _get_bedrock_embedding().embeddings(
                 model=model,
                 input=transformed_input,
                 encoding=encoding,
@@ -4340,7 +4831,7 @@ def embedding(  # noqa: PLR0915
                 raise ValueError(
                     "api_base is required for triton. Please pass `api_base`"
                 )
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -4355,11 +4846,11 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
             )
         elif custom_llm_provider == "gemini":
-            gemini_api_key = api_key or get_api_key_from_env() or litellm.api_key
+            gemini_api_key = api_key or _get_get_api_key_from_env()() or litellm.api_key
 
             api_base = api_base or litellm.api_base or get_secret_str("GEMINI_API_BASE")
 
-            response = google_batch_embeddings.batch_embeddings(  # type: ignore
+            response = _get_google_batch_embeddings().batch_embeddings(  # type: ignore
                 model=model,
                 input=input,
                 encoding=encoding,
@@ -4410,10 +4901,10 @@ def embedding(  # noqa: PLR0915
                 "image" in optional_params
                 or "video" in optional_params
                 or model
-                in vertex_multimodal_embedding.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS
+                in _get_vertex_multimodal_embedding().SUPPORTED_MULTIMODAL_EMBEDDING_MODELS
             ):
                 # multimodal embedding is supported on vertex httpx
-                response = vertex_multimodal_embedding.multimodal_embedding(
+                response = _get_vertex_multimodal_embedding().multimodal_embedding(
                     model=model,
                     input=input,
                     encoding=encoding,
@@ -4431,7 +4922,7 @@ def embedding(  # noqa: PLR0915
                     api_base=api_base,
                 )
             else:
-                response = vertex_embedding.embedding(
+                response = _get_vertex_embedding().embedding(
                     model=model,
                     input=input,
                     encoding=encoding,
@@ -4450,7 +4941,7 @@ def embedding(  # noqa: PLR0915
                     client=client,
                 )
         elif custom_llm_provider == "oobabooga":
-            response = oobabooga.embedding(
+            response = _get_oobabooga().embedding(
                 model=model,
                 input=input,
                 encoding=encoding,
@@ -4477,9 +4968,9 @@ def embedding(  # noqa: PLR0915
                     llm_provider="ollama",  # type: ignore
                 )
             ollama_embeddings_fn = (
-                ollama.ollama_aembeddings
+                _get_ollama().ollama_aembeddings
                 if aembedding is True
-                else ollama.ollama_embeddings
+                else _get_ollama().ollama_embeddings
             )
             response = ollama_embeddings_fn(  # type: ignore
                 api_base=api_base,
@@ -4491,7 +4982,7 @@ def embedding(  # noqa: PLR0915
                 model_response=EmbeddingResponse(),
             )
         elif custom_llm_provider == "sagemaker":
-            response = sagemaker_llm.embedding(
+            response = _get_sagemaker_llm().embedding(
                 model=model,
                 input=input,
                 encoding=encoding,
@@ -4502,7 +4993,7 @@ def embedding(  # noqa: PLR0915
             )
         elif custom_llm_provider == "mistral":
             api_key = api_key or litellm.api_key or get_secret_str("MISTRAL_API_KEY")
-            response = openai_chat_completions.embedding(
+            response = _get_openai_chat_completions().embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -4518,7 +5009,7 @@ def embedding(  # noqa: PLR0915
             api_key = (
                 api_key or litellm.api_key or get_secret_str("FIREWORKS_AI_API_KEY")
             )
-            response = openai_chat_completions.embedding(
+            response = _get_openai_chat_completions().embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -4539,7 +5030,7 @@ def embedding(  # noqa: PLR0915
                 or "api.studio.nebius.ai/v1"
             )
 
-            response = openai_chat_completions.embedding(
+            response = _get_openai_chat_completions().embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -4560,7 +5051,7 @@ def embedding(  # noqa: PLR0915
                 or "https://api.inference.wandb.ai/v1"
             )
 
-            response = openai_chat_completions.embedding(
+            response = _get_openai_chat_completions().embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -4580,7 +5071,7 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("SAMBANOVA_API_BASE")
                 or "https://api.sambanova.ai/v1"
             )
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -4595,7 +5086,7 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
             )
         elif custom_llm_provider == "voyage":
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -4610,7 +5101,7 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
             )
         elif custom_llm_provider == "infinity":
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -4625,7 +5116,7 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
             )
         elif custom_llm_provider == "watsonx":
-            credentials = IBMWatsonXMixin.get_watsonx_credentials(
+            credentials = _get_ibm_watson_x_mixin().get_watsonx_credentials(
                 optional_params=optional_params, api_key=api_key, api_base=api_base
             )
 
@@ -4635,7 +5126,7 @@ def embedding(  # noqa: PLR0915
             if "token" in credentials:
                 optional_params["token"] = credentials["token"]
 
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -4662,7 +5153,7 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("XINFERENCE_API_BASE")
                 or "http://127.0.0.1:9997/v1"
             )
-            response = openai_chat_completions.embedding(
+            response = _get_openai_chat_completions().embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -4689,7 +5180,7 @@ def embedding(  # noqa: PLR0915
             )
 
             ## EMBEDDING CALL
-            response = azure_ai_embedding.embedding(
+            response = _get_azure_ai_embedding().embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -4706,7 +5197,7 @@ def embedding(  # noqa: PLR0915
                 transformed_input = [input]
             else:
                 transformed_input = input
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=transformed_input,
                 custom_llm_provider=custom_llm_provider,
@@ -4735,7 +5226,7 @@ def embedding(  # noqa: PLR0915
                 headers = extra_headers
             else:
                 headers = {}
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=input,
                 timeout=timeout,
@@ -4758,7 +5249,7 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("OVHCLOUD_API_BASE")
                 or "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
             )
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -4785,7 +5276,7 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("COMETAPI_API_BASE")
                 or "https://api.cometapi.com/v1"
             )
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -4800,7 +5291,7 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
             )
         elif custom_llm_provider in litellm._custom_providers:
-            custom_handler: Optional[CustomLLM] = None
+            custom_handler: Optional[_get_custom_llm()] = None
             for item in litellm.custom_provider_map:
                 if item["provider"] == custom_llm_provider:
                     custom_handler = item["custom_handler"]
@@ -4830,7 +5321,7 @@ def embedding(  # noqa: PLR0915
             )
         elif custom_llm_provider == "snowflake":
             api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
-            response = base_llm_http_handler.embedding(
+            response = _get_base_llm_http_handler().embedding(
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
@@ -5390,7 +5881,7 @@ async def amoderation(
     if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
         # call helper to get OpenAI client
         # _get_openai_client maintains in-memory caching logic for OpenAI clients
-        _openai_client: AsyncOpenAI = openai_chat_completions._get_openai_client(  # type: ignore
+        _openai_client: AsyncOpenAI = _get_openai_chat_completions()._get_openai_client(  # type: ignore
             is_async=True,
             api_key=api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
@@ -5614,7 +6105,7 @@ def transcription(
 
         optional_params["extra_headers"] = extra_headers
 
-        response = azure_audio_transcriptions.audio_transcriptions(
+        response = _get_azure_audio_transcriptions().audio_transcriptions(
             model=model,
             audio_file=file,
             optional_params=optional_params,
@@ -5648,7 +6139,7 @@ def transcription(
         # set API KEY
 
         api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")  # type: ignore
-        response = openai_audio_transcriptions.audio_transcriptions(
+        response = _get_openai_audio_transcriptions().audio_transcriptions(
             model=model,
             audio_file=file,
             optional_params=optional_params,
@@ -5665,7 +6156,7 @@ def transcription(
             shared_session=shared_session,
         )
     elif provider_config is not None:
-        response = base_llm_http_handler.audio_transcriptions(
+        response = _get_base_llm_http_handler().audio_transcriptions(
             model=model,
             audio_file=file,
             optional_params=optional_params,
@@ -5870,7 +6361,7 @@ def speech(  # noqa: PLR0915
 
         headers = headers or litellm.headers
 
-        response = openai_chat_completions.audio_speech(
+        response = _get_openai_chat_completions().audio_speech(
             model=model,
             input=input,
             voice=voice,
@@ -5949,7 +6440,7 @@ def speech(  # noqa: PLR0915
             if extra_headers:
                 optional_params["extra_headers"] = extra_headers
 
-            response = azure_chat_completions.audio_speech(
+            response = _get_azure_chat_completions().audio_speech(
                 model=model,
                 input=input,
                 voice=voice,
@@ -6006,7 +6497,7 @@ def speech(  # noqa: PLR0915
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
             )
-        response = vertex_text_to_speech.audio_speech(
+        response = _get_vertex_text_to_speech().audio_speech(
             _is_async=aspeech,
             vertex_credentials=vertex_credentials,
             vertex_project=vertex_ai_project,
