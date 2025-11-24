@@ -1,5 +1,5 @@
 ---
-title: "v1.80.5-stable - Gemini 3.0 Support"
+title: "[PREVIEW] v1.80.5.rc.2 - Gemini 3.0 Support"
 slug: "v1-80-5"
 date: 2025-11-22T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.5-stable
+ghcr.io/berriai/litellm:v1.80.5.rc.2
 ```
 
 </TabItem>
@@ -502,4 +502,4 @@ New interactive playground UI enables side-by-side comparison of multiple LLM mo
 
 ## Full Changelog
 
-**[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.80.0-nightly...v1.80.5.rc.1)**
+**[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.80.0-nightly...v1.80.5.rc.2)**
