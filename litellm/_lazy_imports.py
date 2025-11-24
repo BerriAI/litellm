@@ -1233,8 +1233,17 @@ def _lazy_import_main_functions(name: str) -> Any:
     Optimized to check if module is already loaded before importing, and uses importlib
     for better clarity. Note: Python's import system doesn't support partial imports,
     so the entire litellm.main module will be loaded on first access.
+    
+    For async functions, ensures async client cleanup is registered.
     """
     _globals = _get_litellm_globals()
+    
+    # For async functions, ensure cleanup is registered before importing
+    async_function_names = {"acompletion", "aembedding", "atext_completion", "atranscription", 
+                           "aimage_generation", "aimage_variation", "aimage_edit", "aresponses",
+                           "aadapter_completion", "aadapter_embedding"}
+    if name in async_function_names:
+        _ensure_async_client_cleanup_registered()
     
     # Check if module is already loaded to avoid re-importing
     main_module_name = "litellm.main"
@@ -1369,6 +1378,19 @@ def _lazy_import_assistants_functions(name: str) -> Any:
         return attr
     except AttributeError:
         raise AttributeError(f"module 'litellm.assistants.main' has no attribute {name!r}")
+
+
+def _ensure_async_client_cleanup_registered() -> None:
+    """
+    Ensure async client cleanup is registered. Called lazily when async functions are accessed.
+    This function is idempotent - it only registers once.
+    """
+    # Import here to avoid circular import and reduce import-time memory cost
+    import litellm
+    if not getattr(litellm, "_async_client_cleanup_registered", False):
+        from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
+        register_async_client_cleanup()
+        litellm._async_client_cleanup_registered = True
 
 
 def get_cached_llm_provider() -> Callable:

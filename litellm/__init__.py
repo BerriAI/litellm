@@ -212,14 +212,17 @@ if TYPE_CHECKING:
     from litellm.llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 import httpx
 import dotenv
-from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
+# Note: register_async_client_cleanup is lazy-loaded to reduce import-time memory cost
+# It will be called lazily when async functions are first accessed
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
 
-# Register async client cleanup to prevent resource leaks
-register_async_client_cleanup()
+# Lazy initialization flag for async client cleanup registration
+# The actual registration is handled in _lazy_imports._ensure_async_client_cleanup_registered()
+# and is called when async functions are first accessed
+_async_client_cleanup_registered: bool = False
 ####################################################
 if set_verbose:
     _turn_on_debug()
