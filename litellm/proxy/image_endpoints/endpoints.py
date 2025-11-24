@@ -215,9 +215,11 @@ async def image_generation(
 async def image_edit_api(
     request: Request,
     fastapi_response: Response,
-    image: List[UploadFile] = File(...),
-    mask: Optional[List[UploadFile]] = File(None),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    image: Optional[List[UploadFile]] = File(None),
+    image_array: Optional[List[UploadFile]] = File(None, alias="image[]"),
+    mask: Optional[List[UploadFile]] = File(None),
+    mask_array: Optional[List[UploadFile]] = File(None, alias="mask[]"),
     model: Optional[str] = None,
 ):
     """
@@ -233,6 +235,14 @@ async def image_edit_api(
         -F 'prompt=Create a studio ghibli image of this'
     ```
     """
+    if image is None and image_array is not None:
+        image = image_array
+    if mask is None and mask_array is not None:
+        mask = mask_array
+
+    if image is None:
+        raise HTTPException(status_code=422, detail="Field required: image")
+
     from litellm.proxy.proxy_server import (
         _read_request_body,
         general_settings,
