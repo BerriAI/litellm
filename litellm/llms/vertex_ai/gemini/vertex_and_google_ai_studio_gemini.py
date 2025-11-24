@@ -236,6 +236,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return False
 
+    @staticmethod
+    def _is_image_generation_model(model: str) -> bool:
+        """
+        Check if the model is an image generation model.
+        
+        Image generation models include:
+        - gemini-3-pro-image-preview
+        - gemini-2.5-flash-image
+        - gemini-2.0-flash-preview-image-generation
+        
+        These models use thinking internally and cannot be controlled via thinkingConfig parameter.
+        """
+        image_model_identifiers = [
+            "image-preview",
+            "flash-image",
+            "preview-image-generation",
+        ]
+        return any(identifier in model for identifier in image_model_identifiers)
+
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -904,13 +923,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
-            thinking_config = optional_params.get("thinkingConfig", {})
-            if (
-                "thinkingLevel" not in thinking_config
-                and "thinkingBudget" not in thinking_config
-            ):
-                thinking_config["thinkingLevel"] = "low"
-                optional_params["thinkingConfig"] = thinking_config
+            
+            # Image generation models use thinking internally and cannot be controlled via thinkingConfig
+            # See: https://ai.google.dev/gemini-api/docs/image-generation#thinking-process
+            if not VertexGeminiConfig._is_image_generation_model(model):
+                thinking_config = optional_params.get("thinkingConfig", {})
+                if (
+                    "thinkingLevel" not in thinking_config
+                    and "thinkingBudget" not in thinking_config
+                ):
+                    thinking_config["thinkingLevel"] = "low"
+                    optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
 
