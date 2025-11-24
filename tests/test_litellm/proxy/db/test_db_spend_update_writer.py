@@ -221,6 +221,109 @@ async def test_update_daily_spend_sorting():
 
     # Verify that table.upsert was called
     mock_table.upsert.assert_has_calls(upsert_calls)
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_with_none_values_in_sorting_fields():
+    """
+    Test that _update_daily_spend handles None values in sorting fields correctly.
+    
+    This test ensures that when fields like date, api_key, model, or custom_llm_provider
+    are None, the sorting doesn't crash with TypeError: '<' not supported between 
+    instances of 'NoneType' and 'str'.
+    """
+    # Setup
+    mock_prisma_client = MagicMock()
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_prisma_client.db.batch_.return_value.__aenter__.return_value = mock_batcher
+    mock_batcher.litellm_dailyuserspend = mock_table
+
+    # Create transactions with None values in various sorting fields
+    daily_spend_transactions = {
+        "key1": {
+            "user_id": "user1",
+            "date": None,  # None date
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
+        "key2": {
+            "user_id": "user2",
+            "date": "2024-01-01",
+            "api_key": None,  # None api_key
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
+        "key3": {
+            "user_id": "user3",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": None,  # None model
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
+        "key4": {
+            "user_id": "user4",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": None,  # None custom_llm_provider
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
+        "key5": {
+            "user_id": None,  # None entity_id
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
+    }
+
+    # Call the method - this should not raise TypeError
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=1,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=MagicMock(),
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="user",
+        entity_id_field="user_id",
+        table_name="litellm_dailyuserspend",
+        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider",
+    )
+
+    # Verify that table.upsert was called (should be called 5 times, once for each transaction)
+    assert mock_table.upsert.call_count == 5
+
+
 # Tag Spend Tracking Tests
 
 
