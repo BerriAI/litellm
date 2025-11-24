@@ -1271,7 +1271,8 @@ from .proxy.proxy_cli import run_server
 # from .images.main import *
 # Note: videos.main is lazy-loaded via __getattr__ to reduce import-time memory cost
 # from .videos.main import *
-from .batch_completion.main import *  # type: ignore
+# Note: batch_completion.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .batch_completion.main import *  # type: ignore
 # Note: rerank_api.main is lazy-loaded via __getattr__ to reduce import-time memory cost
 # from .rerank_api.main import *
 # Note: anthropic experimental_pass_through.messages.handler is lazy-loaded via __getattr__ to reduce import-time memory cost
@@ -1288,28 +1289,31 @@ from .batch_completion.main import *  # type: ignore
 # from .realtime_api.main import _arealtime
 # Note: fine_tuning.main is lazy-loaded via __getattr__ to reduce import-time memory cost
 # from .fine_tuning.main import *
-from .files.main import *
-from .vector_store_files.main import (
-    acreate as avector_store_file_create,
-    adelete as avector_store_file_delete,
-    alist as avector_store_file_list,
-    aretrieve as avector_store_file_retrieve,
-    aretrieve_content as avector_store_file_content,
-    aupdate as avector_store_file_update,
-    create as vector_store_file_create,
-    delete as vector_store_file_delete,
-    list as vector_store_file_list,
-    retrieve as vector_store_file_retrieve,
-    retrieve_content as vector_store_file_content,
-    update as vector_store_file_update,
-)
+# Note: files.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .files.main import *
+# Note: vector_store_files.main is lazy-loaded via __getattr__ to reduce import-time memory cost
+# from .vector_store_files.main import (
+#     acreate as avector_store_file_create,
+#     adelete as avector_store_file_delete,
+#     alist as avector_store_file_list,
+#     aretrieve as avector_store_file_retrieve,
+#     aretrieve_content as avector_store_file_content,
+#     aupdate as avector_store_file_update,
+#     create as vector_store_file_create,
+#     delete as vector_store_file_delete,
+#     list as vector_store_file_list,
+#     retrieve as vector_store_file_retrieve,
+#     retrieve_content as vector_store_file_content,
+#     update as vector_store_file_update,
+# )
 from .scheduler import *
 # Note: response_cost_calculator and cost_per_token are imported lazily via __getattr__ 
 # to avoid loading cost_calculator.py at import time
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
-import litellm.anthropic_interface as anthropic
+# Note: anthropic_interface is lazy-loaded via __getattr__ to reduce import-time memory cost
+# import litellm.anthropic_interface as anthropic
 
 adapters: List[AdapterItem] = []
 
@@ -1578,6 +1582,58 @@ def __getattr__(name: str) -> Any:
         _func = getattr(_fine_tuning_main, name)
         globals()[name] = _func
         return _func
+    
+    # Lazy load files functions to reduce import-time memory cost
+    _files_functions = {
+        "create_file", "acreate_file",
+        "file_retrieve", "afile_retrieve",
+        "file_delete", "afile_delete",
+        "file_list", "afile_list",
+        "file_content", "afile_content",
+    }
+    if name in _files_functions:
+        from .files import main as _files_main
+        _func = getattr(_files_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load batch_completion functions to reduce import-time memory cost
+    _batch_completion_functions = {
+        "batch_completion", "batch_completion_models", "batch_completion_models_all_responses",
+    }
+    if name in _batch_completion_functions:
+        from .batch_completion import main as _batch_completion_main
+        _func = getattr(_batch_completion_main, name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load vector_store_files functions to reduce import-time memory cost
+    _vector_store_files_mapping = {
+        "avector_store_file_create": "acreate",
+        "avector_store_file_delete": "adelete",
+        "avector_store_file_list": "alist",
+        "avector_store_file_retrieve": "aretrieve",
+        "avector_store_file_content": "aretrieve_content",
+        "avector_store_file_update": "aupdate",
+        "vector_store_file_create": "create",
+        "vector_store_file_delete": "delete",
+        "vector_store_file_list": "list",
+        "vector_store_file_retrieve": "retrieve",
+        "vector_store_file_content": "retrieve_content",
+        "vector_store_file_update": "update",
+    }
+    if name in _vector_store_files_mapping:
+        from .vector_store_files import main as _vector_store_files_main
+        _original_name = _vector_store_files_mapping[name]
+        _func = getattr(_vector_store_files_main, _original_name)
+        globals()[name] = _func
+        return _func
+    
+    # Lazy load anthropic module to reduce import-time memory cost
+    if name == "anthropic":
+        from . import anthropic_interface as _anthropic_module
+        globals()["anthropic"] = _anthropic_module
+        return _anthropic_module
     
     if name == "provider_list":
         from ._lazy_imports import _lazy_import_types_utils
