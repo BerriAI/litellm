@@ -572,9 +572,11 @@ _key_management_settings: "KeyManagementSettings" = KeyManagementSettings()
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+# model_cost is lazy-loaded to reduce import-time memory cost
+# It will be loaded on first access via __getattr__
+_model_cost_cached: Optional[Dict[str, Any]] = None
+_models_initialized: bool = False
 
-model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = (
     {}
 )  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -733,8 +735,22 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
+def _get_model_cost() -> Dict[str, Any]:
+    """
+    Get cached model_cost with lazy loading.
+    This ensures model_cost is loaded only when needed.
+    """
+    global _model_cost_cached
+    if _model_cost_cached is None:
+        from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+        _model_cost_cached = get_model_cost_map(url=model_cost_map_url)
+    return _model_cost_cached
+
+
 def add_known_models():
-    for key, value in model_cost.items():
+    # Use cached model_cost to ensure it's loaded
+    _model_cost = _get_model_cost()
+    for key, value in _model_cost.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
             key
         ):
@@ -936,7 +952,7 @@ def add_known_models():
             docker_model_runner_models.add(key)
 
 
-add_known_models()
+# add_known_models() is now lazy-loaded - called when model_cost is first accessed
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 
 # this is maintained for Exception Mapping
@@ -1347,6 +1363,16 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 def __getattr__(name: str) -> Any:
     """Lazy import for cost_calculator, litellm_logging, and utils functions."""
+    if name == "model_cost":
+        global _models_initialized
+        _model_cost = _get_model_cost()
+        # Initialize model lists on first access to model_cost (only once)
+        if not _models_initialized:
+            add_known_models()
+            _models_initialized = True
+        globals()["model_cost"] = _model_cost
+        return _model_cost
+    
     if name in {"completion_cost", "response_cost_calculator", "cost_per_token"}:
         from ._lazy_imports import _lazy_import_cost_calculator
         return _lazy_import_cost_calculator(name)
