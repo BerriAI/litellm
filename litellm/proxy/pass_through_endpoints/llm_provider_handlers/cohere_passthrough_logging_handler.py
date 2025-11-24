@@ -161,7 +161,6 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 logging_obj.model_call_details["custom_llm_provider"] = "cohere"
                 logging_obj.model_call_details["response_cost"] = response_cost
 
-                print(f"🔥🔥🔥🔥Cohere passthrough logging handler - Model: {model}, Cost: ${response_cost:.6f}, kwargs: {kwargs}")
                 return {
                     "result": litellm_model_response,
                     "kwargs": kwargs,
