@@ -24,6 +24,7 @@ from typing import (
 if TYPE_CHECKING:
     from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
     from litellm.types.integrations.datadog import DatadogInitParams
+    from litellm.types.prompts.init_prompts import PromptSpec
 # HTTP handlers are lazy-loaded to reduce import-time memory cost
 # from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 # Caching classes are lazy-loaded to reduce import-time memory cost
@@ -442,9 +443,9 @@ llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, "GuardrailItem"] = {}
 include_cost_in_streaming_usage: bool = False
 ### PROMPTS ####
-from litellm.types.prompts.init_prompts import PromptSpec
-
-prompt_name_config_map: Dict[str, PromptSpec] = {}
+# Note: PromptSpec is lazy-loaded to reduce import-time memory cost
+# Type annotation uses string to enable lazy loading
+prompt_name_config_map: Dict[str, "PromptSpec"] = {}
 
 ##################
 ### PREVIEW FEATURES ###
@@ -1441,6 +1442,12 @@ def __getattr__(name: str) -> Any:
         import httpx as _httpx
         globals()["httpx"] = _httpx
         return _httpx
+    
+    # Lazy load PromptSpec to reduce import-time memory cost
+    if name == "PromptSpec":
+        from .types.prompts.init_prompts import PromptSpec as _PromptSpec
+        globals()["PromptSpec"] = _PromptSpec
+        return _PromptSpec
     
     if name == "provider_list":
         from ._lazy_imports import _lazy_import_types_utils
