@@ -86,9 +86,10 @@ from litellm.constants import (
 # from litellm.integrations.custom_guardrail import CustomGuardrail
 # CustomLogger is imported lazily when needed to avoid loading at import time
 # from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.vector_store_integrations.base_vector_store import (
-    BaseVectorStore,
-)
+# BaseVectorStore is not used in utils.py and can be imported directly where needed
+# from litellm.integrations.vector_store_integrations.base_vector_store import (
+#     BaseVectorStore,
+# )
 
 # Import cached imports utilities
 from litellm.litellm_core_utils.cached_imports import (
