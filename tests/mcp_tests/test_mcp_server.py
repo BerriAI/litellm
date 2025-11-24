@@ -1712,7 +1712,6 @@ async def test_list_tool_rest_api_with_server_specific_auth():
         "authorization": "Bearer user_token",
         "x-mcp-zapier-authorization": "Bearer zapier_token",
         "x-mcp-slack-authorization": "Bearer slack_token",
-        "MCP-Protocol-Version": "2025-06-18",
     }
 
     # Create mock user_api_key_dict
@@ -1797,7 +1796,6 @@ async def test_list_tool_rest_api_with_default_auth():
     mock_request.headers = {
         "authorization": "Bearer user_token",
         "x-mcp-authorization": "Bearer default_token",
-        "MCP-Protocol-Version": "2025-06-18",
     }
 
     # Create mock user_api_key_dict
@@ -1880,7 +1878,6 @@ async def test_list_tool_rest_api_all_servers_with_auth():
         "authorization": "Bearer user_token",
         "x-mcp-zapier-authorization": "Bearer zapier_token",
         "x-mcp-slack-authorization": "Bearer slack_token",
-        "MCP-Protocol-Version": "2025-06-18",
     }
 
     # Create mock user_api_key_dict
