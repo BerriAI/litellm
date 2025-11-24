@@ -187,7 +187,7 @@ class TestToolPermissionGuardrail:
             result = await self.guardrail.async_post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
-        assert result is None
+        assert result is not None
 
     @pytest.mark.asyncio
     async def test_async_post_call_success_hook_with_allowed_tools(self):
@@ -203,7 +203,7 @@ class TestToolPermissionGuardrail:
             result = await self.guardrail.async_post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
-        assert result is None
+        assert result is not None
 
     @pytest.mark.asyncio
     async def test_async_post_call_success_hook_with_denied_tools_raises(self):

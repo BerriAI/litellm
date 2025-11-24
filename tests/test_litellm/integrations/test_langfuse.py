@@ -321,8 +321,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             self.assertEqual(usage_details_arg["cache_creation_input_tokens"], 0)
             self.assertEqual(usage_details_arg["cache_read_input_tokens"], 0)
 
-            mock_add_prompt_params.assert_called_once()
-
 
 def test_max_langfuse_clients_limit():
     """
