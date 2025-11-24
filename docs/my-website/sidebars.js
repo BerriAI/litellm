@@ -385,6 +385,7 @@ const sidebars = {
         "anthropic_unified",
         "moderation",
         "ocr",
+        "skills",
         {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
