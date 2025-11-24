@@ -24,29 +24,30 @@ import os
 
 # Create a SKILL.md file
 skill_content = """---
-name: my-skill
+name: test-skill
 description: A custom skill for data analysis
 ---
 
-# My Skill
+# Test Skill
 
 This skill helps with data analysis tasks.
 """
 
 # Create skill directory and SKILL.md
-os.makedirs("my-skill", exist_ok=True)
-with open("my-skill/SKILL.md", "w") as f:
+os.makedirs("test-skill", exist_ok=True)
+with open("test-skill/SKILL.md", "w") as f:
     f.write(skill_content)
 
 # Create a zip file
-with zipfile.ZipFile("my-skill.zip", "w") as zipf:
-    zipf.write("my-skill/SKILL.md", "my-skill/SKILL.md")
+with zipfile.ZipFile("test-skill.zip", "w") as zipf:
+    zipf.write("test-skill/SKILL.md", "test-skill/SKILL.md")
 
 # Create the skill
 response = create_skill(
-    model="anthropic/claude-3-5-sonnet-20241022",
     display_title="My Custom Skill",
-    files=[open("my-skill.zip", "rb")]
+    files=[open("test-skill.zip", "rb")],
+    custom_llm_provider="anthropic",
+    api_key="sk-ant-..."
 )
 
 print(f"Skill created: {response.id}")
@@ -58,7 +59,8 @@ print(f"Skill created: {response.id}")
 from litellm import list_skills
 
 response = list_skills(
-    model="anthropic/claude-3-5-sonnet-20241022",
+    custom_llm_provider="anthropic",
+    api_key="sk-ant-...",
     limit=20
 )
 
@@ -72,8 +74,9 @@ for skill in response.data:
 from litellm import get_skill
 
 skill = get_skill(
-    model="anthropic/claude-3-5-sonnet-20241022",
-    skill_id="skill_01..."
+    skill_id="skill_01...",
+    custom_llm_provider="anthropic",
+    api_key="sk-ant-..."
 )
 
 print(f"Skill: {skill.display_title}")
@@ -86,8 +89,9 @@ print(f"Description: {skill.description}")
 from litellm import delete_skill
 
 response = delete_skill(
-    model="anthropic/claude-3-5-sonnet-20241022",
-    skill_id="skill_01..."
+    skill_id="skill_01...",
+    custom_llm_provider="anthropic",
+    api_key="sk-ant-..."
 )
 
 print(f"Deleted: {response.id}")
@@ -101,28 +105,32 @@ import asyncio
 
 async def manage_skills():
     # Create skill
-    with open("my-skill.zip", "rb") as f:
+    with open("test-skill.zip", "rb") as f:
         skill = await acreate_skill(
-            model="anthropic/claude-3-5-sonnet-20241022",
             display_title="My Async Skill",
-            files=[f]
+            files=[f],
+            custom_llm_provider="anthropic",
+            api_key="sk-ant-..."
         )
     
     # List skills
     skills = await alist_skills(
-        model="anthropic/claude-3-5-sonnet-20241022"
+        custom_llm_provider="anthropic",
+        api_key="sk-ant-..."
     )
     
     # Get skill
     skill_detail = await aget_skill(
-        model="anthropic/claude-3-5-sonnet-20241022",
-        skill_id=skill.id
+        skill_id=skill.id,
+        custom_llm_provider="anthropic",
+        api_key="sk-ant-..."
     )
     
     # Delete skill (if no versions exist)
     # await adelete_skill(
-    #     model="anthropic/claude-3-5-sonnet-20241022",
-    #     skill_id=skill.id
+    #     skill_id=skill.id,
+    #     custom_llm_provider="anthropic",
+    #     api_key="sk-ant-..."
     # )
 
 asyncio.run(manage_skills())
@@ -132,9 +140,30 @@ asyncio.run(manage_skills())
 
 LiteLLM provides Anthropic-compatible `/skills` endpoints for managing skills.
 
-**Setup**
+### Authentication
 
-Add this to your litellm proxy config.yaml
+There are two ways to authenticate Skills API requests:
+
+**Option 1: Use Default ANTHROPIC_API_KEY**
+
+Set the `ANTHROPIC_API_KEY` environment variable. Requests without a `model` parameter will use this default key.
+
+```yaml showLineNumbers title="config.yaml"
+# No model_list needed - uses env var
+# ANTHROPIC_API_KEY=sk-ant-...
+```
+
+```bash
+# Request will use ANTHROPIC_API_KEY from environment
+curl "http://0.0.0.0:4000/v1/skills?beta=true" \
+  -H "X-Api-Key: sk-1234" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: skills-2025-10-02"
+```
+
+**Option 2: Specify Model for Credential Selection**
+
+Define multiple models in your config and use the `model` parameter to specify which credentials to use.
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
@@ -152,50 +181,69 @@ litellm --config /path/to/config.yaml
 # RUNNING on http://0.0.0.0:4000
 ```
 
-### Create Skill
+### Basic Usage
 
-```bash showLineNumbers title="create_skill.sh"
+All examples below work with **either** authentication option (default env key or model-based routing).
+
+#### Create Skill
+
+You can upload either a ZIP file or directly upload the SKILL.md file:
+
+**Option 1: Upload ZIP file**
+
+```bash showLineNumbers title="create_skill_zip.sh"
 curl "http://0.0.0.0:4000/v1/skills?beta=true" \
   -X POST \
-  -H "Authorization: Bearer sk-1234" \
+  -H "X-Api-Key: sk-1234" \
   -H "anthropic-version: 2023-06-01" \
   -H "anthropic-beta: skills-2025-10-02" \
-  -F "model=claude-sonnet" \
   -F "display_title=My Skill" \
-  -F "files[]=@my-skill.zip"
+  -F "files[]=@test-skill.zip"
 ```
 
-### List Skills
+**Option 2: Upload SKILL.md directly**
+
+```bash showLineNumbers title="create_skill_md.sh"
+curl "http://0.0.0.0:4000/v1/skills?beta=true" \
+  -X POST \
+  -H "X-Api-Key: sk-1234" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: skills-2025-10-02" \
+  -F "display_title=My Skill" \
+  -F "files[]=@test-skill/SKILL.md;filename=test-skill/SKILL.md"
+```
+
+#### List Skills
 
 ```bash showLineNumbers title="list_skills.sh"
-curl "http://0.0.0.0:4000/v1/skills?beta=true&model=claude-sonnet" \
-  -H "Authorization: Bearer sk-1234" \
+curl "http://0.0.0.0:4000/v1/skills?beta=true" \
+  -H "X-Api-Key: sk-1234" \
   -H "anthropic-version: 2023-06-01" \
   -H "anthropic-beta: skills-2025-10-02"
 ```
 
-### Get Skill
+#### Get Skill
 
 ```bash showLineNumbers title="get_skill.sh"
-curl "http://0.0.0.0:4000/v1/skills/skill_01abc?beta=true&model=claude-sonnet" \
-  -H "Authorization: Bearer sk-1234" \
+curl "http://0.0.0.0:4000/v1/skills/skill_01abc?beta=true" \
+  -H "X-Api-Key: sk-1234" \
   -H "anthropic-version: 2023-06-01" \
   -H "anthropic-beta: skills-2025-10-02"
 ```
 
-### Delete Skill
+#### Delete Skill
 
 ```bash showLineNumbers title="delete_skill.sh"
-curl "http://0.0.0.0:4000/v1/skills/skill_01abc?beta=true&model=claude-sonnet" \
+curl "http://0.0.0.0:4000/v1/skills/skill_01abc?beta=true" \
   -X DELETE \
-  -H "Authorization: Bearer sk-1234" \
+  -H "X-Api-Key: sk-1234" \
   -H "anthropic-version: 2023-06-01" \
   -H "anthropic-beta: skills-2025-10-02"
 ```
 
-### Model-Based Routing
+### Model-Based Routing (Multi-Account)
 
-Use multiple Anthropic accounts with model routing:
+If you have multiple Anthropic accounts, you can use model-based routing to specify which account to use:
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
@@ -210,24 +258,80 @@ model_list:
       api_key: os.environ/ANTHROPIC_API_KEY_TEAM_B
 ```
 
-Then route to specific accounts:
+Then route to specific accounts using the `model` parameter:
 
-```bash showLineNumbers
-# Route to Team A
+**Create Skill with Routing**
+
+```bash showLineNumbers title="create_with_routing.sh"
+# Route to Team A - using ZIP file
 curl "http://0.0.0.0:4000/v1/skills?beta=true" \
   -X POST \
-  -H "Authorization: Bearer sk-1234" \
+  -H "X-Api-Key: sk-1234" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: skills-2025-10-02" \
   -F "model=claude-team-a" \
   -F "display_title=Team A Skill" \
-  -F "files[]=@skill.zip"
+  -F "files[]=@test-skill.zip"
 
-# Route to Team B
+# Route to Team B - using direct SKILL.md upload
 curl "http://0.0.0.0:4000/v1/skills?beta=true" \
   -X POST \
-  -H "Authorization: Bearer sk-1234" \
+  -H "X-Api-Key: sk-1234" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: skills-2025-10-02" \
   -F "model=claude-team-b" \
   -F "display_title=Team B Skill" \
-  -F "files[]=@skill.zip"
+  -F "files[]=@test-skill/SKILL.md;filename=test-skill/SKILL.md"
+```
+
+**List Skills with Routing**
+
+```bash showLineNumbers title="list_with_routing.sh"
+# List Team A skills
+curl "http://0.0.0.0:4000/v1/skills?beta=true&model=claude-team-a" \
+  -H "X-Api-Key: sk-1234" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: skills-2025-10-02"
+
+# List Team B skills
+curl "http://0.0.0.0:4000/v1/skills?beta=true&model=claude-team-b" \
+  -H "X-Api-Key: sk-1234" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: skills-2025-10-02"
+```
+
+**Get Skill with Routing**
+
+```bash showLineNumbers title="get_with_routing.sh"
+# Get skill from Team A
+curl "http://0.0.0.0:4000/v1/skills/skill_01abc?beta=true&model=claude-team-a" \
+  -H "X-Api-Key: sk-1234" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: skills-2025-10-02"
+
+# Get skill from Team B
+curl "http://0.0.0.0:4000/v1/skills/skill_01xyz?beta=true&model=claude-team-b" \
+  -H "X-Api-Key: sk-1234" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: skills-2025-10-02"
+```
+
+**Delete Skill with Routing**
+
+```bash showLineNumbers title="delete_with_routing.sh"
+# Delete skill from Team A
+curl "http://0.0.0.0:4000/v1/skills/skill_01abc?beta=true&model=claude-team-a" \
+  -X DELETE \
+  -H "X-Api-Key: sk-1234" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: skills-2025-10-02"
+
+# Delete skill from Team B
+curl "http://0.0.0.0:4000/v1/skills/skill_01xyz?beta=true&model=claude-team-b" \
+  -X DELETE \
+  -H "X-Api-Key: sk-1234" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: skills-2025-10-02"
 ```
 
 ## **SKILL.md Format**
@@ -236,7 +340,7 @@ Skills require a `SKILL.md` file with YAML frontmatter:
 
 ```markdown showLineNumbers title="SKILL.md"
 ---
-name: my-skill
+name: test-skill
 description: A brief description of what this skill does
 license: MIT
 allowed-tools:
@@ -244,7 +348,7 @@ allowed-tools:
   - text_editor_20250124
 ---
 
-# My Skill
+# Test Skill
 
 Detailed instructions for Claude on how to use this skill.
 
@@ -265,15 +369,22 @@ Examples and best practices...
 
 ### File Structure
 
-Skills must be packaged as a ZIP file with this structure:
+**Option 1: ZIP file structure**
 
 ```
-my-skill.zip
-└── my-skill/           # Top-level folder (name must match skill name)
+test-skill.zip
+└── test-skill/         # Top-level folder (name must match skill name)
     └── SKILL.md        # Required skill definition
 ```
 
-**Important:** The folder name inside the ZIP must match the `name` in SKILL.md frontmatter.
+**Option 2: Direct SKILL.md upload**
+
+When uploading SKILL.md directly, include the skill name in the filename parameter:
+```bash
+-F "files[]=@test-skill/SKILL.md;filename=test-skill/SKILL.md"
+```
+
+**Important:** The folder name (in ZIP or filename path) must match the `name` in SKILL.md frontmatter.
 
 ## **Response Format**
 
@@ -318,16 +429,6 @@ my-skill.zip
 }
 ```
 
-## **API Limitations**
-
-:::warning
-
-- **Deletion Restriction:** Skills cannot be deleted if they have existing versions. You must delete all versions first.
-- **Unique Titles:** Each skill must have a unique `display_title` within your organization.
-- **File Format:** Only ZIP files are supported for skill uploads.
-- **Beta Feature:** The Skills API is in beta and requires the `anthropic-beta: skills-2025-10-02` header.
-
-:::
 
 ## **Supported Providers**
 
