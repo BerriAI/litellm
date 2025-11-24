@@ -1,12 +1,10 @@
 from datetime import datetime
 from typing import List, Optional, Union
-from urllib.parse import urlparse
 
 import httpx
 
 import litellm
 from litellm import stream_chunk_builder
-from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
@@ -23,7 +21,6 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from litellm.types.utils import (
-    EmbeddingResponse,
     LlmProviders,
     ModelResponse,
     TextCompletionResponse,
@@ -179,3 +176,17 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     request_body=request_body,
                     **kwargs,
                 )
+        
+        # For non-embed routes (e.g., /v2/chat), fall back to chat handler
+        return super().passthrough_chat_handler(
+            httpx_response=httpx_response,
+            response_body=response_body,
+            logging_obj=logging_obj,
+            url_route=url_route,
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
+            request_body=request_body,
+            **kwargs,
+        )
