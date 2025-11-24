@@ -104,11 +104,12 @@ from litellm.litellm_core_utils.cached_imports import (
 # CredentialAccessor is imported lazily when needed to avoid loading at import time
 # from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 # default_encoding is imported lazily when needed to avoid loading tiktoken at import time
-from litellm.litellm_core_utils.exception_mapping_utils import (
-    _get_response_headers,
-    exception_type,
-    get_error_message,
-)
+# exception_mapping_utils functions are imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.exception_mapping_utils import (
+#     _get_response_headers,
+#     exception_type,
+#     get_error_message,
+# )
 from litellm.litellm_core_utils.get_litellm_params import (
     _get_base_model_from_litellm_call_metadata,
     get_litellm_params,
@@ -1221,6 +1222,30 @@ def _get_credential_accessor():
     if _credential_accessor_class is None:
         from litellm.litellm_core_utils.credential_accessor import CredentialAccessor as _credential_accessor_class
     return _credential_accessor_class
+
+# Cached lazy import helpers for exception_mapping_utils functions
+_exception_mapping_utils_module = None
+
+def _get_exception_type():
+    """Lazy import helper for exception_type to avoid loading at import time."""
+    global _exception_mapping_utils_module
+    if _exception_mapping_utils_module is None:
+        from litellm.litellm_core_utils import exception_mapping_utils as _exception_mapping_utils_module
+    return _exception_mapping_utils_module.exception_type
+
+def _get_response_headers_func():
+    """Lazy import helper for _get_response_headers to avoid loading at import time."""
+    global _exception_mapping_utils_module
+    if _exception_mapping_utils_module is None:
+        from litellm.litellm_core_utils import exception_mapping_utils as _exception_mapping_utils_module
+    return _exception_mapping_utils_module._get_response_headers
+
+def _get_error_message_func():
+    """Lazy import helper for get_error_message to avoid loading at import time."""
+    global _exception_mapping_utils_module
+    if _exception_mapping_utils_module is None:
+        from litellm.litellm_core_utils import exception_mapping_utils as _exception_mapping_utils_module
+    return _exception_mapping_utils_module.get_error_message
 
 
 def client(original_function):  # noqa: PLR0915
@@ -6233,7 +6258,7 @@ class TextCompletionStreamWrapper:
         except StopIteration:
             raise StopIteration
         except Exception as e:
-            raise exception_type(
+            raise _get_exception_type()(
                 model=self.model,
                 custom_llm_provider=self.custom_llm_provider or "",
                 original_exception=e,
