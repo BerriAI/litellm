@@ -133,7 +133,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             query_params["source"] = list_params["source"]
         
         verbose_logger.debug(
-            "List skills request - URL: %s, Params: %s", url, query_params
+            "List skills request made to Anthropic Skills endpoint with params: %s", query_params
         )
         
         return url, query_params
