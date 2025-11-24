@@ -167,7 +167,8 @@ _tiktoken_encoding_type = None
 # from litellm.llms.base_llm.google_genai.transformation import (
 #     BaseGoogleGenAIGenerateContentConfig,
 # )
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+# BaseOCRConfig is imported lazily when needed to avoid loading at import time
+# from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
@@ -319,6 +320,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.google_genai.transformation import (
         BaseGoogleGenAIGenerateContentConfig,
     )
+    from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
     from litellm.litellm_core_utils.redact_messages import (
         LiteLLMLoggingObject
     )
