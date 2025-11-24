@@ -744,6 +744,7 @@ def __getattr__(name: str) -> Any:
         "openai_image_variations": _get_openai_image_variations,
         "groq_chat_completions": _get_groq_chat_completions,
         "anthropic_chat_completions": _get_anthropic_chat_completions,
+        "azure_chat_completions": _get_azure_chat_completions,
         "azure_text_completions": _get_azure_text_completions,
         "huggingface_embed": _get_huggingface_embed,
         "predibase_chat_completions": _get_predibase_chat_completions,
