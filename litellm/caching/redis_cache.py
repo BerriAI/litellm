@@ -198,7 +198,7 @@ class RedisCache(BaseCache):
         # because this RedisCache instance might be shared. If we stored them on self,
         # a subsequent call to init_async_client from a different loop might incorrectly
         # reuse these loop-bound objects. Returning a fresh client ensures loop safety.
-        return current_redis_client # type: ignore
+        return current_redis_client  # type: ignore
 
     def check_and_fix_namespace(self, key: str) -> str:
         """

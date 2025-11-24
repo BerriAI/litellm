@@ -33,6 +33,8 @@ import os
 
 os.environ["PHOENIX_API_KEY"] = "" # Necessary only using Phoenix Cloud
 os.environ["PHOENIX_COLLECTOR_HTTP_ENDPOINT"] = "" # The URL of your Phoenix OSS instance e.g. http://localhost:6006/v1/traces
+os.environ["PHOENIX_PROJECT_NAME"]="litellm" # OPTIONAL: you can configure project names, otherwise traces would go to "default" project
+
 # This defaults to https://app.phoenix.arize.com/v1/traces for Phoenix Cloud
 
 # LLM API Keys

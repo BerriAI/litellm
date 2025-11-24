@@ -231,3 +231,119 @@ def test_route_checks_is_llm_api_route():
     
     for invalid_input in invalid_inputs:
         assert not RouteChecks.is_llm_api_route(route=invalid_input), f"Invalid input {invalid_input} should return False"
+
+
+@pytest.mark.asyncio
+async def test_proxy_admin_expired_key_from_cache():
+    """
+    Test that PROXY_ADMIN keys retrieved from cache are checked for expiration
+    before being returned. This prevents expired keys from bypassing expiration checks
+    when retrieved from cache (which normally happens at lines 1014-1036).
+    
+    Regression test for issue where PROXY_ADMIN keys from cache skipped expiration check.
+    """
+    from datetime import datetime, timedelta, timezone
+    
+    from fastapi import Request
+    from starlette.datastructures import URL
+    
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        ProxyErrorTypes,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.proxy_server import hash_token
+    
+    # Create an expired PROXY_ADMIN key
+    api_key = "sk-test-proxy-admin-key"
+    hashed_key = hash_token(api_key)
+    expired_time = datetime.now(timezone.utc) - timedelta(hours=1)  # Expired 1 hour ago
+    
+    expired_token = UserAPIKeyAuth(
+        api_key=api_key,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        expires=expired_time,
+        token=hashed_key,
+    )
+    
+    # Mock cache to return the expired token
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=expired_token)
+    mock_cache.delete_cache = MagicMock()
+    
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+    # Mock post_call_failure_hook as async function
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+    
+    # Mock get_key_object to return expired token from cache
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.get_key_object",
+        new_callable=AsyncMock,
+    ) as mock_get_key_object, \
+         patch("litellm.proxy.auth.user_api_key_auth._delete_cache_key_object", new_callable=AsyncMock) as mock_delete_cache:
+        
+        mock_get_key_object.return_value = expired_token
+        
+        # Set attributes on proxy_server module (these are imported inside _user_api_key_auth_builder)
+        import litellm.proxy.proxy_server
+        
+        setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
+        setattr(litellm.proxy.proxy_server, "user_api_key_cache", mock_cache)
+        setattr(litellm.proxy.proxy_server, "proxy_logging_obj", mock_proxy_logging_obj)
+        setattr(litellm.proxy.proxy_server, "master_key", "sk-master-key")
+        setattr(litellm.proxy.proxy_server, "general_settings", {})
+        setattr(litellm.proxy.proxy_server, "llm_model_list", [])
+        setattr(litellm.proxy.proxy_server, "llm_router", None)
+        setattr(litellm.proxy.proxy_server, "open_telemetry_logger", None)
+        setattr(litellm.proxy.proxy_server, "model_max_budget_limiter", MagicMock())
+        setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
+        setattr(litellm.proxy.proxy_server, "jwt_handler", None)
+        setattr(litellm.proxy.proxy_server, "litellm_proxy_admin_name", "admin")
+        
+        try:
+            
+            # Create a mock request
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+            request_data = {}
+            
+            # Call the auth builder - should raise ProxyException for expired key
+            # Note: api_key needs "Bearer " prefix for get_api_key() to process it correctly
+            with pytest.raises(ProxyException) as exc_info:
+                await _user_api_key_auth_builder(
+                    request=request,
+                    api_key=f"Bearer {api_key}",  # Add Bearer prefix
+                    azure_api_key_header="",
+                    anthropic_api_key_header=None,
+                    google_ai_studio_api_key_header=None,
+                    azure_apim_header=None,
+                    request_data=request_data,
+                )
+            
+            # Verify that ProxyException was raised with expired_key type
+            assert hasattr(exc_info.value, "type"), "Exception should have 'type' attribute"
+            assert exc_info.value.type == ProxyErrorTypes.expired_key, (
+                f"Expected expired_key error type, got {exc_info.value.type}"
+            )
+            assert "Expired Key" in str(exc_info.value.message), (
+                f"Exception message should mention 'Expired Key', got: {exc_info.value.message}"
+            )
+            
+            # Verify that cache deletion was called
+            mock_delete_cache.assert_called_once()
+            call_args = mock_delete_cache.call_args
+            assert call_args[1]["hashed_token"] == hashed_key, (
+                "Cache deletion should be called with the hashed key"
+            )
+        finally:
+            # Clean up - restore original values if needed
+            pass

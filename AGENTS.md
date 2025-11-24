@@ -98,6 +98,25 @@ LiteLLM supports MCP for agent workflows:
 
 Use `poetry run python script.py` to run Python scripts in the project environment (for non-test files).
 
+## GITHUB TEMPLATES
+
+When opening issues or pull requests, follow these templates:
+
+### Bug Reports (`.github/ISSUE_TEMPLATE/bug_report.yml`)
+- Describe what happened vs. expected behavior
+- Include relevant log output
+- Specify LiteLLM version
+- Indicate if you're part of an ML Ops team (helps with prioritization)
+
+### Feature Requests (`.github/ISSUE_TEMPLATE/feature_request.yml`)
+- Clearly describe the feature
+- Explain motivation and use case with concrete examples
+
+### Pull Requests (`.github/pull_request_template.md`)
+- Add at least 1 test in `tests/litellm/`
+- Ensure `make test-unit` passes
+
+
 ## TESTING CONSIDERATIONS
 
 1. **Provider Tests**: Test against real provider APIs when possible

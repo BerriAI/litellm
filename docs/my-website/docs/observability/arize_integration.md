@@ -7,13 +7,6 @@ import TabItem from '@theme/TabItem';
 
 AI Observability and Evaluation Platform
 
-:::tip
-
-This is community maintained, Please make an issue if you run into a bug
-https://github.com/BerriAI/litellm
-
-:::
-
 <Image img={require('../../img/arize.png')} />
 
 
@@ -53,7 +46,7 @@ response = litellm.completion(
 )
 ```
 
-### Using with LiteLLM Proxy
+## Using with LiteLLM Proxy
 
 1. Setup config.yaml
 ```yaml
@@ -71,7 +64,7 @@ general_settings:
   master_key: "sk-1234" # can also be set as an environment variable
 
 environment_variables:
-    ARIZE_SPACE_KEY: "d0*****"
+    ARIZE_SPACE_ID: "d0*****"
     ARIZE_API_KEY: "141a****"
     ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize GRPC api endpoint
     ARIZE_HTTP_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize HTTP api endpoint. Set either this or ARIZE_ENDPOINT or Neither (defaults to https://otlp.arize.com/v1 on grpc)
@@ -96,7 +89,8 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 Supported parameters:
 - `arize_api_key`
-- `arize_space_key`
+- `arize_space_key` *(deprecated, use `arize_space_id` instead)*
+- `arize_space_id`
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -117,8 +111,8 @@ response = litellm.completion(
   messages=[
     {"role": "user", "content": "Hi 👋 - i'm openai"}
   ],
-  arize_api_key=os.getenv("ARIZE_SPACE_2_API_KEY"),
-  arize_space_key=os.getenv("ARIZE_SPACE_2_KEY"),
+  arize_api_key=os.getenv("ARIZE_API_KEY"),
+  arize_space_id=os.getenv("ARIZE_SPACE_ID"),
 )
 ```
 
@@ -159,8 +153,8 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -d '{
   "model": "gpt-4",
   "messages": [{"role": "user", "content": "Hi 👋 - i'm openai"}],
-  "arize_api_key": "ARIZE_SPACE_2_API_KEY",
-  "arize_space_key": "ARIZE_SPACE_2_KEY"
+  "arize_api_key": "ARIZE_API_KEY",
+  "arize_space_id": "ARIZE_SPACE_ID"
 }'
 ```
 </TabItem>
@@ -183,8 +177,8 @@ response = client.chat.completions.create(
         }
     ],
     extra_body={
-      "arize_api_key": "ARIZE_SPACE_2_API_KEY",
-      "arize_space_key": "ARIZE_SPACE_2_KEY"
+      "arize_api_key": "ARIZE_API_KEY",
+      "arize_space_id": "ARIZE_SPACE_ID"
     }
 )
 
@@ -199,5 +193,5 @@ print(response)
 
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
+- Our numbers 📞 +1 (770) 8783-106 / +1 (412) 618-6238
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai

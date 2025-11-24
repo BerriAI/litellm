@@ -10,6 +10,7 @@ guardrails:
       guardrail: tool_permission
       mode: "post_call"
       default_on: true  # Apply to all requests by default
+      violation_message_template: "this violates our org policy, we don't support executing {tool_name} commands"
       rules:
         - id: "allow_bash"
           tool_name: "Bash"
