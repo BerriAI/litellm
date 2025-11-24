@@ -58,7 +58,8 @@ import litellm
 # litellm._service_logger is imported lazily when needed to avoid loading at import time
 # import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
-import litellm.litellm_core_utils.audio_utils.utils
+# litellm.litellm_core_utils.audio_utils.utils is imported lazily when needed to avoid loading at import time
+# import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 import litellm.llms
 import litellm.llms.gemini
@@ -828,7 +829,7 @@ def function_setup(  # noqa: PLR0915
         ):
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
             file_checksum = (
-                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_name(
+                _get_audio_utils_module().get_audio_file_name(
                     file_obj=_file_obj
                 )
             )
@@ -1125,6 +1126,7 @@ _openai_parsing = None
 _openai_pydantic = None
 _openai_response_format = None
 _original_error = None
+_audio_utils_module = None
 
 def _get_openai_module():
     """Lazy import helper for openai module to avoid loading at module import time."""
@@ -1160,6 +1162,13 @@ def _get_original_error():
     if _original_error is None:
         from openai import OpenAIError as _original_error
     return _original_error
+
+def _get_audio_utils_module():
+    """Lazy import helper for audio_utils.utils to avoid loading at import time."""
+    global _audio_utils_module
+    if _audio_utils_module is None:
+        from litellm.litellm_core_utils.audio_utils import utils as _audio_utils_module
+    return _audio_utils_module
 
 
 def client(original_function):  # noqa: PLR0915
