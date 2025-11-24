@@ -97,11 +97,10 @@ from litellm.litellm_core_utils.cached_imports import (
     get_litellm_logging_class,
     get_set_callbacks,
 )
-from litellm.litellm_core_utils.core_helpers import (
-    get_litellm_metadata_from_kwargs,
-    map_finish_reason,
-    process_response_headers,
-)
+# get_litellm_metadata_from_kwargs is imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.core_helpers import (
+#     get_litellm_metadata_from_kwargs,
+# )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 # default_encoding is imported lazily when needed to avoid loading tiktoken at import time
 from litellm.litellm_core_utils.exception_mapping_utils import (
@@ -1135,6 +1134,7 @@ _caching_handler_response_class = None
 _llm_caching_handler_class = None
 _custom_guardrail_class = None
 _custom_logger_class = None
+_get_litellm_metadata_from_kwargs_func = None
 
 def _get_openai_module():
     """Lazy import helper for openai module to avoid loading at module import time."""
@@ -1205,6 +1205,13 @@ def _get_custom_logger():
     if _custom_logger_class is None:
         from litellm.integrations.custom_logger import CustomLogger as _custom_logger_class
     return _custom_logger_class
+
+def _get_get_litellm_metadata_from_kwargs():
+    """Lazy import helper for get_litellm_metadata_from_kwargs to avoid loading at import time."""
+    global _get_litellm_metadata_from_kwargs_func
+    if _get_litellm_metadata_from_kwargs_func is None:
+        from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs as _get_litellm_metadata_from_kwargs_func
+    return _get_litellm_metadata_from_kwargs_func
 
 
 def client(original_function):  # noqa: PLR0915
@@ -8057,7 +8064,7 @@ def get_end_user_id_for_cost_tracking(
     service_type: "litellm_logging" or "prometheus" - used to allow prometheus only disable cost tracking.
     """
     _metadata = cast(
-        dict, get_litellm_metadata_from_kwargs(dict(litellm_params=litellm_params))
+        dict, _get_get_litellm_metadata_from_kwargs()(dict(litellm_params=litellm_params))
     )
 
     end_user_id = cast(
