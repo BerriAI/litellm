@@ -291,6 +291,7 @@ DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
 
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
+ANTHROPIC_SKILLS_API_BETA_VERSION = "skills-2025-10-02"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "low": 1,
     "medium": 5,
