@@ -43,12 +43,13 @@ from os.path import abspath, dirname, join
 import aiohttp
 import dotenv
 import httpx
-import openai
+# openai is imported lazily when needed to avoid loading it at import time (see _get_openai_module helper)
 # tiktoken is imported lazily when needed to avoid loading it at import time
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
-from openai.lib import _parsing, _pydantic
-from openai.types.chat.completion_create_params import ResponseFormat
+# openai submodules are imported lazily when needed to avoid loading openai at import time
+# from openai.lib import _parsing, _pydantic
+# from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel
 # Encoding is imported lazily when needed to avoid loading tiktoken at import time
 from tokenizers import Tokenizer
@@ -270,7 +271,8 @@ def _lazy_import_and_cache(cache_var_name: str, import_func: Callable[[], Any]) 
         globals()[cache_var_name] = cache
     return cache
 
-from openai import OpenAIError as OriginalError
+# OriginalError is imported lazily when needed to avoid loading openai at import time
+# from openai import OpenAIError as OriginalError
 
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
@@ -1063,7 +1065,7 @@ def post_call_processing(
                                             json_response_format = optional_params[
                                                 "response_format"
                                             ]
-                                        elif _parsing._completions.is_basemodel_type(
+                                        elif _get_openai_parsing()._completions.is_basemodel_type(
                                             optional_params["response_format"]  # type: ignore
                                         ):
                                             json_response_format = (
@@ -1114,6 +1116,49 @@ def post_call_processing(
 
     except Exception as e:
         raise e
+
+
+# Lazy import helper for openai module to avoid loading at import time
+_openai_module = None
+_openai_parsing = None
+_openai_pydantic = None
+_openai_response_format = None
+_original_error = None
+
+def _get_openai_module():
+    """Lazy import helper for openai module to avoid loading at module import time."""
+    global _openai_module
+    if _openai_module is None:
+        import openai as _openai_module
+    return _openai_module
+
+def _get_openai_parsing():
+    """Lazy import helper for openai.lib._parsing to avoid loading openai at import time."""
+    global _openai_parsing
+    if _openai_parsing is None:
+        from openai.lib import _parsing as _openai_parsing
+    return _openai_parsing
+
+def _get_openai_pydantic():
+    """Lazy import helper for openai.lib._pydantic to avoid loading openai at import time."""
+    global _openai_pydantic
+    if _openai_pydantic is None:
+        from openai.lib import _pydantic as _openai_pydantic
+    return _openai_pydantic
+
+def _get_openai_response_format():
+    """Lazy import helper for ResponseFormat to avoid loading openai at import time."""
+    global _openai_response_format
+    if _openai_response_format is None:
+        from openai.types.chat.completion_create_params import ResponseFormat as _openai_response_format
+    return _openai_response_format
+
+def _get_original_error():
+    """Lazy import helper for OpenAIError to avoid loading openai at import time."""
+    global _original_error
+    if _original_error is None:
+        from openai import OpenAIError as _original_error
+    return _original_error
 
 
 def client(original_function):  # noqa: PLR0915
@@ -1395,9 +1440,9 @@ def client(original_function):  # noqa: PLR0915
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
-                        isinstance(e, openai.APIError)
-                        or isinstance(e, openai.Timeout)
-                        or isinstance(e, openai.APIConnectionError)
+                        isinstance(e, _get_openai_module().APIError)
+                        or isinstance(e, _get_openai_module().Timeout)
+                        or isinstance(e, _get_openai_module().APIConnectionError)
                     ):
                         kwargs["num_retries"] = num_retries
                         return litellm.completion_with_retries(*args, **kwargs)
@@ -1662,10 +1707,10 @@ def client(original_function):  # noqa: PLR0915
                         kwargs["num_retries"] = num_retries
                         kwargs["original_function"] = original_function
                         if isinstance(
-                            e, openai.RateLimitError
+                            e, _get_openai_module().RateLimitError
                         ):  # rate limiting specific error
                             kwargs["retry_strategy"] = "exponential_backoff_retry"
-                        elif isinstance(e, openai.APIError):  # generic api error
+                        elif isinstance(e, _get_openai_module().APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
                         return await litellm.acompletion_with_retries(*args, **kwargs)
                     except Exception:
@@ -5875,7 +5920,7 @@ def valid_model(model):
             model in litellm.open_ai_chat_completion_models
             or model in litellm.open_ai_text_completion_models
         ):
-            openai.models.retrieve(model)
+            _get_openai_module().models.retrieve(model)
         else:
             messages = [{"role": "user", "content": "Hello World"}]
             litellm.completion(model=model, messages=messages)
