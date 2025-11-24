@@ -1520,7 +1520,7 @@ def client(original_function):  # noqa: PLR0915
         logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
             "litellm_logging_obj", None
         )
-        _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
+        _llm_caching_handler = _get_llm_caching_handler()(
             original_function=original_function,
             request_kwargs=kwargs,
             start_time=start_time,
