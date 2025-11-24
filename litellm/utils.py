@@ -101,7 +101,8 @@ from litellm.litellm_core_utils.cached_imports import (
 # from litellm.litellm_core_utils.core_helpers import (
 #     get_litellm_metadata_from_kwargs,
 # )
-from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+# CredentialAccessor is imported lazily when needed to avoid loading at import time
+# from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 # default_encoding is imported lazily when needed to avoid loading tiktoken at import time
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
@@ -576,7 +577,7 @@ def load_credentials_from_list(kwargs: dict):
     """
     credential_name = kwargs.get("litellm_credential_name")
     if credential_name and litellm.credential_list:
-        credential_accessor = CredentialAccessor.get_credential_values(credential_name)
+        credential_accessor = _get_credential_accessor().get_credential_values(credential_name)
         for key, value in credential_accessor.items():
             if key not in kwargs:
                 kwargs[key] = value
@@ -1135,6 +1136,7 @@ _llm_caching_handler_class = None
 _custom_guardrail_class = None
 _custom_logger_class = None
 _get_litellm_metadata_from_kwargs_func = None
+_credential_accessor_class = None
 
 def _get_openai_module():
     """Lazy import helper for openai module to avoid loading at module import time."""
@@ -1212,6 +1214,13 @@ def _get_get_litellm_metadata_from_kwargs():
     if _get_litellm_metadata_from_kwargs_func is None:
         from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs as _get_litellm_metadata_from_kwargs_func
     return _get_litellm_metadata_from_kwargs_func
+
+def _get_credential_accessor():
+    """Lazy import helper for CredentialAccessor to avoid loading at import time."""
+    global _credential_accessor_class
+    if _credential_accessor_class is None:
+        from litellm.litellm_core_utils.credential_accessor import CredentialAccessor as _credential_accessor_class
+    return _credential_accessor_class
 
 
 def client(original_function):  # noqa: PLR0915
