@@ -3,6 +3,7 @@
 This module contains helper functions that handle lazy loading of various
 litellm components to reduce import-time memory consumption.
 """
+import importlib
 import sys
 from typing import Any
 
@@ -1216,17 +1217,30 @@ def _lazy_import_misc_transformation_configs(name: str) -> Any:
     
     raise AttributeError(f"Misc transformation configs lazy import: unknown attribute {name!r}")
 
-
 def _lazy_import_main_functions(name: str) -> Any:
-    """Lazy import for main module functions and classes - dynamically imports from main."""
+    """Lazy import for main module functions and classes - dynamically imports from main.
+    
+    Optimized to check if module is already loaded before importing, and uses importlib
+    for better clarity. Note: Python's import system doesn't support partial imports,
+    so the entire litellm.main module will be loaded on first access.
+    """
     _globals = _get_litellm_globals()
+    
+    # Check if module is already loaded to avoid re-importing
+    main_module_name = "litellm.main"
+    main_module = sys.modules.get(main_module_name)
+    
+    if main_module is None:
+        # Only import if not already loaded
+        try:
+            main_module = importlib.import_module(main_module_name)
+        except ImportError as e:
+            raise AttributeError(f"Failed to lazy import {name!r} from litellm.main: {e}") from e
+    
+    # Get the requested attribute - use try/except for EAFP (more Pythonic)
     try:
-        # Dynamically import the requested attribute from main module
-        main_module = __import__("litellm.main", fromlist=[name])
-        if hasattr(main_module, name):
-            attr = getattr(main_module, name)
-            _globals[name] = attr
-            return attr
-        raise AttributeError(f"module 'litellm.main' has no attribute {name!r}")
-    except ImportError as e:
-        raise AttributeError(f"Failed to lazy import {name!r} from litellm.main: {e}") from e
+        attr = getattr(main_module, name)
+        _globals[name] = attr
+        return attr
+    except AttributeError:
+        raise AttributeError(f"module 'litellm.main' has no attribute {name!r}") from None
