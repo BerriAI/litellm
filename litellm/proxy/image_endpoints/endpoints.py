@@ -235,6 +235,10 @@ async def image_edit_api(
         -F 'prompt=Create a studio ghibli image of this'
     ```
     """
+    if image is not None and image_array is not None:
+        raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'image[]'")
+    if mask is not None and mask_array is not None:
+        raise HTTPException(status_code=422, detail="Cannot specify both 'mask' and 'mask[]'")
     if image is None and image_array is not None:
         image = image_array
     if mask is None and mask_array is not None:
