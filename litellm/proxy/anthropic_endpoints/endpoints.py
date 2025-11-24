@@ -10,6 +10,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
+    PassthroughResponseException,
+)
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_streaming_response,
@@ -212,6 +215,47 @@ async def anthropic_response(  # noqa: PLR0915
 
         verbose_proxy_logger.debug("\nResponse from Litellm:\n{}".format(response))
         return response
+    except PassthroughResponseException as e:
+        # Guardrail flagged content in passthrough mode - return 200 with violation message
+        _data = e.request_data
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+
+        # Create Anthropic-formatted response with violation message
+        from litellm.types.utils import AnthropicMessagesResponse
+
+        _anthropic_response = AnthropicMessagesResponse(
+            id=f"msg_{litellm.utils.generate_random_id()}",
+            type="message",
+            role="assistant",
+            content=[{"type": "text", "text": e.message}],
+            model=e.model,
+            stop_reason="end_turn",
+            usage={"input_tokens": 0, "output_tokens": 0},
+        )
+
+        if data.get("stream", None) is not None and data["stream"] is True:
+            # For streaming, convert to delta format
+            from litellm import ModelResponseStream
+            from litellm.utils import CustomStreamWrapper
+
+            _streaming_response = CustomStreamWrapper(
+                completion_stream=iter([_anthropic_response]),
+                model=e.model,
+                custom_llm_provider="anthropic",
+                logging_obj=data.get("litellm_logging_obj", None),
+            )
+
+            return create_streaming_response(
+                response=_streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+            )
+
+        return _anthropic_response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
