@@ -786,6 +786,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
 
     budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
