@@ -1262,7 +1262,7 @@ from .exceptions import (
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
-from .router import Router
+# Note: Router is lazy-loaded via __getattr__ to reduce import-time memory cost
 # assistants.main is lazy-loaded via __getattr__ to reduce import-time memory cost
 # from .assistants.main import *
 # batches.main is lazy-loaded via __getattr__ to reduce import-time memory cost
@@ -1448,6 +1448,12 @@ def __getattr__(name: str) -> Any:
         from .types.prompts.init_prompts import PromptSpec as _PromptSpec
         globals()["PromptSpec"] = _PromptSpec
         return _PromptSpec
+    
+    # Lazy load Router to reduce import-time memory cost
+    if name == "Router":
+        from .router import Router as _Router
+        globals()["Router"] = _Router
+        return _Router
     
     if name == "provider_list":
         from ._lazy_imports import _lazy_import_types_utils
