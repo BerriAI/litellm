@@ -212,20 +212,28 @@ from litellm.types.utils import (
     all_litellm_params,
 )
 
-try:
-    # Python 3.9+
-    with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
-        "anthropic_tokenizer.json"
-    ).open("r", encoding="utf-8") as f:
-        json_data = json.load(f)
-except (ImportError, AttributeError, TypeError):
-    with resources.open_text(
-        "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
-    ) as f:
-        json_data = json.load(f)
+# claude_json_str is lazy-loaded to reduce import-time memory cost
+# It's only loaded when _return_huggingface_tokenizer is called for older Anthropic models
+_claude_json_str_cache: "str | None" = None
 
-# Convert to str (if necessary)
-claude_json_str = json.dumps(json_data)
+def _get_claude_json_str() -> str:
+    """Lazy load the Anthropic tokenizer JSON string - caches after first load."""
+    global _claude_json_str_cache
+    if _claude_json_str_cache is None:
+        try:
+            # Python 3.9+
+            with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
+                "anthropic_tokenizer.json"
+            ).open("r", encoding="utf-8") as f:
+                json_data = json.load(f)
+        except (ImportError, AttributeError, TypeError):
+            with resources.open_text(
+                "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
+            ) as f:
+                json_data = json.load(f)
+        # Convert to str (if necessary)
+        _claude_json_str_cache = json.dumps(json_data)
+    return _claude_json_str_cache
 import importlib.metadata
 from typing import (
     TYPE_CHECKING,
@@ -1801,7 +1809,7 @@ def _return_huggingface_tokenizer(model: str) -> Optional[SelectTokenizerRespons
         return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
     # anthropic
     elif model in litellm.anthropic_models and "claude-3" not in model:
-        claude_tokenizer = Tokenizer.from_str(claude_json_str)
+        claude_tokenizer = Tokenizer.from_str(_get_claude_json_str())
         return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
     # llama2
     elif "llama-2" in model.lower() or "replicate" in model.lower():
