@@ -7223,6 +7223,9 @@ class ProviderConfigManager:
             return litellm.HyperbolicChatConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudChatConfig()
+        elif litellm.LlmProviders.GIGACHAT == provider:
+            return litellm.GigaChatConfig()
+
         return None
 
     @staticmethod
