@@ -82,7 +82,8 @@ from litellm.constants import (
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-from litellm.integrations.custom_guardrail import CustomGuardrail
+# CustomGuardrail is imported lazily when needed to avoid loading at import time
+# from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_store_integrations.base_vector_store import (
     BaseVectorStore,
@@ -558,7 +559,7 @@ def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
     request_guardrails = get_request_guardrails(kwargs)
     applied_guardrails = []
     for callback in litellm.callbacks:
-        if callback is not None and isinstance(callback, CustomGuardrail):
+        if callback is not None and isinstance(callback, _get_custom_guardrail()):
             if callback.guardrail_name is not None:
                 if callback.default_on is True:
                     applied_guardrails.append(callback.guardrail_name)
@@ -1130,6 +1131,7 @@ _original_error = None
 _audio_utils_module = None
 _caching_handler_response_class = None
 _llm_caching_handler_class = None
+_custom_guardrail_class = None
 
 def _get_openai_module():
     """Lazy import helper for openai module to avoid loading at module import time."""
@@ -1186,6 +1188,13 @@ def _get_llm_caching_handler():
     if _llm_caching_handler_class is None:
         from litellm.caching.caching_handler import LLMCachingHandler as _llm_caching_handler_class
     return _llm_caching_handler_class
+
+def _get_custom_guardrail():
+    """Lazy import helper for CustomGuardrail to avoid loading at import time."""
+    global _custom_guardrail_class
+    if _custom_guardrail_class is None:
+        from litellm.integrations.custom_guardrail import CustomGuardrail as _custom_guardrail_class
+    return _custom_guardrail_class
 
 
 def client(original_function):  # noqa: PLR0915
