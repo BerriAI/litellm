@@ -4118,6 +4118,7 @@ class BaseLLMHTTPHandler:
             headers=video_generation_optional_request_params.get("extra_headers", {})
             or {},
             model=model,
+            litellm_params=litellm_params,
         )
         
         if extra_headers:
@@ -4218,6 +4219,7 @@ class BaseLLMHTTPHandler:
             headers=video_generation_optional_request_params.get("extra_headers", {})
             or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
