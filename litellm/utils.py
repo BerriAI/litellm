@@ -169,7 +169,8 @@ _tiktoken_encoding_type = None
 # )
 # BaseOCRConfig is imported lazily when needed to avoid loading at import time
 # from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
-from litellm.llms.base_llm.search.transformation import BaseSearchConfig
+# BaseSearchConfig is imported lazily when needed to avoid loading at import time
+# from litellm.llms.base_llm.search.transformation import BaseSearchConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
@@ -321,6 +322,7 @@ if TYPE_CHECKING:
         BaseGoogleGenAIGenerateContentConfig,
     )
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+    from litellm.llms.base_llm.search.transformation import BaseSearchConfig
     from litellm.litellm_core_utils.redact_messages import (
         LiteLLMLoggingObject
     )
