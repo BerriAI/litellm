@@ -3,7 +3,6 @@ import re
 import asyncio
 import base64
 from copy import deepcopy
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional, Type, Union, cast
 from fastapi import HTTPException
 from litellm import DualCache
@@ -375,8 +374,10 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 content = msg.get('content', '')
                 # Handle both string and list content types
                 if isinstance(content, str):
-                    if content.startswith('### '): return False
-                    if '"follow_ups": [' in content: return False
+                    if content.startswith('### '):
+                        return False
+                    if '"follow_ups": [' in content:
+                        return False
                 return True
 
             messages = list(filter(lambda msg: good_msg(msg), messages))
