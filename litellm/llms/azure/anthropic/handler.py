@@ -176,7 +176,9 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                     timeout=timeout,
                     json_mode=json_mode,
                 )
-                from litellm.llms.anthropic.common_utils import process_anthropic_headers
+                from litellm.llms.anthropic.common_utils import (
+                    process_anthropic_headers,
+                )
 
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
