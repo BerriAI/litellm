@@ -32,6 +32,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIStreamEvents,
 )
+from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -46,7 +47,6 @@ if TYPE_CHECKING:
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
     )
-    from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -97,9 +97,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if item_type == "function_call":
             # Extract provider_specific_fields if present and pass through as-is
             provider_specific_fields = item.get("provider_specific_fields")
-            if provider_specific_fields and not isinstance(provider_specific_fields, dict):
-                provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-            
+            if provider_specific_fields and not isinstance(
+                provider_specific_fields, dict
+            ):
+                provider_specific_fields = (
+                    dict(provider_specific_fields)
+                    if hasattr(provider_specific_fields, "__dict__")
+                    else {}
+                )
+
             tool_call_dict = {
                 "id": item.get("call_id") or item.get("id", ""),
                 "function": {
@@ -108,13 +114,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 },
                 "type": "function",
             }
-            
+
             # Pass through provider_specific_fields as-is if present
             if provider_specific_fields:
                 tool_call_dict["provider_specific_fields"] = provider_specific_fields
                 # Also add to function's provider_specific_fields for consistency
-                tool_call_dict["function"]["provider_specific_fields"] = provider_specific_fields
-            
+                tool_call_dict["function"][
+                    "provider_specific_fields"
+                ] = provider_specific_fields
+
             msg = Message(
                 content=None,
                 tool_calls=[tool_call_dict],
@@ -351,33 +359,49 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     index += 1
             elif isinstance(item, ResponseFunctionToolCall):
 
-                provider_specific_fields = None
-                if hasattr(item, "provider_specific_fields") and item.provider_specific_fields:
-                    provider_specific_fields = item.provider_specific_fields
-                    if not isinstance(provider_specific_fields, dict):
-                        provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-                elif hasattr(item, "get") and callable(item.get):
-                    provider_fields = item.get("provider_specific_fields")
+                provider_specific_fields = getattr(
+                    item, "provider_specific_fields", None
+                )
+                if provider_specific_fields and not isinstance(
+                    provider_specific_fields, dict
+                ):
+                    provider_specific_fields = (
+                        dict(provider_specific_fields)
+                        if hasattr(provider_specific_fields, "__dict__")
+                        else {}
+                    )
+                elif hasattr(item, "get") and callable(item.get):  # type: ignore
+                    provider_fields = item.get("provider_specific_fields")  # type: ignore
                     if provider_fields:
-                        provider_specific_fields = provider_fields if isinstance(provider_fields, dict) else (dict(provider_fields) if hasattr(provider_fields, "__dict__") else {})
-                
+                        provider_specific_fields = (
+                            provider_fields
+                            if isinstance(provider_fields, dict)
+                            else (
+                                dict(provider_fields)  # type: ignore
+                                if hasattr(provider_fields, "__dict__")
+                                else {}
+                            )
+                        )
+
                 function_dict: Dict[str, Any] = {
                     "name": item.name,
                     "arguments": item.arguments,
                 }
-                
+
                 if provider_specific_fields:
                     function_dict["provider_specific_fields"] = provider_specific_fields
-                
+
                 tool_call_dict: Dict[str, Any] = {
                     "id": item.call_id,
                     "function": function_dict,
                     "type": "function",
                 }
-                
+
                 if provider_specific_fields:
-                    tool_call_dict["provider_specific_fields"] = provider_specific_fields
-                
+                    tool_call_dict["provider_specific_fields"] = (
+                        provider_specific_fields
+                    )
+
                 msg = Message(
                     content=None,
                     tool_calls=[tool_call_dict],
@@ -606,11 +630,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ResponsesAPIOptionalRequestParams.__annotations__.keys()
         )
         # Also include params we handle specially
-        supported_responses_api_params.update({
-            "previous_response_id",
-            "reasoning_effort",  # We map this to "reasoning"
-        })
-        
+        supported_responses_api_params.update(
+            {
+                "previous_response_id",
+                "reasoning_effort",  # We map this to "reasoning"
+            }
+        )
+
         # Extract supported params from extra_body and merge into optional_params
         extra_body_copy = extra_body.copy()
         for key, value in extra_body_copy.items():
@@ -620,14 +646,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def _map_reasoning_effort(self, reasoning_effort: Union[str, Dict[str, Any]]) -> Optional[Reasoning]:
+    def _map_reasoning_effort(
+        self, reasoning_effort: Union[str, Dict[str, Any]]
+    ) -> Optional[Reasoning]:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
             return Reasoning(**reasoning_effort)  # type: ignore[typeddict-item]
 
         # If string is passed, map without summary (default)
         if reasoning_effort == "none":
-            return Reasoning(effort="none") # type: ignore
+            return Reasoning(effort="none")  # type: ignore
         elif reasoning_effort == "high":
             return Reasoning(effort="high")
         elif reasoning_effort == "medium":
@@ -717,28 +745,36 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             if output_item.get("type") == "function_call":
                 # Extract provider_specific_fields if present
                 provider_specific_fields = output_item.get("provider_specific_fields")
-                if provider_specific_fields and not isinstance(provider_specific_fields, dict):
-                    provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-                
+                if provider_specific_fields and not isinstance(
+                    provider_specific_fields, dict
+                ):
+                    provider_specific_fields = (
+                        dict(provider_specific_fields)
+                        if hasattr(provider_specific_fields, "__dict__")
+                        else {}
+                    )
+
                 function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=output_item.get("name", None),
                     arguments=parsed_chunk.get("arguments", ""),
                 )
-                
+
                 if provider_specific_fields:
-                    function_chunk["provider_specific_fields"] = provider_specific_fields
-                
+                    function_chunk["provider_specific_fields"] = (
+                        provider_specific_fields
+                    )
+
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
                     index=0,
                     type="function",
                     function=function_chunk,
                 )
-                
+
                 # Add provider_specific_fields if present
                 if provider_specific_fields:
                     tool_call_chunk.provider_specific_fields = provider_specific_fields  # type: ignore
-                
+
                 return GenericStreamingChunk(
                     text="",
                     tool_use=tool_call_chunk,
@@ -746,12 +782,6 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     finish_reason="",
                     usage=None,
                 )
-            elif output_item.get("type") == "message":
-                pass
-            elif output_item.get("type") == "reasoning":
-                pass
-            else:
-                raise ValueError(f"Chat provider: Invalid output_item  {output_item}")
         elif event_type == "response.function_call_arguments.delta":
             content_part: Optional[str] = parsed_chunk.get("delta", None)
             if content_part:
@@ -779,29 +809,37 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             if output_item.get("type") == "function_call":
                 # Extract provider_specific_fields if present
                 provider_specific_fields = output_item.get("provider_specific_fields")
-                if provider_specific_fields and not isinstance(provider_specific_fields, dict):
-                    provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-                
+                if provider_specific_fields and not isinstance(
+                    provider_specific_fields, dict
+                ):
+                    provider_specific_fields = (
+                        dict(provider_specific_fields)
+                        if hasattr(provider_specific_fields, "__dict__")
+                        else {}
+                    )
+
                 function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=output_item.get("name", None),
                     arguments="",  # responses API sends everything again, we don't
                 )
-                
+
                 # Add provider_specific_fields to function if present
                 if provider_specific_fields:
-                    function_chunk["provider_specific_fields"] = provider_specific_fields
-                
+                    function_chunk["provider_specific_fields"] = (
+                        provider_specific_fields
+                    )
+
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
                     index=0,
                     type="function",
                     function=function_chunk,
                 )
-                
+
                 # Add provider_specific_fields if present
                 if provider_specific_fields:
                     tool_call_chunk.provider_specific_fields = provider_specific_fields  # type: ignore
-                
+
                 return GenericStreamingChunk(
                     text="",
                     tool_use=tool_call_chunk,
@@ -813,10 +851,6 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 return GenericStreamingChunk(
                     finish_reason="stop", is_finished=True, usage=None, text=""
                 )
-            elif output_item.get("type") == "reasoning":
-                pass
-            else:
-                raise ValueError(f"Chat provider: Invalid output_item  {output_item}")
 
         elif event_type == "response.output_text.delta":
             # Content part added to output

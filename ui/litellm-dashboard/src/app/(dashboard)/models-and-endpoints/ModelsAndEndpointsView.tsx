@@ -162,7 +162,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       const response: CredentialsResponse = await credentialListCall(accessToken);
       setCredentialsList(response.credentials);
     } catch (error) {
-      NotificationsManager.fromBackend("Error fetching credentials");
+      console.error("Error fetching credentials:", error);
     }
   };
 
@@ -368,7 +368,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
         const model_group_alias = router_settings.model_group_alias || {};
         setModelGroupAlias(model_group_alias);
       } catch (error) {
-        NotificationsManager.fromBackend("Error fetching model data: " + error);
+        console.error("Error fetching model data:", error);
       }
     };
 

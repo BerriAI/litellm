@@ -143,7 +143,7 @@ export interface ListPromptsResponse {
 }
 
 export interface Organization {
-  organization_id: string;
+  organization_id: string | null;
   organization_alias: string;
   budget_id: string;
   metadata: Record<string, any>;
@@ -1570,70 +1570,21 @@ export const transformRequestCall = async (accessToken: string, request: object)
   }
 };
 
-type DailyActivityQueryValue = string | number | string[] | null | undefined;
-
-const DEFAULT_DAILY_ACTIVITY_PAGE_SIZE = "1000";
-
-const appendDailyActivityQueryParam = (params: URLSearchParams, key: string, value: DailyActivityQueryValue) => {
-  if (value === null || value === undefined) {
-    return;
-  }
-
-  if (Array.isArray(value)) {
-    if (value.length > 0) {
-      params.append(key, value.join(","));
-    }
-    return;
-  }
-
-  params.append(key, `${value}`);
-};
-
-const buildDailyActivityUrl = (
-  endpoint: string,
-  startTime: Date,
-  endTime: Date,
-  page: number,
-  extraQueryParams?: Record<string, DailyActivityQueryValue>,
-) => {
-  const resolvedEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
-  const baseUrl = proxyBaseUrl ? `${proxyBaseUrl}${resolvedEndpoint}` : resolvedEndpoint;
-
-  const params = new URLSearchParams();
-  params.append("start_date", formatDate(startTime));
-  params.append("end_date", formatDate(endTime));
-  params.append("page_size", DEFAULT_DAILY_ACTIVITY_PAGE_SIZE);
-  params.append("page", page.toString());
-
-  if (extraQueryParams) {
-    Object.entries(extraQueryParams).forEach(([key, value]) => {
-      appendDailyActivityQueryParam(params, key, value);
-    });
-  }
-
-  const queryString = params.toString();
-  return queryString ? `${baseUrl}?${queryString}` : baseUrl;
-};
-
-type DailyActivityCallOptions = {
-  accessToken: string;
-  endpoint: string;
-  startTime: Date;
-  endTime: Date;
-  page?: number;
-  extraQueryParams?: Record<string, DailyActivityQueryValue>;
-};
-
-const fetchDailyActivity = async ({
-  accessToken,
-  endpoint,
-  startTime,
-  endTime,
-  page = 1,
-  extraQueryParams,
-}: DailyActivityCallOptions) => {
+export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1) => {
+  /**
+   * Get daily user activity on proxy
+   */
   try {
-    const url = buildDailyActivityUrl(endpoint, startTime, endTime, page, extraQueryParams);
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/daily/activity` : `/user/daily/activity`;
+    const queryParams = new URLSearchParams();
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    queryParams.append("page_size", "1000");
+    queryParams.append("page", page.toString());
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
 
     const response = await fetch(url, {
       method: "GET",
@@ -1653,22 +1604,9 @@ const fetchDailyActivity = async ({
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error(`Failed to fetch daily activity (${endpoint}):`, error);
+    console.error("Failed to create key:", error);
     throw error;
   }
-};
-
-export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1) => {
-  /**
-   * Get daily user activity on proxy
-   */
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/user/daily/activity",
-    startTime,
-    endTime,
-    page,
-  });
 };
 
 export const tagDailyActivityCall = async (
@@ -1681,16 +1619,42 @@ export const tagDailyActivityCall = async (
   /**
    * Get daily user activity on proxy
    */
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/tag/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      tags,
-    },
-  });
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/daily/activity` : `/tag/daily/activity`;
+    const queryParams = new URLSearchParams();
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    queryParams.append("page_size", "1000");
+    queryParams.append("page", page.toString());
+    if (tags) {
+      queryParams.append("tags", tags.join(","));
+    }
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
 };
 
 export const teamDailyActivityCall = async (
@@ -1703,36 +1667,43 @@ export const teamDailyActivityCall = async (
   /**
    * Get daily user activity on proxy
    */
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/team/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      team_ids: teamIds,
-      exclude_team_ids: "litellm-dashboard",
-    },
-  });
-};
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/daily/activity` : `/team/daily/activity`;
+    const queryParams = new URLSearchParams();
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    queryParams.append("page_size", "1000");
+    queryParams.append("page", page.toString());
+    if (teamIds) {
+      queryParams.append("team_ids", teamIds.join(","));
+    }
+    queryParams.append("exclude_team_ids", "litellm-dashboard");
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
 
-export const organizationDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  organizationIds: string[] | null = null,
-) => {
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/organization/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      organization_ids: organizationIds,
-    },
-  });
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
 };
 
 export const getTotalSpendCall = async (accessToken: string) => {
@@ -7325,19 +7296,32 @@ export const testMCPConnectionRequest = async (accessToken: string, mcpServerCon
   }
 };
 
-export const testMCPToolsListRequest = async (accessToken: string, mcpServerConfig: Record<string, any>) => {
+export const testMCPToolsListRequest = async (
+  accessToken: string | null,
+  mcpServerConfig: Record<string, any>,
+  oauthAccessToken?: string | null,
+) => {
   try {
     console.log("Testing MCP tools list with config:", JSON.stringify(mcpServerConfig));
 
     // Construct the URL for POST request
     const url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/test/tools/list` : `/mcp-rest/test/tools/list`;
 
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (accessToken) {
+      headers["x-litellm-api-key"] = accessToken;
+    }
+    if (oauthAccessToken) {
+      headers["Authorization"] = `Bearer ${oauthAccessToken}`;
+    } else if (accessToken) {
+      headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
+    }
+
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
+      headers,
       body: JSON.stringify(mcpServerConfig),
     });
 
@@ -7373,6 +7357,140 @@ export const testMCPToolsListRequest = async (accessToken: string, mcpServerConf
     // For network errors or other exceptions, still throw
     throw error;
   }
+};
+
+export const cacheTemporaryMcpServer = async (accessToken: string, payload: Record<string, any>) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server/oauth/session` : `/v1/mcp/server/oauth/session`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const errorMessage = deriveErrorMessage(data) || data?.error || "Failed to cache MCP server";
+    throw new Error(errorMessage);
+  }
+  return data;
+};
+
+interface RegisterMcpOAuthClientPayload {
+  client_name?: string;
+  grant_types?: string[];
+  response_types?: string[];
+  token_endpoint_auth_method?: string;
+}
+
+export const registerMcpOAuthClient = async (accessToken: string, serverId: string, payload: RegisterMcpOAuthClientPayload) => {
+  const base = getProxyBaseUrl();
+  const normalizedServerId = encodeURIComponent(serverId.trim());
+  const url = `${base}/v1/mcp/server/oauth/${normalizedServerId}/register`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const errorMessage = deriveErrorMessage(data) || data?.detail || "Failed to register OAuth client";
+    throw new Error(errorMessage);
+  }
+  return data;
+};
+
+interface BuildOAuthAuthorizeURLParams {
+  serverId: string;
+  clientId?: string;
+  redirectUri: string;
+  state: string;
+  codeChallenge: string;
+  scope?: string;
+}
+
+export const buildMcpOAuthAuthorizeUrl = ({
+  serverId,
+  clientId,
+  redirectUri,
+  state,
+  codeChallenge,
+  scope,
+}: BuildOAuthAuthorizeURLParams): string => {
+  const base = getProxyBaseUrl();
+  const normalizedServerId = encodeURIComponent(serverId.trim());
+  const url = `${base}/v1/mcp/server/oauth/${normalizedServerId}/authorize`;
+  const params = new URLSearchParams({
+    redirect_uri: redirectUri,
+    state,
+    response_type: "code",
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+  });
+  if (clientId && clientId.trim().length > 0) {
+    params.set("client_id", clientId);
+  }
+  if (scope && scope.trim().length > 0) {
+    params.set("scope", scope);
+  }
+  return `${url}?${params.toString()}`;
+};
+
+interface ExchangeMcpOAuthTokenParams {
+  serverId: string;
+  code: string;
+  clientId?: string;
+  clientSecret?: string;
+  codeVerifier: string;
+  redirectUri: string;
+}
+
+export const exchangeMcpOAuthToken = async ({
+  serverId,
+  code,
+  clientId,
+  clientSecret,
+  codeVerifier,
+  redirectUri,
+}: ExchangeMcpOAuthTokenParams) => {
+  const base = getProxyBaseUrl();
+  const normalizedServerId = encodeURIComponent(serverId.trim());
+  const url = `${base}/v1/mcp/server/oauth/${normalizedServerId}/token`;
+
+  const body = new URLSearchParams();
+  body.set("grant_type", "authorization_code");
+  body.set("code", code);
+  if (clientId && clientId.trim().length > 0) {
+    body.set("client_id", clientId);
+  }
+  if (clientSecret && clientSecret.trim().length > 0) {
+    body.set("client_secret", clientSecret);
+  }
+  body.set("code_verifier", codeVerifier);
+  body.set("redirect_uri", redirectUri);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const errorMessage = deriveErrorMessage(data) || data?.detail || "OAuth token exchange failed";
+    throw new Error(errorMessage);
+  }
+  return data;
 };
 
 export const vectorStoreSearchCall = async (

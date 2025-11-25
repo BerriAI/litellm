@@ -160,13 +160,11 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
         api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        **kwargs,
-    ) -> Dict:
+        litellm_params: Optional[GenericLiteLLMParams] = None,
+    ) -> dict:
         """
         Validate environment and return headers for Vertex AI OCR.
         

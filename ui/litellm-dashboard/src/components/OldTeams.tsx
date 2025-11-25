@@ -1,7 +1,7 @@
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
-import { isAdminRole } from "@/utils/roles";
+import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ChevronDownIcon, ChevronRightIcon, PencilAltIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
@@ -30,7 +30,7 @@ import {
   Text,
   TextInput,
 } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Select as Select2, Tooltip, Typography } from "antd";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import { fetchTeams } from "./common_components/fetch_teams";
@@ -331,11 +331,10 @@ const Teams: React.FC<TeamProps> = ({
     try {
       setIsTeamDeleting(true);
       await teamDeleteCall(accessToken, teamToDelete.team_id);
-      // Successfully completed the deletion. Update the state to trigger a rerender.
       await fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+      NotificationsManager.success("Team deleted successfully");
     } catch (error) {
-      console.error("Error deleting the team:", error);
-      // Handle any error situations, such as displaying an error message to the user.
+      NotificationsManager.fromBackend("Error deleting the team: " + error);
     } finally {
       setIsTeamDeleting(false);
       setIsDeleteModalOpen(false);
@@ -344,7 +343,6 @@ const Teams: React.FC<TeamProps> = ({
   };
 
   const cancelDelete = () => {
-    // Close the confirmation modal and reset the teamToDelete
     setIsDeleteModalOpen(false);
     setTeamToDelete(null);
   };
@@ -611,7 +609,7 @@ const Teams: React.FC<TeamProps> = ({
                 <div className="flex">
                   <Tab>Your Teams</Tab>
                   <Tab>Available Teams</Tab>
-                  {isAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
+                  {isProxyAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
                 </div>
                 <div className="flex items-center space-x-2">
                   {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
@@ -1000,7 +998,7 @@ const Teams: React.FC<TeamProps> = ({
                 <TabPanel>
                   <AvailableTeamsPanel accessToken={accessToken} userID={userID} />
                 </TabPanel>
-                {isAdminRole(userRole || "") && (
+                {isProxyAdminRole(userRole || "") && (
                   <TabPanel>
                     <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />
                   </TabPanel>
@@ -1147,6 +1145,9 @@ const Teams: React.FC<TeamProps> = ({
                       <Select2.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select2.Option>
+                      <Select2.Option key="no-default-models" value="no-default-models">
+                        No Default Models
+                      </Select2.Option>
                       {modelsToPick.map((model) => (
                         <Select2.Option key={model} value={model}>
                           {getModelDisplayName(model)}
@@ -1260,6 +1261,30 @@ const Teams: React.FC<TeamProps> = ({
                             value: name,
                             label: name,
                           }))}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Disable Global Guardrails{" "}
+                            <Tooltip title="When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="disable_global_guardrails"
+                        className="mt-4"
+                        valuePropName="checked"
+                        help="Bypass global guardrails for this team"
+                      >
+                        <Switch
+                          disabled={!premiumUser}
+                          checkedChildren={
+                            premiumUser ? "Yes" : "Premium feature - Upgrade to disable global guardrails by team"
+                          }
+                          unCheckedChildren={
+                            premiumUser ? "No" : "Premium feature - Upgrade to disable global guardrails by team"
+                          }
                         />
                       </Form.Item>
                       <Form.Item
