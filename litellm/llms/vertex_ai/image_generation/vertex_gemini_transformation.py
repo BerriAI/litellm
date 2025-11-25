@@ -1,4 +1,3 @@
-import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -15,7 +14,6 @@ from litellm.types.llms.openai import (
     OpenAIImageGenerationOptionalParams,
 )
 from litellm.types.utils import ImageObject, ImageResponse
-from litellm.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
