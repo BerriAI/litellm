@@ -2379,10 +2379,18 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
 
             # Ensure the URL ends with /v1/messages
-            if not api_base.endswith("/v1/messages"):
-                if not api_base.endswith("/anthropic"):
-                    api_base = api_base.rstrip("/") + "/anthropic"
-                api_base = api_base.rstrip("/") + "/v1/messages"
+            api_base = api_base.rstrip("/")
+            if api_base.endswith("/v1/messages"):
+                pass
+            elif api_base.endswith("/anthropic/v1/messages"):
+                pass
+            else:
+                if "/anthropic" in api_base:
+                    parts = api_base.split("/anthropic", 1)
+                    api_base = parts[0] + "/anthropic"
+                else:
+                    api_base = api_base + "/anthropic"
+                api_base = api_base + "/v1/messages"
 
             response = azure_anthropic_chat_completions.completion(
                 model=model,
