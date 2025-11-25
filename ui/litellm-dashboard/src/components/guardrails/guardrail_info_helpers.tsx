@@ -46,6 +46,7 @@ export const guardrail_provider_map: Record<string, string> = {
   Bedrock: "bedrock",
   Lakera: "lakera_v2",
   LitellmContentFilter: "litellm_content_filter",
+  ToolPermission: "tool_permission",
 };
 
 // Function to populate provider map from API response - updates the original map
