@@ -1,11 +1,10 @@
 """
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
-import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.azure.common_utils import BaseAzureLLM, get_azure_ad_token
+from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
@@ -56,6 +55,11 @@ class AzureAnthropicConfig(AnthropicConfig):
         headers = BaseAzureLLM._base_validate_azure_environment(
             headers=headers, litellm_params=litellm_params_obj
         )
+        
+        # Azure Anthropic uses x-api-key header (not api-key)
+        # Convert api-key to x-api-key if present
+        if "api-key" in headers and "x-api-key" not in headers:
+            headers["x-api-key"] = headers.pop("api-key")
 
         # Get tools and other anthropic-specific setup
         tools = optional_params.get("tools")
@@ -81,10 +85,6 @@ class AzureAnthropicConfig(AnthropicConfig):
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
         )
-
-        # Remove x-api-key from anthropic headers since Azure uses different auth
-        anthropic_headers.pop("x-api-key", None)
-
         # Merge headers - Azure auth (api-key or Authorization) takes precedence
         headers = {**anthropic_headers, **headers}
 
