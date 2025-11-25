@@ -304,8 +304,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         
         ## check if defer_loading is set in the tool
         _defer_loading = tool.get("defer_loading", None)
-        if returned_tool is not None and _defer_loading is not None:
-            returned_tool["defer_loading"] = _defer_loading
+        _defer_loading_function = tool.get("function", {}).get("defer_loading", None)
+        if returned_tool is not None:
+            if _defer_loading is not None:
+                returned_tool["defer_loading"] = _defer_loading
+            elif _defer_loading_function is not None:
+                returned_tool["defer_loading"] = _defer_loading_function
+        
+        ## check if allowed_callers is set in the tool
+        _allowed_callers = tool.get("allowed_callers", None)
+        _allowed_callers_function = tool.get("function", {}).get("allowed_callers", None)
+        if returned_tool is not None:
+            if _allowed_callers is not None:
+                returned_tool["allowed_callers"] = _allowed_callers
+            elif _allowed_callers_function is not None:
+                returned_tool["allowed_callers"] = _allowed_callers_function
 
         return returned_tool, mcp_server
 
@@ -969,17 +982,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 text_content += content["text"]
             ## TOOL CALLING
             elif content["type"] == "tool_use":
-                tool_calls.append(
-                    ChatCompletionToolCallChunk(
-                        id=content["id"],
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=content["name"],
-                            arguments=json.dumps(content["input"]),
-                        ),
-                        index=idx,
-                    )
+                tool_call = ChatCompletionToolCallChunk(
+                    id=content["id"],
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=content["name"],
+                        arguments=json.dumps(content["input"]),
+                    ),
+                    index=idx,
                 )
+                # Include caller information if present (for programmatic tool calling)
+                if "caller" in content:
+                    tool_call["caller"] = content["caller"]  # type: ignore
+                tool_calls.append(tool_call)
             ## SERVER TOOL USE (for tool search)
             elif content["type"] == "server_tool_use":
                 # Server tool use blocks are for tool search - treat as tool calls

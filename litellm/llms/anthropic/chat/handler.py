@@ -681,6 +681,9 @@ class ModelResponseIterator:
                         },
                         "index": self.tool_index,
                     }
+                    # Include caller information if present (for programmatic tool calling)
+                    if "caller" in content_block_start["content_block"]:
+                        tool_use["caller"] = content_block_start["content_block"]["caller"]
                 elif content_block_start["content_block"]["type"] == "server_tool_use":
                     # Handle server tool use (for tool search)
                     self.tool_index += 1

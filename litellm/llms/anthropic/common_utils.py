@@ -100,6 +100,32 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             if tool_type in ["tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"]:
                 return True
         return False
+    
+    def is_programmatic_tool_calling_used(self, tools: Optional[List]) -> bool:
+        """
+        Check if programmatic tool calling is being used (tools with allowed_callers field).
+        
+        Returns True if any tool has allowed_callers containing 'code_execution_20250825'.
+        """
+        if not tools:
+            return False
+        
+        for tool in tools:
+            # Check top-level allowed_callers
+            allowed_callers = tool.get("allowed_callers", None)
+            if allowed_callers and isinstance(allowed_callers, list):
+                if "code_execution_20250825" in allowed_callers:
+                    return True
+            
+            # Check function.allowed_callers for OpenAI format tools
+            function = tool.get("function", {})
+            if isinstance(function, dict):
+                function_allowed_callers = function.get("allowed_callers", None)
+                if function_allowed_callers and isinstance(function_allowed_callers, list):
+                    if "code_execution_20250825" in function_allowed_callers:
+                        return True
+        
+        return False
 
     def _get_user_anthropic_beta_headers(
         self, anthropic_beta_header: Optional[str]
@@ -136,6 +162,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         file_id_used: bool = False,
         mcp_server_used: bool = False,
         tool_search_used: bool = False,
+        programmatic_tool_calling_used: bool = False,
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
@@ -152,7 +179,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.add("code-execution-2025-05-22")
         if mcp_server_used:
             betas.add("mcp-client-2025-04-04")
-        if tool_search_used:
+        # Tool search and programmatic tool calling both use the same beta header
+        if tool_search_used or programmatic_tool_calling_used:
             from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
             betas.add(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
 
@@ -200,6 +228,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         pdf_used = self.is_pdf_used(messages=messages)
         file_id_used = self.is_file_id_used(messages=messages)
         tool_search_used = self.is_tool_search_used(tools=tools)
+        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
@@ -213,6 +242,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
             tool_search_used=tool_search_used,
+            programmatic_tool_calling_used=programmatic_tool_calling_used,
         )
 
         headers = {**headers, **anthropic_headers}

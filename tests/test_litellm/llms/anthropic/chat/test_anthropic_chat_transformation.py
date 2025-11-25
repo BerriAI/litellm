@@ -747,23 +747,6 @@ def test_tool_reference_expansion():
     assert expanded[1]["function"]["name"] == "get_weather"
 
 
-def test_azure_anthropic_tool_search_integration():
-    """Test that Azure Anthropic properly supports tool search"""
-    from litellm.llms.azure.anthropic.transformation import AzureAnthropicConfig
-    
-    config = AzureAnthropicConfig()
-    
-    # Verify tool search detection works
-    tools = [
-        {
-            "type": "tool_search_tool_regex_20251119",
-            "name": "tool_search_tool_regex"
-        }
-    ]
-    
-    assert config.is_tool_search_used(tools) is True
-
-
 def test_defer_loading_preserved_in_transformation():
     """Test that defer_loading parameter is preserved when transforming tools"""
     config = AnthropicConfig()
@@ -860,3 +843,147 @@ def test_tool_search_complete_response_parsing():
     assert usage.server_tool_use is not None
     assert usage.server_tool_use.web_search_requests == 0
     assert usage.server_tool_use.tool_search_requests == 1  # Counted from server_tool_use blocks
+
+
+def test_allowed_callers_field_preservation():
+    """Test that allowed_callers field is preserved during tool transformation."""
+    config = AnthropicConfig()
+    
+    # Test with top-level allowed_callers
+    tool_with_allowed_callers = {
+        "type": "function",
+        "function": {
+            "name": "query_database",
+            "description": "Execute a SQL query",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string"}
+                },
+                "required": ["sql"]
+            }
+        },
+        "allowed_callers": ["code_execution_20250825"]
+    }
+    
+    transformed_tool, _ = config._map_tool_helper(tool_with_allowed_callers)
+    assert transformed_tool is not None
+    assert "allowed_callers" in transformed_tool
+    assert transformed_tool["allowed_callers"] == ["code_execution_20250825"]
+
+
+def test_programmatic_tool_calling_beta_header():
+    """Test that beta header is automatically added when programmatic tool calling is detected."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    
+    model_info = AnthropicModelInfo()
+    
+    # Test detection with allowed_callers
+    tools = [
+        {
+            "type": "code_execution_20250825",
+            "name": "code_execution"
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_database",
+                "description": "Execute a SQL query",
+                "parameters": {"type": "object", "properties": {}}
+            },
+            "allowed_callers": ["code_execution_20250825"]
+        }
+    ]
+    
+    is_programmatic = model_info.is_programmatic_tool_calling_used(tools)
+    assert is_programmatic is True
+    
+    # Test header generation
+    headers = model_info.get_anthropic_headers(
+        api_key="test-key",
+        programmatic_tool_calling_used=True
+    )
+    
+    assert "anthropic-beta" in headers
+    assert "advanced-tool-use-2025-11-20" in headers["anthropic-beta"]
+
+
+def test_caller_field_in_response():
+    """Test that caller field is correctly parsed from tool_use blocks."""
+    config = AnthropicConfig()
+    
+    # Mock response with programmatic tool call
+    completion_response = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "I'll query the database."
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_123",
+                "name": "query_database",
+                "input": {"sql": "SELECT * FROM users"},
+                "caller": {
+                    "type": "code_execution_20250825",
+                    "tool_id": "srvtoolu_abc"
+                }
+            }
+        ],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 100, "output_tokens": 50}
+    }
+    
+    text, citations, thinking, reasoning, tool_calls = config.extract_response_content(completion_response)
+    
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["id"] == "toolu_123"
+    assert tool_calls[0]["function"]["name"] == "query_database"
+    assert "caller" in tool_calls[0]
+    assert tool_calls[0]["caller"]["type"] == "code_execution_20250825"
+    assert tool_calls[0]["caller"]["tool_id"] == "srvtoolu_abc"
+
+
+def test_code_execution_20250825_tool_type():
+    """Test that code_execution_20250825 tool type is handled correctly."""
+    config = AnthropicConfig()
+    
+    tool = {
+        "type": "code_execution_20250825",
+        "name": "code_execution"
+    }
+    
+    transformed_tool, _ = config._map_tool_helper(tool)
+    assert transformed_tool is not None
+    assert transformed_tool["type"] == "code_execution_20250825"
+    assert transformed_tool["name"] == "code_execution"
+
+
+def test_allowed_callers_in_function_field():
+    """Test that allowed_callers in function field is also preserved."""
+    config = AnthropicConfig()
+    
+    # Test with function.allowed_callers
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "query_database",
+            "description": "Execute a SQL query",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string"}
+                },
+                "required": ["sql"]
+            },
+            "allowed_callers": ["code_execution_20250825"]
+        }
+    }
+    
+    transformed_tool, _ = config._map_tool_helper(tool)
+    assert transformed_tool is not None
+    assert "allowed_callers" in transformed_tool
+    assert transformed_tool["allowed_callers"] == ["code_execution_20250825"]

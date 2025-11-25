@@ -43,6 +43,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     type: Literal["custom"]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     defer_loading: bool
+    allowed_callers: Optional[List[str]]
 
 
 class AnthropicComputerTool(TypedDict, total=False):
@@ -106,6 +107,26 @@ class ToolReference(TypedDict, total=False):
     tool_name: Required[str]
 
 
+class DirectToolCaller(TypedDict, total=False):
+    """Indicates a tool was called directly by Claude."""
+    type: Required[Literal["direct"]]
+
+
+class CodeExecutionToolCaller(TypedDict, total=False):
+    """Indicates a tool was called programmatically from code execution."""
+    type: Required[Literal["code_execution_20250825"]]
+    tool_id: Required[str]  # ID of the code execution tool that made the call
+
+
+ToolCaller = Union[DirectToolCaller, CodeExecutionToolCaller]
+
+
+class AnthropicContainer(TypedDict, total=False):
+    """Container metadata for code execution."""
+    id: Required[str]
+    expires_at: Optional[str]  # ISO 8601 timestamp
+
+
 AllAnthropicToolsValues = Union[
     AnthropicComputerTool,
     AnthropicHostedTools,
@@ -142,6 +163,7 @@ class AnthropicMessagesToolUseParam(TypedDict, total=False):
     name: str
     input: dict
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    caller: Optional[ToolCaller]
 
 
 AnthropicMessagesAssistantMessageValues = Union[
