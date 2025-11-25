@@ -380,7 +380,7 @@ If Claude references a tool that isn't in your deferred tools list, you'll get a
 **When traditional tool calling is better:**
 - Less than 10 tools total
 - All tools are frequently used
-- Very small tool definitions (<100 tokens total)
+- Very small tool definitions (\<100 tokens total)
 
 ## Limitations
 
