@@ -30,8 +30,7 @@ import {
   Text,
   TextInput,
 } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Select as Select2, Tooltip, Typography } from "antd";
-import { AlertTriangleIcon, XIcon } from "lucide-react";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import { fetchTeams } from "./common_components/fetch_teams";
@@ -77,6 +76,7 @@ interface EditTeamModalProps {
 }
 
 import { updateExistingKeys } from "@/utils/dataUtils";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { Member, teamCreateCall, v2TeamListCall } from "./networking";
 
 interface TeamInfo {
