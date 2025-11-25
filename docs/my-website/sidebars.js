@@ -430,6 +430,7 @@ const sidebars = {
             "search/searxng",
           ]
         },
+        "skills",
         {
           type: "category",
           label: "/vector_stores",
