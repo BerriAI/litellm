@@ -2687,7 +2687,7 @@
             "/v1/audio/transcriptions"
         ]
     },
-   "azure/gpt-5.1-2025-11-13": {
+    "azure/gpt-5.1-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
@@ -2723,7 +2723,7 @@
         "supports_service_tier": true,
         "supports_vision": true
     },
-   "azure/gpt-5.1-chat-2025-11-13": {
+    "azure/gpt-5.1-chat-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
@@ -2758,7 +2758,7 @@
         "supports_tool_choice": false,
         "supports_vision": true
     },
-   "azure/gpt-5.1-codex-2025-11-13": {
+    "azure/gpt-5.1-codex-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
@@ -19521,7 +19521,7 @@
         "output_cost_per_token": 0.0,
         "supports_function_calling": true
     },
-    "ollama/deepseek-v3.1:671b-cloud" : {
+    "ollama/deepseek-v3.1:671b-cloud": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "ollama",
         "max_input_tokens": 163840,
@@ -19531,7 +19531,7 @@
         "output_cost_per_token": 0.0,
         "supports_function_calling": true
     },
-    "ollama/gpt-oss:120b-cloud" : {
+    "ollama/gpt-oss:120b-cloud": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "ollama",
         "max_input_tokens": 131072,
@@ -19541,7 +19541,7 @@
         "output_cost_per_token": 0.0,
         "supports_function_calling": true
     },
-    "ollama/gpt-oss:20b-cloud" : {
+    "ollama/gpt-oss:20b-cloud": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "ollama",
         "max_input_tokens": 131072,
@@ -22037,7 +22037,6 @@
         "supports_reasoning": true,
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
-
     "snowflake/claude-3-5-sonnet": {
         "litellm_provider": "snowflake",
         "max_input_tokens": 18000,
@@ -23232,7 +23231,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
-    "us.anthropic.claude-opus-4-5-20251101-v1:0": {
+    "global.anthropic.claude-opus-4-5-20251101-v1:0": {
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
