@@ -2270,7 +2270,7 @@ class MCPServerManager:
                 server.status = "unhealthy"
                 ## try adding server to registry to get error
                 try:
-                    self.add_update_server(server)
+                    await self.add_update_server(server)
                 except Exception as e:
                     server.health_check_error = str(e)
                 server.health_check_error = "Server is not in in memory registry yet. This could be a temporary sync issue."
