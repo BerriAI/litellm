@@ -28,7 +28,6 @@ from litellm.types.llms.anthropic import (
     AnthropicHostedTools,
     AnthropicInputSchema,
     AnthropicMcpServerTool,
-    AnthropicMemoryTool,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicOutputSchema,
