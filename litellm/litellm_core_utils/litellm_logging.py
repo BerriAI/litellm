@@ -4385,14 +4385,14 @@ class StandardLoggingPayloadSetup:
                 serialized_list = []
                 for item in init_response_obj:
                     # Check if item is a Pydantic BaseModel (MCP content types are Pydantic models)
+                    # This follows the same pattern used at line 4745-4746 for BaseModel objects
                     if isinstance(item, BaseModel):
                         # Convert Pydantic model to dict for JSON serialization
                         serialized_list.append(item.model_dump())
-                    elif hasattr(item, "__dict__") and not isinstance(item, (str, int, float, bool, type(None))):
-                        # Fallback: convert object to dict (but skip primitive types)
-                        serialized_list.append(item.__dict__)
                     else:
                         # Already serializable (str, dict, int, float, bool, None, etc.)
+                        # Non-BaseModel objects are kept as-is - they should already be serializable
+                        # or will be handled by json.dumps with default=str if needed
                         serialized_list.append(item)
                 final_response_obj = serialized_list
             else:
