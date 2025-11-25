@@ -904,13 +904,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
-            thinking_config = optional_params.get("thinkingConfig", {})
-            if (
-                "thinkingLevel" not in thinking_config
-                and "thinkingBudget" not in thinking_config
-            ):
-                thinking_config["thinkingLevel"] = "low"
-                optional_params["thinkingConfig"] = thinking_config
+            # Only add thinkingLevel if model supports it (exclude image models)
+            if "image" not in model.lower():
+                thinking_config = optional_params.get("thinkingConfig", {})
+                if (
+                    "thinkingLevel" not in thinking_config
+                    and "thinkingBudget" not in thinking_config
+                ):
+                    thinking_config["thinkingLevel"] = "low"
+                    optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
 

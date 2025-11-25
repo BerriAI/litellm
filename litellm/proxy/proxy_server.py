@@ -190,6 +190,9 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
+from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+    router as anthropic_skills_router,
+)
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     get_team_object,
@@ -283,7 +286,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -337,7 +342,9 @@ from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -428,7 +435,9 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+)
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -1999,6 +2008,16 @@ class ProxyConfig:
                 "search_provider", ""
             )
             print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
+
+            # Handle os.environ/ variables in litellm_params
+            litellm_params = search_tool.get("litellm_params", {})
+            if litellm_params:
+                for k, v in litellm_params.items():
+                    if isinstance(v, str) and v.startswith("os.environ/"):
+                        _v = v.replace("os.environ/", "")
+                        v = get_secret(_v)
+                        litellm_params[k] = v
+                search_tool["litellm_params"] = litellm_params
 
             # Cast to SearchToolTypedDict for type safety
             try:
@@ -3751,6 +3770,7 @@ class ProxyConfig:
     async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
         """
         Initialize search tools from database into the router on startup.
+        Only updates router if there are tools in the database, otherwise preserves config-loaded tools.
         """
         global llm_router
 
@@ -3768,17 +3788,24 @@ class ProxyConfig:
                 f"Loading {len(search_tools)} search tool(s) from database into router"
             )
 
-            if llm_router is not None:
-                # Add search tools to the router
-                await SearchAPIRouter.update_router_search_tools(
-                    router_instance=llm_router, search_tools=search_tools
-                )
-                verbose_proxy_logger.info(
-                    f"Successfully loaded {len(search_tools)} search tool(s) into router"
-                )
+            # Only update router if there are tools in the database
+            # This prevents overwriting config-loaded tools with an empty list
+            if len(search_tools) > 0:
+                if llm_router is not None:
+                    # Add search tools to the router
+                    await SearchAPIRouter.update_router_search_tools(
+                        router_instance=llm_router, search_tools=search_tools
+                    )
+                    verbose_proxy_logger.info(
+                        f"Successfully loaded {len(search_tools)} search tool(s) into router"
+                    )
+                else:
+                    verbose_proxy_logger.debug(
+                        "Router not initialized yet, search tools will be added when router is created"
+                    )
             else:
                 verbose_proxy_logger.debug(
-                    "Router not initialized yet, search tools will be added when router is created"
+                    "No search tools found in database, keeping config-loaded search tools (if any)"
                 )
 
         except Exception as e:
@@ -10139,6 +10166,7 @@ app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
 app.include_router(anthropic_router)
+app.include_router(anthropic_skills_router)
 app.include_router(google_router)
 app.include_router(langfuse_router)
 app.include_router(pass_through_router)

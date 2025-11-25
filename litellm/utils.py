@@ -273,6 +273,7 @@ from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConf
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
@@ -2647,16 +2648,7 @@ def get_optional_params_image_gen(
     ):
         optional_params = non_default_params
     elif custom_llm_provider == "bedrock":
-        # use stability3 config class if model is a stability3 model
-        config_class = (
-            litellm.AmazonStability3Config
-            if litellm.AmazonStability3Config._is_stability_3_model(model=model)
-            else (
-                litellm.AmazonNovaCanvasConfig
-                if litellm.AmazonNovaCanvasConfig._is_nova_model(model=model)
-                else litellm.AmazonStabilityConfig
-            )
-        )
+        config_class = litellm.BedrockImageGeneration.get_config_class(model=model)
         supported_params = config_class.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
         optional_params = config_class.map_openai_params(
@@ -6896,7 +6888,7 @@ def convert_to_dict(message: Union[BaseModel, dict]) -> dict:
         dict: The converted message.
     """
     if isinstance(message, BaseModel):
-        return message.model_dump(exclude_none=True)
+        return message.model_dump(exclude_none=True)  # type: ignore
     elif isinstance(message, dict):
         return message
     else:
@@ -7374,6 +7366,12 @@ class ProviderConfigManager:
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
+        elif litellm.LlmProviders.AZURE_ANTHROPIC == provider:
+            from litellm.llms.azure.anthropic.messages_transformation import (
+                AzureAnthropicMessagesConfig,
+            )
+
+            return AzureAnthropicMessagesConfig()
         return None
 
     @staticmethod
@@ -7428,6 +7426,23 @@ class ProviderConfigManager:
             return litellm.GithubCopilotResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
+        return None
+
+    @staticmethod
+    def get_provider_skills_api_config(
+        provider: LlmProviders,
+    ) -> Optional["BaseSkillsAPIConfig"]:
+        """
+        Get provider-specific Skills API configuration
+        
+        Args:
+            provider: The LLM provider
+            
+        Returns:
+            Provider-specific Skills API config or None
+        """
+        if litellm.LlmProviders.ANTHROPIC == provider:
+            return litellm.AnthropicSkillsConfig()
         return None
 
     @staticmethod
@@ -7703,6 +7718,12 @@ class ProviderConfigManager:
             )
 
             return get_runwayml_image_generation_config(model)
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.image_generation import (
+                get_vertex_ai_image_generation_config,
+            )
+
+            return get_vertex_ai_image_generation_config(model)
         return None
 
     @staticmethod
@@ -7879,6 +7900,12 @@ class ProviderConfigManager:
                 )
 
                 return AzureAVATextToSpeechConfig()
+        elif litellm.LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.text_to_speech.transformation import (
+                ElevenLabsTextToSpeechConfig,
+            )
+
+            return ElevenLabsTextToSpeechConfig()
         elif litellm.LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.text_to_speech.transformation import (
                 RunwayMLTextToSpeechConfig,

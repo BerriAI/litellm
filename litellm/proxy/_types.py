@@ -348,6 +348,8 @@ class LiteLLMRoutes(enum.Enum):
         # search
         "/search",
         "/v1/search",
+        "/search/{search_tool_name}",
+        "/v1/search/{search_tool_name}",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -380,6 +382,8 @@ class LiteLLMRoutes(enum.Enum):
     anthropic_routes = [
         "/v1/messages",
         "/v1/messages/count_tokens",
+        "/v1/skills",
+        "/v1/skills/{skill_id}",
     ]
 
     mcp_routes = [
@@ -812,7 +816,6 @@ class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
-    disable_global_guardrails: Optional[bool] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
@@ -1358,7 +1361,6 @@ class NewTeamRequest(TeamBase):
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     allowed_passthrough_routes: Optional[list] = None
-    disable_global_guardrails: Optional[bool] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     rpm_limit_type: Optional[
         Literal["guaranteed_throughput", "best_effort_throughput"]
@@ -1420,7 +1422,6 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
-    disable_global_guardrails: Optional[bool] = None
     team_member_budget: Optional[float] = None
     team_member_rpm_limit: Optional[int] = None
     team_member_tpm_limit: Optional[int] = None
@@ -1686,6 +1687,27 @@ class DynamoDBArgs(LiteLLMPydanticObjectBase):
     assume_role_aws_session_name: Optional[str] = None
 
 
+class PassThroughGuardrailConfig(LiteLLMPydanticObjectBase):
+    """
+    Configuration for guardrails on passthrough endpoints.
+    
+    Passthrough endpoints are opt-in only for guardrails. Guardrails configured at 
+    org/team/key levels will NOT execute unless explicitly enabled here.
+    """
+    enabled: bool = Field(
+        default=False,
+        description="Whether to execute guardrails for this passthrough endpoint. When True, all org/team/key level guardrails will execute along with any passthrough-specific guardrails. When False (default), NO guardrails execute.",
+    )
+    specific: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of guardrail names that are specific to this passthrough endpoint. These will execute in addition to org/team/key level guardrails when enabled=True.",
+    )
+    target_fields: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of JSON paths to target specific fields for guardrail execution. Examples: 'messages[*].content', 'input', 'messages[?(@.role=='user')].content'. If not specified, guardrails execute on entire payload.",
+    )
+
+
 class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     id: Optional[str] = Field(
         default=None,
@@ -1710,6 +1732,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     auth: bool = Field(
         default=False,
         description="Whether authentication is required for the pass-through endpoint. If True, requests to the endpoint will require a valid LiteLLM API key.",
+    )
+    guardrails: Optional[PassThroughGuardrailConfig] = Field(
+        default=None,
+        description="Guardrail configuration for this passthrough endpoint. When enabled, org/team/key level guardrails will execute along with any passthrough-specific guardrails. Defaults to disabled (no guardrails execute).",
     )
 
 
@@ -1864,6 +1890,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     allowed_routes: Optional[List] = Field(
         None, description="Proxy API Endpoints you want users to be able to access"
+    )
+    reject_clientside_metadata_tags: Optional[bool] = Field(
+        None,
+        description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
     )
     enable_public_model_hub: bool = Field(
         default=False,
@@ -3260,7 +3290,6 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
-    "disable_global_guardrails",
     "guardrails",
     "tags",
     "team_member_key_duration",

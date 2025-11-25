@@ -5,8 +5,9 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from litellm.llms.azure.anthropic.transformation import AzureAnthropicConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -102,8 +103,8 @@ class TestAzureAnthropicConfig:
             call_args = mock_validate.call_args
             assert call_args[1]["litellm_params"].api_key == "provided-api-key"
 
-    def test_validate_environment_removes_x_api_key(self):
-        """Test that x-api-key header is removed (Azure uses api-key instead)"""
+    def test_validate_environment_converts_api_key_to_x_api_key(self):
+        """Test that api-key header is converted to x-api-key (Azure Anthropic uses x-api-key)"""
         config = AzureAnthropicConfig()
         headers = {}
         model = "claude-sonnet-4-5"
@@ -116,7 +117,7 @@ class TestAzureAnthropicConfig:
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             with patch.object(
-                config, "get_anthropic_headers", return_value={"x-api-key": "should-be-removed"}
+                config, "get_anthropic_headers", return_value={}
             ):
                 result = config.validate_environment(
                     headers=headers,
@@ -126,9 +127,10 @@ class TestAzureAnthropicConfig:
                     litellm_params=litellm_params,
                 )
 
-                # Verify x-api-key was removed
-                assert "x-api-key" not in result
-                assert "api-key" in result
+                # Verify api-key was converted to x-api-key
+                assert "x-api-key" in result
+                assert result["x-api-key"] == "test-api-key"
+                assert "api-key" not in result
 
     def test_validate_environment_sets_anthropic_version(self):
         """Test that anthropic-version header is set"""
