@@ -231,9 +231,9 @@ print(response)
 </TabItem>
 </Tabs>
 
-## Messages API Passthrough
+## Messages API
 
-Azure Anthropic also supports the native Anthropic Messages API via passthrough. The endpoint structure is the same as Anthropic's `/v1/messages` API.
+Azure Anthropic also supports the native Anthropic Messages API. The endpoint structure is the same as Anthropic's `/v1/messages` API.
 
 ### Using Anthropic SDK
 
@@ -256,7 +256,7 @@ response = client.messages.create(
 print(response)
 ```
 
-### Using LiteLLM Proxy Passthrough
+### Using LiteLLM Proxy
 
 ```bash
 curl --request POST \
