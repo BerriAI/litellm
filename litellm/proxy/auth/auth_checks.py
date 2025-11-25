@@ -2129,6 +2129,47 @@ def _is_wildcard_pattern(allowed_model_pattern: str) -> bool:
     return "*" in allowed_model_pattern
 
 
+def _get_vector_store_ids_in_request(request_body: dict) -> List[str]:
+    """
+    Collect any vector store ids referenced in the request body.
+    """
+    vector_store_ids: List[str] = []
+
+    if not isinstance(request_body, dict):
+        return vector_store_ids
+
+    # Top-level vector store keys
+    top_level_ids = request_body.get("vector_store_ids") or []
+    if not isinstance(top_level_ids, list):
+        top_level_ids = [top_level_ids]
+    vector_store_ids.extend([vs_id for vs_id in top_level_ids if vs_id])
+
+    single_vector_store_id = request_body.get("vector_store_id")
+    if single_vector_store_id:
+        vector_store_ids.append(single_vector_store_id)
+
+    # Tools can also include vector store ids
+    tools = request_body.get("tools") or []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        tool_vs_ids = tool.get("vector_store_ids") or []
+        if not isinstance(tool_vs_ids, list):
+            tool_vs_ids = [tool_vs_ids]
+        vector_store_ids.extend([vs_id for vs_id in tool_vs_ids if vs_id])
+
+    # De-duplicate while preserving order
+    seen = set()
+    unique_ids: List[str] = []
+    for vs_id in vector_store_ids:
+        if vs_id in seen:
+            continue
+        seen.add(vs_id)
+        unique_ids.append(vs_id)
+
+    return unique_ids
+
+
 async def vector_store_access_check(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -2144,6 +2185,10 @@ async def vector_store_access_check(
     #########################################################
     # Get the vector store the user is trying to access
     #########################################################
+    vector_store_ids_in_request = _get_vector_store_ids_in_request(request_body)
+    if len(vector_store_ids_in_request) == 0:
+        return True
+
     if prisma_client is None:
         verbose_proxy_logger.debug(
             "Prisma client not found, skipping vector store access check"
