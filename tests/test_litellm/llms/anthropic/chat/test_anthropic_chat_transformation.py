@@ -556,3 +556,307 @@ def test_anthropic_structured_output_beta_header():
         "structured-outputs-2025-11-13"
         in response["raw_request_headers"]["anthropic-beta"]
     )
+
+
+# ============ Tool Search Tests ============
+
+
+def test_tool_search_regex_detection():
+    """Test that tool search regex tools are properly detected"""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    
+    config = AnthropicModelInfo()
+    
+    # Test with tool search regex tool
+    tools = [
+        {
+            "type": "tool_search_tool_regex_20251119",
+            "name": "tool_search_tool_regex"
+        }
+    ]
+    assert config.is_tool_search_used(tools) is True
+    
+    # Test without tool search
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "get_weather"}
+        }
+    ]
+    assert config.is_tool_search_used(tools) is False
+
+
+def test_tool_search_bm25_detection():
+    """Test that tool search BM25 tools are properly detected"""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    
+    config = AnthropicModelInfo()
+    
+    # Test with tool search BM25 tool
+    tools = [
+        {
+            "type": "tool_search_tool_bm25_20251119",
+            "name": "tool_search_tool_bm25"
+        }
+    ]
+    assert config.is_tool_search_used(tools) is True
+
+
+def test_tool_search_beta_header():
+    """Test that tool search beta header is automatically added"""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    
+    config = AnthropicModelInfo()
+    
+    headers = config.get_anthropic_headers(
+        api_key="test-key",
+        tool_search_used=True,
+    )
+    
+    assert "anthropic-beta" in headers
+    assert "advanced-tool-use-2025-11-20" in headers["anthropic-beta"]
+
+
+def test_tool_search_regex_mapping():
+    """Test that tool search regex tools are properly mapped"""
+    config = AnthropicConfig()
+    
+    tool = {
+        "type": "tool_search_tool_regex_20251119",
+        "name": "tool_search_tool_regex"
+    }
+    
+    mapped_tool, mcp_server = config._map_tool_helper(tool)
+    
+    assert mapped_tool is not None
+    assert mapped_tool["type"] == "tool_search_tool_regex_20251119"
+    assert mapped_tool["name"] == "tool_search_tool_regex"
+    assert mcp_server is None
+
+
+def test_tool_search_bm25_mapping():
+    """Test that tool search BM25 tools are properly mapped"""
+    config = AnthropicConfig()
+    
+    tool = {
+        "type": "tool_search_tool_bm25_20251119",
+        "name": "tool_search_tool_bm25"
+    }
+    
+    mapped_tool, mcp_server = config._map_tool_helper(tool)
+    
+    assert mapped_tool is not None
+    assert mapped_tool["type"] == "tool_search_tool_bm25_20251119"
+    assert mapped_tool["name"] == "tool_search_tool_bm25"
+    assert mcp_server is None
+
+
+def test_deferred_tools_separation():
+    """Test that deferred and non-deferred tools are properly separated"""
+    config = AnthropicConfig()
+    
+    tools = [
+        {
+            "type": "tool_search_tool_regex_20251119",
+            "name": "tool_search_tool_regex"
+        },
+        {
+            "type": "function",
+            "function": {"name": "get_weather"},
+            "defer_loading": True
+        },
+        {
+            "type": "function",
+            "function": {"name": "search_files"},
+            "defer_loading": False
+        }
+    ]
+    
+    non_deferred, deferred = config._separate_deferred_tools(tools)
+    
+    assert len(non_deferred) == 2  # tool_search and search_files
+    assert len(deferred) == 1  # get_weather
+
+
+def test_server_tool_use_in_response():
+    """Test that server_tool_use blocks are parsed correctly"""
+    config = AnthropicConfig()
+    
+    completion_response = {
+        "content": [
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01ABC123",
+                "name": "tool_search_tool_regex",
+                "input": {"query": "weather"}
+            }
+        ]
+    }
+    
+    text, citations, thinking_blocks, reasoning_content, tool_calls = config.extract_response_content(
+        completion_response
+    )
+    
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["id"] == "srvtoolu_01ABC123"
+    assert tool_calls[0]["function"]["name"] == "tool_search_tool_regex"
+
+
+def test_tool_search_usage_tracking():
+    """Test that tool_search_requests are tracked in usage"""
+    config = AnthropicConfig()
+    
+    usage_object = {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "server_tool_use": {
+            "tool_search_requests": 2
+        }
+    }
+    
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+    
+    assert usage.server_tool_use is not None
+    assert usage.server_tool_use.tool_search_requests == 2
+
+
+def test_tool_reference_expansion():
+    """Test that tool_reference blocks are expanded correctly"""
+    config = AnthropicConfig()
+    
+    deferred_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather"
+            }
+        }
+    ]
+    
+    content = [
+        {"type": "text", "text": "I'll search for tools"},
+        {"type": "tool_reference", "tool_name": "get_weather"}
+    ]
+    
+    expanded = config._expand_tool_references(content, deferred_tools)
+    
+    assert len(expanded) == 2
+    assert expanded[0]["type"] == "text"
+    assert expanded[1]["type"] == "function"
+    assert expanded[1]["function"]["name"] == "get_weather"
+
+
+def test_azure_anthropic_tool_search_integration():
+    """Test that Azure Anthropic properly supports tool search"""
+    from litellm.llms.azure.anthropic.transformation import AzureAnthropicConfig
+    
+    config = AzureAnthropicConfig()
+    
+    # Verify tool search detection works
+    tools = [
+        {
+            "type": "tool_search_tool_regex_20251119",
+            "name": "tool_search_tool_regex"
+        }
+    ]
+    
+    assert config.is_tool_search_used(tools) is True
+
+
+def test_defer_loading_preserved_in_transformation():
+    """Test that defer_loading parameter is preserved when transforming tools"""
+    config = AnthropicConfig()
+    
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather information",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            }
+        },
+        "defer_loading": True
+    }
+    
+    mapped_tool, mcp_server = config._map_tool_helper(tool)
+    
+    assert mapped_tool is not None
+    assert mapped_tool.get("defer_loading") is True
+    assert mapped_tool["name"] == "get_weather"
+    assert mcp_server is None
+
+
+def test_tool_search_complete_response_parsing():
+    """Test parsing a complete tool search response with server_tool_use and tool_search_tool_result blocks"""
+    config = AnthropicConfig()
+    
+    # Simulating actual Anthropic API response with tool search
+    completion_response = {
+        "content": [
+            {
+                "type": "text",
+                "text": "I'll search for weather-related tools that can help you."
+            },
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_015i6aVA2niwzv4RG4DtnxDJ",
+                "name": "tool_search_tool_regex",
+                "input": {"pattern": "weather", "limit": 5},
+                "caller": {"type": "direct"}
+            },
+            {
+                "type": "tool_search_tool_result",
+                "tool_use_id": "srvtoolu_015i6aVA2niwzv4RG4DtnxDJ",
+                "content": {
+                    "type": "tool_search_tool_search_result",
+                    "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}]
+                }
+            },
+            {
+                "type": "text",
+                "text": "Great! I found a weather tool."
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_01CrCNx4ntSaeeV9iArT4JfQ",
+                "name": "get_weather",
+                "input": {"location": "San Francisco"}
+            }
+        ],
+        "usage": {
+            "input_tokens": 1639,
+            "output_tokens": 170,
+            "server_tool_use": {"web_search_requests": 0}
+        }
+    }
+    
+    # Extract content
+    text, citations, thinking_blocks, reasoning_content, tool_calls = config.extract_response_content(
+        completion_response
+    )
+    
+    # Verify text extraction (should concatenate both text blocks)
+    assert "I'll search for weather-related tools" in text
+    assert "Great! I found a weather tool" in text
+    
+    # Verify tool calls (should have both server_tool_use and tool_use)
+    assert len(tool_calls) == 2
+    assert tool_calls[0]["function"]["name"] == "tool_search_tool_regex"
+    assert tool_calls[1]["function"]["name"] == "get_weather"
+    
+    # Verify usage calculation counts tool_search_requests from content
+    usage = config.calculate_usage(
+        usage_object=completion_response["usage"],
+        reasoning_content=None,
+        completion_response=completion_response
+    )
+    
+    assert usage.server_tool_use is not None
+    assert usage.server_tool_use.web_search_requests == 0
+    assert usage.server_tool_use.tool_search_requests == 1  # Counted from server_tool_use blocks

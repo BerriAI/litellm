@@ -681,6 +681,18 @@ class ModelResponseIterator:
                         },
                         "index": self.tool_index,
                     }
+                elif content_block_start["content_block"]["type"] == "server_tool_use":
+                    # Handle server tool use (for tool search)
+                    self.tool_index += 1
+                    tool_use = {
+                        "id": content_block_start["content_block"]["id"],
+                        "type": "function",
+                        "function": {
+                            "name": content_block_start["content_block"]["name"],
+                            "arguments": "",
+                        },
+                        "index": self.tool_index,
+                    }
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):
@@ -707,6 +719,10 @@ class ModelResponseIterator:
                     }
                 # Reset response_format tool tracking when block stops
                 self.is_response_format_tool = False
+            elif type_chunk == "tool_result":
+                # Handle tool_result blocks (for tool search results with tool_reference)
+                # These are automatically handled by Anthropic API, we just pass them through
+                pass
             elif type_chunk == "message_delta":
                 finish_reason, usage = self._handle_message_delta(chunk)
             elif type_chunk == "message_start":

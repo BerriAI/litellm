@@ -88,6 +88,19 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                         return True
         return False
 
+    def is_tool_search_used(self, tools: Optional[List]) -> bool:
+        """
+        Check if tool search tools are present in the tools list.
+        """
+        if not tools:
+            return False
+        
+        for tool in tools:
+            tool_type = tool.get("type", "")
+            if tool_type in ["tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"]:
+                return True
+        return False
+
     def _get_user_anthropic_beta_headers(
         self, anthropic_beta_header: Optional[str]
     ) -> Optional[List[str]]:
@@ -122,6 +135,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         pdf_used: bool = False,
         file_id_used: bool = False,
         mcp_server_used: bool = False,
+        tool_search_used: bool = False,
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
@@ -138,6 +152,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.add("code-execution-2025-05-22")
         if mcp_server_used:
             betas.add("mcp-client-2025-04-04")
+        if tool_search_used:
+            from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+            betas.add(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
 
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
@@ -182,6 +199,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
         pdf_used = self.is_pdf_used(messages=messages)
         file_id_used = self.is_file_id_used(messages=messages)
+        tool_search_used = self.is_tool_search_used(tools=tools)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
@@ -194,6 +212,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
+            tool_search_used=tool_search_used,
         )
 
         headers = {**headers, **anthropic_headers}

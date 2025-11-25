@@ -42,6 +42,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     input_schema: Optional[AnthropicInputSchema]
     type: Literal["custom"]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    defer_loading: bool
 
 
 class AnthropicComputerTool(TypedDict, total=False):
@@ -87,6 +88,24 @@ class AnthropicMemoryTool(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class AnthropicToolSearchToolRegex(TypedDict, total=False):
+    """Tool search tool using regex patterns for tool discovery."""
+    type: Required[Literal["tool_search_tool_regex_20251119"]]
+    name: Required[str]
+
+
+class AnthropicToolSearchToolBM25(TypedDict, total=False):
+    """Tool search tool using BM25 algorithm for tool discovery."""
+    type: Required[Literal["tool_search_tool_bm25_20251119"]]
+    name: Required[str]
+
+
+class ToolReference(TypedDict, total=False):
+    """Reference to a tool that should be expanded from deferred tools."""
+    type: Required[Literal["tool_reference"]]
+    tool_name: Required[str]
+
+
 AllAnthropicToolsValues = Union[
     AnthropicComputerTool,
     AnthropicHostedTools,
@@ -94,6 +113,8 @@ AllAnthropicToolsValues = Union[
     AnthropicWebSearchTool,
     AnthropicCodeExecutionTool,
     AnthropicMemoryTool,
+    AnthropicToolSearchToolRegex,
+    AnthropicToolSearchToolBM25,
 ]
 
 
@@ -565,3 +586,8 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
+    ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
+
+
+# Tool search beta header constant
+ANTHROPIC_TOOL_SEARCH_BETA_HEADER = "advanced-tool-use-2025-11-20"

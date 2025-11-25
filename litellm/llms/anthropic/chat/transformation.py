@@ -268,6 +268,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             mcp_server = self._map_openai_mcp_server_tool(
                 cast(OpenAIMcpServerTool, tool)
             )
+        elif tool["type"] == "tool_search_tool_regex_20251119":
+            # Tool search tool using regex
+            from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
+            
+            tool_name = tool.get("name", "tool_search_tool_regex")
+            returned_tool = AnthropicToolSearchToolRegex(
+                type="tool_search_tool_regex_20251119",
+                name=tool_name,
+            )
+        elif tool["type"] == "tool_search_tool_bm25_20251119":
+            # Tool search tool using BM25
+            from litellm.types.llms.anthropic import AnthropicToolSearchToolBM25
+            
+            tool_name = tool.get("name", "tool_search_tool_bm25")
+            returned_tool = AnthropicToolSearchToolBM25(
+                type="tool_search_tool_bm25_20251119",
+                name=tool_name,
+            )
         if returned_tool is None and mcp_server is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
 
@@ -283,6 +301,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 returned_tool["cache_control"] = ChatCompletionCachedContent(
                     **_cache_control_function  # type: ignore
                 )
+        
+        ## check if defer_loading is set in the tool
+        _defer_loading = tool.get("defer_loading", None)
+        if returned_tool is not None and _defer_loading is not None:
+            returned_tool["defer_loading"] = _defer_loading
 
         return returned_tool, mcp_server
 
@@ -333,6 +356,82 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_server_tool is not None:
                     mcp_servers.append(mcp_server_tool)
         return anthropic_tools, mcp_servers
+
+    def _detect_tool_search_tools(self, tools: Optional[List]) -> bool:
+        """Check if tool search tools are present in the tools list."""
+        if not tools:
+            return False
+        
+        for tool in tools:
+            tool_type = tool.get("type", "")
+            if tool_type in ["tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"]:
+                return True
+        return False
+
+    def _separate_deferred_tools(
+        self, tools: List
+    ) -> Tuple[List, List]:
+        """
+        Separate tools into deferred and non-deferred lists.
+        
+        Returns:
+            Tuple of (non_deferred_tools, deferred_tools)
+        """
+        non_deferred = []
+        deferred = []
+        
+        for tool in tools:
+            if tool.get("defer_loading", False):
+                deferred.append(tool)
+            else:
+                non_deferred.append(tool)
+        
+        return non_deferred, deferred
+
+    def _expand_tool_references(
+        self,
+        content: List,
+        deferred_tools: List,
+    ) -> List:
+        """
+        Expand tool_reference blocks to full tool definitions.
+        
+        When Anthropic's tool search returns results, it includes tool_reference blocks
+        that reference tools by name. This method expands those references to full
+        tool definitions from the deferred_tools catalog.
+        
+        Args:
+            content: Response content that may contain tool_reference blocks
+            deferred_tools: List of deferred tools that can be referenced
+            
+        Returns:
+            Content with tool_reference blocks expanded to full tool definitions
+        """
+        if not deferred_tools:
+            return content
+        
+        # Create a mapping of tool names to tool definitions
+        tool_map = {}
+        for tool in deferred_tools:
+            tool_name = tool.get("name") or tool.get("function", {}).get("name")
+            if tool_name:
+                tool_map[tool_name] = tool
+        
+        # Expand tool references in content
+        expanded_content = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "tool_reference":
+                tool_name = item.get("tool_name")
+                if tool_name and tool_name in tool_map:
+                    # Replace reference with full tool definition
+                    expanded_content.append(tool_map[tool_name])
+                else:
+                    # Keep the reference if we can't find the tool
+                    expanded_content.append(item)
+            else:
+                expanded_content.append(item)
+        
+        return expanded_content
 
     def _map_stop_sequences(
         self, stop: Optional[Union[str, List[str]]]
@@ -881,7 +980,25 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         index=idx,
                     )
                 )
-
+            ## SERVER TOOL USE (for tool search)
+            elif content["type"] == "server_tool_use":
+                # Server tool use blocks are for tool search - treat as tool calls
+                tool_calls.append(
+                    ChatCompletionToolCallChunk(
+                        id=content["id"],
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=content["name"],
+                            arguments=json.dumps(content.get("input", {})),
+                        ),
+                        index=idx,
+                    )
+                )
+            ## TOOL SEARCH TOOL RESULT (skip - this is metadata about tool discovery)
+            elif content["type"] == "tool_search_tool_result":
+                # This block contains tool_references that were discovered
+                # We don't need to include this in the response as it's internal metadata
+                pass
             elif content.get("thinking", None) is not None:
                 if thinking_blocks is None:
                     thinking_blocks = []
@@ -916,7 +1033,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return text_content, citations, thinking_blocks, reasoning_content, tool_calls
 
     def calculate_usage(
-        self, usage_object: dict, reasoning_content: Optional[str]
+        self, usage_object: dict, reasoning_content: Optional[str], completion_response: Optional[dict] = None
     ) -> Usage:
         # NOTE: Sometimes the usage object has None set explicitly for token counts, meaning .get() & key access returns None, and we need to account for this
         prompt_tokens = usage_object.get("input_tokens", 0) or 0
@@ -926,6 +1043,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         cache_read_input_tokens: int = 0
         cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
         web_search_requests: Optional[int] = None
+        tool_search_requests: Optional[int] = None
         if (
             "cache_creation_input_tokens" in _usage
             and _usage["cache_creation_input_tokens"] is not None
@@ -946,6 +1064,25 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 web_search_requests = cast(
                     int, _usage["server_tool_use"]["web_search_requests"]
                 )
+            if (
+                "tool_search_requests" in _usage["server_tool_use"]
+                and _usage["server_tool_use"]["tool_search_requests"] is not None
+            ):
+                tool_search_requests = cast(
+                    int, _usage["server_tool_use"]["tool_search_requests"]
+                )
+        
+        # Count tool_search_requests from content blocks if not in usage
+        # Anthropic doesn't always include tool_search_requests in the usage object
+        if tool_search_requests is None and completion_response is not None:
+            tool_search_count = 0
+            for content in completion_response.get("content", []):
+                if content.get("type") == "server_tool_use":
+                    tool_name = content.get("name", "")
+                    if "tool_search" in tool_name:
+                        tool_search_count += 1
+            if tool_search_count > 0:
+                tool_search_requests = tool_search_count
 
         if "cache_creation" in _usage and _usage["cache_creation"] is not None:
             cache_creation_token_details = CacheCreationTokenDetails(
@@ -982,8 +1119,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
             server_tool_use=(
-                ServerToolUse(web_search_requests=web_search_requests)
-                if web_search_requests is not None
+                ServerToolUse(
+                    web_search_requests=web_search_requests,
+                    tool_search_requests=tool_search_requests,
+                )
+                if (web_search_requests is not None or tool_search_requests is not None)
                 else None
             ),
         )
@@ -1077,6 +1217,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         usage = self.calculate_usage(
             usage_object=completion_response["usage"],
             reasoning_content=reasoning_content,
+            completion_response=completion_response,
         )
         setattr(model_response, "usage", usage)  # type: ignore
 
