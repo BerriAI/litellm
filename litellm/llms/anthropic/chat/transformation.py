@@ -190,7 +190,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _tool_choice
 
-    def _map_tool_helper(  # pylint: disable=too-many-statements
+    def _map_tool_helper(  # noqa: PLR0915
         self, tool: ChatCompletionToolParam
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
         returned_tool: Optional[AllAnthropicToolsValues] = None

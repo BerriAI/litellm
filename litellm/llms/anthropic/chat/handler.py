@@ -630,7 +630,7 @@ class ModelResponseIterator:
 
         return content_block_start
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # pylint: disable=too-many-statements
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # noqa: PLR0915
         try:
             type_chunk = chunk.get("type", "") or ""
 
