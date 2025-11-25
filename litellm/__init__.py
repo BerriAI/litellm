@@ -1470,6 +1470,9 @@ from .vector_stores.vector_store_registry import (
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
 
+### RAG ###
+from . import rag
+
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
 from .types.utils import GenericStreamingChunk
