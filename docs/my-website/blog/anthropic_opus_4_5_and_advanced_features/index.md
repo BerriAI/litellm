@@ -26,6 +26,13 @@ This guide covers Anthropic's latest model (Claude Opus 4.5) and its advanced fe
 
 ---
 
+| Feature | Supported Models |
+|---------|-----------------|
+| Tool Search | Claude Opus 4.5, Sonnet 4.5 |
+| Programmatic Tool Calling | Claude Opus 4.5, Sonnet 4.5 |
+| Input Examples | Claude Opus 4.5, Sonnet 4.5 |
+| Effort Parameter | Claude Opus 4.5 only |
+
 ## Usage
 
 <Tabs>
@@ -222,6 +229,104 @@ curl --location 'http://0.0.0.0:4000/bedrock/model/claude-4/converse' \
 </Tabs>
 
 
+## Usage - Vertex AI
+
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python
+from litellm import completion
+import json 
+
+## GET CREDENTIALS 
+## RUN ## 
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+## OR ## 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+## COMPLETION CALL 
+response = completion(
+  model="vertex_ai/claude-opus-4-5@20251101",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  vertex_credentials=vertex_credentials_json,
+  vertex_project="your-project-id",
+  vertex_location="us-east5"
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+**1. Setup config.yaml**
+
+```yaml
+model_list:
+  - model_name: claude-4 ### RECEIVED MODEL NAME ###
+    litellm_params:
+        model: vertex_ai/claude-opus-4-5@20251101
+        vertex_credentials: "/path/to/service_account.json"
+        vertex_project: "your-project-id"
+        vertex_location: "us-east5"
+```
+
+**2. Start the proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**3. Test it!**
+
+<Tabs>
+<TabItem value="curl" label="OpenAI Chat Completions">
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="anthropic" label="Anthropic /v1/messages API">
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+</Tabs>
+</TabItem>
+</Tabs>
+
+
+
 ## Tool Search {#tool-search}
 
 ### Usage Example
@@ -336,8 +441,6 @@ tools = [
 
 ## Programmatic Tool Calling {#programmatic-tool-calling}
 
-### Usage Example
-
 ```python
 import litellm
 import json
@@ -427,8 +530,6 @@ print("\nFinal answer:", final_response.choices[0].message.content)
 ---
 
 ## Tool Input Examples {#tool-input-examples}
-
-### Usage Example
 
 ```python
 import litellm
@@ -754,83 +855,4 @@ This combination enables:
 3. **High accuracy** - Input examples ensure correct tool usage
 4. **Cost control** - Effort parameter optimizes token spend
 5. **Full visibility** - Track all usage metrics
-
----
-
-## Getting Started
-
-### Installation
-
-```bash
-pip install litellm --upgrade
-```
-
-### Configuration
-
-```python
-import os
-import litellm
-
-# Set your API key
-os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
-
-# LiteLLM automatically handles beta headers for all features
-```
-
-### Supported Models
-
-| Feature | Supported Models |
-|---------|-----------------|
-| Tool Search | Claude Opus 4.5, Sonnet 4.5 |
-| Programmatic Tool Calling | Claude Opus 4.5, Sonnet 4.5 |
-| Input Examples | Claude Opus 4.5, Sonnet 4.5 |
-| Effort Parameter | Claude Opus 4.5 only |
-
-### Supported Endpoints
-
-**Note**: All features are supported on the `/chat/completions` endpoint only.
-
-| Feature | Supported Models |
-|---------|-----------------|
-| Tool Search | Claude Opus 4.5, Sonnet 4.5 |
-| Programmatic Tool Calling | Claude Opus 4.5, Sonnet 4.5 |
-| Input Examples | Claude Opus 4.5, Sonnet 4.5 |
-| Effort Parameter | Claude Opus 4.5 only |
-
-### Provider Support
-
-All features work across:
-- ✅ Standard Anthropic API
-- ✅ Azure Anthropic
-- ✅ Vertex AI Anthropic
-- ✅ LiteLLM Proxy
-
----
-
-## Conclusion
-
-These advanced Anthropic features in LiteLLM enable you to build more sophisticated, efficient, and cost-effective AI applications:
-
-- **Tool Search** scales to thousands of tools
-- **Programmatic Tool Calling** reduces latency and tokens
-- **Input Examples** improve accuracy
-- **Effort Parameter** controls costs
-
-All features work seamlessly together and are supported across all Anthropic providers through LiteLLM's unified interface.
-
-### Resources
-
-- [LiteLLM Documentation](https://docs.litellm.ai/)
-- [Anthropic Tool Search Docs](https://docs.litellm.ai/docs/providers/anthropic_tool_search)
-- [Anthropic Programmatic Tool Calling Docs](https://docs.litellm.ai/docs/providers/anthropic_programmatic_tool_calling)
-- [Anthropic Input Examples Docs](https://docs.litellm.ai/docs/providers/anthropic_tool_input_examples)
-- [Anthropic Effort Parameter Docs](https://docs.litellm.ai/docs/providers/anthropic_effort)
-
-### Get Started Today
-
-```bash
-pip install litellm --upgrade
-```
-
-Happy building! 🚀
 
