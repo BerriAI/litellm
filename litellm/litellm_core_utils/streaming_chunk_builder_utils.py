@@ -353,6 +353,7 @@ class ChunkProcessor:
         cache_read_input_tokens: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        cost: Optional[float] = None
 
         if "prompt_tokens" in usage_chunk:
             prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
@@ -362,6 +363,8 @@ class ChunkProcessor:
             cache_creation_input_tokens = usage_chunk.get("cache_creation_input_tokens")
         if "cache_read_input_tokens" in usage_chunk:
             cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
+        if "cost" in usage_chunk:
+            cost = usage_chunk.get("cost")
         if hasattr(usage_chunk, "completion_tokens_details"):
             if isinstance(usage_chunk.completion_tokens_details, dict):
                 completion_tokens_details = CompletionTokensDetails(
@@ -388,6 +391,7 @@ class ChunkProcessor:
             "cache_read_input_tokens": cache_read_input_tokens,
             "completion_tokens_details": completion_tokens_details,
             "prompt_tokens_details": prompt_tokens_details,
+            "cost": cost,
         }
 
     def count_reasoning_tokens(self, response: ModelResponse) -> int:
@@ -422,9 +426,13 @@ class ChunkProcessor:
         web_search_requests: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        cost: Optional[float] = None
+        
         for chunk in chunks:
             usage_chunk: Optional[Usage] = None
-            if "usage" in chunk:
+            if hasattr(chunk, "usage") and chunk.usage is not None:
+                usage_chunk = chunk.usage
+            elif "usage" in chunk:
                 usage_chunk = chunk["usage"]
             elif (
                 isinstance(chunk, ModelResponse)
@@ -478,6 +486,9 @@ class ChunkProcessor:
 
                 prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
 
+                if usage_chunk_dict["cost"] is not None:
+                    cost = usage_chunk_dict["cost"]
+
         return UsagePerChunk(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -486,6 +497,7 @@ class ChunkProcessor:
             web_search_requests=web_search_requests,
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
+            cost=cost,
         )
 
     def calculate_usage(
@@ -522,6 +534,7 @@ class ChunkProcessor:
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = (
             calculated_usage_per_chunk["prompt_tokens_details"]
         )
+        cost: Optional[float] = calculated_usage_per_chunk["cost"]
 
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(
@@ -585,6 +598,9 @@ class ChunkProcessor:
                 returned_usage.prompt_tokens_details.web_search_requests = (
                     web_search_requests
                 )
+
+        if cost is not None:
+            setattr(returned_usage, "cost", cost)
 
         # Return a new usage object with the new values
 
