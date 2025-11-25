@@ -478,7 +478,6 @@ class ChatCompletionToolCallChunk(TypedDict):  # result of /chat/completions cal
     type: Literal["function"]
     function: ChatCompletionToolCallFunctionChunk
     index: int
-    caller: Optional[Dict[str, Any]]
 
 
 class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):

@@ -689,7 +689,7 @@ class ModelResponseIterator:
                     if "caller" in content_block_start["content_block"]:
                         caller_data = content_block_start["content_block"]["caller"]
                         if caller_data:
-                            tool_use["caller"] = cast(Dict[str, Any], caller_data)  # type: ignore
+                            tool_use["caller"] = cast(Dict[str, Any], caller_data)  # type: ignore[typeddict-item]
                 elif content_block_start["content_block"]["type"] == "server_tool_use":
                     # Handle server tool use (for tool search)
                     self.tool_index += 1
@@ -718,10 +718,10 @@ class ModelResponseIterator:
                 is_empty = self.check_empty_tool_call_args()
                 if is_empty:
                     tool_use = ChatCompletionToolCallChunk(
-                        id=None,
+                        id=None,  # type: ignore[typeddict-item]
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
-                            name=None,
+                            name=None,  # type: ignore[typeddict-item]
                             arguments="{}",
                         ),
                         index=self.tool_index,

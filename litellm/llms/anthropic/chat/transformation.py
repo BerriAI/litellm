@@ -304,14 +304,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _cache_control = tool.get("cache_control", None)
         _cache_control_function = tool.get("function", {}).get("cache_control", None)
         if returned_tool is not None:
-            # Only set cache_control on tools that support it
-            if isinstance(returned_tool, (AnthropicMessagesTool, AnthropicComputerTool, AnthropicWebSearchTool, AnthropicHostedTools, AnthropicCodeExecutionTool, AnthropicMemoryTool)):
+            # Only set cache_control on tools that support it (not tool search tools)
+            tool_type = returned_tool.get("type", "")
+            if tool_type not in ("tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"):
                 if _cache_control is not None:
-                    returned_tool["cache_control"] = _cache_control  # type: ignore[assignment]
+                    returned_tool["cache_control"] = _cache_control  # type: ignore[typeddict-item]
                 elif _cache_control_function is not None and isinstance(
                     _cache_control_function, dict
                 ):
-                    returned_tool["cache_control"] = ChatCompletionCachedContent(
+                    returned_tool["cache_control"] = ChatCompletionCachedContent(  # type: ignore[typeddict-item]
                         **_cache_control_function  # type: ignore
                     )
         
@@ -320,46 +321,50 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _defer_loading_function = tool.get("function", {}).get("defer_loading", None)
         if returned_tool is not None:
             # Only set defer_loading on tools that support it (not tool search tools or computer tools)
-            if isinstance(returned_tool, (AnthropicMessagesTool, AnthropicWebSearchTool, AnthropicHostedTools, AnthropicCodeExecutionTool, AnthropicMemoryTool)):
+            tool_type = returned_tool.get("type", "")
+            if tool_type not in ("tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119", "computer_20241022", "computer_20250124"):
                 if _defer_loading is not None:
                     if not isinstance(_defer_loading, bool):
                         raise ValueError("defer_loading must be a boolean")
-                    returned_tool["defer_loading"] = _defer_loading  # type: ignore[assignment]
+                    returned_tool["defer_loading"] = _defer_loading  # type: ignore[typeddict-item]
                 elif _defer_loading_function is not None:
                     if not isinstance(_defer_loading_function, bool):
                         raise ValueError("defer_loading must be a boolean")
-                    returned_tool["defer_loading"] = _defer_loading_function  # type: ignore[assignment]
+                    returned_tool["defer_loading"] = _defer_loading_function  # type: ignore[typeddict-item]
         
         ## check if allowed_callers is set in the tool
         _allowed_callers = tool.get("allowed_callers", None)
         _allowed_callers_function = tool.get("function", {}).get("allowed_callers", None)
         if returned_tool is not None:
-            if isinstance(returned_tool, (AnthropicMessagesTool, AnthropicWebSearchTool, AnthropicHostedTools, AnthropicCodeExecutionTool, AnthropicMemoryTool)):
+            # Only set allowed_callers on tools that support it (not tool search tools or computer tools)
+            tool_type = returned_tool.get("type", "")
+            if tool_type not in ("tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119", "computer_20241022", "computer_20250124"):
                 if _allowed_callers is not None:
                     if not isinstance(_allowed_callers, list) or not all(
                         isinstance(item, str) for item in _allowed_callers
                     ):
                         raise ValueError("allowed_callers must be a list of strings")
-                    returned_tool["allowed_callers"] = _allowed_callers  # type: ignore[assignment]
+                    returned_tool["allowed_callers"] = _allowed_callers  # type: ignore[typeddict-item]
                 elif _allowed_callers_function is not None:
                     if not isinstance(_allowed_callers_function, list) or not all(
                         isinstance(item, str) for item in _allowed_callers_function
                     ):
                         raise ValueError("allowed_callers must be a list of strings")
-                    returned_tool["allowed_callers"] = _allowed_callers_function  # type: ignore[assignment]
+                    returned_tool["allowed_callers"] = _allowed_callers_function  # type: ignore[typeddict-item]
         
         ## check if input_examples is set in the tool
         _input_examples = tool.get("input_examples", None)
         _input_examples_function = tool.get("function", {}).get("input_examples", None)
         if returned_tool is not None:
-            # Only set input_examples on AnthropicMessagesTool (user-defined tools)
-            if isinstance(returned_tool, AnthropicMessagesTool):
+            # Only set input_examples on user-defined tools (type "custom" or no type)
+            tool_type = returned_tool.get("type", "")
+            if tool_type == "custom" or (tool_type == "" and "name" in returned_tool):
                 if _input_examples is not None and isinstance(_input_examples, list):
-                    returned_tool["input_examples"] = _input_examples  # type: ignore[assignment]
+                    returned_tool["input_examples"] = _input_examples  # type: ignore[typeddict-item]
                 elif _input_examples_function is not None and isinstance(
                     _input_examples_function, list
                 ):
-                    returned_tool["input_examples"] = _input_examples_function  # type: ignore[assignment]
+                    returned_tool["input_examples"] = _input_examples_function  # type: ignore[typeddict-item]
 
         return returned_tool, mcp_server
 
@@ -1045,7 +1050,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
                 # Include caller information if present (for programmatic tool calling)
                 if "caller" in content:
-                    tool_call["caller"] = cast(Dict[str, Any], content["caller"])  # type: ignore
+                    tool_call["caller"] = cast(Dict[str, Any], content["caller"])  # type: ignore[typeddict-item]
                 tool_calls.append(tool_call)
             ## SERVER TOOL USE (for tool search)
             elif content["type"] == "server_tool_use":
@@ -1061,7 +1066,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
                 # Include caller information if present (for programmatic tool calling)
                 if "caller" in content:
-                    tool_call["caller"] = cast(Dict[str, Any], content["caller"])  # type: ignore
+                    tool_call["caller"] = cast(Dict[str, Any], content["caller"])  # type: ignore[typeddict-item]
                 tool_calls.append(tool_call)
             ## TOOL SEARCH TOOL RESULT (skip - this is metadata about tool discovery)
             elif content["type"] == "tool_search_tool_result":
