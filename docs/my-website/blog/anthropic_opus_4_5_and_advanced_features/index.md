@@ -1,7 +1,7 @@
 ---
 slug: anthropic_advanced_features
-title: "Advanced Anthropic Features in LiteLLM: Tool Search, Programmatic Tool Calling, Input Examples, and Effort Control"
-date: 2025-01-25T10:00:00
+title: "Day 0 Support: Claude 4.5 Opus (+Advanced Features)"
+date: 2025-11-25T10:00:00
 authors:
   - name: Sameer Kankute
     title: SWE @ LiteLLM (LLM Translation)
@@ -22,24 +22,205 @@ hide_table_of_contents: false
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+This guide covers Anthropic's latest model (Claude Opus 4.5) and its advanced features now available in LiteLLM: Tool Search, Programmatic Tool Calling, Tool Input Examples, and the Effort Parameter.
+
+---
+
+## Usage
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+
+```python
+import os
+from litellm import completion
+
+# set env - [OPTIONAL] replace with your anthropic key
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+
+messages = [{"role": "user", "content": "Hey! how's it going?"}]
+
+## OPENAI /chat/completions API format
+response = completion(model="claude-opus-4-5-20251101", messages=messages)
+print(response)
+
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+**1. Setup config.yaml**
+
+```yaml
+model_list:
+  - model_name: claude-4 ### RECEIVED MODEL NAME ###
+    litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
+      model: claude-opus-4-5-20251101 ### MODEL NAME sent to `litellm.completion()` ###
+      api_key: "os.environ/ANTHROPIC_API_KEY" # does os.getenv("ANTHROPIC_API_KEY")
+```
+
+**2. Start the proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**3. Test it!**
+
+<Tabs>
+<TabItem value="curl" label="OpenAI Chat Completions">
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="anthropic" label="Anthropic /v1/messages API">
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+</Tabs>
+</TabItem>
+</Tabs>
+
+## Usage - Bedrock
+
 :::info
 
-This guide covers Anthropic's latest advanced features now available in LiteLLM: Tool Search, Programmatic Tool Calling, Tool Input Examples, and the Effort Parameter.
+LiteLLM uses the boto3 library to authenticate with Bedrock.
+
+For more ways to authenticate with Bedrock, see the [Bedrock documentation](../../docs/providers/bedrock#authentication).
 
 :::
 
-We're excited to announce support for Anthropic's latest advanced features in LiteLLM! These powerful capabilities enable you to build more efficient, scalable, and cost-effective AI applications with Claude.
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
 
-## Table of Contents
 
-1. [Tool Search](#tool-search)
-2. [Programmatic Tool Calling](#programmatic-tool-calling)
-3. [Tool Input Examples](#tool-input-examples)
-4. [Effort Parameter: Control Token Usage](#effort-parameter)
-5. [Cost Tracking: Monitor Tool Search Usage](#cost-tracking)
-6. [Combining Features](#combining-features)
+```python
+import os
+from litellm import completion
 
----
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+## OPENAI /chat/completions API format
+response = completion(
+  model="bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+**1. Setup config.yaml**
+
+```yaml
+model_list:
+  - model_name: claude-4 ### RECEIVED MODEL NAME ###
+    litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
+      model: bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0 ### MODEL NAME sent to `litellm.completion()` ###
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+**2. Start the proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**3. Test it!**
+
+<Tabs>
+<TabItem value="curl" label="OpenAI Chat Completions">
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="anthropic" label="Anthropic /v1/messages API">
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="invoke" label="Bedrock /invoke API">
+```bash
+curl --location 'http://0.0.0.0:4000/bedrock/model/claude-4/invoke' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "max_tokens": 1024,
+      "messages": [{"role": "user", "content": "Hello, how are you?"}]
+    }'
+```
+</TabItem>
+<TabItem value="converse" label="Bedrock /converse API">
+```bash
+curl --location 'http://0.0.0.0:4000/bedrock/model/claude-4/converse' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "messages": [{"role": "user", "content": "Hello, how are you?"}]
+    }'
+```
+</TabItem>
+</Tabs>
+</TabItem>
+</Tabs>
+
 
 ## Tool Search {#tool-search}
 
