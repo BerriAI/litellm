@@ -114,6 +114,55 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 Here's how to use `thinking` blocks by Anthropic with tool calling.
 
+### Important: OpenAI-Compatible API Limitations
+
+:::warning Compatibility Notice
+
+Anthropic extended thinking with tool calling is **not fully compatible** with OpenAI-compatible API clients. This is due to fundamental architectural differences between how OpenAI and Anthropic handle reasoning in multi-turn conversations.
+
+:::
+
+When using Anthropic models with `thinking` enabled and tool calling, you **must include `thinking_blocks`** from the previous assistant response when sending tool results back. Failure to do so will result in a `400 Bad Request` error:
+
+```
+Expected `thinking` or `redacted_thinking`, but found `tool_use`.
+When `thinking` is enabled, a final `assistant` message must start with a thinking block.
+```
+
+**OpenAI vs Anthropic Architecture:**
+
+| Provider | API Architecture | Reasoning Storage | Multi-turn Handling |
+|----------|------------------|-------------------|---------------------|
+| **OpenAI** (o1, o3) | Responses API (Stateful) | Server-side | Server stores reasoning internally; client sends `previous_response_id` |
+| **Anthropic** (Claude) | Messages API (Stateless) | Client-side | Client must store and resend `thinking_blocks` with every request |
+
+**How it happens:**
+
+1. OpenAI's Chat Completions spec has **no field** for `thinking_blocks`
+2. OpenAI-compatible clients (LibreChat, Open WebUI, Vercel AI SDK, etc.) **ignore** the `thinking_blocks` field in responses
+3. When these clients reconstruct the assistant message for the next turn, the thinking blocks are lost
+4. Anthropic rejects the request because the assistant message doesn't start with a thinking block
+
+**Solutions:**
+
+1. **For client developers**: Explicitly handle and resend the `thinking_blocks` field (see example below)
+2. **Disable extended thinking** when using tools with OpenAI-compatible clients that don't support `thinking_blocks`
+3. **Use Anthropic's native API** directly instead of OpenAI-compatible endpoints
+
+**Correct way to include `thinking_blocks`:**
+
+```python
+# After receiving a response with tool_calls, include thinking_blocks when sending back:
+assistant_message = {
+    "role": "assistant",
+    "content": response.choices[0].message.content,
+    "tool_calls": [...],
+    "thinking_blocks": response.choices[0].message.thinking_blocks  # ← Required!
+}
+```
+
+---
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
