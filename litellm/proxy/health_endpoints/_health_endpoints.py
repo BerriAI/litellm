@@ -843,11 +843,11 @@ async def health_readiness():
                     index_info = "index does not exist - error: " + str(e)
                 cache_type = {"type": cache_type, "index_info": index_info}
 
-        # build license metadata
+        # build license metadata without re-running license verification on every readiness probe
         try:
-            from litellm.proxy.proxy_server import _license_check  # type: ignore
+            from litellm.proxy.proxy_server import premium_user, _license_check  # type: ignore
 
-            license_available: bool = _license_check.is_premium() if _license_check else False
+            license_available: bool = bool(premium_user)
             license_expiration: Optional[str] = None
 
             if getattr(_license_check, "airgapped_license_data", None):
