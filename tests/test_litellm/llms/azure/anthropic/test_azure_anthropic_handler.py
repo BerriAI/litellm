@@ -32,7 +32,7 @@ class TestAzureAnthropicChatCompletion:
         mock_config.transform_request.return_value = {"model": "claude-sonnet-4-5", "messages": []}
         mock_config.transform_response.return_value = ModelResponse()
         mock_config_instance = MagicMock()
-        mock_config_instance.validate_environment.return_value = {"api-key": "test-api-key", "anthropic-version": "2023-06-01"}
+        mock_config_instance.validate_environment.return_value = {"x-api-key": "test-api-key", "anthropic-version": "2023-06-01"}
         mock_azure_config.return_value = mock_config_instance
         mock_provider_manager.get_provider_chat_config.return_value = mock_config
 
@@ -90,7 +90,7 @@ class TestAzureAnthropicChatCompletion:
             "stream": True,
         }
         mock_config_instance = MagicMock()
-        mock_config_instance.validate_environment.return_value = {"api-key": "test-api-key", "anthropic-version": "2023-06-01"}
+        mock_config_instance.validate_environment.return_value = {"x-api-key": "test-api-key", "anthropic-version": "2023-06-01"}
         mock_azure_config.return_value = mock_config_instance
         mock_provider_manager.get_provider_chat_config.return_value = mock_config
 
@@ -151,7 +151,7 @@ class TestAzureAnthropicChatCompletion:
         mock_response = ModelResponse()
         mock_config.transform_response.return_value = mock_response
         mock_config_instance = MagicMock()
-        mock_config_instance.validate_environment.return_value = {"api-key": "test-api-key", "anthropic-version": "2023-06-01"}
+        mock_config_instance.validate_environment.return_value = {"x-api-key": "test-api-key", "anthropic-version": "2023-06-01"}
         mock_azure_config.return_value = mock_config_instance
         mock_provider_manager.get_provider_chat_config.return_value = mock_config
 
