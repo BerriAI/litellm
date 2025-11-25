@@ -9,6 +9,7 @@ from litellm._logging import verbose_logger
 
 from litellm.types.utils import StandardLoggingPayload
 
+
 class RubrikLogger(CustomLogger):
     def __init__(self):
         # Instance variables
@@ -25,7 +26,9 @@ class RubrikLogger(CustomLogger):
         self.client: Optional[httpx.AsyncClient] = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        standard_logging_payload: StandardLoggingPayload = kwargs["standard_logging_object"]
+        standard_logging_payload: StandardLoggingPayload = kwargs[
+            "standard_logging_object"
+        ]
         # If the request is an anthropic request, the system prompt _might_ be in kwargs["system"]
         if "system" in kwargs:
             # Insert the system prompt at the beginning of the messages list
@@ -47,7 +50,9 @@ class RubrikLogger(CustomLogger):
             if self.key:
                 headers["Authorization"] = f"Bearer {self.key}"
 
-            response = await self.client.post(webhook_endpoint, content=payload_json, headers=headers, timeout=10.0)
+            response = await self.client.post(
+                webhook_endpoint, content=payload_json, headers=headers, timeout=10.0
+            )
             response.raise_for_status()
             verbose_logger.debug(f"Successfully sent payload to {webhook_endpoint}")
         except Exception as e:
