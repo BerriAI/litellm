@@ -64,4 +64,4 @@ class ToolPermissionGuardrailConfigModel(GuardrailConfigModel):
 
     @staticmethod
     def ui_friendly_name() -> str:
-        return "Tool Permission Guardrail"
+        return "LiteLLM Tool Permission Guardrail"

@@ -193,7 +193,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
     <Card>
       <div className="flex items-center justify-between">
         <div>
-          <Text className="text-lg font-semibold">Tool Permission Rules</Text>
+          <Text className="text-lg font-semibold">LiteLLM Tool Permission Guardrail</Text>
           <Text className="text-sm text-gray-500">
             Use wildcards (e.g., mcp__github_*) to scope which tools can run and optionally constrain
             payload fields.
