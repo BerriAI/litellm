@@ -3,7 +3,7 @@ Azure Anthropic handler - reuses AnthropicChatCompletion logic with Azure authen
 """
 import copy
 import json
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Callable, Union
 
 import httpx
 
@@ -12,7 +12,6 @@ from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    get_async_httpx_client,
 )
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
@@ -20,8 +19,7 @@ from litellm.utils import CustomStreamWrapper
 from .transformation import AzureAnthropicConfig
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper as CustomStreamWrapperType
-    from litellm.llms.base_llm.chat.transformation import BaseConfig
+    pass
 
 
 class AzureAnthropicChatCompletion(AnthropicChatCompletion):
