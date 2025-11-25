@@ -54,7 +54,10 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import (
+    PromptTokensDetailsWrapper,
+    ServerToolUse,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
