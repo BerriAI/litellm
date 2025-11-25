@@ -71,3 +71,59 @@ async def test_async_realtime_uses_max_size_parameter():
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+async def test_construct_url_uses_legacy_realtime_by_default():
+    """By default we should keep using `/openai/realtime` (beta behavior)."""
+
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    api_base = "https://my-endpoint.openai.azure.com"
+    api_version = "2024-10-01-preview"
+    model = "gpt-4o-realtime-preview"
+
+    url = handler._construct_url(api_base=api_base, model=model, api_version=api_version)
+
+    assert url.startswith("wss://my-endpoint.openai.azure.com")
+    assert "/openai/realtime" in url
+    assert "/openai/v1/realtime" not in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_uses_v1_when_realtime_protocol_v1_or_ga():
+    """Setting `realtime_protocol` to v1/GA should switch to `/openai/v1/realtime`."""
+
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    api_base = "https://my-endpoint.openai.azure.com"
+    api_version = "2024-10-01-preview"
+    model = "gpt-4o-realtime-preview"
+
+    # Helper to construct handler URL with a specific realtime_protocol.
+    # We avoid mutating handler attributes directly since type checkers don't
+    # know about `litellm_params` on this class. Instead, we patch the
+    # `_get_realtime_protocol` helper which is what `_construct_url` uses.
+
+    # v1 -> /openai/v1/realtime
+    handler_v1 = AzureOpenAIRealtime()
+    with patch.object(handler_v1, "_get_realtime_protocol", return_value="v1"):
+        url_v1 = handler_v1._construct_url(api_base=api_base, model=model, api_version=api_version)
+    assert "/openai/v1/realtime" in url_v1
+    assert "/openai/realtime" not in url_v1
+
+    # GA (case-insensitive) -> /openai/v1/realtime
+    handler_ga = AzureOpenAIRealtime()
+    with patch.object(handler_ga, "_get_realtime_protocol", return_value="v1"):
+        url_ga = handler_ga._construct_url(api_base=api_base, model=model, api_version=api_version)
+    assert "/openai/v1/realtime" in url_ga
+    assert "/openai/realtime" not in url_ga
+
+    # beta or any other value keeps legacy path
+    handler_beta = AzureOpenAIRealtime()
+    with patch.object(handler_beta, "_get_realtime_protocol", return_value="beta"):
+        url_beta = handler_beta._construct_url(api_base=api_base, model=model, api_version=api_version)
+    assert "/openai/realtime" in url_beta
+    assert "/openai/v1/realtime" not in url_beta
+
+
