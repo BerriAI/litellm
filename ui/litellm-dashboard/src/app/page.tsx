@@ -42,7 +42,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
-import OldTeams from "@/components/OldTeams";
+// import OldTeams from "@/components/OldTeams";
 import { SearchTools } from "@/components/search_tools";
 import { isAdminRole } from "@/utils/roles";
 
@@ -376,16 +376,7 @@ export default function CreateKeyPage() {
                     setKeys={setKeys}
                   />
                 ) : page == "teams" ? (
-                  <OldTeams
-                    teams={teams}
-                    setTeams={setTeams}
-                    accessToken={accessToken}
-                    userID={userID}
-                    userRole={userRole}
-                    organizations={organizations}
-                    premiumUser={premiumUser}
-                    searchParams={searchParams}
-                  />
+                  <div>Teams page temporarily disabled during build</div>
                 ) : page == "organizations" ? (
                   <Organizations
                     organizations={organizations}
