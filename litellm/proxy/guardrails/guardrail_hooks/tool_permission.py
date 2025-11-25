@@ -62,8 +62,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self.rules: List[ToolPermissionRule] = []
         self._compiled_rule_patterns: Dict[str, Dict[str, re.Pattern]] = {}
         if rules:
-            for rule_dict in rules:
-                rule = ToolPermissionRule(**rule_dict)
+            for rule_item in rules:
+                if isinstance(rule_item, ToolPermissionRule):
+                    rule = rule_item
+                else:
+                    rule = ToolPermissionRule(**rule_item)
                 self.rules.append(rule)
 
                 if rule.allowed_param_patterns:
@@ -87,6 +90,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
             len(self.rules),
             self.default_action,
         )
+
+    @staticmethod
+    def get_config_model():
+        from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
+            ToolPermissionGuardrailConfigModel,
+        )
+
+        return ToolPermissionGuardrailConfigModel
 
     def _matches_pattern(self, tool_name: str, pattern: str) -> bool:
         """
