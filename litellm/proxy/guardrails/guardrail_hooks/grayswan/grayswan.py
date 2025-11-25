@@ -216,7 +216,9 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return data
 
-        await self.run_grayswan_guardrail(payload, data, GuardrailEventHooks.during_call)
+        await self.run_grayswan_guardrail(
+            payload, data, GuardrailEventHooks.during_call
+        )
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
@@ -281,7 +283,9 @@ class GraySwanGuardrail(CustomGuardrail):
                     )
                     for choice in response.choices:
                         # Handle chat completion format (message.content)
-                        if hasattr(choice, "message") and hasattr(choice.message, "content"):
+                        if hasattr(choice, "message") and hasattr(
+                            choice.message, "content"
+                        ):
                             choice.message.content = violation_message
                         # Handle text completion format (text)
                         elif hasattr(choice, "text"):
@@ -308,7 +312,7 @@ class GraySwanGuardrail(CustomGuardrail):
                     verbose_proxy_logger.warning(
                         "Gray Swan Guardrail: Passthrough mode enabled but response format not recognized. "
                         "Cannot replace content. Response type: %s",
-                        type(response).__name__
+                        type(response).__name__,
                     )
 
         add_guardrail_to_applied_guardrails_header(
@@ -434,7 +438,10 @@ class GraySwanGuardrail(CustomGuardrail):
             }
 
             # For pre_call and during_call, raise exception to short-circuit LLM call
-            if hook_type in (GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call):
+            if hook_type in (
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.during_call,
+            ):
                 verbose_proxy_logger.info(
                     "Gray Swan Guardrail: Passthrough mode - raising exception to short-circuit LLM call"
                 )
@@ -484,10 +491,14 @@ class GraySwanGuardrail(CustomGuardrail):
         ]
 
         if violated_rules:
-            message_parts.append(f"It was violating the rule(s): {', '.join(map(str, violated_rules))}.")
+            message_parts.append(
+                f"It was violating the rule(s): {', '.join(map(str, violated_rules))}."
+            )
 
         if mutation:
-            message_parts.append("Mutation effort to make the harmful intention disguised was DETECTED.")
+            message_parts.append(
+                "Mutation effort to make the harmful intention disguised was DETECTED."
+            )
 
         if ipi:
             message_parts.append("Indirect Prompt Injection was DETECTED.")
