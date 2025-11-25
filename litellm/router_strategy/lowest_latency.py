@@ -230,7 +230,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         - 408 Request Timeout
         - 429 Rate limit
         - API connection errors / service unavailable
-        - NOTE: Do NOT penalize 4xx auth/not-found errors since they are usually user/config issues, not deployment health
+        - 401/404 (misconfig on this deployment) — nudge router away
         """
         try:
             if exc is None:
@@ -258,7 +258,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             if isinstance(status, int):
                 if status >= 500:
                     return True
-                if status in (408, 429):
+                if status in (408, 429, 401, 404):
                     return True
             return False
         except Exception:
