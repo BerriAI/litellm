@@ -24,6 +24,7 @@ from litellm.types.utils import (
     Choices,
     Delta,
     EmbeddingResponse,
+    GuardrailStatus,
     ImageResponse,
     ModelResponse,
     ModelResponseStream,
@@ -412,6 +413,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             violations = result.get("violations", [])
             
             # Determine guardrail status based on action
+            guardrail_status: GuardrailStatus
             if action == "block":
                 guardrail_status = "guardrail_intervened"
             elif action == "modify":
@@ -498,6 +500,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             action = result.get("action")
             
             # Determine guardrail status
+            guardrail_status: GuardrailStatus
             if action == "block":
                 guardrail_status = "guardrail_intervened"
             elif action == "modify":
