@@ -308,62 +308,6 @@ class PromptSecurityGuardrail(CustomGuardrail):
         # Return data - LiteLLM will then call apply_guardrail for text checking
         return data
 
-    @log_guardrail_information
-    async def async_moderation_hook(
-        self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        call_type: str,
-    ) -> Union[Exception, str, dict, None]:
-        """
-        Moderation hook - text checking handled by apply_guardrail.
-
-        This hook is kept for backward compatibility but does nothing
-        because apply_guardrail is called automatically by LiteLLM.
-        """
-        # Ensure metadata exists for logging
-        data.setdefault("metadata", {})
-
-        event_type = GuardrailEventHooks.during_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return data
-
-        # Text checking happens automatically via apply_guardrail
-        # Just add the header and return
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
-
-        return data
-
-    @log_guardrail_information
-    async def async_post_call_success_hook(
-        self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        response,
-    ):
-        """
-        Post-call hook - text checking handled by apply_guardrail.
-
-        This hook is kept for backward compatibility but does nothing
-        because apply_guardrail is called automatically by LiteLLM for output text.
-        """
-        # Ensure metadata exists for logging
-        data.setdefault("metadata", {})
-
-        event_type = GuardrailEventHooks.post_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return response
-
-        # Text checking happens automatically via apply_guardrail
-        # Just add the header and return
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
-
-        return response
-
     async def sanitize_file_content(self, file_data: bytes, filename: str) -> dict:
         """
         Sanitize file content using Prompt Security API.
