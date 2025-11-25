@@ -36,6 +36,10 @@ ROUTE_ENDPOINT_MAPPING = {
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
     "adelete_container": "/containers/{container_id}",
+    "acreate_skill": "/skills",
+    "alist_skills": "/skills",
+    "aget_skill": "/skills/{skill_id}",
+    "adelete_skill": "/skills/{skill_id}",
 }
 
 
@@ -126,6 +130,10 @@ async def route_request(
         "alist_containers",
         "aretrieve_container",
         "adelete_container",
+        "acreate_skill",
+        "alist_skills",
+        "aget_skill",
+        "adelete_skill",
     ],
 ):
     """
@@ -178,8 +186,12 @@ async def route_request(
             "avector_store_file_retrieve",
             "avector_store_file_content",
             "avector_store_file_delete",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
         ] and (data.get("model") is None or data.get("model") == ""):
-            # These video endpoints don't need a model, use custom_llm_provider
+            # These endpoints don't need a model, use custom_llm_provider directly
             return getattr(litellm, f"{route_type}")(**data)
         
         team_model_name = (
