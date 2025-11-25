@@ -1531,26 +1531,37 @@ def _lazy_import_cost_calculator(name: str) -> Any:
 # This significantly reduces memory usage when importing litellm
 def _lazy_import_litellm_logging(name: str) -> Any:
     """Lazy import for litellm_logging module."""
-    from litellm.litellm_core_utils.litellm_logging import (
-        Logging as _Logging,
-        modify_integration as _modify_integration,
-    )
-    
-    # Map names to imported objects
-    _logging_objects = {
-        "Logging": _Logging,
-        "modify_integration": _modify_integration,
-    }
-    
-    # Cache the imported object in the module namespace
-    obj = _logging_objects[name]
-    globals()[name] = obj
-    
-    return obj
+    try:
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as _Logging,
+            modify_integration as _modify_integration,
+        )
+        
+        # Map names to imported objects
+        _logging_objects = {
+            "Logging": _Logging,
+            "modify_integration": _modify_integration,
+        }
+        
+        # Cache the imported object in the module namespace
+        obj = _logging_objects[name]
+        globals()[name] = obj
+        
+        return obj
+    except Exception as e:
+        # If lazy import fails, raise a more informative error
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}. "
+            f"Lazy import failed: {e}"
+        ) from e
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import for cost_calculator and litellm_logging functions."""
+    """Lazy import for cost_calculator and litellm_logging functions.
+    
+    This allows these heavy modules to be loaded only when accessed,
+    reducing initial import time and memory usage.
+    """
     if name in ("completion_cost", "response_cost_calculator", "cost_per_token"):
         return _lazy_import_cost_calculator(name)
     
