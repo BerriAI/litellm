@@ -6109,6 +6109,10 @@ async def ahealth_check(
         }
     """
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+    from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
+    
+    # Use cached import helper to lazy-load Logging class (only loads when function is called)
+    Logging = get_litellm_logging_class()
 
     # Map modes to their corresponding health check calls
     #########################################################
