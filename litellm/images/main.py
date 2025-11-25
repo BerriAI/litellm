@@ -10,7 +10,6 @@ from litellm import client, exception_type, get_litellm_params
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
-# Logging is imported at module level since litellm_logging is already loaded via main.py imports
 from litellm.litellm_core_utils.litellm_logging import Logging, Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
