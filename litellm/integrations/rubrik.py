@@ -27,11 +27,15 @@ class RubrikLogger(CustomLogger):
     def log_success(self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs=None):
         print_verbose("RubrikLogger: Logging Success")
 
-    async def async_log_success_event(
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_payload: StandardLoggingPayload = kwargs["standard_logging_object"]
-
+        # If the request is an anthropic request, the system prompt _might_ be in kwargs["system"]
+        if "system" in kwargs:
+            # Insert the system prompt at the beginning of the messages list
+            # This is a list of dictionaries
+            system_prompt_msg_list = kwargs["system"]
+            system_scaffold = {"role": "system", "content": system_prompt_msg_list}
+            standard_logging_payload.messages.insert(0, system_scaffold)
         try:
             # Initialize client if not already done
             if self.client is None:
@@ -40,21 +44,14 @@ class RubrikLogger(CustomLogger):
             # Convert the payload to JSON
             payload_json = json.dumps(standard_logging_payload, default=str)
 
-            verbose_logger.debug(f"RubrikLogger: Sending payload to {self.webhook_url}")
-            verbose_logger.debug(f"RubrikLogger: Payload = {payload_json}")
             # Send POST request to the webhook
             webhook_endpoint = f"{self.webhook_url}/litellm"
             headers = {"Content-Type": "application/json"}
             if self.key:
                 headers["Authorization"] = f"Bearer {self.key}"
 
-            response = await self.client.post(
-                webhook_endpoint,
-                content=payload_json,
-                headers=headers,
-                timeout=10.0
-            )
+            response = await self.client.post(webhook_endpoint, content=payload_json, headers=headers, timeout=10.0)
             response.raise_for_status()
             verbose_logger.debug(f"Successfully sent payload to {webhook_endpoint}")
         except Exception as e:
-            verbose_logger.exception(f"Error sending payload to Rubrik webhook")
+            verbose_logger.exception(f"Error sending payload to Rubrik webhook: {e}")
