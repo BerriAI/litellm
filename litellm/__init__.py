@@ -22,6 +22,7 @@ from typing import (
     TYPE_CHECKING,
     Tuple,
     overload,
+    Type,
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
@@ -1505,20 +1506,7 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
     global_gitlab_config = config
 
 
-# ============================================================================
-# LAZY LOADING SYSTEM
-# ============================================================================
-# This system allows heavy modules to be loaded only when accessed,
-# significantly reducing initial import time and memory usage.
-#
-# To add a new lazy-loaded function/class:
-# 1. Add the import handler function (e.g., _lazy_import_xxx)
-# 2. Add entries to _LAZY_LOAD_REGISTRY below
-# 3. Add type stubs in the TYPE_CHECKING block
-# 4. Add @overload decorators for type checking
-# ============================================================================
-
-
+# Lazy loading system for heavy modules to reduce initial import time and memory usage
 def _lazy_import_cost_calculator(name: str) -> Any:
     """Lazy import for cost_calculator functions."""
     from .cost_calculator import (
@@ -1534,7 +1522,7 @@ def _lazy_import_cost_calculator(name: str) -> Any:
     }
     
     func = _cost_functions[name]
-    globals()[name] = func  # Cache for future access
+    globals()[name] = func
     return func
 
 
@@ -1552,7 +1540,7 @@ def _lazy_import_litellm_logging(name: str) -> Any:
         }
         
         obj = _logging_objects[name]
-        globals()[name] = obj  # Cache for future access
+        globals()[name] = obj
         return obj
     except Exception as e:
         raise AttributeError(
@@ -1561,54 +1549,24 @@ def _lazy_import_litellm_logging(name: str) -> Any:
         ) from e
 
 
-# Registry mapping lazy-loaded names to their import handlers
-# Add new lazy-loaded items here for easy maintenance
 _LAZY_LOAD_REGISTRY: Dict[str, Callable[[str], Any]] = {
-    # Cost calculator functions
     "completion_cost": _lazy_import_cost_calculator,
     "cost_per_token": _lazy_import_cost_calculator,
     "response_cost_calculator": _lazy_import_cost_calculator,
-    # Logging objects
     "Logging": _lazy_import_litellm_logging,
     "modify_integration": _lazy_import_litellm_logging,
 }
 
 
-# Type stubs for lazy-loaded functions/classes to help type checkers
-# Add type annotations here for new lazy-loaded items
 if TYPE_CHECKING:
-    # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
     completion_cost: Callable[..., float]
     response_cost_calculator: Any
-    # Logging objects
-    Logging: Any
     modify_integration: Any
 
 
-# Type overloads for __getattr__ to provide proper type hints
-# Add @overload decorators here for new lazy-loaded items with specific types
-@overload
-def __getattr__(name: Literal["cost_per_token"]) -> Callable[..., Tuple[float, float]]:
-    ...
-
-
-@overload
-def __getattr__(name: Literal["completion_cost"]) -> Callable[..., float]:
-    ...
-
-
-@overload
-def __getattr__(name: Literal["response_cost_calculator", "Logging", "modify_integration"]) -> Any:
-    ...
-
-
 def __getattr__(name: str) -> Any:
-    """Lazy import handler for cost_calculator and litellm_logging functions.
-    
-    This allows these heavy modules to be loaded only when accessed,
-    reducing initial import time and memory usage.
-    """
+    """Lazy import handler for cost_calculator and litellm_logging functions."""
     if name in _LAZY_LOAD_REGISTRY:
         return _LAZY_LOAD_REGISTRY[name](name)
     
