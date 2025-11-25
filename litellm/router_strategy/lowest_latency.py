@@ -89,14 +89,19 @@ class LowestLatencyLoggingHandler(CustomLogger):
         self, kwargs, response_obj, start_time, end_time
     ) -> Optional[Dict[str, Any]]:
         metadata_field = self._select_metadata_field(kwargs)
-        if kwargs["litellm_params"].get(metadata_field) is None:
+        litellm_params = kwargs.get("litellm_params") or {}
+        if not isinstance(litellm_params, dict):
+            return None
+        if metadata_field is None:
             return None
 
-        model_group = kwargs["litellm_params"][metadata_field].get(
-            "model_group", None
-        )
+        metadata = litellm_params.get(metadata_field)
+        if metadata is None:
+            return None
 
-        id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+        model_group = metadata.get("model_group", None)
+
+        id = (litellm_params.get("model_info") or {}).get("id", None)
         if model_group is None or id is None:
             return None
         if isinstance(id, int):
@@ -282,13 +287,18 @@ class LowestLatencyLoggingHandler(CustomLogger):
             if not self._should_penalize_exception(_exception):
                 return
 
-            if kwargs["litellm_params"].get(metadata_field) is None:
+            litellm_params = kwargs.get("litellm_params") or {}
+            if not isinstance(litellm_params, dict):
+                return
+            if metadata_field is None:
                 return
 
-            model_group = kwargs["litellm_params"][metadata_field].get(
-                "model_group", None
-            )
-            id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+            metadata = litellm_params.get(metadata_field)
+            if metadata is None:
+                return
+
+            model_group = metadata.get("model_group", None)
+            id = (litellm_params.get("model_info") or {}).get("id", None)
             if model_group is None or id is None:
                 return
             if isinstance(id, int):
@@ -322,13 +332,18 @@ class LowestLatencyLoggingHandler(CustomLogger):
             if not self._should_penalize_exception(_exception):
                 return
 
-            if kwargs["litellm_params"].get(metadata_field) is None:
+            litellm_params = kwargs.get("litellm_params") or {}
+            if not isinstance(litellm_params, dict):
+                return
+            if metadata_field is None:
                 return
 
-            model_group = kwargs["litellm_params"][metadata_field].get(
-                "model_group", None
-            )
-            id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+            metadata = litellm_params.get(metadata_field)
+            if metadata is None:
+                return
+
+            model_group = metadata.get("model_group", None)
+            id = (litellm_params.get("model_info") or {}).get("id", None)
             if model_group is None or id is None:
                 return
             if isinstance(id, int):
