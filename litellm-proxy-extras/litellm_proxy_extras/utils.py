@@ -131,6 +131,60 @@ class ProxyExtrasDBManager:
         )
 
     @staticmethod
+    def _is_permission_error(error_message: str) -> bool:
+        """
+        Check if the error message indicates a database permission error.
+
+        Permission errors should NOT be marked as applied, as the migration
+        did not actually execute successfully.
+
+        Args:
+            error_message: The error message from Prisma migrate
+
+        Returns:
+            bool: True if this is a permission error, False otherwise
+        """
+        permission_patterns = [
+            r"Database error code: 42501",  # PostgreSQL insufficient privilege
+            r"must be owner of table",
+            r"permission denied for schema",
+            r"permission denied for table",
+            r"must be owner of schema",
+        ]
+
+        for pattern in permission_patterns:
+            if re.search(pattern, error_message, re.IGNORECASE):
+                return True
+        return False
+
+    @staticmethod
+    def _is_idempotent_error(error_message: str) -> bool:
+        """
+        Check if the error message indicates an idempotent operation error.
+
+        Idempotent errors (like "column already exists") mean the migration
+        has effectively already been applied, so it's safe to mark as applied.
+
+        Args:
+            error_message: The error message from Prisma migrate
+
+        Returns:
+            bool: True if this is an idempotent error, False otherwise
+        """
+        idempotent_patterns = [
+            r"already exists",
+            r"column .* already exists",
+            r"duplicate key value violates",
+            r"relation .* already exists",
+            r"constraint .* already exists",
+        ]
+
+        for pattern in idempotent_patterns:
+            if re.search(pattern, error_message, re.IGNORECASE):
+                return True
+        return False
+
+    @staticmethod
     def _resolve_all_migrations(
         migrations_dir: str, schema_path: str, mark_all_applied: bool = True
     ):
@@ -320,29 +374,79 @@ class ProxyExtrasDBManager:
                             )
                             logger.info("✅ All migrations resolved.")
                             return True
-                        elif (
-                            "P3018" in e.stderr
-                        ):  # PostgreSQL error code for duplicate column
-                            logger.info(
-                                "Migration already exists, resolving specific migration"
-                            )
-                            # Extract the migration name from the error message
-                            migration_match = re.search(
-                                r"Migration name: (\d+_.*)", e.stderr
-                            )
-                            if migration_match:
-                                migration_name = migration_match.group(1)
-                                logger.info(f"Rolling back migration {migration_name}")
-                                ProxyExtrasDBManager._roll_back_migration(
-                                    migration_name
+                        elif "P3018" in e.stderr:
+                            # Check if this is a permission error or idempotent error
+                            if ProxyExtrasDBManager._is_permission_error(e.stderr):
+                                # Permission errors should NOT be marked as applied
+                                # Extract migration name for logging
+                                migration_match = re.search(
+                                    r"Migration name: (\d+_.*)", e.stderr
                                 )
+                                migration_name = (
+                                    migration_match.group(1)
+                                    if migration_match
+                                    else "unknown"
+                                )
+
+                                logger.error(
+                                    f"❌ Migration {migration_name} failed due to insufficient permissions. "
+                                    f"Please check database user privileges. Error: {e.stderr}"
+                                )
+
+                                # Mark as rolled back and exit with error
+                                if migration_match:
+                                    try:
+                                        ProxyExtrasDBManager._roll_back_migration(
+                                            migration_name
+                                        )
+                                        logger.info(
+                                            f"Migration {migration_name} marked as rolled back"
+                                        )
+                                    except Exception as rollback_error:
+                                        logger.warning(
+                                            f"Failed to mark migration as rolled back: {rollback_error}"
+                                        )
+
+                                # Re-raise the error to prevent silent failures
+                                raise RuntimeError(
+                                    f"Migration failed due to permission error. Migration {migration_name} "
+                                    f"was NOT applied. Please grant necessary database permissions and retry."
+                                ) from e
+
+                            elif ProxyExtrasDBManager._is_idempotent_error(e.stderr):
+                                # Idempotent errors mean the migration has effectively been applied
                                 logger.info(
-                                    f"Resolving migration {migration_name} that failed due to existing columns"
+                                    "Migration failed due to idempotent error (e.g., column already exists), "
+                                    "resolving as applied"
                                 )
-                                ProxyExtrasDBManager._resolve_specific_migration(
-                                    migration_name
+                                # Extract the migration name from the error message
+                                migration_match = re.search(
+                                    r"Migration name: (\d+_.*)", e.stderr
                                 )
-                                logger.info("✅ Migration resolved.")
+                                if migration_match:
+                                    migration_name = migration_match.group(1)
+                                    logger.info(
+                                        f"Rolling back migration {migration_name}"
+                                    )
+                                    ProxyExtrasDBManager._roll_back_migration(
+                                        migration_name
+                                    )
+                                    logger.info(
+                                        f"Resolving migration {migration_name} that failed "
+                                        f"due to existing schema objects"
+                                    )
+                                    ProxyExtrasDBManager._resolve_specific_migration(
+                                        migration_name
+                                    )
+                                    logger.info("✅ Migration resolved.")
+                            else:
+                                # Unknown P3018 error - log and re-raise for safety
+                                logger.warning(
+                                    f"P3018 error encountered but could not classify "
+                                    f"as permission or idempotent error. "
+                                    f"Error: {e.stderr}"
+                                )
+                                raise
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(

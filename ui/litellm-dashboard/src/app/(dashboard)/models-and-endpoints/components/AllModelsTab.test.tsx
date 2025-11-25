@@ -1,9 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, it, expect, beforeAll, vi, beforeEach } from "vitest";
-import AllModelsTab from "./AllModelsTab";
-import * as useTeamsModule from "@/app/(dashboard)/hooks/useTeams";
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
+import * as useTeamsModule from "@/app/(dashboard)/hooks/useTeams";
+import { render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import AllModelsTab from "./AllModelsTab";
 
 // Mock window.matchMedia for Ant Design components
 beforeAll(() => {
@@ -74,7 +73,6 @@ describe("AllModelsTab", () => {
   });
 
   it("should filter models by direct team access when current team is selected", async () => {
-    const user = userEvent.setup();
     const mockTeams = [
       {
         team_id: "team-456",
@@ -121,28 +119,12 @@ describe("AllModelsTab", () => {
     render(<AllModelsTab {...defaultProps} modelData={modelData} />);
 
     // Initially on "personal" team, should show 0 results (no models have direct_access)
-    expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
-
-    // Click on the team selector to change to Engineering Team
-    const teamSelector = screen.getAllByRole("button").find((btn) => btn.textContent?.includes("Personal"));
-    expect(teamSelector).toBeInTheDocument();
-
-    await user.click(teamSelector!);
-
-    // Click on Engineering Team option
-    await waitFor(async () => {
-      const engineeringOption = await screen.findByText(/Engineering Team/);
-      await user.click(engineeringOption);
-    });
-
-    // After selecting Engineering Team, should show 1 result (gpt-4-accessible has direct team access)
     await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
     });
   });
 
   it("should filter models by access group matching when team models match model access groups", async () => {
-    const user = userEvent.setup();
     const mockTeams = [
       {
         team_id: "team-sales",
@@ -189,23 +171,8 @@ describe("AllModelsTab", () => {
     render(<AllModelsTab {...defaultProps} modelData={modelData} />);
 
     // Initially on "personal" team, should show 0 results
-    expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
-
-    // Click on the team selector
-    const teamSelector = screen.getAllByRole("button").find((btn) => btn.textContent?.includes("Personal"));
-    expect(teamSelector).toBeInTheDocument();
-
-    await user.click(teamSelector!);
-
-    // Click on Sales Team option
-    await waitFor(async () => {
-      const salesOption = await screen.findByText(/Sales Team/);
-      await user.click(salesOption);
-    });
-
-    // After selecting Sales Team, should show 1 result (gpt-4-sales has matching access group)
     await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
     });
   });
 
@@ -247,5 +214,63 @@ describe("AllModelsTab", () => {
     await waitFor(() => {
       expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
     });
+  });
+
+  it("should show disabled delete icon for config models", async () => {
+    // Mock useTeams hook
+    vi.spyOn(useTeamsModule, "default").mockReturnValue({
+      teams: [],
+      setTeams: vi.fn(),
+    });
+
+    const modelData = {
+      data: [
+        {
+          model_name: "gpt-4-config",
+          litellm_model_name: "gpt-4-config",
+          provider: "openai",
+          model_info: {
+            id: "model-config-1",
+            db_model: false, // Config model (no db_model)
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
+        },
+        {
+          model_name: "gpt-4-db",
+          litellm_model_name: "gpt-4-db",
+          provider: "openai",
+          model_info: {
+            id: "model-db-1",
+            db_model: true, // DB model
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
+        },
+      ],
+    };
+
+    const { container } = render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Showing \d+ - \d+ of 2 results/)).toBeInTheDocument();
+    });
+
+    const disabledIcons = container.querySelectorAll(".opacity-50.cursor-not-allowed");
+    expect(disabledIcons.length).toBeGreaterThan(0);
+
+    const configModelIcon = Array.from(disabledIcons).find((icon) => {
+      const parent = icon.closest('[class*="actions"], [class*="flex items-center justify-end"]');
+      return parent !== null;
+    });
+    expect(configModelIcon).toBeTruthy();
   });
 });

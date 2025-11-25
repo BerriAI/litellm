@@ -210,7 +210,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                 errors.push("Role is required");
               } else {
                 // Validate user role
-                const validRoles = ["proxy_admin", "proxy_admin_view_only", "internal_user", "internal_user_view_only"];
+                const validRoles = ["proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer"];
                 if (!validRoles.includes(user.user_role)) {
                   errors.push(`Invalid role "${user.user_role}". Must be one of: ${validRoles.join(", ")}`);
                 }
@@ -587,8 +587,8 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       <div>
                         <p className="font-medium">user_role</p>
                         <p className="text-sm text-gray-600">
-                          User&apos;s role (one of: &quot;proxy_admin&quot;, &quot;proxy_admin_view_only&quot;,
-                          &quot;internal_user&quot;, &quot;internal_user_view_only&quot;)
+                          User&apos;s role (one of: &quot;proxy_admin&quot;, &quot;proxy_admin_viewer&quot;,
+                          &quot;internal_user&quot;, &quot;internal_user_viewer&quot;)
                         </p>
                       </div>
                     </div>
