@@ -201,6 +201,89 @@ Without `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX`:
 With `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true`:
 - Base URL `https://my-proxy.com/custom/path` → `https://my-proxy.com/custom/path` (unchanged)
 
+### Azure AI Foundry (Microsoft Foundry)
+
+Claude models are available on [Azure AI Foundry](https://azure.microsoft.com/en-us/blog/introducing-anthropics-claude-models-in-microsoft-foundry-bringing-frontier-intelligence-to-azure/). Azure exposes Claude using Anthropic's native API, so you can use the `anthropic/` provider with your Azure endpoint.
+
+**Available Models:**
+- Claude Sonnet 4.5
+- Claude Haiku 4.5
+- Claude Opus 4.1
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-5",
+    api_base="https://<your-resource>.services.ai.azure.com/anthropic",
+    api_key="<your-azure-api-key>",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="env" label="Environment Variables">
+
+```python
+import os
+from litellm import completion
+
+os.environ["ANTHROPIC_API_KEY"] = "<your-azure-api-key>"
+os.environ["ANTHROPIC_API_BASE"] = "https://<your-resource>.services.ai.azure.com/anthropic"
+
+response = completion(
+    model="anthropic/claude-sonnet-4-5",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: azure-claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/AZURE_ANTHROPIC_API_KEY
+      api_base: https://<your-resource>.services.ai.azure.com/anthropic
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "azure-claude-sonnet",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+**Finding your Azure endpoint:**
+- Go to Azure AI Foundry → Your deployment → Overview
+- Your base URL will be: `https://<resource-name>.services.ai.azure.com/anthropic`
+- Use your Azure API key (not an Anthropic API key)
+:::
+
 ## Usage
 
 ```python
