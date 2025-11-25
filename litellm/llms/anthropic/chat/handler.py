@@ -36,7 +36,6 @@ from litellm.types.llms.anthropic import (
     ContentBlockStop,
     MessageBlockDelta,
     MessageStartBlock,
-    ToolCaller,
     UsageDelta,
 )
 from litellm.types.llms.openai import (
