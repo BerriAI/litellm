@@ -187,10 +187,10 @@ async def common_checks(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
     
-    # 6.1 [OPTIONAL] If 'reject_metadata_tags' enabled - reject request if it has 'metadata.tags'
+    # 6.1 [OPTIONAL] If 'reject_clientside_metadata_tags' enabled - reject request if it has client-side 'metadata.tags'
     if (
-        general_settings.get("reject_metadata_tags", None) is not None
-        and general_settings["reject_metadata_tags"] is True
+        general_settings.get("reject_clientside_metadata_tags", None) is not None
+        and general_settings["reject_clientside_metadata_tags"] is True
     ):
         if (
             RouteChecks.is_llm_api_route(route=route)
@@ -199,7 +199,7 @@ async def common_checks(
             and "tags" in request_body["metadata"]
         ):
             raise ProxyException(
-                message=f"'metadata.tags' not allowed in request. 'reject_metadata_tags'={general_settings['reject_metadata_tags']}. Tags can only be set via API key metadata.",
+                message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via API key metadata.",
                 type=ProxyErrorTypes.bad_request_error,
                 param="metadata.tags",
                 code=status.HTTP_400_BAD_REQUEST,

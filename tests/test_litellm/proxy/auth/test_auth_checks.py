@@ -734,12 +734,12 @@ async def test_get_team_object_raises_404_when_not_found():
     assert "Team doesn't exist in db" in str(exc_info.value.detail)
 
 
-# Reject Metadata Tags Tests
+# Reject Client-Side Metadata Tags Tests
 
 
 @pytest.mark.asyncio
-async def test_reject_metadata_tags_enabled_with_tags():
-    """Test that common_checks rejects request when reject_metadata_tags is True and metadata.tags is present"""
+async def test_reject_clientside_metadata_tags_enabled_with_tags():
+    """Test that common_checks rejects request when reject_clientside_metadata_tags is True and metadata.tags is present"""
     from litellm.proxy.auth.auth_checks import common_checks
     from fastapi import Request
 
@@ -749,7 +749,7 @@ async def test_reject_metadata_tags_enabled_with_tags():
         "metadata": {"tags": ["custom-tag"]},
     }
 
-    general_settings = {"reject_metadata_tags": True}
+    general_settings = {"reject_clientside_metadata_tags": True}
 
     # Create a mock request object
     mock_request = MagicMock(spec=Request)
@@ -776,8 +776,8 @@ async def test_reject_metadata_tags_enabled_with_tags():
 
 
 @pytest.mark.asyncio
-async def test_reject_metadata_tags_enabled_without_tags():
-    """Test that common_checks allows request when reject_metadata_tags is True but no metadata.tags is present"""
+async def test_reject_clientside_metadata_tags_enabled_without_tags():
+    """Test that common_checks allows request when reject_clientside_metadata_tags is True but no metadata.tags is present"""
     from litellm.proxy.auth.auth_checks import common_checks
     from fastapi import Request
 
@@ -787,7 +787,7 @@ async def test_reject_metadata_tags_enabled_without_tags():
         "metadata": {"custom_field": "value"},  # No tags field
     }
 
-    general_settings = {"reject_metadata_tags": True}
+    general_settings = {"reject_clientside_metadata_tags": True}
 
     # Create a mock request object
     mock_request = MagicMock(spec=Request)
@@ -811,8 +811,8 @@ async def test_reject_metadata_tags_enabled_without_tags():
 
 
 @pytest.mark.asyncio
-async def test_reject_metadata_tags_disabled_with_tags():
-    """Test that common_checks allows request with metadata.tags when reject_metadata_tags is False"""
+async def test_reject_clientside_metadata_tags_disabled_with_tags():
+    """Test that common_checks allows request with metadata.tags when reject_clientside_metadata_tags is False"""
     from litellm.proxy.auth.auth_checks import common_checks
     from fastapi import Request
 
@@ -822,7 +822,7 @@ async def test_reject_metadata_tags_disabled_with_tags():
         "metadata": {"tags": ["custom-tag"]},
     }
 
-    general_settings = {"reject_metadata_tags": False}
+    general_settings = {"reject_clientside_metadata_tags": False}
 
     # Create a mock request object
     mock_request = MagicMock(spec=Request)
@@ -846,8 +846,8 @@ async def test_reject_metadata_tags_disabled_with_tags():
 
 
 @pytest.mark.asyncio
-async def test_reject_metadata_tags_not_set_with_tags():
-    """Test that common_checks allows request with metadata.tags when reject_metadata_tags is not set"""
+async def test_reject_clientside_metadata_tags_not_set_with_tags():
+    """Test that common_checks allows request with metadata.tags when reject_clientside_metadata_tags is not set"""
     from litellm.proxy.auth.auth_checks import common_checks
     from fastapi import Request
 
@@ -857,7 +857,7 @@ async def test_reject_metadata_tags_not_set_with_tags():
         "metadata": {"tags": ["custom-tag"]},
     }
 
-    general_settings = {}  # No reject_metadata_tags setting
+    general_settings = {}  # No reject_clientside_metadata_tags setting
 
     # Create a mock request object
     mock_request = MagicMock(spec=Request)
@@ -881,8 +881,8 @@ async def test_reject_metadata_tags_not_set_with_tags():
 
 
 @pytest.mark.asyncio
-async def test_reject_metadata_tags_non_llm_route():
-    """Test that reject_metadata_tags check only applies to LLM API routes"""
+async def test_reject_clientside_metadata_tags_non_llm_route():
+    """Test that reject_clientside_metadata_tags check only applies to LLM API routes"""
     from litellm.proxy.auth.auth_checks import common_checks
     from fastapi import Request
 
@@ -890,7 +890,7 @@ async def test_reject_metadata_tags_non_llm_route():
         "metadata": {"tags": ["custom-tag"]},
     }
 
-    general_settings = {"reject_metadata_tags": True}
+    general_settings = {"reject_clientside_metadata_tags": True}
 
     # Create a mock request object
     mock_request = MagicMock(spec=Request)
