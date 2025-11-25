@@ -369,16 +369,20 @@ model_list:
 </Tabs>
 
 
-## GPT-5 Models
+## GPT-5 Reasoning Models
 
 | Property | Details |
 |-------|-------|
-| Description | Azure OpenAI GPT-5 models |
+| Description | Azure OpenAI GPT-5 reasoning models |
 | Provider Route on LiteLLM | `azure/gpt5_series/<custom-name>` or `azure/gpt-5-deployment-name` |
 
-LiteLLM supports using Azure GPT-5 models in one of the two ways:
+LiteLLM supports using Azure GPT-5 reasoning models in one of the two ways:
 1. Explicit Routing: `model = azure/gpt5_series/<deployment-name>`. In this scenario the model onboarded to litellm follows the format `model=azure/gpt5_series/<deployment-name>`.
-2. Inferred Routing (If the azure deployment name contains `gpt-5` in the name): `model = azure/gpt-5-mini`. In this scenario the model onboarded to litellm follows the format `model=azure/gpt-5-mini`.
+2. Inferred Routing (If the azure deployment name contains `gpt-5` but not `gpt-5-chat`): `model = azure/gpt-5-mini`. In this scenario the model onboarded to litellm follows the format `model=azure/gpt-5-mini`.
+
+:::note
+For GPT-5 chat models (e.g., `gpt-5-chat`), do not use the `gpt5_series/` prefix, as these are not reasoning models.
+:::
 
 #### Explicit Routing
 Use `azure/gpt5_series/<deployment-name>` for explicit GPT-5 model routing. 
