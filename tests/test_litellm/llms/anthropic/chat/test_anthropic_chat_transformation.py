@@ -1144,3 +1144,156 @@ def test_input_examples_empty_list_not_added():
     assert transformed_tool is not None
     # Empty list should not be added
     assert "input_examples" not in transformed_tool or len(transformed_tool.get("input_examples", [])) == 0
+
+
+# ============ Effort Parameter Tests ============
+
+
+def test_effort_output_config_preservation():
+    """Test that output_config with effort is preserved in transformation."""
+    config = AnthropicConfig()
+    
+    messages = [{"role": "user", "content": "Analyze this code"}]
+    optional_params = {
+        "output_config": {
+            "effort": "medium"
+        }
+    }
+    
+    result = config.transform_request(
+        model="claude-opus-4-5-20251101",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    assert "output_config" in result
+    assert result["output_config"]["effort"] == "medium"
+
+
+def test_effort_beta_header_injection():
+    """Test that effort beta header is automatically added when output_config is detected."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    
+    model_info = AnthropicModelInfo()
+    
+    # Test with effort parameter
+    optional_params = {
+        "output_config": {
+            "effort": "low"
+        }
+    }
+    
+    effort_used = model_info.is_effort_used(optional_params=optional_params)
+    assert effort_used is True
+    
+    headers = model_info.get_anthropic_headers(
+        api_key="test-key",
+        effort_used=effort_used
+    )
+    
+    assert "anthropic-beta" in headers
+    assert "effort-2025-11-24" in headers["anthropic-beta"]
+
+
+def test_effort_validation():
+    """Test that only valid effort values are accepted."""
+    config = AnthropicConfig()
+    
+    messages = [{"role": "user", "content": "Test"}]
+    
+    # Valid values should work
+    for effort in ["high", "medium", "low"]:
+        optional_params = {"output_config": {"effort": effort}}
+        result = config.transform_request(
+            model="claude-opus-4-5-20251101",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+        assert result["output_config"]["effort"] == effort
+    
+    # Invalid value should raise error
+    with pytest.raises(ValueError, match="Invalid effort value"):
+        optional_params = {"output_config": {"effort": "invalid"}}
+        config.transform_request(
+            model="claude-opus-4-5-20251101",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+
+
+def test_effort_with_claude_opus_45():
+    """Test effort parameter works with Claude Opus 4.5 model."""
+    config = AnthropicConfig()
+    
+    messages = [{"role": "user", "content": "Complex analysis task"}]
+    optional_params = {
+        "output_config": {
+            "effort": "high"
+        }
+    }
+    
+    result = config.transform_request(
+        model="claude-opus-4-5-20251101",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    assert "output_config" in result
+    assert result["output_config"]["effort"] == "high"
+    assert result["model"] == "claude-opus-4-5-20251101"
+
+
+def test_effort_with_other_features():
+    """Test effort works alongside other features (thinking, tools)."""
+    config = AnthropicConfig()
+    
+    messages = [{"role": "user", "content": "Use tools efficiently"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_data",
+                "description": "Get data",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        }
+    ]
+    optional_params = {
+        "output_config": {
+            "effort": "low"
+        },
+        "tools": tools,
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 1000
+        }
+    }
+    
+    result = config.transform_request(
+        model="claude-opus-4-5-20251101",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # Verify all features are present
+    assert "output_config" in result
+    assert result["output_config"]["effort"] == "low"
+    assert "tools" in result
+    assert len(result["tools"]) > 0
+    assert "thinking" in result

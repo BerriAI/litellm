@@ -36,6 +36,11 @@ class AnthropicOutputSchema(TypedDict, total=False):
     schema: Required[dict]
 
 
+class AnthropicOutputConfig(TypedDict, total=False):
+    """Configuration for controlling Claude's output behavior."""
+    effort: Literal["high", "medium", "low"]
+
+
 class AnthropicMessagesTool(TypedDict, total=False):
     name: Required[str]
     description: str
@@ -614,3 +619,6 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
 
 # Tool search beta header constant
 ANTHROPIC_TOOL_SEARCH_BETA_HEADER = "advanced-tool-use-2025-11-20"
+
+# Effort beta header constant
+ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"

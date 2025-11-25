@@ -150,6 +150,23 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                     return True
         
         return False
+    
+    def is_effort_used(self, optional_params: Optional[dict]) -> bool:
+        """
+        Check if effort parameter is being used via output_config.
+        
+        Returns True if output_config with effort field is present.
+        """
+        if not optional_params:
+            return False
+        
+        output_config = optional_params.get("output_config")
+        if output_config and isinstance(output_config, dict):
+            effort = output_config.get("effort")
+            if effort and isinstance(effort, str):
+                return True
+        
+        return False
 
     def _get_user_anthropic_beta_headers(
         self, anthropic_beta_header: Optional[str]
@@ -188,6 +205,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         tool_search_used: bool = False,
         programmatic_tool_calling_used: bool = False,
         input_examples_used: bool = False,
+        effort_used: bool = False,
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
@@ -208,6 +226,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if tool_search_used or programmatic_tool_calling_used or input_examples_used:
             from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
             betas.add(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
+        
+        # Effort parameter uses a separate beta header
+        if effort_used:
+            from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
+            betas.add(ANTHROPIC_EFFORT_BETA_HEADER)
 
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
@@ -255,6 +278,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         tool_search_used = self.is_tool_search_used(tools=tools)
         programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
         input_examples_used = self.is_input_examples_used(tools=tools)
+        effort_used = self.is_effort_used(optional_params=optional_params)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
@@ -270,6 +294,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             tool_search_used=tool_search_used,
             programmatic_tool_calling_used=programmatic_tool_calling_used,
             input_examples_used=input_examples_used,
+            effort_used=effort_used,
         )
 
         headers = {**headers, **anthropic_headers}
