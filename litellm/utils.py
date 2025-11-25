@@ -171,20 +171,15 @@ _tiktoken_encoding_type = None
 # from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 # BaseSearchConfig is imported lazily when needed to avoid loading at import time
 # from litellm.llms.base_llm.search.transformation import BaseSearchConfig
-from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
-from litellm.llms.cohere.common_utils import CohereModelInfo
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
-from litellm.router_utils.get_retry_from_policy import (
-    get_num_retries_from_retry_policy,
-    reset_retry_policy,
-)
-from litellm.secret_managers.main import get_secret
-from litellm.types.llms.anthropic import (
-    ANTHROPIC_API_ONLY_HEADERS,
-    AnthropicThinkingParam,
-)
+# BaseTextToSpeechConfig is lazy-loaded to reduce import-time memory cost
+# BedrockModelInfo is lazy-loaded to reduce import-time memory cost
+# CohereModelInfo is lazy-loaded to reduce import-time memory cost
+# AsyncHTTPHandler and HTTPHandler are lazy-loaded to reduce import-time memory cost
+# MistralOCRConfig is lazy-loaded to reduce import-time memory cost
+# get_num_retries_from_retry_policy and reset_retry_policy are lazy-loaded to reduce import-time memory cost
+# get_secret is lazy-loaded to reduce import-time memory cost
+# ANTHROPIC_API_ONLY_HEADERS is lazy-loaded to reduce import-time memory cost
+# AnthropicThinkingParam is lazy-loaded to reduce import-time memory cost
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -298,52 +293,54 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-from litellm.llms.base_llm.anthropic_messages.transformation import (
-    BaseAnthropicMessagesConfig,
-)
-from litellm.llms.base_llm.audio_transcription.transformation import (
-    BaseAudioTranscriptionConfig,
-)
-from litellm.llms.base_llm.base_utils import (
-    BaseLLMModelInfo,
-    type_to_response_format_param,
-)
-from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
-from litellm.llms.base_llm.chat.transformation import BaseConfig
-from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
-from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
-from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-# BaseFilesConfig is lazy-loaded to reduce import-time memory cost
-# It's only needed when get_provider_files_config is called
-# LiteLLMLoggingObject is lazy-loaded to reduce import-time memory cost
+# Base*Config classes are lazy-loaded to reduce import-time memory cost
+# Most are only used in type hints and moved to TYPE_CHECKING
+# Runtime-used ones have lazy loaders
 if TYPE_CHECKING:
+    from litellm.llms.base_llm.anthropic_messages.transformation import (
+        BaseAnthropicMessagesConfig,
+    )
+    from litellm.llms.base_llm.audio_transcription.transformation import (
+        BaseAudioTranscriptionConfig,
+    )
+    from litellm.llms.base_llm.base_utils import (
+        BaseLLMModelInfo,
+        type_to_response_format_param,
+    )
+    from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
+    from litellm.llms.base_llm.chat.transformation import BaseConfig
+    from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+    from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
+    from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
     from litellm.llms.base_llm.google_genai.transformation import (
         BaseGoogleGenAIGenerateContentConfig,
     )
+    from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+    from litellm.llms.base_llm.image_generation.transformation import (
+        BaseImageGenerationConfig,
+    )
+    from litellm.llms.base_llm.image_variations.transformation import (
+        BaseImageVariationConfig,
+    )
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+    from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
     from litellm.llms.base_llm.search.transformation import BaseSearchConfig
+    from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
+    from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+    from litellm.llms.base_llm.vector_store_files.transformation import (
+        BaseVectorStoreFilesConfig,
+    )
+    from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
     from litellm.litellm_core_utils.redact_messages import (
         LiteLLMLoggingObject
     )
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
 else:
     LiteLLMLoggingObject = None  # Will be lazy-loaded when needed
-from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
-from litellm.llms.base_llm.image_generation.transformation import (
-    BaseImageGenerationConfig,
-)
-from litellm.llms.base_llm.image_variations.transformation import (
-    BaseImageVariationConfig,
-)
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
-from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
-from litellm.llms.base_llm.vector_store_files.transformation import (
-    BaseVectorStoreFilesConfig,
-)
-from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -966,11 +963,11 @@ def _get_wrapper_num_retries(
     if num_retries is None:
         num_retries = litellm.num_retries
     if kwargs.get("retry_policy", None):
-        retry_policy_num_retries = get_num_retries_from_retry_policy(
+        retry_policy_num_retries = _get_num_retries_from_retry_policy_func()(
             exception=exception,
             retry_policy=kwargs.get("retry_policy"),
         )
-        kwargs["retry_policy"] = reset_retry_policy()
+        kwargs["retry_policy"] = _get_reset_retry_policy_func()()
         if retry_policy_num_retries is not None:
             num_retries = retry_policy_num_retries
 
@@ -1099,7 +1096,7 @@ def post_call_processing(
                                             optional_params["response_format"]  # type: ignore
                                         ):
                                             json_response_format = (
-                                                type_to_response_format_param(
+                                                _get_type_to_response_format_param()(
                                                     response_format=optional_params[
                                                         "response_format"
                                                     ]
@@ -1429,6 +1426,138 @@ def _get_custom_stream_wrapper():
             globals()["CustomStreamWrapper"] = _custom_stream_wrapper_class
     return _custom_stream_wrapper_class
 
+# Lazy loaders for Base*Config classes used at runtime
+_base_config_cache = None
+_base_embedding_config_cache = None
+_base_audio_transcription_config_cache = None
+_base_image_generation_config_cache = None
+_base_llm_model_info_cache = None
+_type_to_response_format_param_cache = None
+_base_text_to_speech_config_cache = None
+
+def _get_base_config():
+    """Lazy import helper for BaseConfig to avoid loading at import time."""
+    global _base_config_cache
+    if _base_config_cache is None:
+        from litellm.llms.base_llm.chat.transformation import BaseConfig as _base_config_cache
+    return _base_config_cache
+
+def _get_base_embedding_config():
+    """Lazy import helper for BaseEmbeddingConfig to avoid loading at import time."""
+    global _base_embedding_config_cache
+    if _base_embedding_config_cache is None:
+        from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig as _base_embedding_config_cache
+    return _base_embedding_config_cache
+
+def _get_base_audio_transcription_config():
+    """Lazy import helper for BaseAudioTranscriptionConfig to avoid loading at import time."""
+    global _base_audio_transcription_config_cache
+    if _base_audio_transcription_config_cache is None:
+        from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig as _base_audio_transcription_config_cache
+    return _base_audio_transcription_config_cache
+
+def _get_base_image_generation_config():
+    """Lazy import helper for BaseImageGenerationConfig to avoid loading at import time."""
+    global _base_image_generation_config_cache
+    if _base_image_generation_config_cache is None:
+        from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig as _base_image_generation_config_cache
+    return _base_image_generation_config_cache
+
+def _get_base_llm_model_info():
+    """Lazy import helper for BaseLLMModelInfo to avoid loading at import time."""
+    global _base_llm_model_info_cache
+    if _base_llm_model_info_cache is None:
+        from litellm.llms.base_llm.base_utils import BaseLLMModelInfo as _base_llm_model_info_cache
+    return _base_llm_model_info_cache
+
+def _get_type_to_response_format_param():
+    """Lazy import helper for type_to_response_format_param to avoid loading at import time."""
+    global _type_to_response_format_param_cache
+    if _type_to_response_format_param_cache is None:
+        from litellm.llms.base_llm.base_utils import type_to_response_format_param as _type_to_response_format_param_cache
+    return _type_to_response_format_param_cache
+
+def _get_base_text_to_speech_config():
+    """Lazy import helper for BaseTextToSpeechConfig to avoid loading at import time."""
+    global _base_text_to_speech_config_cache
+    if _base_text_to_speech_config_cache is None:
+        from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig as _base_text_to_speech_config_cache
+    return _base_text_to_speech_config_cache
+
+# Lazy loaders for other runtime imports
+_bedrock_model_info_cache = None
+_cohere_model_info_cache = None
+_async_http_handler_cache = None
+_http_handler_cache = None
+_mistral_ocr_config_cache = None
+_get_num_retries_from_retry_policy_cache = None
+_reset_retry_policy_cache = None
+_get_secret_cache = None
+_anthropic_api_only_headers_cache = None
+
+def _get_bedrock_model_info():
+    """Lazy import helper for BedrockModelInfo to avoid loading at import time."""
+    global _bedrock_model_info_cache
+    if _bedrock_model_info_cache is None:
+        from litellm.llms.bedrock.common_utils import BedrockModelInfo as _bedrock_model_info_cache
+    return _bedrock_model_info_cache
+
+def _get_cohere_model_info():
+    """Lazy import helper for CohereModelInfo to avoid loading at import time."""
+    global _cohere_model_info_cache
+    if _cohere_model_info_cache is None:
+        from litellm.llms.cohere.common_utils import CohereModelInfo as _cohere_model_info_cache
+    return _cohere_model_info_cache
+
+def _get_async_http_handler():
+    """Lazy import helper for AsyncHTTPHandler to avoid loading at import time."""
+    global _async_http_handler_cache
+    if _async_http_handler_cache is None:
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as _async_http_handler_cache
+    return _async_http_handler_cache
+
+def _get_http_handler():
+    """Lazy import helper for HTTPHandler to avoid loading at import time."""
+    global _http_handler_cache
+    if _http_handler_cache is None:
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler as _http_handler_cache
+    return _http_handler_cache
+
+def _get_mistral_ocr_config():
+    """Lazy import helper for MistralOCRConfig to avoid loading at import time."""
+    global _mistral_ocr_config_cache
+    if _mistral_ocr_config_cache is None:
+        from litellm.llms.mistral.ocr.transformation import MistralOCRConfig as _mistral_ocr_config_cache
+    return _mistral_ocr_config_cache
+
+def _get_num_retries_from_retry_policy_func():
+    """Lazy import helper for get_num_retries_from_retry_policy to avoid loading at import time."""
+    global _get_num_retries_from_retry_policy_cache
+    if _get_num_retries_from_retry_policy_cache is None:
+        from litellm.router_utils.get_retry_from_policy import get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy_cache
+    return _get_num_retries_from_retry_policy_cache
+
+def _get_reset_retry_policy_func():
+    """Lazy import helper for reset_retry_policy to avoid loading at import time."""
+    global _reset_retry_policy_cache
+    if _reset_retry_policy_cache is None:
+        from litellm.router_utils.get_retry_from_policy import reset_retry_policy as _reset_retry_policy_cache
+    return _reset_retry_policy_cache
+
+def _get_secret_func():
+    """Lazy import helper for get_secret to avoid loading at import time."""
+    global _get_secret_cache
+    if _get_secret_cache is None:
+        from litellm.secret_managers.main import get_secret as _get_secret_cache
+    return _get_secret_cache
+
+def _get_anthropic_api_only_headers():
+    """Lazy import helper for ANTHROPIC_API_ONLY_HEADERS to avoid loading at import time."""
+    global _anthropic_api_only_headers_cache
+    if _anthropic_api_only_headers_cache is None:
+        from litellm.types.llms.anthropic import ANTHROPIC_API_ONLY_HEADERS as _anthropic_api_only_headers_cache
+    return _anthropic_api_only_headers_cache
+
 
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
@@ -1688,12 +1817,12 @@ def client(original_function):  # noqa: PLR0915
                     kwargs.get("num_retries", None) or litellm.num_retries or None
                 )
                 if kwargs.get("retry_policy", None):
-                    num_retries = get_num_retries_from_retry_policy(
+                    num_retries = _get_num_retries_from_retry_policy_func()(
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
                     kwargs["retry_policy"] = (
-                        reset_retry_policy()
+                        _get_reset_retry_policy_func()()
                     )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
@@ -2859,7 +2988,7 @@ def get_optional_params_transcription(
                     )
             return non_default_params
 
-    provider_config: Optional[BaseAudioTranscriptionConfig] = None
+    provider_config: Optional["BaseAudioTranscriptionConfig"] = None
     if custom_llm_provider is not None:
         provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
             model=model,
@@ -2927,7 +3056,7 @@ def get_optional_params_image_gen(
     user: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[list] = None,
-    provider_config: Optional[BaseImageGenerationConfig] = None,
+    provider_config: Optional["BaseImageGenerationConfig"] = None,
     drop_params: Optional[bool] = None,
     **kwargs,
 ):
@@ -3104,7 +3233,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
     )
 
-    provider_config: Optional[BaseEmbeddingConfig] = None
+    provider_config: Optional["BaseEmbeddingConfig"] = None
 
     optional_params = {}
     if (
@@ -3551,7 +3680,7 @@ def pre_process_non_default_params(
     model: str,
     remove_sensitive_keys: bool = False,
     add_provider_specific_params: bool = False,
-    provider_config: Optional[BaseConfig] = None,
+    provider_config: Optional["BaseConfig"] = None,
 ) -> dict:
     """
     Pre-process non-default params to a standardized format
@@ -3575,7 +3704,7 @@ def pre_process_non_default_params(
                 )
             )
         else:
-            non_default_params["response_format"] = type_to_response_format_param(
+            non_default_params["response_format"] = _get_type_to_response_format_param()(
                 response_format=non_default_params["response_format"]
             )
 
@@ -3764,7 +3893,7 @@ def get_optional_params(  # noqa: PLR0915
     verbosity=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
-    thinking: Optional[AnthropicThinkingParam] = None,
+    thinking: Optional["AnthropicThinkingParam"] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     safety_identifier: Optional[str] = None,
     **kwargs,
@@ -3783,7 +3912,7 @@ def get_optional_params(  # noqa: PLR0915
         non_default_params=non_default_params,
         custom_llm_provider=custom_llm_provider,
     )
-    provider_config: Optional[BaseConfig] = None
+    provider_config: Optional["BaseConfig"] = None
     if custom_llm_provider is not None and custom_llm_provider in [
         provider.value for provider in LlmProviders
     ]:
@@ -4088,8 +4217,8 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "bedrock":
-        bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-        bedrock_base_model = BedrockModelInfo.get_base_model(model)
+        bedrock_route = _get_bedrock_model_info().get_bedrock_route(model)
+        bedrock_base_model = _get_bedrock_model_info().get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
@@ -4443,13 +4572,13 @@ def get_optional_params(  # noqa: PLR0915
         else:
             verbose_logger.debug(
                 "Azure optional params - api_version: api_version={}, litellm.api_version={}, os.environ['AZURE_API_VERSION']={}".format(
-                    api_version, litellm.api_version, get_secret("AZURE_API_VERSION")
+                    api_version, litellm.api_version, _get_secret_func()("AZURE_API_VERSION")
                 )
             )
             api_version = (
                 api_version
                 or litellm.api_version
-                or get_secret("AZURE_API_VERSION")
+                or _get_secret_func()("AZURE_API_VERSION")
                 or litellm.AZURE_DEFAULT_API_VERSION
             )
             optional_params = litellm.AzureOpenAIConfig().map_openai_params(
@@ -4660,8 +4789,8 @@ def _get_model_region(
         vertex_ai_location = (
             litellm_params.vertex_location
             or litellm.vertex_location
-            or get_secret("VERTEXAI_LOCATION")
-            or get_secret("VERTEX_LOCATION")
+            or _get_secret_func()("VERTEXAI_LOCATION")
+            or _get_secret_func()("VERTEX_LOCATION")
         )
         if vertex_ai_location is not None and isinstance(vertex_ai_location, str):
             return vertex_ai_location
@@ -4851,49 +4980,49 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     api_key = dynamic_api_key or litellm.api_key
     # openai
     if llm_provider == "openai" or llm_provider == "text-completion-openai":
-        api_key = api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+        api_key = api_key or litellm.openai_key or _get_secret_func()("OPENAI_API_KEY")
     # anthropic
     elif llm_provider == "anthropic" or llm_provider == "anthropic_text":
-        api_key = api_key or litellm.anthropic_key or get_secret("ANTHROPIC_API_KEY")
+        api_key = api_key or litellm.anthropic_key or _get_secret_func()("ANTHROPIC_API_KEY")
     # ai21
     elif llm_provider == "ai21":
-        api_key = api_key or litellm.ai21_key or get_secret("AI211_API_KEY")
+        api_key = api_key or litellm.ai21_key or _get_secret_func()("AI211_API_KEY")
     # aleph_alpha
     elif llm_provider == "aleph_alpha":
         api_key = (
-            api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY")
+            api_key or litellm.aleph_alpha_key or _get_secret_func()("ALEPH_ALPHA_API_KEY")
         )
     # baseten
     elif llm_provider == "baseten":
-        api_key = api_key or litellm.baseten_key or get_secret("BASETEN_API_KEY")
+        api_key = api_key or litellm.baseten_key or _get_secret_func()("BASETEN_API_KEY")
     # cohere
     elif llm_provider == "cohere" or llm_provider == "cohere_chat":
-        api_key = api_key or litellm.cohere_key or get_secret("COHERE_API_KEY")
+        api_key = api_key or litellm.cohere_key or _get_secret_func()("COHERE_API_KEY")
     # huggingface
     elif llm_provider == "huggingface":
         api_key = (
-            api_key or litellm.huggingface_key or get_secret("HUGGINGFACE_API_KEY")
+            api_key or litellm.huggingface_key or _get_secret_func()("HUGGINGFACE_API_KEY")
         )
     # nlp_cloud
     elif llm_provider == "nlp_cloud":
-        api_key = api_key or litellm.nlp_cloud_key or get_secret("NLP_CLOUD_API_KEY")
+        api_key = api_key or litellm.nlp_cloud_key or _get_secret_func()("NLP_CLOUD_API_KEY")
     # replicate
     elif llm_provider == "replicate":
-        api_key = api_key or litellm.replicate_key or get_secret("REPLICATE_API_KEY")
+        api_key = api_key or litellm.replicate_key or _get_secret_func()("REPLICATE_API_KEY")
     # together_ai
     elif llm_provider == "together_ai":
         api_key = (
             api_key
             or litellm.togetherai_api_key
-            or get_secret("TOGETHERAI_API_KEY")
-            or get_secret("TOGETHER_AI_TOKEN")
+            or _get_secret_func()("TOGETHERAI_API_KEY")
+            or _get_secret_func()("TOGETHER_AI_TOKEN")
         )
     # nebius
     elif llm_provider == "nebius":
-        api_key = api_key or litellm.nebius_key or get_secret("NEBIUS_API_KEY")
+        api_key = api_key or litellm.nebius_key or _get_secret_func()("NEBIUS_API_KEY")
     # wandb
     elif llm_provider == "wandb":
-        api_key = api_key or litellm.wandb_key or get_secret("WANDB_API_KEY")
+        api_key = api_key or litellm.wandb_key or _get_secret_func()("WANDB_API_KEY")
     return api_key
 
 
@@ -4981,7 +5110,7 @@ def _get_base_bedrock_model(model_name) -> str:
     """
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
-    return BedrockModelInfo.get_base_model(model_name)
+    return _get_bedrock_model_info().get_base_model(model_name)
 
 
 def _strip_openai_finetune_model_name(model_name: str) -> str:
@@ -5149,7 +5278,7 @@ def get_provider_info(
     ## PROVIDER-SPECIFIC INFORMATION
     # if custom_llm_provider == "predibase":
     #     _model_info["supports_response_schema"] = True
-    provider_config: Optional[BaseLLMModelInfo] = None
+    provider_config: Optional["BaseLLMModelInfo"] = None
     if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
         # Check if the provider string exists in LlmProviders enum
         provider_config = ProviderConfigManager.get_provider_model_info(
@@ -6886,7 +7015,7 @@ def _infer_valid_provider_from_env_vars(
 
 
 def _get_valid_models_from_provider_api(
-    provider_config: BaseLLMModelInfo,
+    provider_config: "BaseLLMModelInfo",
     custom_llm_provider: str,
     litellm_params: Optional[LiteLLM_Params] = None,
 ) -> List[str]:
@@ -7389,7 +7518,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
         model: str, provider: LlmProviders
-    ) -> Optional[BaseConfig]:
+    ) -> Optional["BaseConfig"]:
         """
         Returns the provider config for a given provider.
         """
@@ -7424,7 +7553,7 @@ class ProviderConfigManager:
             litellm.LlmProviders.COHERE_CHAT == provider
             or litellm.LlmProviders.COHERE == provider
         ):
-            route = CohereModelInfo.get_cohere_route(model)
+            route = _get_cohere_model_info().get_cohere_route(model)
             if route == "v2":
                 return litellm.CohereV2ChatConfig()
             else:
@@ -7618,7 +7747,7 @@ class ProviderConfigManager:
     def get_provider_embedding_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseEmbeddingConfig]:
+    ) -> Optional["BaseEmbeddingConfig"]:
         if (
             litellm.LlmProviders.VOYAGE == provider
             and litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(
@@ -7675,7 +7804,7 @@ class ProviderConfigManager:
         provider: LlmProviders,
         api_base: Optional[str],
         present_version_params: List[str],
-    ) -> BaseRerankConfig:
+    ) -> "BaseRerankConfig":
         if (
             litellm.LlmProviders.COHERE == provider
             or litellm.LlmProviders.COHERE_CHAT == provider
@@ -7706,7 +7835,7 @@ class ProviderConfigManager:
     def get_provider_anthropic_messages_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseAnthropicMessagesConfig]:
+    ) -> Optional["BaseAnthropicMessagesConfig"]:
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicMessagesConfig()
         # The 'BEDROCK' provider corresponds to Amazon's implementation of Anthropic Claude v3.
@@ -7714,7 +7843,7 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
-            return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
+            return _get_bedrock_model_info().get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model:
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
@@ -7728,7 +7857,7 @@ class ProviderConfigManager:
     def get_provider_audio_transcription_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseAudioTranscriptionConfig]:
+    ) -> Optional["BaseAudioTranscriptionConfig"]:
         if litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
@@ -7756,7 +7885,7 @@ class ProviderConfigManager:
     def get_provider_responses_api_config(
         provider: LlmProviders,
         model: Optional[str] = None,
-    ) -> Optional[BaseResponsesAPIConfig]:
+    ) -> Optional["BaseResponsesAPIConfig"]:
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
@@ -7782,7 +7911,7 @@ class ProviderConfigManager:
     def get_provider_text_completion_config(
         model: str,
         provider: LlmProviders,
-    ) -> BaseTextCompletionConfig:
+    ) -> "BaseTextCompletionConfig":
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAITextCompletionConfig()
         elif LlmProviders.TOGETHER_AI == provider:
@@ -7793,7 +7922,7 @@ class ProviderConfigManager:
     def get_provider_model_info(
         model: Optional[str],
         provider: LlmProviders,
-    ) -> Optional[BaseLLMModelInfo]:
+    ) -> Optional["BaseLLMModelInfo"]:
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
         elif LlmProviders.OPENAI == provider:
@@ -7833,7 +7962,7 @@ class ProviderConfigManager:
     def get_provider_passthrough_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BasePassthroughConfig]:
+    ) -> Optional["BasePassthroughConfig"]:
         if LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.passthrough.transformation import (
                 BedrockPassthroughConfig,
@@ -7858,7 +7987,7 @@ class ProviderConfigManager:
     def get_provider_image_variation_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseImageVariationConfig]:
+    ) -> Optional["BaseImageVariationConfig"]:
         if LlmProviders.OPENAI == provider:
             return litellm.OpenAIImageVariationConfig()
         elif LlmProviders.TOPAZ == provider:
@@ -7890,7 +8019,7 @@ class ProviderConfigManager:
     def get_provider_batches_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseBatchesConfig]:
+    ) -> Optional["BaseBatchesConfig"]:
         if LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
@@ -7913,7 +8042,7 @@ class ProviderConfigManager:
     def get_provider_vector_stores_config(
         provider: LlmProviders,
         api_type: Optional[str] = None,
-    ) -> Optional[BaseVectorStoreConfig]:
+    ) -> Optional["BaseVectorStoreConfig"]:
         """
         v2 vector store config, use this for new vector store integrations
         """
@@ -7971,7 +8100,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_vector_store_files_config(
         provider: LlmProviders,
-    ) -> Optional[BaseVectorStoreFilesConfig]:
+    ) -> Optional["BaseVectorStoreFilesConfig"]:
         if litellm.LlmProviders.OPENAI == provider:
             from litellm.llms.openai.vector_store_files.transformation import (
                 OpenAIVectorStoreFilesConfig,
@@ -7984,7 +8113,7 @@ class ProviderConfigManager:
     def get_provider_image_generation_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseImageGenerationConfig]:
+    ) -> Optional["BaseImageGenerationConfig"]:
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.image_generation import (
                 get_openai_image_generation_config,
@@ -8057,7 +8186,7 @@ class ProviderConfigManager:
     def get_provider_video_config(
         model: Optional[str],
         provider: LlmProviders,
-    ) -> Optional[BaseVideoConfig]:
+    ) -> Optional["BaseVideoConfig"]:
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 
@@ -8085,7 +8214,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_container_config(
         provider: LlmProviders,
-    ) -> Optional[BaseContainerConfig]:
+    ) -> Optional["BaseContainerConfig"]:
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.containers.transformation import (
                 OpenAIContainerConfig,
@@ -8098,7 +8227,7 @@ class ProviderConfigManager:
     def get_provider_realtime_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseRealtimeConfig]:
+    ) -> Optional["BaseRealtimeConfig"]:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
@@ -8109,7 +8238,7 @@ class ProviderConfigManager:
     def get_provider_image_edit_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional[BaseImageEditConfig]:
+    ) -> Optional["BaseImageEditConfig"]:
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.image_edit import get_openai_image_edit_config
 
@@ -8165,7 +8294,7 @@ class ProviderConfigManager:
             return get_azure_ai_ocr_config(model=model)
 
         PROVIDER_TO_CONFIG_MAP = {
-            litellm.LlmProviders.MISTRAL: MistralOCRConfig,
+            litellm.LlmProviders.MISTRAL: _get_mistral_ocr_config(),
             litellm.LlmProviders.VERTEX_AI: VertexAIOCRConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
@@ -8597,4 +8726,38 @@ def __getattr__(name: str) -> Any:
         return _get_redact_message_input_output_from_logging()
     if name == "CustomStreamWrapper":
         return _get_custom_stream_wrapper()
+    # Lazy-loaded Base*Config classes
+    if name == "BaseConfig":
+        return _get_base_config()
+    if name == "BaseEmbeddingConfig":
+        return _get_base_embedding_config()
+    if name == "BaseAudioTranscriptionConfig":
+        return _get_base_audio_transcription_config()
+    if name == "BaseImageGenerationConfig":
+        return _get_base_image_generation_config()
+    if name == "BaseLLMModelInfo":
+        return _get_base_llm_model_info()
+    if name == "type_to_response_format_param":
+        return _get_type_to_response_format_param()
+    if name == "BaseTextToSpeechConfig":
+        return _get_base_text_to_speech_config()
+    # Lazy-loaded other runtime imports
+    if name == "BedrockModelInfo":
+        return _get_bedrock_model_info()
+    if name == "CohereModelInfo":
+        return _get_cohere_model_info()
+    if name == "AsyncHTTPHandler":
+        return _get_async_http_handler()
+    if name == "HTTPHandler":
+        return _get_http_handler()
+    if name == "MistralOCRConfig":
+        return _get_mistral_ocr_config()
+    if name == "get_num_retries_from_retry_policy":
+        return _get_num_retries_from_retry_policy_func()
+    if name == "reset_retry_policy":
+        return _get_reset_retry_policy_func()
+    if name == "get_secret":
+        return _get_secret_func()
+    if name == "ANTHROPIC_API_ONLY_HEADERS":
+        return _get_anthropic_api_only_headers()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
