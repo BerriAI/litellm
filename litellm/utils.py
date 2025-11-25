@@ -7341,6 +7341,12 @@ class ProviderConfigManager:
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
+        elif litellm.LlmProviders.AZURE_ANTHROPIC == provider:
+            from litellm.llms.azure.anthropic.messages_transformation import (
+                AzureAnthropicMessagesConfig,
+            )
+
+            return AzureAnthropicMessagesConfig()
         return None
 
     @staticmethod
