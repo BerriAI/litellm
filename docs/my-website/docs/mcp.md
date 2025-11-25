@@ -248,6 +248,41 @@ mcp_servers:
       X-Custom-Header: "some-value"
 ```
 
+### MCP Walkthroughs
+
+- **Strands (STDIO)** – [watch tutorial](https://screen.studio/share/ruv4D73F)
+
+> Add it from the UI
+
+```json title="strands-mcp" showLineNumbers
+{
+  "mcpServers": {
+    "strands-agents": {
+      "command": "uvx",
+      "args": ["strands-agents-mcp-server"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "INFO"
+      },
+      "disabled": false,
+      "autoApprove": ["search_docs", "fetch_doc"]
+    }
+  }
+}
+```
+
+> config.yml
+
+```yaml title="config.yml – strands MCP" showLineNumbers
+mcp_servers:
+  strands_mcp:
+    transport: "stdio"
+    command: "uvx"
+    args: ["strands-agents-mcp-server"]
+    env:
+      FASTMCP_LOG_LEVEL: "INFO"
+```
+
+
 ### MCP Aliases
 
 You can define aliases for your MCP servers in the `litellm_settings` section. This allows you to:
