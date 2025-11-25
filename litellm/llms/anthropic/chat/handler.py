@@ -36,12 +36,14 @@ from litellm.types.llms.anthropic import (
     ContentBlockStop,
     MessageBlockDelta,
     MessageStartBlock,
+    ToolCaller,
     UsageDelta,
 )
 from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.utils import (
     Delta,
@@ -550,15 +552,18 @@ class ModelResponseIterator:
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
         elif "partial_json" in content_block["delta"]:
-            tool_use = {
-                "id": None,
-                "type": "function",
-                "function": {
-                    "name": None,
-                    "arguments": content_block["delta"]["partial_json"],
+            tool_use = cast(
+                ChatCompletionToolCallChunk,
+                {
+                    "id": None,
+                    "type": "function",
+                    "function": {
+                        "name": None,
+                        "arguments": content_block["delta"]["partial_json"],
+                    },
+                    "index": self.tool_index,
                 },
-                "index": self.tool_index,
-            }
+            )
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif (
@@ -569,7 +574,7 @@ class ModelResponseIterator:
                 ChatCompletionThinkingBlock(
                     type="thinking",
                     thinking=content_block["delta"].get("thinking") or "",
-                    signature=content_block["delta"].get("signature"),
+                    signature=str(content_block["delta"].get("signature") or ""),
                 )
             ]
             provider_specific_fields["thinking_blocks"] = thinking_blocks
@@ -625,7 +630,7 @@ class ModelResponseIterator:
 
         return content_block_start
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # pylint: disable=too-many-statements
         try:
             type_chunk = chunk.get("type", "") or ""
 
@@ -672,30 +677,32 @@ class ModelResponseIterator:
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use":
                     self.tool_index += 1
-                    tool_use = {
-                        "id": content_block_start["content_block"]["id"],
-                        "type": "function",
-                        "function": {
-                            "name": content_block_start["content_block"]["name"],
-                            "arguments": "",
-                        },
-                        "index": self.tool_index,
-                    }
-                    # Include caller information if present (for programmatic tool calling)
-                    if "caller" in content_block_start["content_block"]:
-                        tool_use["caller"] = content_block_start["content_block"]["caller"]
+                tool_use = ChatCompletionToolCallChunk(
+                    id=content_block_start["content_block"]["id"],
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=content_block_start["content_block"]["name"],
+                        arguments="",
+                    ),
+                    index=self.tool_index,
+                )
+                if "caller" in content_block_start["content_block"]:
+                    tool_use["caller"] = cast(
+                        ToolCaller,
+                        content_block_start["content_block"]["caller"],
+                    )
                 elif content_block_start["content_block"]["type"] == "server_tool_use":
                     # Handle server tool use (for tool search)
                     self.tool_index += 1
-                    tool_use = {
-                        "id": content_block_start["content_block"]["id"],
-                        "type": "function",
-                        "function": {
-                            "name": content_block_start["content_block"]["name"],
-                            "arguments": "",
-                        },
-                        "index": self.tool_index,
-                    }
+                    tool_use = ChatCompletionToolCallChunk(
+                        id=content_block_start["content_block"]["id"],
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=content_block_start["content_block"]["name"],
+                            arguments="",
+                        ),
+                        index=self.tool_index,
+                    )
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):

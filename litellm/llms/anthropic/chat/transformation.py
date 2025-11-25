@@ -190,7 +190,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _tool_choice
 
-    def _map_tool_helper(
+    def _map_tool_helper(  # pylint: disable=too-many-statements
         self, tool: ChatCompletionToolParam
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
         returned_tool: Optional[AllAnthropicToolsValues] = None
@@ -253,9 +253,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
             returned_tool = _computer_tool
         elif any(tool["type"].startswith(t) for t in ANTHROPIC_HOSTED_TOOLS):
-            function_name = tool.get("name", tool.get("function", {}).get("name"))
-            if function_name is None or not isinstance(function_name, str):
+            function_name_obj = tool.get("name", tool.get("function", {}).get("name"))
+            if function_name_obj is None or not isinstance(function_name_obj, str):
                 raise ValueError("Missing required parameter: name")
+            function_name = function_name_obj
 
             additional_tool_params = {}
             for k, v in tool.items():
@@ -275,7 +276,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             # Tool search tool using regex
             from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
             
-            tool_name = tool.get("name", "tool_search_tool_regex")
+            tool_name_obj = tool.get("name", "tool_search_tool_regex")
+            if not isinstance(tool_name_obj, str):
+                raise ValueError("Tool search tool must have a valid name")
+            tool_name = tool_name_obj
             returned_tool = AnthropicToolSearchToolRegex(
                 type="tool_search_tool_regex_20251119",
                 name=tool_name,
@@ -284,7 +288,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             # Tool search tool using BM25
             from litellm.types.llms.anthropic import AnthropicToolSearchToolBM25
             
-            tool_name = tool.get("name", "tool_search_tool_bm25")
+            tool_name_obj = tool.get("name", "tool_search_tool_bm25")
+            if not isinstance(tool_name_obj, str):
+                raise ValueError("Tool search tool must have a valid name")
+            tool_name = tool_name_obj
             returned_tool = AnthropicToolSearchToolBM25(
                 type="tool_search_tool_bm25_20251119",
                 name=tool_name,
@@ -297,7 +304,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _cache_control_function = tool.get("function", {}).get("cache_control", None)
         if returned_tool is not None:
             if _cache_control is not None:
-                returned_tool["cache_control"] = _cache_control
+                returned_tool["cache_control"] = _cache_control  # type: ignore[arg-type]
             elif _cache_control_function is not None and isinstance(
                 _cache_control_function, dict
             ):
@@ -310,8 +317,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _defer_loading_function = tool.get("function", {}).get("defer_loading", None)
         if returned_tool is not None:
             if _defer_loading is not None:
+                if not isinstance(_defer_loading, bool):
+                    raise ValueError("defer_loading must be a boolean")
                 returned_tool["defer_loading"] = _defer_loading
             elif _defer_loading_function is not None:
+                if not isinstance(_defer_loading_function, bool):
+                    raise ValueError("defer_loading must be a boolean")
                 returned_tool["defer_loading"] = _defer_loading_function
         
         ## check if allowed_callers is set in the tool
@@ -319,8 +330,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _allowed_callers_function = tool.get("function", {}).get("allowed_callers", None)
         if returned_tool is not None:
             if _allowed_callers is not None:
+                if not isinstance(_allowed_callers, list) or not all(
+                    isinstance(item, str) for item in _allowed_callers
+                ):
+                    raise ValueError("allowed_callers must be a list of strings")
                 returned_tool["allowed_callers"] = _allowed_callers
             elif _allowed_callers_function is not None:
+                if not isinstance(_allowed_callers_function, list) or not all(
+                    isinstance(item, str) for item in _allowed_callers_function
+                ):
+                    raise ValueError("allowed_callers must be a list of strings")
                 returned_tool["allowed_callers"] = _allowed_callers_function
         
         ## check if input_examples is set in the tool
@@ -329,7 +348,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if returned_tool is not None:
             if _input_examples is not None and isinstance(_input_examples, list):
                 returned_tool["input_examples"] = _input_examples
-            elif _input_examples_function is not None and isinstance(_input_examples_function, list):
+            elif _input_examples_function is not None and isinstance(
+                _input_examples_function, list
+            ):
                 returned_tool["input_examples"] = _input_examples_function
 
         return returned_tool, mcp_server

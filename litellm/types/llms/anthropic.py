@@ -75,24 +75,36 @@ class AnthropicWebSearchTool(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     max_uses: Optional[int]
     user_location: Optional[AnthropicWebSearchUserLocation]
+    defer_loading: Optional[bool]
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
 
 
 class AnthropicHostedTools(TypedDict, total=False):  # for bash_tool and text_editor
     type: Required[str]
     name: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    defer_loading: Optional[bool]
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
 
 
 class AnthropicCodeExecutionTool(TypedDict, total=False):
     type: Required[str]
     name: Required[Literal["code_execution"]]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    defer_loading: Optional[bool]
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
 
 
 class AnthropicMemoryTool(TypedDict, total=False):
     type: Required[str]
     name: Required[Literal["memory"]]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    defer_loading: Optional[bool]
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
 
 
 class AnthropicToolSearchToolRegex(TypedDict, total=False):
@@ -105,6 +117,10 @@ class AnthropicToolSearchToolBM25(TypedDict, total=False):
     """Tool search tool using BM25 algorithm for tool discovery."""
     type: Required[Literal["tool_search_tool_bm25_20251119"]]
     name: Required[str]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    defer_loading: Optional[bool]
+    allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
 
 
 class ToolReference(TypedDict, total=False):
@@ -421,6 +437,7 @@ class ToolUseBlock(TypedDict):
     name: str
 
     type: Literal["tool_use"]
+    caller: Optional[ToolCaller]
 
 
 class TextBlock(TypedDict):

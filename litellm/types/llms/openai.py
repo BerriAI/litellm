@@ -1,6 +1,17 @@
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Dict, Iterable, List, Literal, Mapping, Optional, Tuple, Union
+from typing import (
+    IO,
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx
 from openai._legacy_response import (
@@ -467,6 +478,7 @@ class ChatCompletionToolCallChunk(TypedDict):  # result of /chat/completions cal
     type: Literal["function"]
     function: ChatCompletionToolCallFunctionChunk
     index: int
+    caller: Optional[Dict[str, Any]]
 
 
 class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
