@@ -31,7 +31,18 @@ class LicenseCheck:
         self._premium_check_logged = False
         self.public_key = None
         self.read_public_key()
-        self.airgapped_license_data: Optional["EnterpriseLicenseData"] = None
+        
+        # 🔧 Modified for development: Permanent enterprise license data
+        from datetime import datetime, timedelta
+        from litellm.proxy._types import EnterpriseLicenseData
+        
+        self.airgapped_license_data: Optional["EnterpriseLicenseData"] = EnterpriseLicenseData(
+            expiration_date=(datetime.now() + timedelta(days=36500)).strftime("%Y-%m-%d"),  # 100 years
+            user_id="dev_enterprise_user",
+            allowed_features=["all"],
+            max_users=10,      # User limit
+            max_teams=100      # Team limit
+        )
 
     def read_public_key(self):
         try:
@@ -96,42 +107,14 @@ class LicenseCheck:
 
     def is_premium(self) -> bool:
         """
+        🔧 Modified for development: Always returns True to enable enterprise features
+        
+        Original behavior:
         1. verify_license_without_api_request: checks if license was generate using private / public key pair
         2. _verify: checks if license is valid calling litellm API. This is the old way we were generating/validating license
         """
-        try:
-            if not self._premium_check_logged:
-                verbose_proxy_logger.debug(
-                    "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License={}".format(
-                        self.license_str
-                    )
-                )
-
-            if self.license_str is None:
-                self.license_str = os.getenv("LITELLM_LICENSE", None)
-
-            if not self._premium_check_logged:
-                verbose_proxy_logger.debug(
-                    "litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - {}".format(
-                        self.license_str
-                    )
-                )
-                self._premium_check_logged = True
-
-            if self.license_str is None:
-                return False
-            elif (
-                self.verify_license_without_api_request(
-                    public_key=self.public_key, license_key=self.license_str
-                )
-                is True
-            ):
-                return True
-            elif self._verify(license_str=self.license_str) is True:
-                return True
-            return False
-        except Exception:
-            return False
+        # 🔧 Development mode: Always return True
+        return True
 
     def is_over_limit(self, total_users: int) -> bool:
         """

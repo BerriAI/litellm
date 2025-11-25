@@ -4,13 +4,13 @@ services:
       context: .
       args:
         target: runtime
-    image: docker.litellm.ai/berriai/litellm:main-stable
+    image: ghcr.io/danielaskdd/litellm/litellm:main-stable
     #########################################
     ## Uncomment these lines to start proxy with a config.yaml file ##
-    # volumes:
-    #  - ./config.yaml:/app/config.yaml
-    # command:
-    #  - "--config=/app/config.yaml"
+    volumes:
+     - ./config.yaml:/app/config.yaml
+    command:
+     - "--config=/app/config.yaml"
     ##############################################
     ports:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
@@ -48,21 +48,21 @@ services:
       timeout: 5s
       retries: 10
 
-  prometheus:
-    image: prom/prometheus
-    volumes:
-      - prometheus_data:/prometheus
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    ports:
-      - "9090:9090"
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=15d"
-    restart: always
+  # prometheus:
+  #   image: prom/prometheus
+  #   volumes:
+  #     - prometheus_data:/prometheus
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  #   ports:
+  #     - "9090:9090"
+  #   command:
+  #     - "--config.file=/etc/prometheus/prometheus.yml"
+  #     - "--storage.tsdb.path=/prometheus"
+  #     - "--storage.tsdb.retention.time=15d"
+  #   restart: always
 
 volumes:
-  prometheus_data:
-    driver: local
+  # prometheus_data:
+  #   driver: local
   postgres_data:
     name: litellm_postgres_data # Named volume for Postgres data persistence
