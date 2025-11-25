@@ -28,6 +28,7 @@ from litellm.types.llms.anthropic import (
     AnthropicHostedTools,
     AnthropicInputSchema,
     AnthropicMcpServerTool,
+    AnthropicMemoryTool,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicOutputSchema,
@@ -303,55 +304,62 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _cache_control = tool.get("cache_control", None)
         _cache_control_function = tool.get("function", {}).get("cache_control", None)
         if returned_tool is not None:
-            if _cache_control is not None:
-                returned_tool["cache_control"] = _cache_control  # type: ignore[arg-type]
-            elif _cache_control_function is not None and isinstance(
-                _cache_control_function, dict
-            ):
-                returned_tool["cache_control"] = ChatCompletionCachedContent(
-                    **_cache_control_function  # type: ignore
-                )
+            # Only set cache_control on tools that support it
+            if isinstance(returned_tool, (AnthropicMessagesTool, AnthropicComputerTool, AnthropicWebSearchTool, AnthropicHostedTools, AnthropicCodeExecutionTool, AnthropicMemoryTool)):
+                if _cache_control is not None:
+                    returned_tool["cache_control"] = _cache_control  # type: ignore[assignment]
+                elif _cache_control_function is not None and isinstance(
+                    _cache_control_function, dict
+                ):
+                    returned_tool["cache_control"] = ChatCompletionCachedContent(
+                        **_cache_control_function  # type: ignore
+                    )
         
         ## check if defer_loading is set in the tool
         _defer_loading = tool.get("defer_loading", None)
         _defer_loading_function = tool.get("function", {}).get("defer_loading", None)
         if returned_tool is not None:
-            if _defer_loading is not None:
-                if not isinstance(_defer_loading, bool):
-                    raise ValueError("defer_loading must be a boolean")
-                returned_tool["defer_loading"] = _defer_loading
-            elif _defer_loading_function is not None:
-                if not isinstance(_defer_loading_function, bool):
-                    raise ValueError("defer_loading must be a boolean")
-                returned_tool["defer_loading"] = _defer_loading_function
+            # Only set defer_loading on tools that support it (not tool search tools or computer tools)
+            if isinstance(returned_tool, (AnthropicMessagesTool, AnthropicWebSearchTool, AnthropicHostedTools, AnthropicCodeExecutionTool, AnthropicMemoryTool)):
+                if _defer_loading is not None:
+                    if not isinstance(_defer_loading, bool):
+                        raise ValueError("defer_loading must be a boolean")
+                    returned_tool["defer_loading"] = _defer_loading  # type: ignore[assignment]
+                elif _defer_loading_function is not None:
+                    if not isinstance(_defer_loading_function, bool):
+                        raise ValueError("defer_loading must be a boolean")
+                    returned_tool["defer_loading"] = _defer_loading_function  # type: ignore[assignment]
         
         ## check if allowed_callers is set in the tool
         _allowed_callers = tool.get("allowed_callers", None)
         _allowed_callers_function = tool.get("function", {}).get("allowed_callers", None)
         if returned_tool is not None:
-            if _allowed_callers is not None:
-                if not isinstance(_allowed_callers, list) or not all(
-                    isinstance(item, str) for item in _allowed_callers
-                ):
-                    raise ValueError("allowed_callers must be a list of strings")
-                returned_tool["allowed_callers"] = _allowed_callers
-            elif _allowed_callers_function is not None:
-                if not isinstance(_allowed_callers_function, list) or not all(
-                    isinstance(item, str) for item in _allowed_callers_function
-                ):
-                    raise ValueError("allowed_callers must be a list of strings")
-                returned_tool["allowed_callers"] = _allowed_callers_function
+            if isinstance(returned_tool, (AnthropicMessagesTool, AnthropicWebSearchTool, AnthropicHostedTools, AnthropicCodeExecutionTool, AnthropicMemoryTool)):
+                if _allowed_callers is not None:
+                    if not isinstance(_allowed_callers, list) or not all(
+                        isinstance(item, str) for item in _allowed_callers
+                    ):
+                        raise ValueError("allowed_callers must be a list of strings")
+                    returned_tool["allowed_callers"] = _allowed_callers  # type: ignore[assignment]
+                elif _allowed_callers_function is not None:
+                    if not isinstance(_allowed_callers_function, list) or not all(
+                        isinstance(item, str) for item in _allowed_callers_function
+                    ):
+                        raise ValueError("allowed_callers must be a list of strings")
+                    returned_tool["allowed_callers"] = _allowed_callers_function  # type: ignore[assignment]
         
         ## check if input_examples is set in the tool
         _input_examples = tool.get("input_examples", None)
         _input_examples_function = tool.get("function", {}).get("input_examples", None)
         if returned_tool is not None:
-            if _input_examples is not None and isinstance(_input_examples, list):
-                returned_tool["input_examples"] = _input_examples
-            elif _input_examples_function is not None and isinstance(
-                _input_examples_function, list
-            ):
-                returned_tool["input_examples"] = _input_examples_function
+            # Only set input_examples on AnthropicMessagesTool (user-defined tools)
+            if isinstance(returned_tool, AnthropicMessagesTool):
+                if _input_examples is not None and isinstance(_input_examples, list):
+                    returned_tool["input_examples"] = _input_examples  # type: ignore[assignment]
+                elif _input_examples_function is not None and isinstance(
+                    _input_examples_function, list
+                ):
+                    returned_tool["input_examples"] = _input_examples_function  # type: ignore[assignment]
 
         return returned_tool, mcp_server
 
@@ -1037,22 +1045,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
                 # Include caller information if present (for programmatic tool calling)
                 if "caller" in content:
-                    tool_call["caller"] = content["caller"]  # type: ignore
+                    tool_call["caller"] = cast(Dict[str, Any], content["caller"])  # type: ignore
                 tool_calls.append(tool_call)
             ## SERVER TOOL USE (for tool search)
             elif content["type"] == "server_tool_use":
                 # Server tool use blocks are for tool search - treat as tool calls
-                tool_calls.append(
-                    ChatCompletionToolCallChunk(
-                        id=content["id"],
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=content["name"],
-                            arguments=json.dumps(content.get("input", {})),
-                        ),
-                        index=idx,
-                    )
+                tool_call = ChatCompletionToolCallChunk(
+                    id=content["id"],
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=content["name"],
+                        arguments=json.dumps(content.get("input", {})),
+                    ),
+                    index=idx,
                 )
+                # Include caller information if present (for programmatic tool calling)
+                if "caller" in content:
+                    tool_call["caller"] = cast(Dict[str, Any], content["caller"])  # type: ignore
+                tool_calls.append(tool_call)
             ## TOOL SEARCH TOOL RESULT (skip - this is metadata about tool discovery)
             elif content["type"] == "tool_search_tool_result":
                 # This block contains tool_references that were discovered

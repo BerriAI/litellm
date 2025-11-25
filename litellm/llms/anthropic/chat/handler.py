@@ -677,20 +677,20 @@ class ModelResponseIterator:
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use":
                     self.tool_index += 1
-                tool_use = ChatCompletionToolCallChunk(
-                    id=content_block_start["content_block"]["id"],
-                    type="function",
-                    function=ChatCompletionToolCallFunctionChunk(
-                        name=content_block_start["content_block"]["name"],
-                        arguments="",
-                    ),
-                    index=self.tool_index,
-                )
-                if "caller" in content_block_start["content_block"]:
-                    tool_use["caller"] = cast(
-                        ToolCaller,
-                        content_block_start["content_block"]["caller"],
+                    tool_use = ChatCompletionToolCallChunk(
+                        id=content_block_start["content_block"]["id"],
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=content_block_start["content_block"]["name"],
+                            arguments="",
+                        ),
+                        index=self.tool_index,
                     )
+                    # Include caller information if present (for programmatic tool calling)
+                    if "caller" in content_block_start["content_block"]:
+                        caller_data = content_block_start["content_block"]["caller"]
+                        if caller_data:
+                            tool_use["caller"] = cast(Dict[str, Any], caller_data)  # type: ignore
                 elif content_block_start["content_block"]["type"] == "server_tool_use":
                     # Handle server tool use (for tool search)
                     self.tool_index += 1
@@ -718,15 +718,15 @@ class ModelResponseIterator:
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
                 if is_empty:
-                    tool_use = {
-                        "id": None,
-                        "type": "function",
-                        "function": {
-                            "name": None,
-                            "arguments": "{}",
-                        },
-                        "index": self.tool_index,
-                    }
+                    tool_use = ChatCompletionToolCallChunk(
+                        id=None,
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=None,
+                            arguments="{}",
+                        ),
+                        index=self.tool_index,
+                    )
                 # Reset response_format tool tracking when block stops
                 self.is_response_format_tool = False
             elif type_chunk == "tool_result":
