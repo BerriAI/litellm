@@ -394,6 +394,8 @@ curl --location 'http://0.0.0.0:4000/team/unblock' \
 ### Upsert Users + Allowed Email Domains 
 
 Allow users who belong to a specific email domain, automatic access to the proxy.
+
+**Note:** `user_allowed_email_domain` is optional. If not specified, all users will be allowed regardless of their email domain.
  
 ```yaml
 general_settings:
@@ -401,7 +403,7 @@ general_settings:
   enable_jwt_auth: True
   litellm_jwtauth:
     user_email_jwt_field: "email" # 👈 checks 'email' field in jwt payload
-    user_allowed_email_domain: "my-co.com" # allows user@my-co.com to call proxy
+    user_allowed_email_domain: "my-co.com" # 👈 OPTIONAL - allows user@my-co.com to call proxy
     user_id_upsert: true # 👈 upserts the user to db, if valid email but not in db
 ```
 

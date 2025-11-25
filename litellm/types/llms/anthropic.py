@@ -6,8 +6,8 @@ from typing_extensions import Literal, Required, TypedDict
 
 from .openai import (
     ChatCompletionCachedContent,
-    ChatCompletionThinkingBlock,
     ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
 )
 
 
@@ -29,6 +29,11 @@ AnthropicInputSchema = TypedDict(
     },
     total=False,
 )
+
+
+class AnthropicOutputSchema(TypedDict, total=False):
+    type: Required[Literal["json_schema"]]
+    schema: Required[dict]
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
@@ -166,7 +171,11 @@ class AnthropicMessagesContainerUploadParam(TypedDict, total=False):
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
     source: Required[
-        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+        Union[
+            AnthropicContentParamSource,
+            AnthropicContentParamSourceFileId,
+            AnthropicContentParamSourceUrl,
+        ]
     ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
@@ -458,6 +467,10 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     id: str
     name: str
     input: dict
+    provider_specific_fields: Optional[Dict[str, Any]] = None
+
+    class Config:
+        extra = "allow"  # Allow provider_specific_fields
 
 
 class AnthropicResponseContentBlockThinking(BaseModel):
@@ -551,3 +564,4 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
 
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
+    STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"

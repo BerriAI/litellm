@@ -561,11 +561,15 @@ model LiteLLM_GuardrailsTable {
 // Prompt table for storing prompt configurations
 model LiteLLM_PromptTable {
   id String @id @default(uuid())
-  prompt_id String @unique
+  prompt_id String
+  version Int @default(1)
   litellm_params Json
   prompt_info Json?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+
+  @@unique([prompt_id, version])
+  @@index([prompt_id])
 }
 
 model LiteLLM_HealthCheckTable {

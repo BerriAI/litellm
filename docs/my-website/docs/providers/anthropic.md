@@ -5,6 +5,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM supports all anthropic models.
 
 - `claude-sonnet-4-5-20250929`
+- `claude-opus-4-5-20251101`
 - `claude-opus-4-1-20250805`
 - `claude-4` (`claude-opus-4-20250514`, `claude-sonnet-4-20250514`)
 - `claude-3.7` (`claude-3-7-sonnet-20250219`)
@@ -45,8 +46,111 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 
 :::info
 
-Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
+**Notes:**
+- Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
+- `response_format` is fully supported for Claude Sonnet 4.5 and Opus 4.1 models (see [Structured Outputs](#structured-outputs) section)
 
+:::
+
+## **Structured Outputs**
+
+LiteLLM supports Anthropic's [structured outputs feature](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) for Claude Sonnet 4.5 and Opus 4.1 models. When you use `response_format` with these models, LiteLLM automatically:
+- Adds the required `structured-outputs-2025-11-13` beta header
+- Transforms OpenAI's `response_format` to Anthropic's `output_format` format
+
+### Supported Models
+- `sonnet-4-5` or `sonnet-4.5` (all Sonnet 4.5 variants)
+- `opus-4-1` or `opus-4.1` (all Opus 4.1 variants)
+  - `opus-4-5` or `opus-4.5` (all Opus 4.5 variants)
+  
+### Example Usage
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="claude-sonnet-4-5-20250929",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "capital_response",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "country": {"type": "string"},
+                    "capital": {"type": "string"}
+                },
+                "required": ["country", "capital"],
+                "additionalProperties": False
+            }
+        }
+    }
+)
+
+print(response.choices[0].message.content)
+# Output: {"country": "France", "capital": "Paris"}
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-sonnet-4-5",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "capital_response",
+            "strict": true,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "country": {"type": "string"},
+                    "capital": {"type": "string"}
+                },
+                "required": ["country", "capital"],
+                "additionalProperties": false
+            }
+        }
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+When using structured outputs with supported models, LiteLLM automatically:
+- Converts OpenAI's `response_format` to Anthropic's `output_schema`
+- Adds the `anthropic-beta: structured-outputs-2025-11-13` header
+- Creates a tool with the schema and forces the model to use it
 :::
 
 ## API Keys

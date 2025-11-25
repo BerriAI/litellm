@@ -390,6 +390,58 @@ def test_streaming_chunk_includes_reasoning_content():
     )
 
 
+def test_streaming_chunk_with_tool_calls_includes_reasoning_content():
+    """
+    Test for issue #16805: Ensure that when Gemini returns a streaming chunk with
+    tool calls AND thoughtSignature, the reasoning_content is included in the delta.
+
+    Previously, thinking_blocks were only added to non-streaming responses, causing
+    reasoning_content to be missing in streaming mode when tools were enabled.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    litellm_logging = MagicMock()
+
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_current_time",
+                                "args": {"timezone": "America/New_York"},
+                            },
+                            "thoughtSignature": "EsEDCr4DAdHtim...",  # Base64 signature
+                        }
+                    ]
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 68,
+            "candidatesTokenCount": 120,
+            "totalTokenCount": 188,
+        },
+    }
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    # Verify that reasoning_content is present in the streaming delta
+    assert streaming_chunk.choices[0].delta.reasoning_content is not None
+
+    # Verify tool calls are also present
+    assert streaming_chunk.choices[0].delta.tool_calls is not None
+    assert len(streaming_chunk.choices[0].delta.tool_calls) == 1
+    assert streaming_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_time"
+
+
 def test_check_finish_reason():
     finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
     for k, v in finish_reason_mappings.items():
@@ -423,6 +475,86 @@ def test_vertex_ai_usage_metadata_response_token_count():
     assert result.prompt_tokens_details.audio_tokens is None
     assert result.prompt_tokens_details.cached_tokens is None
     assert result.completion_tokens_details.text_tokens == 74
+
+
+def test_vertex_ai_usage_metadata_with_image_tokens():
+    """Test candidatesTokensDetails with IMAGE modality (e.g., Imagen models)
+
+    This test simulates the case where candidatesTokenCount is EXCLUSIVE of thoughtsTokenCount.
+    Gemini API returns: totalTokenCount = promptTokenCount + candidatesTokenCount + thoughtsTokenCount
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 14,
+        "candidatesTokenCount": 1442,  # Does NOT include thoughtsTokenCount
+        "totalTokenCount": 1614,  # 14 + 1442 + 158
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 14}],
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1120},
+            {"modality": "TEXT", "tokenCount": 322}  # 1442 - 1120 = 322
+        ],
+        "thoughtsTokenCount": 158
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    print("result", result)
+
+    # Verify basic token counts
+    assert result.prompt_tokens == 14
+    # completion_tokens = candidatesTokenCount + thoughtsTokenCount (when exclusive)
+    assert result.completion_tokens == 1600  # 1442 + 158
+    assert result.total_tokens == 1614
+
+    # Verify detailed token breakdown
+    assert result.completion_tokens_details.image_tokens == 1120
+    assert result.completion_tokens_details.text_tokens == 322
+    assert result.completion_tokens_details.reasoning_tokens == 158
+
+    # Verify the math: completion_tokens = image + text + reasoning
+    # 1600 = 1120 (image) + 322 (text) + 158 (reasoning)
+    assert (
+        result.completion_tokens_details.image_tokens
+        + result.completion_tokens_details.text_tokens
+        + result.completion_tokens_details.reasoning_tokens
+        == result.completion_tokens
+    )
+
+
+def test_vertex_ai_usage_metadata_with_image_tokens_auto_calculated_text():
+    """Test that text_tokens is auto-calculated when only IMAGE modality is provided
+
+    This test verifies the auto-calculation logic at line 1367-1372 in vertex_and_google_ai_studio_gemini.py
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 14,
+        "candidatesTokenCount": 1442,
+        "totalTokenCount": 1614,  # 14 + 1442 + 158 (exclusive)
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 14}],
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1120}
+            # TEXT modality omitted - should be auto-calculated
+        ],
+        "thoughtsTokenCount": 158
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    print("result", result)
+
+    # Verify basic token counts
+    assert result.prompt_tokens == 14
+    assert result.completion_tokens == 1600  # 1442 + 158
+    assert result.total_tokens == 1614
+
+    # Verify image_tokens is set
+    assert result.completion_tokens_details.image_tokens == 1120
+
+    # Verify text_tokens is auto-calculated: candidatesTokenCount - image_tokens
+    # Note: reasoning_tokens is NOT subtracted here because candidatesTokenCount is exclusive
+    # 1442 - 1120 = 322
+    expected_text_tokens = 1442 - 1120
+    assert result.completion_tokens_details.text_tokens == expected_text_tokens
+    assert result.completion_tokens_details.reasoning_tokens == 158
 
 
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
@@ -1207,6 +1339,78 @@ def test_vertex_ai_penalty_parameters_validation():
     assert result["max_output_tokens"] == 100
 
 
+def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
+    """
+    Test that penalty parameters are not supported for Gemini 3 models.
+    
+    This test ensures that:
+    1. Gemini 3 models do not support penalty parameters
+    2. Penalty parameters are excluded from supported params list for Gemini 3 models
+    3. Penalty parameters are filtered out when mapping params for Gemini 3 models
+    """
+    v = VertexGeminiConfig()
+
+    # Test Gemini 3 models
+    gemini_3_models = [
+        "gemini-3-pro-preview",
+        "vertex_ai/gemini-3-pro-preview",
+        "gemini/gemini-3-pro-preview",
+    ]
+
+    for model in gemini_3_models:
+        # Test _supports_penalty_parameters method
+        assert v._supports_penalty_parameters(model) == False, \
+            f"Gemini 3 model {model} should not support penalty parameters"
+
+        # Test get_supported_openai_params method
+        supported_params = v.get_supported_openai_params(model)
+        assert "frequency_penalty" not in supported_params, \
+            f"frequency_penalty should not be in supported params for {model}"
+        assert "presence_penalty" not in supported_params, \
+            f"presence_penalty should not be in supported params for {model}"
+
+        # Test parameter mapping - penalty params should be filtered out
+        non_default_params = {
+            "temperature": 0.7,
+            "frequency_penalty": 0.5,
+            "presence_penalty": 0.3,
+            "max_tokens": 100
+        }
+
+        optional_params = {}
+        result = v.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False
+        )
+
+        # Penalty parameters should be filtered out for Gemini 3 models
+        assert "frequency_penalty" not in result, \
+            f"frequency_penalty should be filtered out for Gemini 3 model {model}"
+        assert "presence_penalty" not in result, \
+            f"presence_penalty should be filtered out for Gemini 3 model {model}"
+
+        # Other parameters should still be included
+        assert "temperature" in result, \
+            f"temperature should still be included for Gemini 3 model {model}"
+        assert "max_output_tokens" in result, \
+            f"max_output_tokens should still be included for Gemini 3 model {model}"
+        assert result["temperature"] == 0.7
+        assert result["max_output_tokens"] == 100
+
+    # Test that non-Gemini 3 models still support penalty parameters (if they're not in the unsupported list)
+    non_gemini_3_model = "gemini-2.5-pro"
+    assert v._supports_penalty_parameters(non_gemini_3_model) == True, \
+        f"Non-Gemini 3 model {non_gemini_3_model} should support penalty parameters"
+    
+    supported_params = v.get_supported_openai_params(non_gemini_3_model)
+    assert "frequency_penalty" in supported_params, \
+        f"frequency_penalty should be in supported params for {non_gemini_3_model}"
+    assert "presence_penalty" in supported_params, \
+        f"presence_penalty should be in supported params for {non_gemini_3_model}"
+
+
 def test_vertex_ai_annotation_streaming_events():
     """
     Test that annotation events are properly emitted during streaming for Vertex AI Gemini.
@@ -1455,7 +1659,7 @@ def test_is_gemini_3_or_newer():
 
 
 def test_reasoning_effort_maps_to_thinking_level_gemini_3():
-    """Test that reasoning_effort maps to thinking_level for Gemini 3+ models"""
+    """Test that reasoning_effort maps to thinking_level AND includeThoughts for Gemini 3+ models"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
@@ -1464,7 +1668,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     model = "gemini-3-pro-preview"
     optional_params = {}
 
-    # Test minimal -> low
+    # Test minimal -> low + includeThoughts=True
     non_default_params = {"reasoning_effort": "minimal"}
     result = v.map_openai_params(
         non_default_params=non_default_params,
@@ -1473,8 +1677,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test low -> low
+    # Test low -> low + includeThoughts=True
     optional_params = {}
     non_default_params = {"reasoning_effort": "low"}
     result = v.map_openai_params(
@@ -1484,8 +1689,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test medium -> high (medium not available yet)
+    # Test medium -> high + includeThoughts=True (medium not available yet)
     optional_params = {}
     non_default_params = {"reasoning_effort": "medium"}
     result = v.map_openai_params(
@@ -1495,8 +1701,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test high -> high
+    # Test high -> high + includeThoughts=True
     optional_params = {}
     non_default_params = {"reasoning_effort": "high"}
     result = v.map_openai_params(
@@ -1506,8 +1713,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test disable -> low (cannot fully disable in Gemini 3)
+    # Test disable -> low + includeThoughts=False (cannot fully disable in Gemini 3)
     optional_params = {}
     non_default_params = {"reasoning_effort": "disable"}
     result = v.map_openai_params(
@@ -1517,8 +1725,9 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is False
 
-    # Test none -> low (cannot fully disable in Gemini 3)
+    # Test none -> low + includeThoughts=False (cannot fully disable in Gemini 3)
     optional_params = {}
     non_default_params = {"reasoning_effort": "none"}
     result = v.map_openai_params(
@@ -1528,6 +1737,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         drop_params=False,
     )
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is False
 
 
 def test_temperature_default_for_gemini_3():
@@ -1756,4 +1966,99 @@ def test_media_resolution_per_part():
     image2_part = contents[0]["parts"][2]
     assert "inline_data" in image2_part
     assert image2_part["inline_data"]["mediaResolution"] == "high"
+
+
+def test_gemini_3_image_models_no_thinking_config():
+    """
+    Test that Gemini 3 image models do NOT receive automatic thinkingConfig.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/17013
+    gemini-3-pro-image-preview does not support thinking_level parameter
+    and returns BadRequestError: "Thinking level is not supported for this model"
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Test gemini-3-pro-image-preview (the specific model from the bug report)
+    model = "gemini-3-pro-image-preview"
+    optional_params = {}
+    non_default_params = {}
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+
+    # Should NOT have thinkingConfig automatically added
+    assert "thinkingConfig" not in result
+    # But should still get temperature=1.0 for Gemini 3
+    assert result["temperature"] == 1.0
+
+
+def test_gemini_3_text_models_get_thinking_config():
+    """
+    Test that Gemini 3 text models DO receive automatic thinkingConfig.
+    This ensures we didn't break the existing behavior for non-image models.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Test gemini-3-pro-preview (text model, should get thinking)
+    model = "gemini-3-pro-preview"
+    optional_params = {}
+    non_default_params = {}
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+
+    # Should have thinkingConfig automatically added
+    assert "thinkingConfig" in result
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["temperature"] == 1.0
+
+
+def test_gemini_image_models_excluded_from_thinking():
+    """
+    Test that any Gemini model with 'image' in the name is excluded from thinking config.
+    This covers current and future image models.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Test various image model patterns
+    image_models = [
+        "gemini-3-pro-image-preview",
+        "gemini-3-pro-image-generation",
+        "gemini-3-flash-image-preview",
+        "gemini/gemini-3-image-edit",
+    ]
+
+    for model in image_models:
+        optional_params = {}
+        non_default_params = {}
+
+        result = v.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False,
+        )
+
+        # None of these should have thinkingConfig
+        assert "thinkingConfig" not in result, f"Model {model} should not have thinkingConfig"
 

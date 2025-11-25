@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { teamCreateCall } from "./networking";
 import OldTeams from "./OldTeams";
@@ -265,8 +265,7 @@ describe("OldTeams - handleCreate organization handling", () => {
     act(() => {
       fireEvent.click(deleteTeamButton);
     });
-    expect(getByRole("heading", { name: "Delete Team" })).toBeInTheDocument();
-    expect(getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.getByText("Delete Team?")).toBeInTheDocument();
   });
 });
 
@@ -465,5 +464,131 @@ describe("OldTeams - helper functions", () => {
 
       expect(isAdmin || isOrgAdmin).toBe(false);
     });
+  });
+});
+
+describe("OldTeams - Default Team Settings tab visibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should show Default Team Settings tab for Admin role", () => {
+    const { getByRole } = render(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
+  });
+
+  it("should show Default Team Settings tab for proxy_admin role", () => {
+    const { getByRole } = render(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="proxy_admin"
+        organizations={[]}
+      />,
+    );
+
+    expect(getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
+  });
+
+  it("should not show Default Team Settings tab for proxy_admin_viewer role", () => {
+    const { queryByRole } = render(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="proxy_admin_viewer"
+        organizations={[]}
+      />,
+    );
+
+    expect(queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
+  });
+
+  it("should not show Default Team Settings tab for Admin Viewer role", () => {
+    const { queryByRole } = render(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Test Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin Viewer"
+        organizations={[]}
+      />,
+    );
+
+    expect(queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
   });
 });

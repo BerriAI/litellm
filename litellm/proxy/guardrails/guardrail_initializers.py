@@ -1,4 +1,6 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
+from typing import Any, Dict, List, Optional
+
 import litellm
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.guardrails import *
@@ -128,13 +130,23 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
         ToolPermissionGuardrail,
     )
 
+    rules: Optional[List[Dict[str, Any]]] = None
+    if litellm_params.rules:
+        rules = []
+        for rule in litellm_params.rules:
+            if hasattr(rule, "model_dump"):
+                rules.append(rule.model_dump())
+            else:
+                rules.append(dict(rule))
+
     _tool_permission_callback = ToolPermissionGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
-        rules=litellm_params.rules,
+        rules=rules,
         default_action=getattr(litellm_params, "default_action", "deny"),
         on_disallowed_action=getattr(litellm_params, "on_disallowed_action", "block"),
         default_on=litellm_params.default_on,
+        violation_message_template=litellm_params.violation_message_template,
     )
     litellm.logging_callback_manager.add_litellm_callback(_tool_permission_callback)
     return _tool_permission_callback
@@ -172,9 +184,12 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         raise ValueError("PANW Prisma AIRS: profile_name is required")
 
     _panw_callback = PanwPrismaAirsHandler(
-        guardrail_name=guardrail.get("guardrail_name", "panw_prisma_airs"),  # Use .get() with default
+        guardrail_name=guardrail.get(
+            "guardrail_name", "panw_prisma_airs"
+        ),  # Use .get() with default
         api_key=litellm_params.api_key,
-        api_base=litellm_params.api_base or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
+        api_base=litellm_params.api_base
+        or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
         profile_name=litellm_params.profile_name,
         default_on=litellm_params.default_on,
     )

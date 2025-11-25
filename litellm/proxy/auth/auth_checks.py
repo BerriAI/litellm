@@ -13,7 +13,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
 
 import litellm
@@ -1274,7 +1274,7 @@ async def get_team_object(
     - if not, then raise an error
 
     Raises:
-        - Exception: If team doesn't exist in db or cache
+        - HTTPException: If team doesn't exist in db or cache (status_code=404)
     """
     if prisma_client is None:
         raise Exception(
@@ -1296,8 +1296,11 @@ async def get_team_object(
             return cached_team_obj
 
         if check_cache_only:
-            raise Exception(
-                f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+                },
             )
 
     # else, check db
@@ -1313,8 +1316,11 @@ async def get_team_object(
             team_id_upsert=team_id_upsert,
         )
     except Exception:
-        raise Exception(
-            f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+            },
         )
 
 

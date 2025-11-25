@@ -380,6 +380,8 @@ class LiteLLMRoutes(enum.Enum):
     anthropic_routes = [
         "/v1/messages",
         "/v1/messages/count_tokens",
+        "/v1/skills",
+        "/v1/skills/{skill_id}",
     ]
 
     mcp_routes = [
@@ -516,6 +518,7 @@ class LiteLLMRoutes(enum.Enum):
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
             "/public/agent_hub",
+            "/public/mcp_hub",
         ]
     )
 
@@ -1099,6 +1102,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     env: Dict[str, str] = Field(default_factory=dict)
 
 
+class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
+    mcp_server_ids: List[str]
+
+
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     team_id: str
     max_budget_in_team: Optional[float] = None
@@ -1678,6 +1685,27 @@ class DynamoDBArgs(LiteLLMPydanticObjectBase):
     assume_role_aws_session_name: Optional[str] = None
 
 
+class PassThroughGuardrailConfig(LiteLLMPydanticObjectBase):
+    """
+    Configuration for guardrails on passthrough endpoints.
+    
+    Passthrough endpoints are opt-in only for guardrails. Guardrails configured at 
+    org/team/key levels will NOT execute unless explicitly enabled here.
+    """
+    enabled: bool = Field(
+        default=False,
+        description="Whether to execute guardrails for this passthrough endpoint. When True, all org/team/key level guardrails will execute along with any passthrough-specific guardrails. When False (default), NO guardrails execute.",
+    )
+    specific: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of guardrail names that are specific to this passthrough endpoint. These will execute in addition to org/team/key level guardrails when enabled=True.",
+    )
+    target_fields: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of JSON paths to target specific fields for guardrail execution. Examples: 'messages[*].content', 'input', 'messages[?(@.role=='user')].content'. If not specified, guardrails execute on entire payload.",
+    )
+
+
 class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     id: Optional[str] = Field(
         default=None,
@@ -1702,6 +1730,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     auth: bool = Field(
         default=False,
         description="Whether authentication is required for the pass-through endpoint. If True, requests to the endpoint will require a valid LiteLLM API key.",
+    )
+    guardrails: Optional[PassThroughGuardrailConfig] = Field(
+        default=None,
+        description="Guardrail configuration for this passthrough endpoint. When enabled, org/team/key level guardrails will execute along with any passthrough-specific guardrails. Defaults to disabled (no guardrails execute).",
     )
 
 
@@ -1960,6 +1992,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_model_aliases: Optional[Dict] = None
     team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
+    team_object_permission_id: Optional[str] = None
 
     # Team Member Specific Params
     team_member_spend: Optional[float] = None

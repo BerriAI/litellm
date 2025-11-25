@@ -183,7 +183,10 @@ class PromptManager:
         return frontmatter, template_content
 
     def render(
-        self, prompt_id: str, prompt_variables: Optional[Dict[str, Any]] = None
+        self,
+        prompt_id: str,
+        prompt_variables: Optional[Dict[str, Any]] = None,
+        version: Optional[int] = None,
     ) -> str:
         """
         Render a prompt template with the given variables.
@@ -191,6 +194,7 @@ class PromptManager:
         Args:
             prompt_id: The ID of the prompt template to render
             prompt_variables: Variables to substitute in the template
+            version: Optional version number. If provided, looks for {prompt_id}.v{version}
 
         Returns:
             The rendered prompt string
@@ -199,13 +203,16 @@ class PromptManager:
             KeyError: If prompt_id is not found
             ValueError: If template rendering fails
         """
-        if prompt_id not in self.prompts:
+        # Get the template (versioned or base)
+        template = self.get_prompt(prompt_id=prompt_id, version=version)
+        
+        if template is None:
             available_prompts = list(self.prompts.keys())
+            version_str = f" (version {version})" if version else ""
             raise KeyError(
-                f"Prompt '{prompt_id}' not found. Available prompts: {available_prompts}"
+                f"Prompt '{prompt_id}'{version_str} not found. Available prompts: {available_prompts}"
             )
 
-        template = self.prompts[prompt_id]
         variables = prompt_variables or {}
 
         # Validate input variables against schema if defined
@@ -254,8 +261,26 @@ class PromptManager:
 
         return type_mapping.get(schema_type.lower(), str)  # type: ignore
 
-    def get_prompt(self, prompt_id: str) -> Optional[PromptTemplate]:
-        """Get a prompt template by ID."""
+    def get_prompt(
+        self, prompt_id: str, version: Optional[int] = None
+    ) -> Optional[PromptTemplate]:
+        """
+        Get a prompt template by ID and optional version.
+        
+        Args:
+            prompt_id: The base prompt ID
+            version: Optional version number. If provided, looks for {prompt_id}.v{version}
+        
+        Returns:
+            The prompt template if found, None otherwise
+        """
+        if version is not None:
+            # Try versioned prompt first: prompt_id.v{version}
+            versioned_id = f"{prompt_id}.v{version}"
+            if versioned_id in self.prompts:
+                return self.prompts[versioned_id]
+        
+        # Fall back to base prompt_id
         return self.prompts.get(prompt_id)
 
     def list_prompts(self) -> List[str]:

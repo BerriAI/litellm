@@ -18,7 +18,6 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
-from openai.types.batch import Metadata as BatchMetadata
 
 import litellm
 from litellm._logging import verbose_logger

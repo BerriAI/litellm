@@ -705,6 +705,7 @@ def _process_keys_for_user_info(
     keys: Optional[List[LiteLLM_VerificationToken]],
     all_teams: Optional[Union[List[LiteLLM_TeamTable], List[TeamListResponseObject]]],
 ):
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
     from litellm.proxy.proxy_server import general_settings, litellm_master_key_hash
 
     returned_keys = []
@@ -724,6 +725,11 @@ def _process_keys_for_user_info(
             except Exception:
                 # if using pydantic v1
                 _key = key.dict()
+            
+            # Filter out UI session tokens (team_id="litellm-dashboard")
+            if _key.get("team_id") == UI_SESSION_TOKEN_TEAM_ID:
+                continue
+            
             if (
                 "team_id" in _key
                 and _key["team_id"] is not None
@@ -1456,13 +1462,19 @@ async def get_users(
     where_conditions: Dict[str, Any] = {}
 
     if role:
-        where_conditions["user_role"] = role  # Exact match instead of contains
+        where_conditions["user_role"] = role
 
     if user_ids and isinstance(user_ids, str):
         user_id_list = [uid.strip() for uid in user_ids.split(",") if uid.strip()]
-        where_conditions["user_id"] = {
-            "in": user_id_list,
-        }
+        if len(user_id_list) == 1:
+            where_conditions["user_id"] = {
+                "contains": user_id_list[0],
+                "mode": "insensitive",
+            }
+        else:
+            where_conditions["user_id"] = {
+                "in": user_id_list,
+            }
 
     if user_email is not None and isinstance(user_email, str):
         where_conditions["user_email"] = {

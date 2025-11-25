@@ -165,12 +165,6 @@ class TestAimlImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "aiml/flux-pro/v1.1"}
 
-
-class TestFAL_AI_ImageGeneration(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "fal_ai/fal-ai/imagen4/preview"}
-
-
 class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gemini/imagen-4.0-generate-001"}

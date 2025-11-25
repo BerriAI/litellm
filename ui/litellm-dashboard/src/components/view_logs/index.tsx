@@ -26,6 +26,7 @@ import { Tab, TabGroup, TabList, TabPanels, TabPanel, Switch } from "@tremor/rea
 import AuditLogs from "./audit_logs";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { truncateString } from "@/utils/textUtils";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -791,11 +792,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
 
   // Extract guardrail information from metadata if available
   const guardrailInfo = row.original.metadata?.guardrail_information;
-  const guardrailEntries = Array.isArray(guardrailInfo)
-    ? guardrailInfo
-    : guardrailInfo
-    ? [guardrailInfo]
-    : [];
+  const guardrailEntries = Array.isArray(guardrailInfo) ? guardrailInfo : guardrailInfo ? [guardrailInfo] : [];
   const hasGuardrailData = guardrailEntries.length > 0;
 
   // Calculate total masked entities if guardrail data exists
@@ -806,18 +803,18 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
     }
     return (
       sum +
-      Object.values(maskedCounts).reduce<number>(
-        (acc, count) => (typeof count === "number" ? acc + count : acc),
-        0,
-      )
+      Object.values(maskedCounts).reduce<number>((acc, count) => (typeof count === "number" ? acc + count : acc), 0)
     );
   }, 0);
 
-  const primaryGuardrailLabel = guardrailEntries.length === 1
-    ? guardrailEntries[0]?.guardrail_name ?? "-"
-    : guardrailEntries.length > 1
-    ? `${guardrailEntries.length} guardrails`
-    : "-";
+  const primaryGuardrailLabel =
+    guardrailEntries.length === 1
+      ? guardrailEntries[0]?.guardrail_name ?? "-"
+      : guardrailEntries.length > 1
+        ? `${guardrailEntries.length} guardrails`
+        : "-";
+
+  const truncatedRequestId = truncateString(row.original.request_id, 64);
 
   return (
     <div className="p-6 bg-gray-50 space-y-6 w-full max-w-full overflow-hidden box-border">
@@ -830,7 +827,13 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
           <div className="space-y-2">
             <div className="flex">
               <span className="font-medium w-1/3">Request ID:</span>
-              <span className="font-mono text-sm">{row.original.request_id}</span>
+              {row.original.request_id.length > 64 ? (
+                <Tooltip title={row.original.request_id}>
+                  <span className="font-mono text-sm">{truncatedRequestId}</span>
+                </Tooltip>
+              ) : (
+                <span className="font-mono text-sm">{row.original.request_id}</span>
+              )}
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Model:</span>
