@@ -24,9 +24,6 @@ class RubrikLogger(CustomLogger):
         # Cache the httpx client
         self.client: Optional[httpx.AsyncClient] = None
 
-    def log_success(self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs=None):
-        print_verbose("RubrikLogger: Logging Success")
-
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_payload: StandardLoggingPayload = kwargs["standard_logging_object"]
         # If the request is an anthropic request, the system prompt _might_ be in kwargs["system"]

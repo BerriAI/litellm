@@ -3425,8 +3425,6 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _prometheus_logger = PrometheusLogger()
             _in_memory_loggers.append(_prometheus_logger)
             return _prometheus_logger  # type: ignore
-
-
         elif logging_integration == "datadog":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
