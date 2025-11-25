@@ -273,6 +273,7 @@ from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConf
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
@@ -7447,6 +7448,23 @@ class ProviderConfigManager:
             return litellm.GithubCopilotResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
+        return None
+
+    @staticmethod
+    def get_provider_skills_api_config(
+        provider: LlmProviders,
+    ) -> Optional["BaseSkillsAPIConfig"]:
+        """
+        Get provider-specific Skills API configuration
+        
+        Args:
+            provider: The LLM provider
+            
+        Returns:
+            Provider-specific Skills API config or None
+        """
+        if litellm.LlmProviders.ANTHROPIC == provider:
+            return litellm.AnthropicSkillsConfig()
         return None
 
     @staticmethod

@@ -430,6 +430,7 @@ const sidebars = {
             "search/searxng",
           ]
         },
+        "skills",
         {
           type: "category",
           label: "/vector_stores",
@@ -455,6 +456,11 @@ const sidebars = {
           type: "doc",
           id: "provider_registration/index",
           label: "Integrate as a Model Provider",
+        },
+        {
+          type: "doc",
+          id: "provider_registration/add_model_pricing",
+          label: "Add Model Pricing & Context Window",
         },
         {
           type: "category",
