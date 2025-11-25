@@ -3047,7 +3047,6 @@ jobs:
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e USE_PRISMA_MIGRATE=True \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
