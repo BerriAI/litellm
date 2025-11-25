@@ -66,7 +66,7 @@ class TestMCPCustomFields:
         assert mcp_info["priority"] == 10
         assert mcp_info["tags"] == ["production", "api"]
 
-    def test_custom_fields_preserved_from_database(self):
+    async def test_custom_fields_preserved_from_database(self):
         """Test that custom fields in mcp_info are preserved when adding from database."""
         manager = MCPServerManager()
 
@@ -92,7 +92,7 @@ class TestMCPCustomFields:
         mock_server.mcp_access_groups = None
 
         # Add server to manager
-        manager.add_update_server(mock_server)
+        await manager.add_update_server(mock_server)
 
         # Get the added server
         server = manager.get_mcp_server_by_id("test-server-id")

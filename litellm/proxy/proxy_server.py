@@ -42,6 +42,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.common_utils.callback_utils import normalize_callback_names
+from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -49,7 +50,6 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 from litellm.utils import load_credentials_from_list
-from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -147,6 +147,7 @@ from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
+    _REALTIME_BODY_CACHE_SIZE,
     APSCHEDULER_COALESCE,
     APSCHEDULER_MAX_INSTANCES,
     APSCHEDULER_MISFIRE_GRACE_TIME,
@@ -160,7 +161,6 @@ from litellm.constants import (
     PROXY_BATCH_WRITE_AT,
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
-    _REALTIME_BODY_CACHE_SIZE,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -190,6 +190,9 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
+from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+    router as anthropic_skills_router,
+)
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     get_team_object,
@@ -390,6 +393,7 @@ from litellm.proxy.utils import (
     get_server_root_path,
     handle_exception_on_proxy,
     hash_token,
+    model_dump_with_preserved_fields,
     update_spend,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
@@ -3595,6 +3599,7 @@ class ProxyConfig:
             verbose_proxy_logger.exception(
                 f"Error in _check_and_reload_model_cost_map: {str(e)}"
             )
+
     def _get_prompt_spec_for_db_prompt(self, db_prompt):
         """
         Convert a DB prompt object to a PromptSpec object.
@@ -3608,7 +3613,7 @@ class ProxyConfig:
             The PromptSpec object
         """
         from litellm.proxy.prompts.prompt_endpoints import create_versioned_prompt_spec
-        
+
         return create_versioned_prompt_spec(db_prompt=db_prompt)
 
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
@@ -4856,7 +4861,7 @@ async def chat_completion(  # noqa: PLR0915
             version=version,
         )
         if isinstance(result, BaseModel):
-            return result.model_dump(exclude_none=True, exclude_unset=True)
+            return model_dump_with_preserved_fields(result, exclude_unset=True)
         else:
             return result
     except RejectedRequestError as e:
@@ -5585,6 +5590,7 @@ async def vertex_ai_live_passthrough_endpoint(
 
 ######################################################################
 
+
 @lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
 def _realtime_query_params_template(
     model: str, intent: Optional[str]
@@ -5632,10 +5638,10 @@ async def realtime_websocket_endpoint(
     request = Request(scope=scope)
 
     request._url = websocket.url
-    
+
     async def return_body():
         return _realtime_request_body(model)
-    
+
     request.body = return_body  # type: ignore
 
     ### ROUTE THE REQUEST ###
@@ -10143,6 +10149,7 @@ app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
 app.include_router(anthropic_router)
+app.include_router(anthropic_skills_router)
 app.include_router(google_router)
 app.include_router(langfuse_router)
 app.include_router(pass_through_router)

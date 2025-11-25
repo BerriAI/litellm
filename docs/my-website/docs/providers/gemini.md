@@ -74,6 +74,10 @@ Note: Reasoning cannot be turned off on Gemini 2.5 Pro models.
 For **Gemini 3+ models** (e.g., `gemini-3-pro-preview`), LiteLLM automatically maps `reasoning_effort` to the new `thinking_level` parameter instead of `thinking_budget`. The `thinking_level` parameter uses `"low"` or `"high"` values for better control over reasoning depth.
 :::
 
+:::warning Image Models
+**Gemini image models** (e.g., `gemini-3-pro-image-preview`, `gemini-2.0-flash-exp-image-generation`) do **not** support the `thinking_level` parameter. LiteLLM automatically excludes image models from receiving thinking configuration to prevent API errors.
+:::
+
 **Mapping for Gemini 2.5 and earlier models**
 
 | reasoning_effort | thinking | Notes |

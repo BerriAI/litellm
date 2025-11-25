@@ -1035,14 +1035,30 @@ class Router:
             delete_container, call_type="delete_container"
         )
 
+    def _initialize_skills_endpoints(self):
+        """Initialize Anthropic Skills API endpoints."""
+        self.acreate_skill = self.factory_function(
+            litellm.acreate_skill, call_type="acreate_skill"
+        )
+        self.alist_skills = self.factory_function(
+            litellm.alist_skills, call_type="alist_skills"
+        )
+        self.aget_skill = self.factory_function(
+            litellm.aget_skill, call_type="aget_skill"
+        )
+        self.adelete_skill = self.factory_function(
+            litellm.adelete_skill, call_type="adelete_skill"
+        )
+
     def _initialize_specialized_endpoints(self):
-        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container)."""
+        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills)."""
         self._initialize_vector_store_endpoints()
         self._initialize_vector_store_file_endpoints()
         self._initialize_google_genai_endpoints()
         self._initialize_ocr_search_endpoints()
         self._initialize_video_endpoints()
         self._initialize_container_endpoints()
+        self._initialize_skills_endpoints()
 
     def initialize_router_endpoints(self):
         self._initialize_core_endpoints()
@@ -3817,6 +3833,10 @@ class Router:
             "retrieve_container",
             "adelete_container",
             "delete_container",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
         ] = "assistants",
     ):
         """
@@ -3937,6 +3957,10 @@ class Router:
                 "aretrieve_container",
                 "adelete_container",
                 "acancel_batch",
+                "acreate_skill",
+                "alist_skills",
+                "aget_skill",
+                "adelete_skill",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

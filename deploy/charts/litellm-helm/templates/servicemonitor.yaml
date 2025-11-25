@@ -1,0 +1,39 @@
+{{- with .Values.serviceMonitor }}
+{{- if and (eq .enabled true) }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "litellm.fullname" $ }}
+  labels:
+    {{- include "litellm.labels" $ | nindent 4 }}
+    {{- if .labels }}
+    {{- toYaml .labels | nindent 4 }}
+    {{- end }}
+  {{- if .annotations }}
+  annotations:
+    {{- toYaml .annotations | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "litellm.selectorLabels" $ | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+    # if not set, use the release namespace
+    {{- if not .namespaceSelector.matchNames }}
+    - {{ $.Release.Namespace | quote }}
+    {{- else }}
+    {{- toYaml .namespaceSelector.matchNames | nindent 4 }}
+    {{- end }}
+  endpoints:
+  - port: http
+    path: /metrics/
+    interval: {{ .interval }}
+    scrapeTimeout: {{ .scrapeTimeout }}
+    scheme: http
+  {{- if .relabelings }}
+    relabelings:
+{{- toYaml .relabelings | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

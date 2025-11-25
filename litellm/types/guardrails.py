@@ -14,6 +14,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
+    ToolPermissionGuardrailConfigModel,
+)
 
 
 """
@@ -55,6 +58,7 @@ class SupportedGuardrailIntegrations(Enum):
     ENKRYPTAI = "enkryptai"
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
+    PROMPT_SECURITY = "prompt_security"
 
 
 class Role(Enum):
@@ -411,18 +415,6 @@ class NomaGuardrailConfigModel(BaseModel):
     anonymize_input: Optional[bool] = Field(
         default=None,
         description="If True, replaces sensitive content with anonymized version when only PII/PCI/secrets are detected. Only applies in blocking mode. Defaults to False if not provided",
-    )
-
-
-class ToolPermissionGuardrailConfigModel(BaseModel):
-    """Configuration parameters for the Tool Permission guardrail"""
-
-    rules: Optional[List[Dict]] = Field(
-        default=None, description="List of permission rules for tool usage"
-    )
-    default_action: Optional[str] = Field(
-        default="Deny",
-        description="Default action when no rule matches (Allow or Deny)",
     )
 
 

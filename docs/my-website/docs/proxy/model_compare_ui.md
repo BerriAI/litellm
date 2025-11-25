@@ -40,7 +40,7 @@ You can compare up to 3 models simultaneously. For each comparison panel:
 - Select a model from your configured endpoints
 - Models are loaded from your LiteLLM proxy configuration
 
-<Image img={require('../../img/ui_model_compare_select_models.png')} />
+<Image img={require('../../img/ui_model_compare_select_model.png')} />
 
 #### 2. Configure Model Parameters
 
