@@ -44,6 +44,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     defer_loading: bool
     allowed_callers: Optional[List[str]]
+    input_examples: Optional[List[Dict[str, Any]]]
 
 
 class AnthropicComputerTool(TypedDict, total=False):

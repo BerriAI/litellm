@@ -319,6 +319,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 returned_tool["allowed_callers"] = _allowed_callers
             elif _allowed_callers_function is not None:
                 returned_tool["allowed_callers"] = _allowed_callers_function
+        
+        ## check if input_examples is set in the tool
+        _input_examples = tool.get("input_examples", None)
+        _input_examples_function = tool.get("function", {}).get("input_examples", None)
+        if returned_tool is not None:
+            if _input_examples is not None and isinstance(_input_examples, list):
+                returned_tool["input_examples"] = _input_examples
+            elif _input_examples_function is not None and isinstance(_input_examples_function, list):
+                returned_tool["input_examples"] = _input_examples_function
 
         return returned_tool, mcp_server
 

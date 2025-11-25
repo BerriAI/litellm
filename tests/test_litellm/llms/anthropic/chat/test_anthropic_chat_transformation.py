@@ -987,3 +987,160 @@ def test_allowed_callers_in_function_field():
     assert transformed_tool is not None
     assert "allowed_callers" in transformed_tool
     assert transformed_tool["allowed_callers"] == ["code_execution_20250825"]
+
+
+def test_input_examples_field_preservation():
+    """Test that input_examples field is preserved during tool transformation."""
+    config = AnthropicConfig()
+    
+    # Test with top-level input_examples
+    tool_with_examples = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"},
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+                },
+                "required": ["location"]
+            }
+        },
+        "input_examples": [
+            {"location": "San Francisco, CA", "unit": "fahrenheit"},
+            {"location": "Tokyo, Japan", "unit": "celsius"}
+        ]
+    }
+    
+    transformed_tool, _ = config._map_tool_helper(tool_with_examples)
+    assert transformed_tool is not None
+    assert "input_examples" in transformed_tool
+    assert len(transformed_tool["input_examples"]) == 2
+    assert transformed_tool["input_examples"][0]["location"] == "San Francisco, CA"
+
+
+def test_input_examples_beta_header():
+    """Test that beta header is automatically added when input_examples is detected."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    
+    model_info = AnthropicModelInfo()
+    
+    # Test detection with input_examples
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather information",
+                "parameters": {"type": "object", "properties": {}}
+            },
+            "input_examples": [
+                {"location": "San Francisco, CA"}
+            ]
+        }
+    ]
+    
+    is_examples_used = model_info.is_input_examples_used(tools)
+    assert is_examples_used is True
+    
+    # Test header generation
+    headers = model_info.get_anthropic_headers(
+        api_key="test-key",
+        input_examples_used=True
+    )
+    
+    assert "anthropic-beta" in headers
+    assert "advanced-tool-use-2025-11-20" in headers["anthropic-beta"]
+
+
+def test_input_examples_in_function_field():
+    """Test that input_examples in function field is also preserved."""
+    config = AnthropicConfig()
+    
+    # Test with function.input_examples
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather information",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            },
+            "input_examples": [
+                {"location": "Paris, France"},
+                {"location": "London, UK"}
+            ]
+        }
+    }
+    
+    transformed_tool, _ = config._map_tool_helper(tool)
+    assert transformed_tool is not None
+    assert "input_examples" in transformed_tool
+    assert len(transformed_tool["input_examples"]) == 2
+
+
+def test_input_examples_with_other_features():
+    """Test that input_examples works alongside other tool features."""
+    config = AnthropicConfig()
+    
+    # Tool with input_examples, defer_loading, and allowed_callers
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "query_database",
+            "description": "Execute a SQL query",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string"}
+                },
+                "required": ["sql"]
+            }
+        },
+        "input_examples": [
+            {"sql": "SELECT * FROM users WHERE id = 1"}
+        ],
+        "defer_loading": True,
+        "allowed_callers": ["code_execution_20250825"]
+    }
+    
+    transformed_tool, _ = config._map_tool_helper(tool)
+    assert transformed_tool is not None
+    assert "input_examples" in transformed_tool
+    assert "defer_loading" in transformed_tool
+    assert "allowed_callers" in transformed_tool
+    assert transformed_tool["defer_loading"] is True
+    assert transformed_tool["allowed_callers"] == ["code_execution_20250825"]
+
+
+def test_input_examples_empty_list_not_added():
+    """Test that empty input_examples list is not added to transformed tool."""
+    config = AnthropicConfig()
+    
+    # Tool with empty input_examples
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather information",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            }
+        },
+        "input_examples": []
+    }
+    
+    transformed_tool, _ = config._map_tool_helper(tool)
+    assert transformed_tool is not None
+    # Empty list should not be added
+    assert "input_examples" not in transformed_tool or len(transformed_tool.get("input_examples", [])) == 0
