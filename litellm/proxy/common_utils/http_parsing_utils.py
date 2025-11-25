@@ -1,7 +1,7 @@
 import json
 import re
 from typing import Any, Collection, Dict, List, Optional
-
+import asyncio # Import asyncio
 import orjson
 from fastapi import Request, UploadFile, status
 
@@ -50,7 +50,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                 parsed_body = {}
             else:
                 try:
-                    parsed_body = orjson.loads(body)
+                    parsed_body = await asyncio.to_thread(orjson.loads, body)
                 except orjson.JSONDecodeError as e:
                     # First try the standard json module which is more forgiving
                     # First decode bytes to string if needed
@@ -67,7 +67,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                     )
 
                     try:
-                        parsed_body = json.loads(body_str)
+                        parsed_body = await asyncio.to_thread(json.loads, body_str)
                     except json.JSONDecodeError:
                         # If both orjson and json.loads fail, throw a proper error
                         verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
