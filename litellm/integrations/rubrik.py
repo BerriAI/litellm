@@ -35,7 +35,19 @@ class RubrikLogger(CustomLogger):
             # This is a list of dictionaries
             system_prompt_msg_list = kwargs["system"]
             system_scaffold = {"role": "system", "content": system_prompt_msg_list}
-            standard_logging_payload.messages.insert(0, system_scaffold)
+            try: 
+                # check if system prompt is not empty
+                if system_prompt_msg_list: 
+                    system_scaffold = {"role": "system", "content": system_prompt_msg_list}
+                    # If the messages are a list 
+                    if type(standard_logging_payload["messages"]) is list:
+                        standard_logging_payload["messages"].insert(0, system_scaffold) # type: ignore
+                    # If the messages are a dictionary or a string -> transform the messages into a list?
+                    elif type(standard_logging_payload["messages"]) is dict or type(standard_logging_payload["messages"]) is str:
+                        # Transform the messages into a list
+                        standard_logging_payload["messages"] = [standard_logging_payload["messages"], system_scaffold]
+            except Exception as e: 
+                verbose_logger.debug(f"Error adding system prompt to messages: {e}")
         try:
             # Initialize client if not already done
             if self.client is None:
