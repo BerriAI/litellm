@@ -1,3 +1,11 @@
+include:
+ - project: 'ccoe/photon/pipelines'
+   ref: review
+   file: '.gitlab/ci/global.gitlab-ci.yml'
+ - project: 'ccoe/photon/pipelines'
+   ref: review
+   file: 'security.yml'
+
 .vault:
   id_tokens:
     VAULT_ID_TOKEN:
