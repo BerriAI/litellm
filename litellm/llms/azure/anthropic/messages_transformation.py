@@ -1,19 +1,12 @@
 """
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
-import httpx
-
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
-from litellm.types.llms.anthropic_messages.anthropic_response import (
-    AnthropicMessagesResponse,
-)
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -41,8 +34,6 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         Validate environment and set up Azure authentication headers for /v1/messages endpoint.
         Azure Anthropic uses x-api-key header (not api-key).
         """
-        from litellm.secret_managers.main import get_secret_str
-
         # Convert dict to GenericLiteLLMParams if needed
         if isinstance(litellm_params, dict):
             if api_key and "api_key" not in litellm_params:
