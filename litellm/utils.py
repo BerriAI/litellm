@@ -7865,6 +7865,12 @@ class ProviderConfigManager:
                 )
 
                 return AzureAVATextToSpeechConfig()
+        elif litellm.LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.text_to_speech.transformation import (
+                ElevenLabsTextToSpeechConfig,
+            )
+
+            return ElevenLabsTextToSpeechConfig()
         elif litellm.LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.text_to_speech.transformation import (
                 RunwayMLTextToSpeechConfig,
