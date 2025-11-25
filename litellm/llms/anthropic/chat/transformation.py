@@ -822,7 +822,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "messages": anthropic_messages,
             **optional_params,
         }
-
         return data
 
     def _transform_response_for_json_mode(
