@@ -1,6 +1,6 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -23,6 +23,28 @@ class VertexAIError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
+
+def get_anthropic_beta_from_headers(headers: Dict) -> List[str]:
+    """
+    Extract anthropic-beta header values and convert them to a list.
+    Supports comma-separated values from user headers.
+
+    Used by Vertex AI Anthropic transformation for consistent handling
+    of anthropic-beta headers that should be passed to Vertex AI.
+
+    Args:
+        headers (dict): Request headers dictionary
+
+    Returns:
+        List[str]: List of anthropic beta feature strings, empty list if no header
+    """
+    anthropic_beta_header = headers.get("anthropic-beta")
+    if not anthropic_beta_header:
+        return []
+
+    # Split comma-separated values and strip whitespace
+    return [beta.strip() for beta in anthropic_beta_header.split(",")]
 
 
 class VertexAIAnthropicConfig(AnthropicConfig):
@@ -68,6 +90,31 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         )
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
+        
+        # Handle anthropic_beta from user headers
+        anthropic_beta_list = get_anthropic_beta_from_headers(headers)
+        
+        # Auto-add computer-use beta if computer use tools are present
+        tools = data.get("tools", [])
+        if tools:
+            for tool in tools:
+                tool_type = tool.get("type", "")
+                if tool_type.startswith("computer_"):
+                    # Auto-add the computer-use beta header
+                    if "computer-use-2024-10-22" not in anthropic_beta_list:
+                        anthropic_beta_list.append("computer-use-2024-10-22")
+                    break
+        
+        # Remove duplicates while preserving order
+        if anthropic_beta_list:
+            unique_betas = []
+            seen = set()
+            for beta in anthropic_beta_list:
+                if beta not in seen:
+                    unique_betas.append(beta)
+                    seen.add(beta)
+            data["anthropic_beta"] = unique_betas
+        
         return data
 
     def transform_response(
