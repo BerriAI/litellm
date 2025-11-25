@@ -432,7 +432,8 @@ class ProxyExtrasDBManager:
                                         migration_name
                                     )
                                     logger.info(
-                                        f"Resolving migration {migration_name} that failed due to existing schema objects"
+                                        f"Resolving migration {migration_name} that failed "
+                                        f"due to existing schema objects"
                                     )
                                     ProxyExtrasDBManager._resolve_specific_migration(
                                         migration_name
@@ -441,7 +442,8 @@ class ProxyExtrasDBManager:
                             else:
                                 # Unknown P3018 error - log and re-raise for safety
                                 logger.warning(
-                                    f"P3018 error encountered but could not classify as permission or idempotent error. "
+                                    f"P3018 error encountered but could not classify "
+                                    f"as permission or idempotent error. "
                                     f"Error: {e.stderr}"
                                 )
                                 raise

@@ -7,8 +7,10 @@ sys.path.insert(
 
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
+
 def test_custom_prisma_dir(monkeypatch):
     import tempfile
+
     # create a temp directory
     temp_dir = tempfile.mkdtemp()
     monkeypatch.setenv("LITELLM_MIGRATION_DIR", temp_dir)
@@ -123,4 +125,3 @@ class TestErrorClassificationPriority:
         error_message = "connection timeout"
         assert ProxyExtrasDBManager._is_permission_error(error_message) is False
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is False
-
