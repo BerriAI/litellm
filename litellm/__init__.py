@@ -20,6 +20,8 @@ from typing import (
     Literal,
     get_args,
     TYPE_CHECKING,
+    Tuple,
+    overload,
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
@@ -1503,8 +1505,20 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
     global_gitlab_config = config
 
 
-# Lazy import for cost_calculator functions to avoid loading the module at import time
-# This significantly reduces memory usage when importing litellm
+# ============================================================================
+# LAZY LOADING SYSTEM
+# ============================================================================
+# This system allows heavy modules to be loaded only when accessed,
+# significantly reducing initial import time and memory usage.
+#
+# To add a new lazy-loaded function/class:
+# 1. Add the import handler function (e.g., _lazy_import_xxx)
+# 2. Add entries to _LAZY_LOAD_REGISTRY below
+# 3. Add type stubs in the TYPE_CHECKING block
+# 4. Add @overload decorators for type checking
+# ============================================================================
+
+
 def _lazy_import_cost_calculator(name: str) -> Any:
     """Lazy import for cost_calculator functions."""
     from .cost_calculator import (
@@ -1513,22 +1527,17 @@ def _lazy_import_cost_calculator(name: str) -> Any:
         response_cost_calculator as _response_cost_calculator,
     )
     
-    # Map names to imported functions
     _cost_functions = {
         "completion_cost": _completion_cost,
         "cost_per_token": _cost_per_token,
         "response_cost_calculator": _response_cost_calculator,
     }
     
-    # Cache the imported function in the module namespace
     func = _cost_functions[name]
-    globals()[name] = func
-    
+    globals()[name] = func  # Cache for future access
     return func
 
 
-# Lazy import for litellm_logging to avoid loading the module at import time
-# This significantly reduces memory usage when importing litellm
 def _lazy_import_litellm_logging(name: str) -> Any:
     """Lazy import for litellm_logging module."""
     try:
@@ -1537,35 +1546,70 @@ def _lazy_import_litellm_logging(name: str) -> Any:
             modify_integration as _modify_integration,
         )
         
-        # Map names to imported objects
         _logging_objects = {
             "Logging": _Logging,
             "modify_integration": _modify_integration,
         }
         
-        # Cache the imported object in the module namespace
         obj = _logging_objects[name]
-        globals()[name] = obj
-        
+        globals()[name] = obj  # Cache for future access
         return obj
     except Exception as e:
-        # If lazy import fails, raise a more informative error
         raise AttributeError(
             f"module {__name__!r} has no attribute {name!r}. "
             f"Lazy import failed: {e}"
         ) from e
 
 
+# Registry mapping lazy-loaded names to their import handlers
+# Add new lazy-loaded items here for easy maintenance
+_LAZY_LOAD_REGISTRY: Dict[str, Callable[[str], Any]] = {
+    # Cost calculator functions
+    "completion_cost": _lazy_import_cost_calculator,
+    "cost_per_token": _lazy_import_cost_calculator,
+    "response_cost_calculator": _lazy_import_cost_calculator,
+    # Logging objects
+    "Logging": _lazy_import_litellm_logging,
+    "modify_integration": _lazy_import_litellm_logging,
+}
+
+
+# Type stubs for lazy-loaded functions/classes to help type checkers
+# Add type annotations here for new lazy-loaded items
+if TYPE_CHECKING:
+    # Cost calculator functions
+    cost_per_token: Callable[..., Tuple[float, float]]
+    completion_cost: Callable[..., float]
+    response_cost_calculator: Any
+    # Logging objects
+    Logging: Any
+    modify_integration: Any
+
+
+# Type overloads for __getattr__ to provide proper type hints
+# Add @overload decorators here for new lazy-loaded items with specific types
+@overload
+def __getattr__(name: Literal["cost_per_token"]) -> Callable[..., Tuple[float, float]]:
+    ...
+
+
+@overload
+def __getattr__(name: Literal["completion_cost"]) -> Callable[..., float]:
+    ...
+
+
+@overload
+def __getattr__(name: Literal["response_cost_calculator", "Logging", "modify_integration"]) -> Any:
+    ...
+
+
 def __getattr__(name: str) -> Any:
-    """Lazy import for cost_calculator and litellm_logging functions.
+    """Lazy import handler for cost_calculator and litellm_logging functions.
     
     This allows these heavy modules to be loaded only when accessed,
     reducing initial import time and memory usage.
     """
-    if name in ("completion_cost", "response_cost_calculator", "cost_per_token"):
-        return _lazy_import_cost_calculator(name)
-    
-    if name in ("Logging", "modify_integration"):
-        return _lazy_import_litellm_logging(name)
+    if name in _LAZY_LOAD_REGISTRY:
+        return _LAZY_LOAD_REGISTRY[name](name)
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
