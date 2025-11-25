@@ -9,6 +9,7 @@ import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
+import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -19,6 +20,8 @@ interface MCPServerEditProps {
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
+const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2];
+const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   mcpServer,
@@ -34,8 +37,82 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [pendingRestoredValues, setPendingRestoredValues] = useState<Record<string, any> | null>(null);
   const authType = Form.useWatch("auth_type", form) as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
+  const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
+  
+  const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
+
+  const persistEditUiState = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const values = form.getFieldsValue(true);
+      window.sessionStorage.setItem(
+        EDIT_OAUTH_UI_STATE_KEY,
+        JSON.stringify({
+          serverId: mcpServer.server_id,
+          formValues: values,
+          costConfig,
+          allowedTools,
+          searchValue,
+          aliasManuallyEdited,
+        }),
+      );
+    } catch (err) {
+      console.warn("Failed to persist MCP edit state", err);
+    }
+  };
+
+  const {
+    startOAuthFlow,
+    status: oauthStatus,
+    error: oauthError,
+    tokenResponse: oauthTokenResponse,
+  } = useMcpOAuthFlow({
+    accessToken,
+    getCredentials: () => form.getFieldValue("credentials"),
+    getTemporaryPayload: () => {
+      const values = form.getFieldsValue(true);
+      const url = values.url || mcpServer.url;
+      const transport = values.transport || mcpServer.transport;
+      if (!url || !transport) {
+        return null;
+      }
+      const staticHeaders = Array.isArray(values.static_headers)
+        ? values.static_headers.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
+            const header = entry?.header?.trim();
+            if (!header) {
+              return acc;
+            }
+            acc[header] = entry?.value ?? "";
+            return acc;
+          }, {})
+        : ({} as Record<string, string>);
+
+      return {
+        server_id: mcpServer.server_id,
+        server_name: values.server_name || mcpServer.server_name || mcpServer.alias,
+        alias: values.alias || mcpServer.alias,
+        description: values.description || mcpServer.description,
+        url,
+        transport,
+        auth_type: AUTH_TYPE.OAUTH2,
+        credentials: values.credentials,
+        mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
+        static_headers: staticHeaders,
+        command: values.command,
+        args: values.args,
+        env: values.env,
+      };
+    },
+    onTokenReceived: (token) => {
+      setOauthAccessToken(token?.access_token ?? null);
+    },
+    onBeforeRedirect: persistEditUiState,
+  });
 
   const initialStaticHeaders = React.useMemo(() => {
     if (!mcpServer.static_headers) {
@@ -69,6 +146,55 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const storedState = window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY);
+    if (!storedState) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(storedState);
+      if (!parsed || parsed.serverId !== mcpServer.server_id) {
+        return;
+      }
+      if (parsed.formValues) {
+        setPendingRestoredValues({ ...mcpServer, ...parsed.formValues });
+      }
+      if (parsed.costConfig) {
+        setCostConfig(parsed.costConfig);
+      }
+      if (parsed.allowedTools) {
+        setAllowedTools(parsed.allowedTools);
+      }
+      if (parsed.searchValue) {
+        setSearchValue(parsed.searchValue);
+      }
+      if (typeof parsed.aliasManuallyEdited === "boolean") {
+        setAliasManuallyEdited(parsed.aliasManuallyEdited);
+      }
+    } catch (err) {
+      console.error("Failed to restore MCP edit state", err);
+    } finally {
+      window.sessionStorage.removeItem(EDIT_OAUTH_UI_STATE_KEY);
+    }
+  }, [form, mcpServer]);
+
+  useEffect(() => {
+    if (!pendingRestoredValues) {
+      return;
+    }
+    const transport = pendingRestoredValues.transport || mcpServer.transport;
+    if (transport && transport !== form.getFieldValue("transport")) {
+      form.setFieldsValue({ transport });
+      return;
+    }
+    form.setFieldsValue(pendingRestoredValues);
+    setPendingRestoredValues(null);
+  }, [pendingRestoredValues, form, mcpServer.transport]);
+
   // Transform string array to object array for initial form values
   useEffect(() => {
     if (mcpServer.mcp_access_groups) {
@@ -81,10 +207,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   // Fetch tools when component mounts
   useEffect(() => {
     fetchTools();
-  }, [mcpServer, accessToken]);
+  }, [mcpServer, accessToken, oauthAccessToken]);
 
   const fetchTools = async () => {
     if (!accessToken || !mcpServer.url) {
+      return;
+    }
+
+    if (mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !oauthAccessToken) {
       return;
     }
 
@@ -101,7 +231,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         mcp_info: mcpServer.mcp_info,
       };
 
-      const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig);
+      const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig, oauthAccessToken);
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
@@ -208,7 +338,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         static_headers: staticHeaders,
       };
 
-      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(restValues.auth_type);
+      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
       if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
@@ -278,6 +408,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 <Select.Option value="api_key">API Key</Select.Option>
                 <Select.Option value="bearer_token">Bearer Token</Select.Option>
                 <Select.Option value="basic">Basic Auth</Select.Option>
+                <Select.Option value="oauth2">OAuth</Select.Option>
               </Select>
             </Form.Item>
 
@@ -309,6 +440,84 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               </Form.Item>
             )}
 
+            {isOAuthAuthType && (
+              <>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      OAuth Client ID (optional)
+                      <Tooltip title="Provide only if your MCP server cannot handle dynamic client registration.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "client_id"]}
+                >
+                  <TextInput
+                    type="password"
+                    placeholder="Enter OAuth client ID (leave blank to keep existing)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      OAuth Client Secret (optional)
+                      <Tooltip title="Provide only if your MCP server cannot handle dynamic client registration.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "client_secret"]}
+                >
+                  <TextInput
+                    type="password"
+                    placeholder="Enter OAuth client secret (leave blank to keep existing)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      OAuth Scopes (optional)
+                      <Tooltip title="Add scopes to override the default scope list used for this MCP server.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "scopes"]}
+                >
+                  <Select
+                    mode="tags"
+                    tokenSeparators={[","]}
+                    placeholder="Add scopes"
+                    className="rounded-lg"
+                    size="large"
+                  />
+                </Form.Item>
+                <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
+                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and save it as the authentication value.</p>
+                  <Button
+                    variant="secondary"
+                    onClick={startOAuthFlow}
+                    disabled={oauthStatus === "authorizing" || oauthStatus === "exchanging"}
+                  >
+                    {oauthStatus === "authorizing"
+                      ? "Waiting for authorization..."
+                      : oauthStatus === "exchanging"
+                        ? "Exchanging authorization code..."
+                        : "Authorize & Fetch Token"}
+                  </Button>
+                  {oauthError && <p className="text-sm text-red-500">{oauthError}</p>}
+                  {oauthStatus === "success" && oauthTokenResponse?.access_token && (
+                    <p className="text-sm text-green-600">
+                      Token fetched. Expires in {oauthTokenResponse.expires_in ?? "?"} seconds.
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+
             {/* Permission Management / Access Control Section */}
             <div className="mt-6">
               <MCPPermissionManagement
@@ -324,6 +533,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <div className="mt-6">
               <MCPToolConfiguration
                 accessToken={accessToken}
+                oauthAccessToken={oauthAccessToken}
                 formValues={{
                   server_id: mcpServer.server_id,
                   server_name: mcpServer.server_name,

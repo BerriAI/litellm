@@ -16,7 +16,8 @@
         "batches": "Supports /batches endpoint",
         "rerank": "Supports /rerank endpoint",
         "ocr": "Supports /ocr endpoint",
-        "search": "Supports /search endpoint"
+        "search": "Supports /search endpoint",
+        "skills": "Supports /skills endpoint"
       }
     }
   },
@@ -82,7 +83,8 @@
         "audio_speech": false,
         "moderations": false,
         "batches": true,
-        "rerank": false
+        "rerank": false,
+        "skills": true
       }
     },
     "anthropic_text": {
@@ -98,7 +100,8 @@
         "audio_speech": false,
         "moderations": false,
         "batches": true,
-        "rerank": false
+        "rerank": false,
+        "skills": true
       }
     },
     "assemblyai": {
@@ -1023,6 +1026,22 @@
     "moonshot": {
       "display_name": "Moonshot (`moonshot`)",
       "url": "https://docs.litellm.ai/docs/providers/moonshot",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
+    "docker_model_runner": {
+      "display_name": "Docker Model Runner (`docker_model_runner`)",
+      "url": "https://docs.litellm.ai/docs/providers/docker_model_runner",
       "endpoints": {
         "chat_completions": true,
         "messages": true,

@@ -1,13 +1,15 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { modelHubCall, modelHubPublicModelsCall, getAgentsList, getProxyBaseUrl } from "./networking";
+import { modelHubCall, modelHubPublicModelsCall, getAgentsList, getProxyBaseUrl, fetchMCPServers } from "./networking";
 import { getConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
 import { agentHubColumns, AgentHubData } from "./agent_hub_table_columns";
+import { mcpHubColumns, MCPServerData } from "./mcp_hub_table_columns";
 import PublicModelHub from "./public_model_hub";
 import MakeModelPublicForm from "./make_model_public_form";
 import MakeAgentPublicForm from "./make_agent_public_form";
+import MakeMCPPublicForm from "./make_mcp_public_form";
 import ModelFilters from "./model_filters";
 import UsefulLinksManagement from "./useful_links_management";
 import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
@@ -60,9 +62,16 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
   const [selectedAgent, setSelectedAgent] = useState<null | AgentHubData>(null);
   const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
+  // MCP Hub state
+  const [mcpHubData, setMcpHubData] = useState<MCPServerData[] | null>(null);
+  const [mcpLoading, setMcpLoading] = useState<boolean>(true);
+  const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
+  const [isMcpModalVisible, setIsMcpModalVisible] = useState(false);
+  const [isMakeMcpPublicModalVisible, setIsMakeMcpPublicModalVisible] = useState(false);
   const router = useRouter();
   const tableRef = useRef<TableInstance<any>>(null);
   const agentTableRef = useRef<TableInstance<any>>(null);
+  const mcpTableRef = useRef<TableInstance<any>>(null);
 
   useEffect(() => {
     const fetchData = async (accessToken: string) => {
@@ -143,6 +152,30 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     }
   }, [publicPage, accessToken]);
 
+  // Fetch MCP Hub data
+  useEffect(() => {
+    const fetchMcpData = async () => {
+      if (!accessToken) {
+        return;
+      }
+
+      try {
+        setMcpLoading(true);
+        const response = await fetchMCPServers(accessToken);
+        console.log("MCPHubData:", response);
+        setMcpHubData(response);
+      } catch (error) {
+        console.error("There was an error fetching the MCP server data", error);
+      } finally {
+        setMcpLoading(false);
+      }
+    };
+
+    if (!publicPage) {
+      fetchMcpData();
+    }
+  }, [publicPage, accessToken]);
+
   const showModal = (model: ModelGroupInfo) => {
     setSelectedModel(model);
     setIsModalVisible(true);
@@ -151,6 +184,11 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const showAgentModal = (agent: AgentHubData) => {
     setSelectedAgent(agent);
     setIsAgentModalVisible(true);
+  };
+
+  const showMcpModal = (server: MCPServerData) => {
+    setSelectedMcpServer(server);
+    setIsMcpModalVisible(true);
   };
 
   const goToPublicModelPage = () => {
@@ -175,12 +213,23 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     setIsMakeAgentPublicModalVisible(true);
   };
 
+  const handleMakeMcpPublicPage = () => {
+    if (!accessToken) {
+      return;
+    }
+
+    // Show the modal for selecting MCP servers to make public
+    setIsMakeMcpPublicModalVisible(true);
+  };
+
   const handleOk = () => {
     setIsModalVisible(false);
     setIsPublicPageModalVisible(false);
     setSelectedModel(null);
     setIsAgentModalVisible(false);
     setSelectedAgent(null);
+    setIsMcpModalVisible(false);
+    setSelectedMcpServer(null);
   };
 
   const handleCancel = () => {
@@ -189,6 +238,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     setSelectedModel(null);
     setIsAgentModalVisible(false);
     setSelectedAgent(null);
+    setIsMcpModalVisible(false);
+    setSelectedMcpServer(null);
   };
 
   const copyToClipboard = (text: string) => {
@@ -252,6 +303,21 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     }
   };
 
+  const handleMakeMcpPublicSuccess = () => {
+    // Refresh the MCP hub data after successful public operation
+    if (accessToken) {
+      const fetchMcpData = async () => {
+        try {
+          const response = await fetchMCPServers(accessToken);
+          setMcpHubData(response);
+        } catch (error) {
+          console.error("Error refreshing MCP server data:", error);
+        }
+      };
+      fetchMcpData();
+    }
+  };
+
   const handleFilteredDataChange = useCallback((newFilteredData: ModelGroupInfo[]) => {
     setFilteredData(newFilteredData);
   }, []);
@@ -274,7 +340,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <Title className="text-center">AI Hub</Title>
               {isAdminRole(userRole || "") ? (
                 <p className="text-sm text-gray-600">
-                  Make models and agents public for developers to know what&apos;s available.
+                  Make models, agents, and MCP servers public for developers to know what&apos;s available.
                 </p>
               ) : (
                 <p className="text-sm text-gray-600">A list of all public model names personally available to you.</p>
@@ -302,11 +368,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
             </div>
           )}
 
-          {/* Tab System for Model Hub and Agent Hub */}
+          {/* Tab System for Model Hub, Agent Hub, and MCP Hub */}
           <TabGroup>
             <TabList className="mb-4">
               <Tab>Model Hub</Tab>
               <Tab>Agent Hub</Tab>
+              <Tab>MCP Hub</Tab>
             </TabList>
 
             <TabPanels>
@@ -368,6 +435,35 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                 <div className="mt-4 text-center space-y-2">
                   <Text className="text-sm text-gray-600">
                     Showing {agentHubData?.length || 0} agent{agentHubData?.length !== 1 ? "s" : ""}
+                  </Text>
+                </div>
+              </TabPanel>
+
+              {/* MCP Hub Tab */}
+              <TabPanel>
+                <Card>
+                  {/* Header with Make Public Button */}
+                  {publicPage == false && isAdminRole(userRole || "") && (
+                    <div className="flex justify-end mb-4">
+                      <Button onClick={() => handleMakeMcpPublicPage()}>
+                        Select MCP Servers to Make Public
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* MCP Server Table */}
+                  <ModelDataTable
+                    columns={mcpHubColumns(showMcpModal, copyToClipboard, publicPage)}
+                    data={mcpHubData || []}
+                    isLoading={mcpLoading}
+                    table={mcpTableRef}
+                    defaultSorting={[{ id: "server_name", desc: false }]}
+                  />
+                </Card>
+
+                <div className="mt-4 text-center space-y-2">
+                  <Text className="text-sm text-gray-600">
+                    Showing {mcpHubData?.length || 0} MCP server{mcpHubData?.length !== 1 ? "s" : ""}
                   </Text>
                 </div>
               </TabPanel>
@@ -693,6 +789,229 @@ print(response.choices[0].message.content)`}
         )}
       </Modal>
 
+      {/* MCP Server Details Modal */}
+      <Modal
+        title={selectedMcpServer?.server_name || "MCP Server Details"}
+        width={1000}
+        visible={isMcpModalVisible}
+        footer={null}
+        onOk={handleOk}
+        onCancel={handleCancel}
+      >
+        {selectedMcpServer && (
+          <div className="space-y-6">
+            {/* Server Overview */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Server Overview</Text>
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <Text className="font-medium">Server Name:</Text>
+                  <Text>{selectedMcpServer.server_name}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Server ID:</Text>
+                  <div className="flex items-center space-x-2">
+                    <Text className="text-xs truncate">{selectedMcpServer.server_id}</Text>
+                    <CopyOutlined
+                      onClick={() => copyToClipboard(selectedMcpServer.server_id)}
+                      className="cursor-pointer text-gray-500 hover:text-blue-500"
+                    />
+                  </div>
+                </div>
+                {selectedMcpServer.alias && (
+                  <div>
+                    <Text className="font-medium">Alias:</Text>
+                    <Text>{selectedMcpServer.alias}</Text>
+                  </div>
+                )}
+                <div>
+                  <Text className="font-medium">Transport:</Text>
+                  <Badge color="blue">{selectedMcpServer.transport}</Badge>
+                </div>
+                <div>
+                  <Text className="font-medium">Auth Type:</Text>
+                  <Badge color={selectedMcpServer.auth_type === "none" ? "gray" : "green"}>
+                    {selectedMcpServer.auth_type}
+                  </Badge>
+                </div>
+                <div>
+                  <Text className="font-medium">Status:</Text>
+                  <Badge 
+                    color={
+                      selectedMcpServer.status === "active" || selectedMcpServer.status === "healthy" 
+                        ? "green" 
+                        : selectedMcpServer.status === "inactive" || selectedMcpServer.status === "unhealthy"
+                        ? "red"
+                        : "gray"
+                    }
+                  >
+                    {selectedMcpServer.status || "unknown"}
+                  </Badge>
+                </div>
+              </div>
+              {selectedMcpServer.description && (
+                <div className="mt-2">
+                  <Text className="font-medium">Description:</Text>
+                  <Text className="mt-1">{selectedMcpServer.description}</Text>
+                </div>
+              )}
+            </div>
+
+            {/* Connection Details */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Connection Details</Text>
+              <div className="space-y-2">
+                <div>
+                  <Text className="font-medium">URL:</Text>
+                  <div className="flex items-center space-x-2 mt-1">
+                    <Text className="text-sm break-all bg-gray-100 p-2 rounded flex-1">
+                      {selectedMcpServer.url}
+                    </Text>
+                    <CopyOutlined
+                      onClick={() => copyToClipboard(selectedMcpServer.url)}
+                      className="cursor-pointer text-gray-500 hover:text-blue-500 flex-shrink-0"
+                    />
+                  </div>
+                </div>
+                {selectedMcpServer.command && (
+                  <div>
+                    <Text className="font-medium">Command:</Text>
+                    <Text className="text-sm bg-gray-100 p-2 rounded mt-1 font-mono">
+                      {selectedMcpServer.command}
+                    </Text>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Tools */}
+            {selectedMcpServer.allowed_tools && selectedMcpServer.allowed_tools.length > 0 && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Allowed Tools</Text>
+                <div className="flex flex-wrap gap-2">
+                  {selectedMcpServer.allowed_tools.map((tool, idx) => (
+                    <Badge key={idx} color="purple">
+                      {tool}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Teams */}
+            {selectedMcpServer.teams && selectedMcpServer.teams.length > 0 && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Teams</Text>
+                <div className="flex flex-wrap gap-2">
+                  {selectedMcpServer.teams.map((team, idx) => (
+                    <Badge key={idx} color="blue">
+                      {team}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Access Groups */}
+            {selectedMcpServer.mcp_access_groups && selectedMcpServer.mcp_access_groups.length > 0 && (
+              <div>
+                <Text className="text-lg font-semibold mb-4">Access Groups</Text>
+                <div className="flex flex-wrap gap-2">
+                  {selectedMcpServer.mcp_access_groups.map((group, idx) => (
+                    <Badge key={idx} color="green">
+                      {group}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Metadata */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Metadata</Text>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Text className="font-medium">Created By:</Text>
+                  <Text>{selectedMcpServer.created_by}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Updated By:</Text>
+                  <Text>{selectedMcpServer.updated_by}</Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Created At:</Text>
+                  <Text className="text-sm">
+                    {new Date(selectedMcpServer.created_at).toLocaleString()}
+                  </Text>
+                </div>
+                <div>
+                  <Text className="font-medium">Updated At:</Text>
+                  <Text className="text-sm">
+                    {new Date(selectedMcpServer.updated_at).toLocaleString()}
+                  </Text>
+                </div>
+                {selectedMcpServer.last_health_check && (
+                  <div>
+                    <Text className="font-medium">Last Health Check:</Text>
+                    <Text className="text-sm">
+                      {new Date(selectedMcpServer.last_health_check).toLocaleString()}
+                    </Text>
+                  </div>
+                )}
+              </div>
+              {selectedMcpServer.health_check_error && (
+                <div className="mt-2 p-2 bg-red-50 rounded">
+                  <Text className="font-medium text-red-700">Health Check Error:</Text>
+                  <Text className="text-sm text-red-600 mt-1">
+                    {selectedMcpServer.health_check_error}
+                  </Text>
+                </div>
+              )}
+            </div>
+
+            {/* Usage Example */}
+            <div>
+              <Text className="text-lg font-semibold mb-4">Usage Example</Text>
+              <SyntaxHighlighter language="python" className="text-sm">
+                {`from fastmcp import Client
+import asyncio
+
+# Standard MCP configuration
+config = {
+    "mcpServers": {
+        "${selectedMcpServer.server_name}": {
+            "url": "http://localhost:4000/${selectedMcpServer.server_name}/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234"
+            }
+        }
+    }
+}
+
+# Create a client that connects to the server
+client = Client(config)
+
+async def main():
+    async with client:
+        # List available tools
+        tools = await client.list_tools()
+        print(f"Available tools: {[tool.name for tool in tools]}")
+
+        # Call a tool
+        response = await client.call_tool(
+            name="tool_name", 
+            arguments={"arg": "value"}
+        )
+        print(f"Response: {response}")
+
+if __name__ == "__main__":
+    asyncio.run(main())`}
+              </SyntaxHighlighter>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       {/* Make Model Public Form */}
       <MakeModelPublicForm
         visible={isMakePublicModalVisible}
@@ -709,6 +1028,15 @@ print(response.choices[0].message.content)`}
         accessToken={accessToken || ""}
         agentHubData={agentHubData || []}
         onSuccess={handleMakeAgentPublicSuccess}
+      />
+
+      {/* Make MCP Public Form */}
+      <MakeMCPPublicForm
+        visible={isMakeMcpPublicModalVisible}
+        onClose={() => setIsMakeMcpPublicModalVisible(false)}
+        accessToken={accessToken || ""}
+        mcpHubData={mcpHubData || []}
+        onSuccess={handleMakeMcpPublicSuccess}
       />
     </div>
   );
