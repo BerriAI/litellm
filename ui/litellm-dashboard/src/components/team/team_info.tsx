@@ -25,7 +25,7 @@ import {
   teamUpdateCall,
   getGuardrailsList,
 } from "@/components/networking";
-import { Button, Form, Input, Select, Switch, message, Modal, Tooltip } from "antd";
+import { Button, Form, Input, Select, Switch, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
@@ -44,6 +44,7 @@ import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import NotificationsManager from "../molecules/notifications_manager";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
 
 export interface TeamMembership {
   user_id: string;
@@ -139,6 +140,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
   console.log("userModels in team info", userModels);
@@ -272,6 +274,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const handleMemberDelete = (member: Member) => {
     setMemberToDelete(member);
+    setIsDeleteModalOpen(true);
   };
 
   const handleDeleteConfirm = async () => {
@@ -294,11 +297,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       console.error("Error removing team member:", error);
     } finally {
       setIsDeleting(false);
+      setIsDeleteModalOpen(false);
       setMemberToDelete(null);
     }
   };
 
   const handleDeleteCancel = () => {
+    setIsDeleteModalOpen(false);
     setMemberToDelete(null);
   };
 
@@ -927,28 +932,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       />
 
       {/* Delete Member Confirmation Modal */}
-      {memberToDelete && (
-        <Modal
-          title="Delete Team Member"
-          open={memberToDelete !== null}
-          onOk={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-          confirmLoading={isDeleting}
-          okText={isDeleting ? "Deleting..." : "Delete"}
-          okButtonProps={{ danger: true }}
-        >
-          <p>Are you sure you want to remove this member from the team?</p>
-          <p className="mt-2">
-            <strong>User ID:</strong> {memberToDelete.user_id}
-          </p>
-          {memberToDelete.user_email && (
-            <p>
-              <strong>Email:</strong> {memberToDelete.user_email}
-            </p>
-          )}
-          <p className="mt-2 text-red-600">This action cannot be undone.</p>
-        </Modal>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete Team Member"
+        alertMessage="Removing team members will also delete any keys created by or created for this member."
+        message="Are you sure you want to remove this member from the team? This action cannot be undone."
+        resourceInformationTitle="Team Member Information"
+        resourceInformation={[
+          { label: "User ID", value: memberToDelete?.user_id, code: true },
+          { label: "Email", value: memberToDelete?.user_email },
+          { label: "Role", value: memberToDelete?.role },
+        ]}
+        onCancel={handleDeleteCancel}
+        onOk={handleDeleteConfirm}
+        confirmLoading={isDeleting}
+      />
     </div>
   );
 };
