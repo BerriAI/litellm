@@ -1811,9 +1811,9 @@ def test_media_resolution_from_detail_parameter():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    # The TypedDict uses snake_case internally, but mediaResolution is camelCase in the dict
-    assert "mediaResolution" in image_part["inline_data"]
-    assert image_part["inline_data"]["mediaResolution"] == "high"
+    # The TypedDict uses snake_case internally, and we keep it as snake_case
+    assert "media_resolution" in image_part["inline_data"]
+    assert image_part["inline_data"]["media_resolution"] == "high"
 
 
 def test_media_resolution_low_detail():
@@ -1851,7 +1851,7 @@ def test_media_resolution_low_detail():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    assert image_part["inline_data"]["mediaResolution"] == "low"
+    assert image_part["inline_data"]["media_resolution"] == "low"
 
 
 def test_media_resolution_auto_detail():
@@ -1888,8 +1888,8 @@ def test_media_resolution_auto_detail():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    # mediaResolution should not be set for auto
-    assert "mediaResolution" not in image_part["inline_data"] or image_part["inline_data"].get("mediaResolution") is None
+    # media_resolution should not be set for auto
+    assert "media_resolution" not in image_part["inline_data"] or image_part["inline_data"].get("media_resolution") is None
 
     # Test with None
     messages_none = [
@@ -1915,8 +1915,8 @@ def test_media_resolution_auto_detail():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    # mediaResolution should not be set
-    assert "mediaResolution" not in image_part["inline_data"] or image_part["inline_data"].get("mediaResolution") is None
+    # media_resolution should not be set
+    assert "media_resolution" not in image_part["inline_data"] or image_part["inline_data"].get("media_resolution") is None
 
 
 def test_media_resolution_per_part():
@@ -1966,12 +1966,12 @@ def test_media_resolution_per_part():
     # First image should have low resolution (first part is the image)
     image1_part = contents[0]["parts"][0]
     assert "inline_data" in image1_part
-    assert image1_part["inline_data"]["mediaResolution"] == "low"
+    assert image1_part["inline_data"]["media_resolution"] == "low"
     
     # Second image should have high resolution (third part is the second image)
     image2_part = contents[0]["parts"][2]
     assert "inline_data" in image2_part
-    assert image2_part["inline_data"]["mediaResolution"] == "high"
+    assert image2_part["inline_data"]["media_resolution"] == "high"
 
 
 def test_media_resolution_only_for_gemini_3_models():
