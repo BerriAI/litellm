@@ -8,7 +8,6 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
-import re
 import secrets
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
