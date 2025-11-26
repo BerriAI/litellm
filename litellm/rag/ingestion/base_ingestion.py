@@ -337,5 +337,6 @@ class BaseRAGIngestion(ABC):
                 status="failed",
                 vector_store_id="",
                 file_id=None,
+                error=str(e),
             )
 
