@@ -77,7 +77,9 @@ curl -X POST "http://localhost:4000/v1/vector_stores/vs_xyz789/search" \
 
 ## End-to-End Example
 
-### 1. Ingest Document
+### OpenAI
+
+#### 1. Ingest Document
 
 ```bash showLineNumbers title="Step 1: Ingest"
 curl -X POST "http://localhost:4000/v1/rag/ingest" \
@@ -85,11 +87,12 @@ curl -X POST "http://localhost:4000/v1/rag/ingest" \
     -H "Content-Type: application/json" \
     -d "{
         \"file\": {
-            \"filename\": \"report.txt\",
-            \"content\": \"$(base64 -i report.txt)\",
+            \"filename\": \"test_document.txt\",
+            \"content\": \"$(base64 -i test_document.txt)\",
             \"content_type\": \"text/plain\"
         },
         \"ingest_options\": {
+            \"name\": \"test-basic-ingest\",
             \"vector_store\": {
                 \"custom_llm_provider\": \"openai\"
             }
@@ -100,20 +103,47 @@ curl -X POST "http://localhost:4000/v1/rag/ingest" \
 Response:
 ```json
 {
-  "id": "ingest_001",
+  "id": "ingest_d834f544-fc5e-4751-902d-fb0bcc183b85",
   "status": "completed",
-  "vector_store_id": "vs_abc123",
-  "file_id": "file_456"
+  "vector_store_id": "vs_692658d337c4819183f2ad8488d12fc9",
+  "file_id": "file-M2pJJiWH56cfUP4Fe7rJay"
 }
 ```
 
-### 2. Query
+#### 2. Query
 
 ```bash showLineNumbers title="Step 2: Query"
-curl -X POST "http://localhost:4000/v1/vector_stores/vs_abc123/search" \
+curl -X POST "http://localhost:4000/v1/vector_stores/vs_692658d337c4819183f2ad8488d12fc9/search" \
     -H "Authorization: Bearer sk-1234" \
     -H "Content-Type: application/json" \
-    -d '{"query": "What is the main topic?"}'
+    -d '{
+        "query": "What is LiteLLM?",
+        "custom_llm_provider": "openai"
+    }'
+```
+
+Response:
+```json
+{
+  "object": "vector_store.search_results.page",
+  "search_query": ["What is LiteLLM?"],
+  "data": [
+    {
+      "file_id": "file-M2pJJiWH56cfUP4Fe7rJay",
+      "filename": "test_document.txt",
+      "score": 0.4004629778869299,
+      "attributes": {},
+      "content": [
+        {
+          "type": "text",
+          "text": "Test document abc123 for RAG ingestion.\nThis is a sample document to test the RAG ingest API.\nLiteLLM provides a unified interface for vector stores."
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}
 ```
 
 ## Request Parameters
