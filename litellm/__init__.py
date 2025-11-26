@@ -1113,6 +1113,7 @@ from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
+from .llms.azure.anthropic.transformation import AzureAnthropicConfig
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -1224,6 +1225,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation impor
 from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+    AmazonBedrockOpenAIConfig,
+)
 
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
 from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
@@ -1271,6 +1275,8 @@ from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
+from .llms.anthropic.skills.transformation import AnthropicSkillsConfig
+from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
 from .llms.gradient_ai.chat.transformation import GradientAIConfig
 
@@ -1367,6 +1373,18 @@ from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
 from .main import *  # type: ignore
+
+# Skills API
+from .skills.main import (
+    create_skill,
+    acreate_skill,
+    list_skills,
+    alist_skills,
+    get_skill,
+    aget_skill,
+    delete_skill,
+    adelete_skill,
+)
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
@@ -1404,8 +1422,19 @@ from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
+from .skills.main import (
+    create_skill,
+    acreate_skill,
+    list_skills,
+    alist_skills,
+    get_skill,
+    aget_skill,
+    delete_skill,
+    adelete_skill,
+)
 from .containers.main import *
 from .ocr.main import *
+from .rag.main import *
 from .search.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
@@ -1441,6 +1470,9 @@ from .vector_stores.vector_store_registry import (
 
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
+
+### RAG ###
+from . import rag
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem

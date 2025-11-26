@@ -237,6 +237,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return False
 
     def _supports_penalty_parameters(self, model: str) -> bool:
+        # Gemini 3 models do not support penalty parameters
+        if VertexGeminiConfig._is_gemini_3_or_newer(model):
+            return False
         unsupported_models = ["gemini-2.5-pro-preview-06-05"]
         if model in unsupported_models:
             return False
@@ -901,13 +904,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
-            thinking_config = optional_params.get("thinkingConfig", {})
-            if (
-                "thinkingLevel" not in thinking_config
-                and "thinkingBudget" not in thinking_config
-            ):
-                thinking_config["thinkingLevel"] = "low"
-                optional_params["thinkingConfig"] = thinking_config
+            # Only add thinkingLevel if model supports it (exclude image models)
+            if "image" not in model.lower():
+                thinking_config = optional_params.get("thinkingConfig", {})
+                if (
+                    "thinkingLevel" not in thinking_config
+                    and "thinkingBudget" not in thinking_config
+                ):
+                    thinking_config["thinkingLevel"] = "low"
+                    optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
 
@@ -1344,7 +1349,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
 
     @staticmethod
-    def _calculate_usage(
+    def _calculate_usage(  # noqa: PLR0915
         completion_response: Union[
             GenerateContentResponseBody, BidiGenerateContentServerMessage
         ],

@@ -82,6 +82,7 @@ const sidebars = {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
+        "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
         "proxy/prompt_management"
@@ -411,6 +412,7 @@ const sidebars = {
             "proxy/pass_through"
           ]
         },
+        "rag_ingest",
         "realtime",
         "rerank",
         "response_api",
@@ -429,6 +431,7 @@ const sidebars = {
             "search/searxng",
           ]
         },
+        "skills",
         {
           type: "category",
           label: "/vector_stores",
@@ -454,6 +457,11 @@ const sidebars = {
           type: "doc",
           id: "provider_registration/index",
           label: "Integrate as a Model Provider",
+        },
+        {
+          type: "doc",
+          id: "provider_registration/add_model_pricing",
+          label: "Add Model Pricing & Context Window",
         },
         {
           type: "category",
@@ -523,6 +531,7 @@ const sidebars = {
           items: [
             "providers/bedrock",
             "providers/bedrock_embedding",
+            "providers/bedrock_imported",
             "providers/bedrock_image_gen",
             "providers/bedrock_rerank",
             "providers/bedrock_agentcore",
@@ -730,6 +739,7 @@ const sidebars = {
         "tutorials/prompt_caching",
         "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
+        "tutorials/presidio_pii_masking",
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
         "tutorials/claude_responses_api",
@@ -789,6 +799,7 @@ const sidebars = {
           },
           items: [
             "projects/smolagents",
+            "projects/mini-swe-agent",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",

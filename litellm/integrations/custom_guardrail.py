@@ -11,9 +11,7 @@ from litellm.types.guardrails import (
     Mode,
     PiiEntityType,
 )
-from litellm.types.llms.openai import (
-    AllMessageValues,
-)
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     CallTypes,
@@ -136,6 +134,17 @@ class CustomGuardrail(CustomLogger):
                     f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}"
                 )
 
+    def get_disable_global_guardrail(self, data: dict) -> Optional[bool]:
+        """
+        Returns True if the global guardrail should be disabled
+        """
+        if "disable_global_guardrail" in data:
+            return data["disable_global_guardrail"]
+        metadata = data.get("litellm_metadata") or data.get("metadata", {})
+        if "disable_global_guardrail" in metadata:
+            return metadata["disable_global_guardrail"]
+        return False
+
     def get_guardrail_from_metadata(
         self, data: dict
     ) -> Union[List[str], List[Dict[str, DynamicGuardrailParams]]]:
@@ -252,6 +261,7 @@ class CustomGuardrail(CustomLogger):
         Returns True if the guardrail should be run on the event_type
         """
         requested_guardrails = self.get_guardrail_from_metadata(data)
+        disable_global_guardrail = self.get_disable_global_guardrail(data)
         verbose_logger.debug(
             "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s requested_guardrails= %s self.default_on= %s",
             self.guardrail_name,
@@ -260,7 +270,7 @@ class CustomGuardrail(CustomLogger):
             requested_guardrails,
             self.default_on,
         )
-        if self.default_on is True:
+        if self.default_on is True and disable_global_guardrail is not True:
             if self._event_hook_is_event_type(event_type):
                 if isinstance(self.event_hook, Mode):
                     try:
@@ -467,6 +477,7 @@ class CustomGuardrail(CustomLogger):
         """
         # Convert None to empty dict to satisfy type requirements
         guardrail_response = {} if response is None else response
+
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
             request_data=request_data,

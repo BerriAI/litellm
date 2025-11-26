@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.80.0"
+version = "1.80.5"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -67,6 +67,7 @@ polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
 semantic-router = {version = ">=0.1.12", optional = true, python = ">=3.9,<3.14"}
 mlflow = {version = ">3.1.4", optional = true, python = ">=3.10"}
 soundfile = {version = "^0.12.1", optional = true}
+grpcio = ">=1.62.3,<1.68.0"  # Constrain to < 1.68.0 to avoid resource exhausted bug (https://github.com/grpc/grpc/issues/38290). Minimum 1.62.3 required by grpcio-status.
 
 [tool.poetry.extras]
 proxy = [
@@ -159,7 +160,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.80.3"
+version = "1.80.5"
 version_files = [
     "pyproject.toml:^version"
 ]

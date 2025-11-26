@@ -395,12 +395,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -432,73 +432,127 @@ class MCPServerManager:
                 f"Server ID {mcp_server.server_id} not found in registry"
             )
 
-    def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
+    async def build_mcp_server_from_table(
+        self,
+        mcp_server: LiteLLM_MCPServerTable,
+        *,
+        credentials_are_encrypted: bool = True,
+    ) -> MCPServer:
+        _mcp_info: MCPInfo = mcp_server.mcp_info or {}
+        env_dict = _deserialize_json_dict(getattr(mcp_server, "env", None))
+        static_headers_dict = _deserialize_json_dict(
+            getattr(mcp_server, "static_headers", None)
+        )
+        credentials_dict = _deserialize_json_dict(
+            getattr(mcp_server, "credentials", None)
+        )
+
+        encrypted_auth_value: Optional[str] = None
+        encrypted_client_id: Optional[str] = None
+        encrypted_client_secret: Optional[str] = None
+        if credentials_dict:
+            encrypted_auth_value = credentials_dict.get("auth_value")
+            encrypted_client_id = credentials_dict.get("client_id")
+            encrypted_client_secret = credentials_dict.get("client_secret")
+
+        auth_value: Optional[str] = None
+        if encrypted_auth_value:
+            if credentials_are_encrypted:
+                auth_value = decrypt_value_helper(
+                    value=encrypted_auth_value,
+                    key="auth_value",
+                    exception_type="debug",
+                    return_original_value=True,
+                )
+            else:
+                auth_value = encrypted_auth_value
+
+        client_id_value: Optional[str] = None
+        if encrypted_client_id:
+            if credentials_are_encrypted:
+                client_id_value = decrypt_value_helper(
+                    value=encrypted_client_id,
+                    key="client_id",
+                    exception_type="debug",
+                    return_original_value=True,
+                )
+            else:
+                client_id_value = encrypted_client_id
+
+        client_secret_value: Optional[str] = None
+        if encrypted_client_secret:
+            if credentials_are_encrypted:
+                client_secret_value = decrypt_value_helper(
+                    value=encrypted_client_secret,
+                    key="client_secret",
+                    exception_type="debug",
+                    return_original_value=True,
+                )
+            else:
+                client_secret_value = encrypted_client_secret
+
+        scopes: Optional[List[str]] = None
+        if credentials_dict:
+            scopes_value = credentials_dict.get("scopes")
+            if scopes_value is not None:
+                scopes = self._extract_scopes(scopes_value)
+
+        name_for_prefix = (
+            mcp_server.alias or mcp_server.server_name or mcp_server.server_id
+        )
+
+        mcp_info: MCPInfo = _mcp_info.copy()
+        if "server_name" not in mcp_info:
+            mcp_info["server_name"] = mcp_server.server_name or mcp_server.server_id
+        if "description" not in mcp_info and mcp_server.description:
+            mcp_info["description"] = mcp_server.description
+
+        auth_type = cast(MCPAuthType, mcp_server.auth_type)
+        if mcp_server.url and auth_type == MCPAuth.oauth2:
+            mcp_oauth_metadata = await self._descovery_metadata(
+                server_url=mcp_server.url,
+            )
+        else:
+            mcp_oauth_metadata = None
+
+        resolved_scopes = scopes or (
+            mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
+        )
+
+        new_server = MCPServer(
+            server_id=mcp_server.server_id,
+            name=name_for_prefix,
+            alias=getattr(mcp_server, "alias", None),
+            server_name=getattr(mcp_server, "server_name", None),
+            url=mcp_server.url,
+            transport=cast(MCPTransportType, mcp_server.transport),
+            auth_type=auth_type,
+            authentication_token=auth_value,
+            mcp_info=mcp_info,
+            extra_headers=getattr(mcp_server, "extra_headers", None),
+            static_headers=static_headers_dict,
+            client_id=client_id_value or getattr(mcp_server, "client_id", None),
+            client_secret=client_secret_value
+            or getattr(mcp_server, "client_secret", None),
+            scopes=resolved_scopes,
+            authorization_url=getattr(mcp_oauth_metadata, "authorization_url", None),
+            token_url=getattr(mcp_oauth_metadata, "token_url", None),
+            registration_url=getattr(mcp_oauth_metadata, "registration_url", None),
+            command=getattr(mcp_server, "command", None),
+            args=getattr(mcp_server, "args", None) or [],
+            env=env_dict,
+            access_groups=getattr(mcp_server, "mcp_access_groups", None),
+            allowed_tools=getattr(mcp_server, "allowed_tools", None),
+            disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
+        )
+        return new_server
+
+    async def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
-            if mcp_server.server_id not in self.get_registry():
-                _mcp_info: MCPInfo = mcp_server.mcp_info or {}
-                # Use helper to deserialize dictionary
-                # Safely access env field which may not exist on Prisma model objects
-                env_dict = _deserialize_json_dict(getattr(mcp_server, "env", None))
-                static_headers_dict = _deserialize_json_dict(
-                    getattr(mcp_server, "static_headers", None)
-                )
-                credentials_dict = _deserialize_json_dict(
-                    getattr(mcp_server, "credentials", None)
-                )
-
-                encrypted_auth_value: Optional[str] = None
-                if credentials_dict:
-                    encrypted_auth_value = credentials_dict.get("auth_value")
-
-                auth_value: Optional[str] = None
-                if encrypted_auth_value:
-                    auth_value = decrypt_value_helper(
-                        value=encrypted_auth_value,
-                        key="auth_value",
-                    )
-                # Use alias for name if present, else server_name
-                name_for_prefix = (
-                    mcp_server.alias or mcp_server.server_name or mcp_server.server_id
-                )
-                # Preserve all custom fields from database while setting defaults for core fields
-                mcp_info: MCPInfo = _mcp_info.copy()
-                # Set default values for core fields if not present
-                if "server_name" not in mcp_info:
-                    mcp_info["server_name"] = (
-                        mcp_server.server_name or mcp_server.server_id
-                    )
-                if "description" not in mcp_info and mcp_server.description:
-                    mcp_info["description"] = mcp_server.description
-
-                new_server = MCPServer(
-                    server_id=mcp_server.server_id,
-                    name=name_for_prefix,
-                    alias=getattr(mcp_server, "alias", None),
-                    server_name=getattr(mcp_server, "server_name", None),
-                    url=mcp_server.url,
-                    transport=cast(MCPTransportType, mcp_server.transport),
-                    auth_type=cast(MCPAuthType, mcp_server.auth_type),
-                    authentication_token=auth_value,
-                    mcp_info=mcp_info,
-                    extra_headers=getattr(mcp_server, "extra_headers", None),
-                    static_headers=static_headers_dict,
-                    # oauth specific fields
-                    client_id=getattr(mcp_server, "client_id", None),
-                    client_secret=getattr(mcp_server, "client_secret", None),
-                    scopes=getattr(mcp_server, "scopes", None),
-                    authorization_url=getattr(mcp_server, "authorization_url", None),
-                    token_url=getattr(mcp_server, "token_url", None),
-                    registration_url=getattr(mcp_server, "registration_url", None),
-                    # Stdio-specific fields
-                    command=getattr(mcp_server, "command", None),
-                    args=getattr(mcp_server, "args", None) or [],
-                    env=env_dict,
-                    access_groups=getattr(mcp_server, "mcp_access_groups", None),
-                    allowed_tools=getattr(mcp_server, "allowed_tools", None),
-                    disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
-                )
+            if mcp_server.server_id not in self.registry:
+                new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
-                verbose_logger.debug(f"Added MCP Server: {name_for_prefix}")
+                verbose_logger.debug(f"Added MCP Server: {new_server.name}")
 
         except Exception as e:
             verbose_logger.debug(f"Failed to add MCP server: {str(e)}")
@@ -1922,7 +1976,7 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Adding server to registry: {server.server_id} ({server.server_name})"
             )
-            self.add_update_server(server)
+            await self.add_update_server(server)
 
         verbose_logger.debug(
             f"Registry now contains {len(self.get_registry())} servers"
@@ -2216,7 +2270,7 @@ class MCPServerManager:
                 server.status = "unhealthy"
                 ## try adding server to registry to get error
                 try:
-                    self.add_update_server(server)
+                    await self.add_update_server(server)
                 except Exception as e:
                     server.health_check_error = str(e)
                 server.health_check_error = "Server is not in in memory registry yet. This could be a temporary sync issue."

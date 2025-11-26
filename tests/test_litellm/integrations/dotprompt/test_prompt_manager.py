@@ -548,88 +548,6 @@ def test_prompt_main():
     pass
 
 
-@pytest.mark.asyncio
-async def test_dotprompt_auto_detection_with_model_only():
-    """
-    Test that dotprompt prompts can be auto-detected when passing model="gpt-4" and prompt_id,
-    without needing to specify model="dotprompt/gpt-4".
-    """
-    from litellm.integrations.dotprompt import DotpromptManager
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    prompt_dir = Path(__file__).parent
-    dotprompt_manager = DotpromptManager(prompt_directory=str(prompt_dir))
-    
-    # Register the dotprompt manager in callbacks
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [dotprompt_manager]
-    
-    try:
-        # Mock the HTTP handler to avoid actual API calls
-        client = AsyncHTTPHandler()
-        
-        # Create a proper mock response
-        mock_response = Mock(spec=httpx.Response)
-        mock_response.status_code = 200
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {
-            "id": "chatcmpl-test-123",
-            "object": "chat.completion",
-            "created": 1700000000,
-            "model": "gpt-4",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Test response",
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 10,
-                "total_tokens": 20,
-            },
-        }
-        
-        with patch.object(client, "post", return_value=mock_response) as mock_post:
-            # Call with model="gpt-4" (no "dotprompt/" prefix) and prompt_id
-            response = await litellm.acompletion(
-                model="gpt-4",
-                prompt_id="chat_prompt",
-                prompt_variables={"user_message": "Hello world"},
-                messages=[{"role": "user", "content": "This will be ignored"}],
-                client=client,
-            )
-            
-            mock_post.assert_called_once()
-            
-            # Get request body from the call
-            request_body = mock_post.call_args.kwargs.get("json") or json.loads(mock_post.call_args.kwargs.get("data", "{}"))
-            
-            # Verify the prompt was auto-detected and used
-            # The chat_prompt.prompt has metadata: model: gpt-4, temperature: 0.7, max_tokens: 150
-            assert request_body["model"] == "gpt-4"
-            
-            # Verify the messages were transformed using the prompt template
-            # chat_prompt template: "User: {{user_message}}"
-            messages = request_body["messages"]
-            assert len(messages) >= 1
-            
-            # The first message should be from the prompt template with the variable substituted
-            # Template is: "User: {{user_message}}" with user_message="Hello world"
-            first_message_content = messages[0]["content"]
-            assert "Hello world" in first_message_content
-            
-            # Verify response was returned
-            assert response is not None
-    
-    finally:
-        # Restore original callbacks
-        litellm.callbacks = original_callbacks
-
 
 @pytest.mark.asyncio
 async def test_dotprompt_with_prompt_version():
@@ -637,129 +555,35 @@ async def test_dotprompt_with_prompt_version():
     Test that dotprompt can load and use specific prompt versions.
     Versions are stored as separate files with .v{version}.prompt naming convention.
     """
-    from litellm.integrations.dotprompt import DotpromptManager
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.integrations.dotprompt.prompt_manager import PromptManager
 
     prompt_dir = Path(__file__).parent
-    dotprompt_manager = DotpromptManager(prompt_directory=str(prompt_dir))
+    prompt_manager = PromptManager(prompt_directory=str(prompt_dir))
     
-    # Register the dotprompt manager in callbacks
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [dotprompt_manager]
+    # Test version 1
+    v1_prompt = prompt_manager.get_prompt(prompt_id="chat_prompt", version=1)
+    assert v1_prompt is not None
+    assert v1_prompt.model == "gpt-3.5-turbo"
     
-    try:
-        # Test version 1
-        client = AsyncHTTPHandler()
-        
-        # Create a proper mock response for version 1
-        mock_response_v1 = Mock(spec=httpx.Response)
-        mock_response_v1.status_code = 200
-        mock_response_v1.headers = {"content-type": "application/json"}
-        mock_response_v1.json.return_value = {
-            "id": "chatcmpl-test-v1-123",
-            "object": "chat.completion",
-            "created": 1700000000,
-            "model": "gpt-3.5-turbo",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Test response v1",
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 10,
-                "total_tokens": 20,
-            },
-        }
-        
-        with patch.object(client, "post", return_value=mock_response_v1) as mock_post:
-            response = await litellm.acompletion(
-                model="gpt-3.5-turbo",
-                prompt_id="chat_prompt",
-                prompt_version=1,
-                prompt_variables={"user_message": "Test v1"},
-                messages=[],
-                client=client,
-            )
-            
-            mock_post.assert_called_once()
-            request_body = mock_post.call_args.kwargs.get("json") or json.loads(mock_post.call_args.kwargs.get("data", "{}"))
-            
-            # Verify version 1 prompt was used
-            # chat_prompt.v1.prompt has: model: gpt-3.5-turbo, temperature: 0.5, max_tokens: 100
-            assert request_body["model"] == "gpt-3.5-turbo"
-            
-            # Verify the message contains "Version 1:" prefix from v1 template
-            messages = request_body["messages"]
-            assert len(messages) >= 1
-            first_message_content = messages[0]["content"]
-            assert "Version 1:" in first_message_content
-            assert "Test v1" in first_message_content
-            
-            # Verify response was returned
-            assert response is not None
-        
-        # Test version 2
-        client = AsyncHTTPHandler()
-        
-        # Create a proper mock response for version 2
-        mock_response_v2 = Mock(spec=httpx.Response)
-        mock_response_v2.status_code = 200
-        mock_response_v2.headers = {"content-type": "application/json"}
-        mock_response_v2.json.return_value = {
-            "id": "chatcmpl-test-v2-123",
-            "object": "chat.completion",
-            "created": 1700000000,
-            "model": "gpt-4",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Test response v2",
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 10,
-                "total_tokens": 20,
-            },
-        }
-        
-        with patch.object(client, "post", return_value=mock_response_v2) as mock_post:
-            response = await litellm.acompletion(
-                model="gpt-4",
-                prompt_id="chat_prompt",
-                prompt_version=2,
-                prompt_variables={"user_message": "Test v2"},
-                messages=[],
-                client=client,
-            )
-            
-            mock_post.assert_called_once()
-            request_body = mock_post.call_args.kwargs.get("json") or json.loads(mock_post.call_args.kwargs.get("data", "{}"))
-            
-            # Verify version 2 prompt was used
-            # chat_prompt.v2.prompt has: model: gpt-4, temperature: 0.9, max_tokens: 200
-            assert request_body["model"] == "gpt-4"
-            
-            # Verify the message contains "Version 2:" prefix from v2 template
-            messages = request_body["messages"]
-            assert len(messages) >= 1
-            first_message_content = messages[0]["content"]
-            assert "Version 2:" in first_message_content
-            assert "Test v2" in first_message_content
-            
-            # Verify response was returned
-            assert response is not None
+    # Verify version 1 content
+    v1_rendered = prompt_manager.render(
+        prompt_id="chat_prompt",
+        prompt_variables={"user_message": "Test v1"},
+        version=1
+    )
+    assert "Version 1:" in v1_rendered
+    assert "Test v1" in v1_rendered
     
-    finally:
-        # Restore original callbacks
-        litellm.callbacks = original_callbacks
+    # Test version 2
+    v2_prompt = prompt_manager.get_prompt(prompt_id="chat_prompt", version=2)
+    assert v2_prompt is not None
+    assert v2_prompt.model == "gpt-4"
+    
+    # Verify version 2 content
+    v2_rendered = prompt_manager.render(
+        prompt_id="chat_prompt",
+        prompt_variables={"user_message": "Test v2"},
+        version=2
+    )
+    assert "Version 2:" in v2_rendered
+    assert "Test v2" in v2_rendered

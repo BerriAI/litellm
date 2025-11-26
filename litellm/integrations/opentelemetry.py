@@ -7,11 +7,13 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     CostBreakdown,
     Function,
+    LLMResponseTypes,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
@@ -487,6 +489,28 @@ class OpenTelemetry(CustomLogger):
             # End Parent OTEL Sspan
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: LLMResponseTypes,
+    ):
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+        litellm_logging_obj = data.get("litellm_logging_obj")
+
+        if litellm_logging_obj is not None and isinstance(
+            litellm_logging_obj, LiteLLMLogging
+        ):
+            kwargs = litellm_logging_obj.model_call_details
+            parent_span = user_api_key_dict.parent_otel_span
+
+            ctx, _ = self._get_span_context(kwargs, default_span=parent_span)
+
+            # 3. Guardrail span
+            self._create_guardrail_span(kwargs=kwargs, context=ctx)
+        return response
+
     #########################################################
     # Team/Key Based Logging Control Flow
     #########################################################
@@ -515,9 +539,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
 
         if not standard_callback_dynamic_params:
             return None
@@ -565,8 +589,15 @@ class OpenTelemetry(CustomLogger):
         )
         ctx, parent_span = self._get_span_context(kwargs)
 
+        if get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN"):
+            primary_span_parent = None
+        else:
+            primary_span_parent = parent_span
+
         # 1. Primary span
-        span = self._start_primary_span(kwargs, response_obj, start_time, end_time, ctx)
+        span = self._start_primary_span(
+            kwargs, response_obj, start_time, end_time, ctx, primary_span_parent
+        )
 
         # 2. Raw‐request sub-span (if enabled)
         self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
@@ -585,11 +616,19 @@ class OpenTelemetry(CustomLogger):
         if parent_span is not None:
             parent_span.end(end_time=self._to_ns(datetime.now()))
 
-    def _start_primary_span(self, kwargs, response_obj, start_time, end_time, context):
+    def _start_primary_span(
+        self,
+        kwargs,
+        response_obj,
+        start_time,
+        end_time,
+        context,
+        parent_span: Optional[Span] = None,
+    ):
         from opentelemetry.trace import Status, StatusCode
 
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
-        span = otel_tracer.start_span(
+        span = parent_span or otel_tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=context,
@@ -779,6 +818,7 @@ class OpenTelemetry(CustomLogger):
         guardrail_information_data = standard_logging_payload.get(
             "guardrail_information"
         )
+
         if not guardrail_information_data:
             return
 
@@ -1078,7 +1118,9 @@ class OpenTelemetry(CustomLogger):
                     span=span, key="hidden_params", value=safe_dumps(hidden_params)
                 )
             # Cost breakdown tracking
-            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get("cost_breakdown")
+            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get(
+                "cost_breakdown"
+            )
             if cost_breakdown:
                 for key, value in cost_breakdown.items():
                     if value is not None:
@@ -1370,7 +1412,7 @@ class OpenTelemetry(CustomLogger):
 
         return _parent_context
 
-    def _get_span_context(self, kwargs):
+    def _get_span_context(self, kwargs, default_span: Optional[Span] = None):
         from opentelemetry import context, trace
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
@@ -1773,7 +1815,7 @@ class OpenTelemetry(CustomLogger):
         """
         Create a span for the received proxy server request.
         """
-        # don't create proxy parent spans for arize phoenix
+        # don't create proxy parent spans for arize phoenix - [TODO]: figure out a better way to handle this
         if self.callback_name == "arize_phoenix":
             return None
 

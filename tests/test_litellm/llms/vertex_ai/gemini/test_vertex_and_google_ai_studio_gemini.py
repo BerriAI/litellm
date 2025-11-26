@@ -1339,6 +1339,78 @@ def test_vertex_ai_penalty_parameters_validation():
     assert result["max_output_tokens"] == 100
 
 
+def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
+    """
+    Test that penalty parameters are not supported for Gemini 3 models.
+    
+    This test ensures that:
+    1. Gemini 3 models do not support penalty parameters
+    2. Penalty parameters are excluded from supported params list for Gemini 3 models
+    3. Penalty parameters are filtered out when mapping params for Gemini 3 models
+    """
+    v = VertexGeminiConfig()
+
+    # Test Gemini 3 models
+    gemini_3_models = [
+        "gemini-3-pro-preview",
+        "vertex_ai/gemini-3-pro-preview",
+        "gemini/gemini-3-pro-preview",
+    ]
+
+    for model in gemini_3_models:
+        # Test _supports_penalty_parameters method
+        assert v._supports_penalty_parameters(model) == False, \
+            f"Gemini 3 model {model} should not support penalty parameters"
+
+        # Test get_supported_openai_params method
+        supported_params = v.get_supported_openai_params(model)
+        assert "frequency_penalty" not in supported_params, \
+            f"frequency_penalty should not be in supported params for {model}"
+        assert "presence_penalty" not in supported_params, \
+            f"presence_penalty should not be in supported params for {model}"
+
+        # Test parameter mapping - penalty params should be filtered out
+        non_default_params = {
+            "temperature": 0.7,
+            "frequency_penalty": 0.5,
+            "presence_penalty": 0.3,
+            "max_tokens": 100
+        }
+
+        optional_params = {}
+        result = v.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False
+        )
+
+        # Penalty parameters should be filtered out for Gemini 3 models
+        assert "frequency_penalty" not in result, \
+            f"frequency_penalty should be filtered out for Gemini 3 model {model}"
+        assert "presence_penalty" not in result, \
+            f"presence_penalty should be filtered out for Gemini 3 model {model}"
+
+        # Other parameters should still be included
+        assert "temperature" in result, \
+            f"temperature should still be included for Gemini 3 model {model}"
+        assert "max_output_tokens" in result, \
+            f"max_output_tokens should still be included for Gemini 3 model {model}"
+        assert result["temperature"] == 0.7
+        assert result["max_output_tokens"] == 100
+
+    # Test that non-Gemini 3 models still support penalty parameters (if they're not in the unsupported list)
+    non_gemini_3_model = "gemini-2.5-pro"
+    assert v._supports_penalty_parameters(non_gemini_3_model) == True, \
+        f"Non-Gemini 3 model {non_gemini_3_model} should support penalty parameters"
+    
+    supported_params = v.get_supported_openai_params(non_gemini_3_model)
+    assert "frequency_penalty" in supported_params, \
+        f"frequency_penalty should be in supported params for {non_gemini_3_model}"
+    assert "presence_penalty" in supported_params, \
+        f"presence_penalty should be in supported params for {non_gemini_3_model}"
+
+
 def test_vertex_ai_annotation_streaming_events():
     """
     Test that annotation events are properly emitted during streaming for Vertex AI Gemini.
@@ -1894,4 +1966,99 @@ def test_media_resolution_per_part():
     image2_part = contents[0]["parts"][2]
     assert "inline_data" in image2_part
     assert image2_part["inline_data"]["mediaResolution"] == "high"
+
+
+def test_gemini_3_image_models_no_thinking_config():
+    """
+    Test that Gemini 3 image models do NOT receive automatic thinkingConfig.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/17013
+    gemini-3-pro-image-preview does not support thinking_level parameter
+    and returns BadRequestError: "Thinking level is not supported for this model"
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Test gemini-3-pro-image-preview (the specific model from the bug report)
+    model = "gemini-3-pro-image-preview"
+    optional_params = {}
+    non_default_params = {}
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+
+    # Should NOT have thinkingConfig automatically added
+    assert "thinkingConfig" not in result
+    # But should still get temperature=1.0 for Gemini 3
+    assert result["temperature"] == 1.0
+
+
+def test_gemini_3_text_models_get_thinking_config():
+    """
+    Test that Gemini 3 text models DO receive automatic thinkingConfig.
+    This ensures we didn't break the existing behavior for non-image models.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Test gemini-3-pro-preview (text model, should get thinking)
+    model = "gemini-3-pro-preview"
+    optional_params = {}
+    non_default_params = {}
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+
+    # Should have thinkingConfig automatically added
+    assert "thinkingConfig" in result
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["temperature"] == 1.0
+
+
+def test_gemini_image_models_excluded_from_thinking():
+    """
+    Test that any Gemini model with 'image' in the name is excluded from thinking config.
+    This covers current and future image models.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Test various image model patterns
+    image_models = [
+        "gemini-3-pro-image-preview",
+        "gemini-3-pro-image-generation",
+        "gemini-3-flash-image-preview",
+        "gemini/gemini-3-image-edit",
+    ]
+
+    for model in image_models:
+        optional_params = {}
+        non_default_params = {}
+
+        result = v.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False,
+        )
+
+        # None of these should have thinkingConfig
+        assert "thinkingConfig" not in result, f"Model {model} should not have thinkingConfig"
 

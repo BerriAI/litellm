@@ -370,9 +370,49 @@ general_settings:
 
 #### 2. Make TTS requests
 
+
+##### Simple Usage (OpenAI Parameters)
+
+You can use standard OpenAI-compatible parameters without any provider-specific configuration:
+
+```bash showLineNumbers title="Simple TTS request with curl"
+curl http://localhost:4000/v1/audio/speech \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-tts",
+    "input": "Testing ElevenLabs speech via the LiteLLM proxy.",
+    "voice": "alloy",
+    "response_format": "mp3"
+  }' \
+  --output speech.mp3
+```
+
+```python showLineNumbers title="Simple TTS with OpenAI SDK"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-litellm-api-key"
+)
+
+response = client.audio.speech.create(
+    model="elevenlabs-tts",
+    input="Testing ElevenLabs speech via the LiteLLM proxy.",
+    voice="alloy",
+    response_format="mp3"
+)
+
+# Save audio
+with open("speech.mp3", "wb") as f:
+    f.write(response.content)
+```
+
+##### Advanced Usage (ElevenLabs-Specific Parameters)
+
 **Note**: When using the proxy, provider-specific parameters (like `pronunciation_dictionary_locators`, `voice_settings`, etc.) must be passed in the `extra_body` field.
 
-```bash showLineNumbers title="TTS request with curl"
+```bash showLineNumbers title="Advanced TTS request with curl"
 curl http://localhost:4000/v1/audio/speech \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
@@ -386,14 +426,18 @@ curl http://localhost:4000/v1/audio/speech \
           {"pronunciation_dictionary_id": "dict_123", "version_id": "v1"}
       ],
       "voice_settings": {
-        "speed": 1.1
+
+        "speed": 1.1,
+        "stability": 0.5,
+        "similarity_boost": 0.75
       }
     }
   }' \
   --output speech.mp3
 ```
 
-```python showLineNumbers title="Using OpenAI SDK with LiteLLM proxy"
+
+```python showLineNumbers title="Advanced TTS with OpenAI SDK"
 from openai import OpenAI
 
 client = OpenAI(
@@ -411,7 +455,9 @@ response = client.audio.speech.create(
                {"pronunciation_dictionary_id": "dict_123", "version_id": "v1"}
         ],
         "voice_settings": {
-            "speed": 1.1
+            "speed": 1.1,
+            "stability": 0.5,
+            "similarity_boost": 0.75
         }
     }
 )

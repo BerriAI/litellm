@@ -70,6 +70,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.containers.main import ContainerObject
 from litellm.types.llms.openai import (
@@ -690,7 +691,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 except Exception:
                     # If check fails, continue to next logger
                     continue
-        
+
         return None
 
     def get_custom_logger_for_prompt_management(
@@ -1298,6 +1299,7 @@ class Logging(LiteLLMLoggingBaseClass):
             OpenAIFileObject,
             LiteLLMRealtimeStreamLoggingObject,
             OpenAIModerationResponse,
+            "SearchResponse",
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
@@ -1710,8 +1712,11 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
             or isinstance(logging_result, OCRResponse)  # OCR
+            or isinstance(logging_result, SearchResponse)  # Search API
             or isinstance(logging_result, dict)
             and logging_result.get("object") == "vector_store.search_results.page"
+            or isinstance(logging_result, dict)
+            and logging_result.get("object") == "search"  # Search API (dict format)
             or isinstance(logging_result, VideoObject)
             or isinstance(logging_result, ContainerObject)
             or (self.call_type == CallTypes.call_mcp_tool.value)
@@ -3533,7 +3538,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             )
 
             os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
-                f"space_id={arize_config.space_key},api_key={arize_config.api_key}"
+                f"space_id={arize_config.space_key or arize_config.space_id},api_key={arize_config.api_key}"
             )
             for callback in _in_memory_loggers:
                 if (
@@ -3545,6 +3550,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_arize_otel_logger)
             return _arize_otel_logger  # type: ignore
         elif logging_integration == "arize_phoenix":
+
             from litellm.integrations.opentelemetry import (
                 OpenTelemetry,
                 OpenTelemetryConfig,
@@ -3556,6 +3562,17 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 endpoint=arize_phoenix_config.endpoint,
                 headers=arize_phoenix_config.otlp_auth_headers,
             )
+            if arize_phoenix_config.project_name:
+                existing_attrs = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
+                # Add openinference.project.name attribute
+                if existing_attrs:
+                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
+                        f"{existing_attrs},openinference.project.name={arize_phoenix_config.project_name}"
+                    )
+                else:
+                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
+                        f"openinference.project.name={arize_phoenix_config.project_name}"
+                    )
 
             # Set Phoenix project name from environment variable
             phoenix_project_name = os.environ.get("PHOENIX_PROJECT_NAME", None)
@@ -3563,9 +3580,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 existing_attrs = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
                 # Add openinference.project.name attribute
                 if existing_attrs:
-                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = f"{existing_attrs},openinference.project.name={phoenix_project_name}"
+                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
+                        f"{existing_attrs},openinference.project.name={phoenix_project_name}"
+                    )
                 else:
-                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = f"openinference.project.name={phoenix_project_name}"
+                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
+                        f"openinference.project.name={phoenix_project_name}"
+                    )
 
             # auth can be disabled on local deployments of arize phoenix
             if arize_phoenix_config.otlp_auth_headers is not None:
@@ -3964,8 +3985,6 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, OpenTelemetry):
                     return callback
         elif logging_integration == "arize":
-            if "ARIZE_SPACE_KEY" not in os.environ:
-                raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
             if "ARIZE_API_KEY" not in os.environ:
                 raise ValueError("ARIZE_API_KEY not found in environment variables")
             for callback in _in_memory_loggers:
@@ -4344,12 +4363,12 @@ class StandardLoggingPayloadSetup:
         """
         Get final response object after redacting the message input/output from logging
         """
-        if response_obj is not None:
+        if response_obj:
             final_response_obj: Optional[Union[dict, str, list]] = response_obj
         elif isinstance(init_response_obj, list) or isinstance(init_response_obj, str):
             final_response_obj = init_response_obj
         else:
-            final_response_obj = None
+            final_response_obj = {}
 
         modified_final_response_obj = redact_message_input_output_from_logging(
             model_call_details=kwargs,

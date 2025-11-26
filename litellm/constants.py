@@ -206,6 +206,7 @@ REPEATED_STREAMING_CHUNK_LIMIT = int(
     os.getenv("REPEATED_STREAMING_CHUNK_LIMIT", 100)
 )  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 DEFAULT_MAX_LRU_CACHE_SIZE = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 16))
+_REALTIME_BODY_CACHE_SIZE = 1000  # Keep realtime helper caches bounded; workloads rarely exceed 1k models/intents
 INITIAL_RETRY_DELAY = float(os.getenv("INITIAL_RETRY_DELAY", 0.5))
 MAX_RETRY_DELAY = float(os.getenv("MAX_RETRY_DELAY", 8.0))
 JITTER = float(os.getenv("JITTER", 0.75))
@@ -275,12 +276,22 @@ REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
     os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
 )
+LOGGING_WORKER_CONCURRENCY = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100)) # Must be above 0
+LOGGING_WORKER_MAX_QUEUE_SIZE = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
+LOGGING_WORKER_MAX_TIME_PER_COROUTINE = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
+LOGGING_WORKER_CLEAR_PERCENTAGE = int(os.getenv("LOGGING_WORKER_CLEAR_PERCENTAGE", 50))  # Percentage of queue to clear (default: 50%)
+MAX_ITERATIONS_TO_CLEAR_QUEUE = int(os.getenv("MAX_ITERATIONS_TO_CLEAR_QUEUE", 200))
+MAX_TIME_TO_CLEAR_QUEUE = float(os.getenv("MAX_TIME_TO_CLEAR_QUEUE", 5.0))
+LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS = float(
+    os.getenv("LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS", 0.5)
+)  # Cooldown time in seconds before allowing another aggressive clear (default: 0.5s)
 DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
 
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
+ANTHROPIC_SKILLS_API_BETA_VERSION = "skills-2025-10-02"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "low": 1,
     "medium": 5,
@@ -1200,3 +1211,7 @@ SENTRY_PII_DENYLIST = [
 COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
     os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
 )
+
+########################### RAG Text Splitter Constants ###########################
+DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
+DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
