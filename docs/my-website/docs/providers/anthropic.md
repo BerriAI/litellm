@@ -5,6 +5,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM supports all anthropic models.
 
 - `claude-sonnet-4-5-20250929`
+- `claude-opus-4-5-20251101`
 - `claude-opus-4-1-20250805`
 - `claude-4` (`claude-opus-4-20250514`, `claude-sonnet-4-20250514`)
 - `claude-3.7` (`claude-3-7-sonnet-20250219`)
@@ -17,11 +18,11 @@ LiteLLM supports all anthropic models.
 
 | Property | Details |
 |-------|-------|
-| Description | Claude is a highly performant, trustworthy, and intelligent AI platform built by Anthropic. Claude excels at tasks involving language, reasoning, analysis, coding, and more. |
-| Provider Route on LiteLLM | `anthropic/` (add this prefix to the model name, to route any requests to Anthropic - e.g. `anthropic/claude-3-5-sonnet-20240620`) |
-| Provider Doc | [Anthropic ↗](https://docs.anthropic.com/en/docs/build-with-claude/overview) |
-| API Endpoint for Provider | https://api.anthropic.com |
-| Supported Endpoints | `/chat/completions` |
+| Description | Claude is a highly performant, trustworthy, and intelligent AI platform built by Anthropic. Claude excels at tasks involving language, reasoning, analysis, coding, and more. Also available via Azure Foundry. |
+| Provider Route on LiteLLM | `anthropic/` (add this prefix to the model name, to route any requests to Anthropic - e.g. `anthropic/claude-3-5-sonnet-20240620`). For Azure Foundry deployments, use `azure/claude-*` (see [Azure Anthropic documentation](../providers/azure/azure_anthropic)) |
+| Provider Doc | [Anthropic ↗](https://docs.anthropic.com/en/docs/build-with-claude/overview), [Azure Foundry Claude ↗](https://learn.microsoft.com/en-us/azure/ai-services/foundry-models/claude) |
+| API Endpoint for Provider | https://api.anthropic.com (or Azure Foundry endpoint: `https://<resource-name>.services.ai.azure.com/anthropic`) |
+| Supported Endpoints | `/chat/completions`, `/v1/messages` (passthrough) |
 
 
 ## Supported OpenAI Parameters
@@ -60,7 +61,8 @@ LiteLLM supports Anthropic's [structured outputs feature](https://platform.claud
 ### Supported Models
 - `sonnet-4-5` or `sonnet-4.5` (all Sonnet 4.5 variants)
 - `opus-4-1` or `opus-4.1` (all Opus 4.1 variants)
-
+  - `opus-4-5` or `opus-4.5` (all Opus 4.5 variants)
+  
 ### Example Usage
 
 <Tabs>
@@ -160,6 +162,22 @@ os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 # os.environ["ANTHROPIC_API_BASE"] = "" # [OPTIONAL] or 'ANTHROPIC_BASE_URL'
 # os.environ["LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"] = "true" # [OPTIONAL] Disable automatic URL suffix appending
 ```
+
+:::tip Azure Foundry Support
+
+Claude models are also available via Microsoft Azure Foundry. Use the `azure/` prefix instead of `anthropic/` and configure Azure authentication. See the [Azure Anthropic documentation](../providers/azure/azure_anthropic) for details.
+
+Example:
+```python
+response = completion(
+    model="azure/claude-sonnet-4-5",
+    api_base="https://<resource-name>.services.ai.azure.com/anthropic",
+    api_key="your-azure-api-key",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+:::
 
 ### Custom API Base
 
