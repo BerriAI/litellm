@@ -1,4 +1,5 @@
 import { KeyIcon, TrashIcon } from "@heroicons/react/outline";
+import { KeyIcon, TrashIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Button, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
@@ -114,18 +115,25 @@ export const columns = (
     size: 160, // Fixed column width
     cell: ({ row }) => {
       const model = row.original;
+      const isConfigModel = !model.model_info?.db_model;
       const createdBy = model.model_info.created_by;
       const createdAt = model.model_info.created_at ? new Date(model.model_info.created_at).toLocaleDateString() : null;
 
       return (
         <div className="flex flex-col min-w-0 max-w-[160px]">
           {/* Created By - Primary */}
-          <div className="text-xs font-medium text-gray-900 truncate" title={createdBy || "Unknown"}>
-            {createdBy || "Unknown"}
+          <div
+            className="text-xs font-medium text-gray-900 truncate"
+            title={isConfigModel ? "Defined in config" : createdBy || "Unknown"}
+          >
+            {isConfigModel ? "Defined in config" : createdBy || "Unknown"}
           </div>
           {/* Created At - Secondary */}
-          <div className="text-xs text-gray-500 truncate mt-0.5" title={createdAt || "Unknown date"}>
-            {createdAt || "Unknown date"}
+          <div
+            className="text-xs text-gray-500 truncate mt-0.5"
+            title={isConfigModel ? "Config file" : createdAt || "Unknown date"}
+          >
+            {isConfigModel ? "-" : createdAt || "Unknown date"}
           </div>
         </div>
       );
