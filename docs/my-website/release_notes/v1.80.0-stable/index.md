@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.80.0-stable - Agent Hub Support"
+title: "v1.80.0-stable - Introducing Agent Hub: Register, Publish, and Share Agents"
 slug: "v1-80-0"
 date: 2025-11-15T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.0.rc.2
+ghcr.io/berriai/litellm:v1.80.0-stable
 ```
 
 </TabItem>
@@ -385,6 +385,9 @@ curl --location 'http://localhost:4000/v1/vector_stores/vs_123/files' \
     - UI - SSO Modal Cosmetic Changes - [PR #16554](https://github.com/BerriAI/litellm/pull/16554)
     - Fix UI logos loading with SERVER_ROOT_PATH - [PR #16618](https://github.com/BerriAI/litellm/pull/16618)
     - Fix remove misleading 'Custom' option mention from OpenAI endpoint tooltips - [PR #16622](https://github.com/BerriAI/litellm/pull/16622)
+
+- **SSO**
+    - Ensure `role` from SSO provider is used when a user is inserted onto LiteLLM - [PR #16794](https://github.com/BerriAI/litellm/pull/16794)
 
 #### Bugs
 

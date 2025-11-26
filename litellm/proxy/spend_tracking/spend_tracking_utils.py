@@ -95,9 +95,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata[
-        "vector_store_request_metadata"
-    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    clean_metadata["vector_store_request_metadata"] = (
+        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    )
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -142,28 +142,26 @@ def get_spend_logs_id(
     return id
 
 
-def _extract_usage_for_ocr_call(
-    response_obj: Any, response_obj_dict: dict
-) -> dict:
+def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> dict:
     """
     Extract usage information for OCR/AOCR calls.
-    
+
     OCR responses use usage_info (with pages_processed) instead of token-based usage.
-    
+
     Args:
         response_obj: The raw response object (can be dict, BaseModel, or other)
         response_obj_dict: Dictionary representation of the response object
-    
+
     Returns:
         A dict with prompt_tokens=0, completion_tokens=0, total_tokens=0,
         and pages_processed from usage_info.
     """
     usage_info = None
-    
+
     # Try to extract usage_info from dict
     if isinstance(response_obj_dict, dict) and "usage_info" in response_obj_dict:
         usage_info = response_obj_dict.get("usage_info")
-    
+
     # Try to extract usage_info from object attributes if not found in dict
     if not usage_info and hasattr(response_obj, "usage_info"):
         usage_info = response_obj.usage_info
@@ -171,7 +169,7 @@ def _extract_usage_for_ocr_call(
             usage_info = usage_info.model_dump()
         elif hasattr(usage_info, "__dict__"):
             usage_info = vars(usage_info)
-    
+
     # For OCR, we track pages instead of tokens
     if usage_info is not None:
         # Handle dict or object with attributes
@@ -193,7 +191,7 @@ def _extract_usage_for_ocr_call(
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "total_tokens": 0,
-                "pages_processed": 0
+                "pages_processed": 0,
             }
     else:
         return {}
@@ -206,17 +204,18 @@ def get_logging_payload(  # noqa: PLR0915
 
     if kwargs is None:
         kwargs = {}
-    if response_obj is None or (
-        not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict)
-    ):
+
+    if response_obj is None:
         response_obj = {}
+    elif not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict):
+        response_obj = {"result": str(response_obj)}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
     metadata = get_litellm_metadata_from_kwargs(kwargs)
     completion_start_time = kwargs.get("completion_start_time", end_time)
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
-    
+
     # Convert response_obj to dict first
     if isinstance(response_obj, dict):
         response_obj_dict = response_obj
@@ -224,12 +223,13 @@ def get_logging_payload(  # noqa: PLR0915
         response_obj_dict = response_obj.model_dump()
     else:
         response_obj_dict = {}
-    
+
     # Handle OCR responses which use usage_info instead of usage
     if call_type in ["ocr", "aocr"]:
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
     else:
-        usage = cast(dict, response_obj).get("usage", None) or {}
+        # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
+        usage = response_obj_dict.get("usage", None) or {}
         if isinstance(usage, litellm.Usage):
             usage = dict(usage)
 
@@ -658,6 +658,7 @@ def _get_response_for_spend_logs_payload(
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
             {"response": response_obj}
         )
+
         sanitized_response = sanitized_wrapper.get("response", response_obj)
 
         if sanitized_response is None:
