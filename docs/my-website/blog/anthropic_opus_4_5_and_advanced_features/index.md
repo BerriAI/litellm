@@ -26,6 +26,15 @@ This guide covers Anthropic's latest model (Claude Opus 4.5) and its advanced fe
 
 ---
 
+| Feature | Supported Models |
+|---------|-----------------|
+| Tool Search | Claude Opus 4.5, Sonnet 4.5 |
+| Programmatic Tool Calling | Claude Opus 4.5, Sonnet 4.5 |
+| Input Examples | Claude Opus 4.5, Sonnet 4.5 |
+| Effort Parameter | Claude Opus 4.5 only |
+
+Supported Providers: [Anthropic](../../docs/providers/anthropic), [Bedrock](../../docs/providers/bedrock), [Vertex AI](../../docs/providers/vertex_partner#vertex-ai---anthropic-claude).
+
 ## Usage
 
 <Tabs>
@@ -222,9 +231,112 @@ curl --location 'http://0.0.0.0:4000/bedrock/model/claude-4/converse' \
 </Tabs>
 
 
+## Usage - Vertex AI
+
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python
+from litellm import completion
+import json 
+
+## GET CREDENTIALS 
+## RUN ## 
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+## OR ## 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+## COMPLETION CALL 
+response = completion(
+  model="vertex_ai/claude-opus-4-5@20251101",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  vertex_credentials=vertex_credentials_json,
+  vertex_project="your-project-id",
+  vertex_location="us-east5"
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+**1. Setup config.yaml**
+
+```yaml
+model_list:
+  - model_name: claude-4 ### RECEIVED MODEL NAME ###
+    litellm_params:
+        model: vertex_ai/claude-opus-4-5@20251101
+        vertex_credentials: "/path/to/service_account.json"
+        vertex_project: "your-project-id"
+        vertex_location: "us-east5"
+```
+
+**2. Start the proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**3. Test it!**
+
+<Tabs>
+<TabItem value="curl" label="OpenAI Chat Completions">
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="anthropic" label="Anthropic /v1/messages API">
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+</Tabs>
+</TabItem>
+</Tabs>
+
+
+
 ## Tool Search {#tool-search}
 
+This lets Claude work with thousands of tools, by dynamically loading tools on-demand, instead of loading all tools into the context window upfront.
+
 ### Usage Example
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
 
 ```python
 import litellm
@@ -302,7 +414,7 @@ tools = [
 
 # Make a request - Claude will search for and use relevant tools
 response = litellm.completion(
-    model="anthropic/claude-sonnet-4-5-20250929",
+    model="anthropic/claude-opus-4-5-20251101",
     messages=[{
         "role": "user",
         "content": "What's the weather like in San Francisco?"
@@ -317,6 +429,108 @@ print("Tool calls:", response.choices[0].message.tool_calls)
 if hasattr(response.usage, 'server_tool_use'):
     print(f"Tool searches performed: {response.usage.server_tool_use.tool_search_requests}")
 ```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-4
+    litellm_params:
+      model: anthropic/claude-opus-4-5-20251101
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start the proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "messages": [{
+        "role": "user",
+        "content": "What's the weather like in San Francisco?"
+       }],
+       "tools": [
+        # Tool search tool (regex variant)
+        {
+            "type": "tool_search_tool_regex_20251119",
+            "name": "tool_search_tool_regex"
+        },
+        # Deferred tools - loaded on-demand
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather in a given location. Returns temperature and conditions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA"
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                            "description": "Temperature unit"
+                        }
+                    },
+                    "required": ["location"]
+                }
+            },
+            "defer_loading": True  # Load on-demand
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_files",
+                "description": "Search through files in the workspace using keywords",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "file_types": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            "defer_loading": True
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_database",
+                "description": "Execute SQL queries against the database",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "sql": {"type": "string"}
+                    },
+                    "required": ["sql"]
+                }
+            },
+            "defer_loading": True
+        }
+    ]
+}
+'
+```
+</TabItem>
+</Tabs>
 
 ### BM25 Variant (Natural Language Search)
 
@@ -336,7 +550,10 @@ tools = [
 
 ## Programmatic Tool Calling {#programmatic-tool-calling}
 
-### Usage Example
+Programmatic tool calling allows Claude to write code that calls your tools programmatically. [Learn more](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling)
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
 
 ```python
 import litellm
@@ -424,11 +641,79 @@ final_response = litellm.completion(
 print("\nFinal answer:", final_response.choices[0].message.content)
 ```
 
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-4
+    litellm_params:
+      model: anthropic/claude-opus-4-5-20251101
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start the proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "messages": [{
+        "role": "user",
+        "content": "Query sales data for West, East, and Central regions, then tell me which had the highest revenue"
+      }],
+      "tools": [
+        # Code execution tool (required for programmatic calling)
+        {
+            "type": "code_execution_20250825",
+            "name": "code_execution"
+        },
+        # Tool that can be called from code
+        {
+            "type": "function",
+            "function": {
+                "name": "query_database",
+                "description": "Execute a SQL query against the sales database. Returns a list of rows as JSON objects.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "sql": {
+                            "type": "string",
+                            "description": "SQL query to execute"
+                        }
+                    },
+                    "required": ["sql"]
+                }
+            },
+            "allowed_callers": ["code_execution_20250825"]  # Enable programmatic calling
+        }
+    ]
+}
+'
+```
+</TabItem>
+</Tabs>
+
 ---
 
 ## Tool Input Examples {#tool-input-examples}
 
-### Usage Example
+You can now provide Claude with examples of how to use your tools. [Learn more](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-input-examples)
+
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
 
 ```python
 import litellm
@@ -508,11 +793,123 @@ response = litellm.completion(
 print("Tool call:", response.choices[0].message.tool_calls[0].function.arguments)
 ```
 
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-4
+    litellm_params:
+      model: anthropic/claude-opus-4-5-20251101
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start the proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "messages": [{
+        "role": "user",
+        "content": "Schedule a team meeting for tomorrow at 2pm for 45 minutes with john@company.com and sarah@company.com"
+      }],
+      "tools": [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_calendar_event",
+            "description": "Create a new calendar event with attendees and reminders",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "start_time": {
+                        "type": "string",
+                        "description": "ISO 8601 format: YYYY-MM-DDTHH:MM:SS"
+                    },
+                    "duration_minutes": {"type": "integer"},
+                    "attendees": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "email": {"type": "string"},
+                                "optional": {"type": "boolean"}
+                            }
+                        }
+                    },
+                    "reminders": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "minutes_before": {"type": "integer"},
+                                "method": {"type": "string", "enum": ["email", "popup"]}
+                            }
+                        }
+                    }
+                },
+                "required": ["title", "start_time", "duration_minutes"]
+            }
+        },
+        # Provide concrete examples
+        "input_examples": [
+            {
+                "title": "Team Standup",
+                "start_time": "2025-01-15T09:00:00",
+                "duration_minutes": 30,
+                "attendees": [
+                    {"email": "alice@company.com", "optional": False},
+                    {"email": "bob@company.com", "optional": False}
+                ],
+                "reminders": [
+                    {"minutes_before": 15, "method": "popup"}
+                ]
+            },
+            {
+                "title": "Lunch Break",
+                "start_time": "2025-01-15T12:00:00",
+                "duration_minutes": 60
+                # Demonstrates optional fields can be omitted
+            }
+        ]
+    }
+]
+}
+'
+```
+</TabItem>
+</Tabs>
+
 ---
 
 ## Effort Parameter: Control Token Usage {#effort-parameter}
 
+Controls aspects like how much effort the model puts into its response, via `output_config={"effort": ..}`.
+
+:::info
+
+Soon, we will map OpenAI's `reasoning_effort` parameter to this.
+:::
+
+Potential Values for `effort` parameter: `"high"`, `"medium"`, `"low"`.
+
 ### Usage Example
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
 
 ```python
 import litellm
@@ -559,41 +956,46 @@ print(f"Medium: {response_medium.usage.completion_tokens} tokens")
 print(f"Low:    {response_low.usage.completion_tokens} tokens")
 ```
 
-### Effort with Tool Use
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
 
-Lower effort affects both explanations and tool calls:
+1. Setup config.yaml
 
-```python
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "Get weather for a location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string"}
-                },
-                "required": ["location"]
-            }
-        }
-    }
-]
-
-# Low effort = fewer tool calls, more direct
-response = litellm.completion(
-    model="anthropic/claude-opus-4-5-20251101",
-    messages=[{
-        "role": "user",
-        "content": "Check weather in San Francisco, New York, and London"
-    }],
-    tools=tools,
-    output_config={"effort": "low"}  # May combine into fewer calls
-)
+```yaml
+model_list:
+  - model_name: claude-4
+    litellm_params:
+      model: anthropic/claude-opus-4-5-20251101
+      api_key: os.environ/ANTHROPIC_API_KEY
 ```
 
----
+2. Start the proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "messages": [{
+        "role": "user",
+        "content": "Analyze the trade-offs between microservices and monolithic architectures"
+      }],
+      "output_config": {
+        "effort": "high"
+      }
+    }
+'
+```
+</TabItem>
+</Tabs>
+
 
 ## Cost Tracking: Monitor Tool Search Usage {#cost-tracking}
 
@@ -601,7 +1003,14 @@ response = litellm.completion(
 
 Tool search operations are tracked separately in the usage object, allowing you to monitor and optimize costs.
 
+It is available in the `usage` object, under `server_tool_use.tool_search_requests`.
+
+Anthropic charges $0.0001 per tool search request. 
+
 ### Tracking Example
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
 
 ```python
 import litellm
@@ -648,6 +1057,65 @@ if hasattr(response.usage, 'server_tool_use') and response.usage.server_tool_use
     print(f"  Total:          ${total_cost:.6f}")
 ```
 
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-4
+    litellm_params:
+      model: anthropic/claude-opus-4-5-20251101
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start the proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "messages": [{
+        "role": "user",
+        "content": "Find and use the weather tool for San Francisco"
+      }],
+      "tools": [
+        {
+          "type": "tool_search_tool_regex_20251119",
+          "name": "tool_search_tool_regex"
+        },
+        # ... 100 deferred tools
+      ]
+    }
+'
+```
+
+Expected Response:
+
+```json
+{
+    ...,
+    "usage": {
+        ...,
+        "server_tool_use": {
+            "tool_search_requests": 1
+        }
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
 ### Cost Optimization Tips
 
 1. **Keep frequently used tools non-deferred** (3-5 tools)
@@ -655,15 +1123,6 @@ if hasattr(response.usage, 'server_tool_use') and response.usage.server_tool_use
 3. **Monitor search requests** to identify optimization opportunities
 4. **Combine with effort parameter** for maximum efficiency
 
-```python
-# Optimized for cost
-response = litellm.completion(
-    model="anthropic/claude-sonnet-4-5-20250929",
-    messages=[{"role": "user", "content": "Simple query"}],
-    tools=tools_with_search,
-    output_config={"effort": "low"}  # Reduce output tokens
-)
-```
 
 ---
 
@@ -672,6 +1131,9 @@ response = litellm.completion(
 ### The Power of Integration
 
 These features work together seamlessly. Here's a real-world example combining all of them:
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
 
 ```python
 import litellm
@@ -745,6 +1207,68 @@ if hasattr(response.usage, 'server_tool_use') and response.usage.server_tool_use
 print(f"\nResponse: {response.choices[0].message.content}")
 ```
 
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-4
+    litellm_params:
+      model: anthropic/claude-opus-4-5-20251101
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start the proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_KEY' \
+--data ' {
+      "model": "claude-4",
+      "messages": [{
+        "role": "user",
+        "content": "Analyze sales by region for the last quarter and identify top performers"
+      }],
+      "tools": [
+        {
+          "type": "tool_search_tool_regex_20251119",
+          "name": "tool_search_tool_regex"
+        },
+        # ... 100 deferred tools
+      ],
+      "output_config": {
+        "effort": "medium"
+      }
+    }
+'
+```
+
+Expected Response:
+
+```json
+{
+    ...,
+    "usage": {
+        ...,    
+        "server_tool_use": {
+            "tool_search_requests": 1
+        }
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
 ### Real-World Benefits
 
 This combination enables:
@@ -754,83 +1278,4 @@ This combination enables:
 3. **High accuracy** - Input examples ensure correct tool usage
 4. **Cost control** - Effort parameter optimizes token spend
 5. **Full visibility** - Track all usage metrics
-
----
-
-## Getting Started
-
-### Installation
-
-```bash
-pip install litellm --upgrade
-```
-
-### Configuration
-
-```python
-import os
-import litellm
-
-# Set your API key
-os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
-
-# LiteLLM automatically handles beta headers for all features
-```
-
-### Supported Models
-
-| Feature | Supported Models |
-|---------|-----------------|
-| Tool Search | Claude Opus 4.5, Sonnet 4.5 |
-| Programmatic Tool Calling | Claude Opus 4.5, Sonnet 4.5 |
-| Input Examples | Claude Opus 4.5, Sonnet 4.5 |
-| Effort Parameter | Claude Opus 4.5 only |
-
-### Supported Endpoints
-
-**Note**: All features are supported on the `/chat/completions` endpoint only.
-
-| Feature | Supported Models |
-|---------|-----------------|
-| Tool Search | Claude Opus 4.5, Sonnet 4.5 |
-| Programmatic Tool Calling | Claude Opus 4.5, Sonnet 4.5 |
-| Input Examples | Claude Opus 4.5, Sonnet 4.5 |
-| Effort Parameter | Claude Opus 4.5 only |
-
-### Provider Support
-
-All features work across:
-- ✅ Standard Anthropic API
-- ✅ Azure Anthropic
-- ✅ Vertex AI Anthropic
-- ✅ LiteLLM Proxy
-
----
-
-## Conclusion
-
-These advanced Anthropic features in LiteLLM enable you to build more sophisticated, efficient, and cost-effective AI applications:
-
-- **Tool Search** scales to thousands of tools
-- **Programmatic Tool Calling** reduces latency and tokens
-- **Input Examples** improve accuracy
-- **Effort Parameter** controls costs
-
-All features work seamlessly together and are supported across all Anthropic providers through LiteLLM's unified interface.
-
-### Resources
-
-- [LiteLLM Documentation](https://docs.litellm.ai/)
-- [Anthropic Tool Search Docs](https://docs.litellm.ai/docs/providers/anthropic_tool_search)
-- [Anthropic Programmatic Tool Calling Docs](https://docs.litellm.ai/docs/providers/anthropic_programmatic_tool_calling)
-- [Anthropic Input Examples Docs](https://docs.litellm.ai/docs/providers/anthropic_tool_input_examples)
-- [Anthropic Effort Parameter Docs](https://docs.litellm.ai/docs/providers/anthropic_effort)
-
-### Get Started Today
-
-```bash
-pip install litellm --upgrade
-```
-
-Happy building! 🚀
 
