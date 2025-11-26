@@ -6,7 +6,7 @@ All-in-one document ingestion pipeline: **Upload → Chunk → Embed → Vector 
 |---------|-----------|
 | Cost Tracking | ❌ |
 | Logging | ✅ |
-| Supported Providers | `openai`, `bedrock` |
+| Supported Providers | `openai`, `bedrock`, `gemini` |
 
 ## Quick Start
 
@@ -48,6 +48,52 @@ curl -X POST "http://localhost:4000/v1/rag/ingest" \
             }
         }
     }"
+```
+
+### Gemini
+
+```bash showLineNumbers title="Ingest to Gemini File Search"
+curl -X POST "http://localhost:4000/v1/rag/ingest" \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"file\": {
+            \"filename\": \"document.txt\",
+            \"content\": \"$(base64 -i document.txt)\",
+            \"content_type\": \"text/plain\"
+        },
+        \"ingest_options\": {
+            \"vector_store\": {
+                \"custom_llm_provider\": \"gemini\"
+            }
+        }
+    }"
+```
+
+**With Custom Chunking:**
+
+```bash showLineNumbers title="Ingest with custom chunking"
+curl -X POST "http://localhost:4000/v1/rag/ingest" \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "file": {
+            "filename": "document.txt",
+            "content": "'$(base64 -i document.txt)'",
+            "content_type": "text/plain"
+        },
+        "ingest_options": {
+            "vector_store": {
+                "custom_llm_provider": "gemini"
+            },
+            "chunking_strategy": {
+                "white_space_config": {
+                    "max_tokens_per_chunk": 200,
+                    "max_overlap_tokens": 20
+                }
+            }
+        }
+    }'
 ```
 
 ## Response
