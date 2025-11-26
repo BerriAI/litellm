@@ -533,6 +533,7 @@ featherless_ai_models: Set = set()
 palm_models: Set = set()
 groq_models: Set = set()
 azure_models: Set = set()
+azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
@@ -737,6 +738,8 @@ def add_known_models():
             groq_models.add(key)
         elif value.get("litellm_provider") == "azure":
             azure_models.add(key)
+        elif value.get("litellm_provider") == "azure_anthropic":
+            azure_anthropic_models.add(key)
         elif value.get("litellm_provider") == "anyscale":
             anyscale_models.add(key)
         elif value.get("litellm_provider") == "cerebras":
@@ -876,6 +879,7 @@ model_list = list(
     | palm_models
     | groq_models
     | azure_models
+    | azure_anthropic_models
     | anyscale_models
     | cerebras_models
     | galadriel_models
@@ -965,6 +969,7 @@ models_by_provider: dict = {
     "palm": palm_models,
     "groq": groq_models,
     "azure": azure_models | azure_text_models,
+    "azure_anthropic": azure_anthropic_models,
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
