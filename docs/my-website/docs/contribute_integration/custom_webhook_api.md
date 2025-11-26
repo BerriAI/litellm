@@ -100,3 +100,7 @@ curl -L -X POST 'http://0.0.0.0:4000/chat/completions' \
 - Review our contribution guide [here](../../extras/contributing_code)
 - push your fork to your GitHub repo
 - submit a PR from there
+
+## What get's logged? 
+
+The [LiteLLM Standard Logging Payload](https://docs.litellm.ai/docs/proxy/logging_spec) is sent to your endpoint.
