@@ -3,12 +3,18 @@ Bedrock-specific RAG Ingestion implementation.
 
 Bedrock Knowledge Bases handle embedding internally when files are ingested,
 so this implementation uploads files to S3 and triggers ingestion jobs.
+
+Supports two modes:
+1. Use existing KB: Provide vector_store_id (KB ID)
+2. Auto-create KB: Don't provide vector_store_id - creates all AWS resources automatically
 """
 
 from __future__ import annotations
 
+import json
 import time
-from typing import TYPE_CHECKING, List, Optional, Tuple
+import uuid
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -23,30 +29,23 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     """
     Bedrock Knowledge Base RAG ingestion.
 
-    Key differences from base:
-    - Embedding is handled by Bedrock when files are ingested
-    - Files are uploaded to S3 and ingestion jobs are triggered
-    - Requires existing Knowledge Base and Data Source to be set up
+    Supports two modes:
+    1. **Use existing KB**: Provide vector_store_id
+    2. **Auto-create KB**: Don't provide vector_store_id - creates S3 bucket,
+       OpenSearch Serverless collection, IAM role, KB, and data source automatically
 
-    Required vector_store config:
-    - knowledge_base_id: Bedrock KB ID
-    - data_source_id: Data source ID
-    - s3_bucket: S3 bucket name for file uploads
-    - s3_prefix: (optional) S3 key prefix, defaults to "data/"
+    Optional config:
+    - vector_store_id: Existing KB ID (if not provided, auto-creates)
+    - s3_bucket: S3 bucket (auto-created if not provided)
+    - embedding_model: Bedrock embedding model (default: amazon.titan-embed-text-v2:0)
+    - wait_for_ingestion: Wait for completion (default: True)
+    - ingestion_timeout: Max seconds to wait (default: 300)
 
-    Optional config (uses BaseAWSLLM auth):
-    - aws_access_key_id: AWS access key
-    - aws_secret_access_key: AWS secret key
-    - aws_session_token: AWS session token
-    - aws_region_name: AWS region (defaults to us-west-2)
-    - aws_role_name: IAM role to assume
-    - aws_session_name: Session name for role assumption
-    - aws_profile_name: AWS profile name
-    - aws_web_identity_token: Web identity token for IRSA
-    - aws_sts_endpoint: Custom STS endpoint
-    - aws_external_id: External ID for role assumption
-    - wait_for_ingestion: Whether to wait for ingestion to complete (default: True)
-    - ingestion_timeout: Max seconds to wait for ingestion (default: 300)
+    AWS Auth (uses BaseAWSLLM):
+    - aws_access_key_id, aws_secret_access_key, aws_session_token
+    - aws_region_name (default: us-west-2)
+    - aws_role_name, aws_session_name, aws_profile_name
+    - aws_web_identity_token, aws_sts_endpoint, aws_external_id
     """
 
     def __init__(
@@ -57,26 +56,420 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         BaseRAGIngestion.__init__(self, ingest_options=ingest_options, router=router)
         BaseAWSLLM.__init__(self)
 
-        # Bedrock-specific config
-        self.knowledge_base_id = self.vector_store_config.get("knowledge_base_id")
-        self.data_source_id = self.vector_store_config.get("data_source_id")
-        self.s3_bucket = self.vector_store_config.get("s3_bucket")
-        self.s3_prefix = self.vector_store_config.get("s3_prefix", "data/")
-        self.wait_for_ingestion = self.vector_store_config.get("wait_for_ingestion", True)
-        self.ingestion_timeout = self.vector_store_config.get("ingestion_timeout", 300)
+        # Use vector_store_id as unified param (maps to knowledge_base_id)
+        self.knowledge_base_id = self.vector_store_config.get(
+            "vector_store_id"
+        ) or self.vector_store_config.get("knowledge_base_id")
+
+        # Optional config
+        self._data_source_id = self.vector_store_config.get("data_source_id")
+        self._s3_bucket = self.vector_store_config.get("s3_bucket")
+        self._s3_prefix: Optional[str] = self.vector_store_config.get("s3_prefix")
+        self.embedding_model = self.vector_store_config.get(
+            "embedding_model"
+        ) or "amazon.titan-embed-text-v2:0"
+
+        self.wait_for_ingestion = self.vector_store_config.get("wait_for_ingestion", False)
+        self.ingestion_timeout: int = self.vector_store_config.get("ingestion_timeout") or 300
 
         # Get AWS region using BaseAWSLLM method
         self.aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
             aws_region_name=self.vector_store_config.get("aws_region_name")
         )
 
-        # Validate required config
-        if not self.knowledge_base_id:
-            raise ValueError("knowledge_base_id is required for Bedrock ingestion")
-        if not self.data_source_id:
-            raise ValueError("data_source_id is required for Bedrock ingestion")
-        if not self.s3_bucket:
-            raise ValueError("s3_bucket is required for Bedrock ingestion")
+        # Will be set during initialization
+        self.data_source_id: Optional[str] = None
+        self.s3_bucket: Optional[str] = None
+        self.s3_prefix: str = self._s3_prefix or "data/"
+        self._config_initialized = False
+
+        # Track resources we create (for cleanup if needed)
+        self._created_resources: Dict[str, Any] = {}
+
+    def _ensure_config_initialized(self):
+        """Lazily initialize KB config - either detect from existing or create new."""
+        if self._config_initialized:
+            return
+
+        if self.knowledge_base_id:
+            # Use existing KB - auto-detect data source and S3 bucket
+            self._auto_detect_config()
+        else:
+            # No KB provided - create everything from scratch
+            self._create_knowledge_base_infrastructure()
+
+        self._config_initialized = True
+
+    def _auto_detect_config(self):
+        """Auto-detect data source ID and S3 bucket from existing Knowledge Base."""
+        verbose_logger.debug(
+            f"Auto-detecting data source and S3 bucket for KB={self.knowledge_base_id}"
+        )
+
+        bedrock_agent = self._get_boto3_client("bedrock-agent")
+
+        # List data sources for this KB
+        ds_response = bedrock_agent.list_data_sources(
+            knowledgeBaseId=self.knowledge_base_id
+        )
+        data_sources = ds_response.get("dataSourceSummaries", [])
+
+        if not data_sources:
+            raise ValueError(
+                f"No data sources found for Knowledge Base {self.knowledge_base_id}. "
+                "Please create a data source first or provide data_source_id and s3_bucket."
+            )
+
+        # Use first data source (or user-provided override)
+        if self._data_source_id:
+            self.data_source_id = self._data_source_id
+        else:
+            self.data_source_id = data_sources[0]["dataSourceId"]
+            verbose_logger.info(f"Auto-detected data source: {self.data_source_id}")
+
+        # Get data source details for S3 bucket
+        ds_details = bedrock_agent.get_data_source(
+            knowledgeBaseId=self.knowledge_base_id,
+            dataSourceId=self.data_source_id,
+        )
+
+        s3_config = (
+            ds_details.get("dataSource", {})
+            .get("dataSourceConfiguration", {})
+            .get("s3Configuration", {})
+        )
+
+        bucket_arn = s3_config.get("bucketArn", "")
+        if bucket_arn:
+            # Extract bucket name from ARN: arn:aws:s3:::bucket-name
+            self.s3_bucket = self._s3_bucket or bucket_arn.split(":")[-1]
+            verbose_logger.info(f"Auto-detected S3 bucket: {self.s3_bucket}")
+
+            # Use inclusion prefix if available
+            prefixes = s3_config.get("inclusionPrefixes", [])
+            if prefixes and not self._s3_prefix:
+                self.s3_prefix = prefixes[0]
+        else:
+            if not self._s3_bucket:
+                raise ValueError(
+                    f"Could not auto-detect S3 bucket for data source {self.data_source_id}. "
+                    "Please provide s3_bucket in config."
+                )
+            self.s3_bucket = self._s3_bucket
+
+    def _create_knowledge_base_infrastructure(self):
+        """Create all AWS resources needed for a new Knowledge Base."""
+        verbose_logger.info("Creating new Bedrock Knowledge Base infrastructure...")
+
+        # Generate unique names
+        unique_id = uuid.uuid4().hex[:8]
+        kb_name = self.ingest_name or f"litellm-kb-{unique_id}"
+
+        # Get AWS account ID
+        sts = self._get_boto3_client("sts")
+        account_id = sts.get_caller_identity()["Account"]
+
+        # Step 1: Create S3 bucket (if not provided)
+        self.s3_bucket = self._s3_bucket or self._create_s3_bucket(unique_id)
+
+        # Step 2: Create OpenSearch Serverless collection
+        collection_name, collection_arn = self._create_opensearch_collection(
+            unique_id, account_id
+        )
+
+        # Step 3: Create OpenSearch index
+        self._create_opensearch_index(collection_name)
+
+        # Step 4: Create IAM role for Bedrock
+        role_arn = self._create_bedrock_role(unique_id, account_id, collection_arn)
+
+        # Step 5: Create Knowledge Base
+        self.knowledge_base_id = self._create_knowledge_base(
+            kb_name, role_arn, collection_arn
+        )
+
+        # Step 6: Create Data Source
+        self.data_source_id = self._create_data_source(kb_name)
+
+        verbose_logger.info(
+            f"Created KB infrastructure: kb_id={self.knowledge_base_id}, "
+            f"ds_id={self.data_source_id}, bucket={self.s3_bucket}"
+        )
+
+    def _create_s3_bucket(self, unique_id: str) -> str:
+        """Create S3 bucket for KB data source."""
+        s3 = self._get_boto3_client("s3")
+        bucket_name = f"litellm-kb-{unique_id}"
+
+        verbose_logger.debug(f"Creating S3 bucket: {bucket_name}")
+
+        create_params: Dict[str, Any] = {"Bucket": bucket_name}
+        if self.aws_region_name != "us-east-1":
+            create_params["CreateBucketConfiguration"] = {
+                "LocationConstraint": self.aws_region_name
+            }
+
+        s3.create_bucket(**create_params)
+        self._created_resources["s3_bucket"] = bucket_name
+
+        verbose_logger.info(f"Created S3 bucket: {bucket_name}")
+        return bucket_name
+
+    def _create_opensearch_collection(
+        self, unique_id: str, account_id: str
+    ) -> Tuple[str, str]:
+        """Create OpenSearch Serverless collection for vector storage."""
+        oss = self._get_boto3_client("opensearchserverless")
+        collection_name = f"litellm-kb-{unique_id}"
+
+        verbose_logger.debug(f"Creating OpenSearch Serverless collection: {collection_name}")
+
+        # Create encryption policy
+        oss.create_security_policy(
+            name=f"{collection_name}-enc",
+            type="encryption",
+            policy=json.dumps({
+                "Rules": [{"ResourceType": "collection", "Resource": [f"collection/{collection_name}"]}],
+                "AWSOwnedKey": True,
+            }),
+        )
+
+        # Create network policy (public access for simplicity)
+        oss.create_security_policy(
+            name=f"{collection_name}-net",
+            type="network",
+            policy=json.dumps([{
+                "Rules": [{"ResourceType": "collection", "Resource": [f"collection/{collection_name}"]},
+                          {"ResourceType": "dashboard", "Resource": [f"collection/{collection_name}"]}],
+                "AllowFromPublic": True,
+            }]),
+        )
+
+        # Create data access policy
+        oss.create_access_policy(
+            name=f"{collection_name}-access",
+            type="data",
+            policy=json.dumps([{
+                "Rules": [
+                    {"ResourceType": "index", "Resource": [f"index/{collection_name}/*"], "Permission": ["aoss:*"]},
+                    {"ResourceType": "collection", "Resource": [f"collection/{collection_name}"], "Permission": ["aoss:*"]},
+                ],
+                "Principal": [f"arn:aws:iam::{account_id}:root"],
+            }]),
+        )
+
+        # Create collection
+        response = oss.create_collection(
+            name=collection_name,
+            type="VECTORSEARCH",
+        )
+        collection_id = response["createCollectionDetail"]["id"]
+        self._created_resources["opensearch_collection"] = collection_name
+
+        # Wait for collection to be active
+        verbose_logger.debug("Waiting for OpenSearch collection to be active...")
+        for _ in range(60):  # 5 min timeout
+            status_response = oss.batch_get_collection(ids=[collection_id])
+            status = status_response["collectionDetails"][0]["status"]
+            if status == "ACTIVE":
+                break
+            time.sleep(5)
+        else:
+            raise TimeoutError("OpenSearch collection did not become active in time")
+
+        collection_arn = status_response["collectionDetails"][0]["arn"]
+        verbose_logger.info(f"Created OpenSearch collection: {collection_name}")
+
+        return collection_name, collection_arn
+
+    def _create_opensearch_index(self, collection_name: str):
+        """Create vector index in OpenSearch collection."""
+        from opensearchpy import OpenSearch, RequestsHttpConnection
+        from requests_aws4auth import AWS4Auth
+
+        # Get credentials for signing
+        credentials = self.get_credentials(
+            aws_access_key_id=self.vector_store_config.get("aws_access_key_id"),
+            aws_secret_access_key=self.vector_store_config.get("aws_secret_access_key"),
+            aws_session_token=self.vector_store_config.get("aws_session_token"),
+            aws_region_name=self.aws_region_name,
+        )
+
+        # Get collection endpoint
+        oss = self._get_boto3_client("opensearchserverless")
+        collections = oss.batch_get_collection(names=[collection_name])
+        endpoint = collections["collectionDetails"][0]["collectionEndpoint"]
+        host = endpoint.replace("https://", "")
+
+        auth = AWS4Auth(
+            credentials.access_key,
+            credentials.secret_key,
+            self.aws_region_name,
+            "aoss",
+            session_token=credentials.token,
+        )
+
+        client = OpenSearch(
+            hosts=[{"host": host, "port": 443}],
+            http_auth=auth,
+            use_ssl=True,
+            verify_certs=True,
+            connection_class=RequestsHttpConnection,
+        )
+
+        index_name = "bedrock-kb-index"
+        index_body = {
+            "settings": {
+                "index": {"knn": True, "knn.algo_param.ef_search": 512}
+            },
+            "mappings": {
+                "properties": {
+                    "bedrock-knowledge-base-default-vector": {
+                        "type": "knn_vector",
+                        "dimension": 1024,
+                        "method": {"engine": "faiss", "name": "hnsw", "space_type": "l2"},
+                    },
+                    "AMAZON_BEDROCK_METADATA": {"type": "text", "index": False},
+                    "AMAZON_BEDROCK_TEXT_CHUNK": {"type": "text"},
+                }
+            },
+        }
+
+        client.indices.create(index=index_name, body=index_body)
+        verbose_logger.info(f"Created OpenSearch index: {index_name}")
+
+    def _create_bedrock_role(
+        self, unique_id: str, account_id: str, collection_arn: str
+    ) -> str:
+        """Create IAM role for Bedrock KB."""
+        iam = self._get_boto3_client("iam")
+        role_name = f"litellm-bedrock-kb-{unique_id}"
+
+        verbose_logger.debug(f"Creating IAM role: {role_name}")
+
+        trust_policy = {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Service": "bedrock.amazonaws.com"},
+                "Action": "sts:AssumeRole",
+                "Condition": {
+                    "StringEquals": {"aws:SourceAccount": account_id},
+                    "ArnLike": {"aws:SourceArn": f"arn:aws:bedrock:{self.aws_region_name}:{account_id}:knowledge-base/*"},
+                },
+            }],
+        }
+
+        response = iam.create_role(
+            RoleName=role_name,
+            AssumeRolePolicyDocument=json.dumps(trust_policy),
+        )
+        role_arn = response["Role"]["Arn"]
+        self._created_resources["iam_role"] = role_name
+
+        # Attach permissions policy
+        permissions_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["bedrock:InvokeModel"],
+                    "Resource": [f"arn:aws:bedrock:{self.aws_region_name}::foundation-model/{self.embedding_model}"],
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["aoss:APIAccessAll"],
+                    "Resource": [collection_arn],
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:ListBucket"],
+                    "Resource": [f"arn:aws:s3:::{self.s3_bucket}", f"arn:aws:s3:::{self.s3_bucket}/*"],
+                },
+            ],
+        }
+
+        iam.put_role_policy(
+            RoleName=role_name,
+            PolicyName=f"{role_name}-policy",
+            PolicyDocument=json.dumps(permissions_policy),
+        )
+
+        # Wait for role to propagate
+        time.sleep(10)
+
+        verbose_logger.info(f"Created IAM role: {role_arn}")
+        return role_arn
+
+    def _create_knowledge_base(
+        self, kb_name: str, role_arn: str, collection_arn: str
+    ) -> str:
+        """Create Bedrock Knowledge Base."""
+        bedrock_agent = self._get_boto3_client("bedrock-agent")
+
+        verbose_logger.debug(f"Creating Knowledge Base: {kb_name}")
+
+        response = bedrock_agent.create_knowledge_base(
+            name=kb_name,
+            roleArn=role_arn,
+            knowledgeBaseConfiguration={
+                "type": "VECTOR",
+                "vectorKnowledgeBaseConfiguration": {
+                    "embeddingModelArn": f"arn:aws:bedrock:{self.aws_region_name}::foundation-model/{self.embedding_model}",
+                },
+            },
+            storageConfiguration={
+                "type": "OPENSEARCH_SERVERLESS",
+                "opensearchServerlessConfiguration": {
+                    "collectionArn": collection_arn,
+                    "fieldMapping": {
+                        "metadataField": "AMAZON_BEDROCK_METADATA",
+                        "textField": "AMAZON_BEDROCK_TEXT_CHUNK",
+                        "vectorField": "bedrock-knowledge-base-default-vector",
+                    },
+                    "vectorIndexName": "bedrock-kb-index",
+                },
+            },
+        )
+        kb_id = response["knowledgeBase"]["knowledgeBaseId"]
+        self._created_resources["knowledge_base"] = kb_id
+
+        # Wait for KB to be active
+        verbose_logger.debug("Waiting for Knowledge Base to be active...")
+        for _ in range(30):
+            kb_status = bedrock_agent.get_knowledge_base(knowledgeBaseId=kb_id)
+            status = kb_status["knowledgeBase"]["status"]
+            if status == "ACTIVE":
+                break
+            time.sleep(2)
+        else:
+            raise TimeoutError("Knowledge Base did not become active in time")
+
+        verbose_logger.info(f"Created Knowledge Base: {kb_id}")
+        return kb_id
+
+    def _create_data_source(self, kb_name: str) -> str:
+        """Create Data Source for the Knowledge Base."""
+        bedrock_agent = self._get_boto3_client("bedrock-agent")
+
+        verbose_logger.debug(f"Creating Data Source for KB: {self.knowledge_base_id}")
+
+        response = bedrock_agent.create_data_source(
+            knowledgeBaseId=self.knowledge_base_id,
+            name=f"{kb_name}-s3-source",
+            dataSourceConfiguration={
+                "type": "S3",
+                "s3Configuration": {
+                    "bucketArn": f"arn:aws:s3:::{self.s3_bucket}",
+                    "inclusionPrefixes": [self.s3_prefix],
+                },
+            },
+        )
+        ds_id = response["dataSource"]["dataSourceId"]
+        self._created_resources["data_source"] = ds_id
+
+        verbose_logger.info(f"Created Data Source: {ds_id}")
+        return ds_id
 
     def _get_boto3_client(self, service_name: str):
         """Get a boto3 client for the specified service using BaseAWSLLM auth."""
@@ -133,9 +526,10 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         Store content in Bedrock Knowledge Base.
 
         Bedrock workflow:
-        1. Upload file to S3 bucket
-        2. Start ingestion job
-        3. (Optional) Wait for ingestion to complete
+        1. Auto-detect data source and S3 bucket (if not provided)
+        2. Upload file to S3 bucket
+        3. Start ingestion job
+        4. (Optional) Wait for ingestion to complete
 
         Args:
             file_content: Raw file bytes
@@ -147,6 +541,9 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         Returns:
             Tuple of (knowledge_base_id, file_key)
         """
+        # Auto-detect data source and S3 bucket if needed
+        self._ensure_config_initialized()
+
         if not file_content or not filename:
             verbose_logger.warning("No file content or filename provided for Bedrock ingestion")
             return self.knowledge_base_id, None
