@@ -92,7 +92,7 @@ class WeaveOtelLogger(OpenTelemetry):
     @staticmethod
     def _set_metadata_attributes(span: Span, metadata: dict):
         """Helper to set metadata attributes from mapping."""
-        from litellm.integrations.arize._utils import safe_set_attribute
+        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
         # Weave-specific attributes
@@ -123,7 +123,7 @@ class WeaveOtelLogger(OpenTelemetry):
     @staticmethod
     def _set_token_usage(span: Span, response_obj):
         """Helper to set token usage attributes using OpenInference conventions."""
-        from litellm.integrations.arize._utils import safe_set_attribute
+        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
 
         if not response_obj or not hasattr(response_obj, "get"):
             return
@@ -157,7 +157,7 @@ class WeaveOtelLogger(OpenTelemetry):
         - "inputs": input.value
         - "outputs": output.value
         """
-        from litellm.integrations.arize._utils import safe_set_attribute
+        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
         # Set metadata attributes (thread_id, session_id, etc.)
