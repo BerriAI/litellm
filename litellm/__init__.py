@@ -1434,6 +1434,7 @@ from .skills.main import (
 )
 from .containers.main import *
 from .ocr.main import *
+from .rag.main import *
 from .search.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
@@ -1469,6 +1470,9 @@ from .vector_stores.vector_store_registry import (
 
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
+
+### RAG ###
+from . import rag
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem

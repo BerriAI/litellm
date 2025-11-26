@@ -412,6 +412,7 @@ const sidebars = {
             "proxy/pass_through"
           ]
         },
+        "rag_ingest",
         "realtime",
         "rerank",
         "response_api",
