@@ -86,8 +86,37 @@ class BedrockVectorStoreOptions(TypedDict, total=False):
     aws_external_id: Optional[str]
 
 
+class VertexAIVectorStoreOptions(TypedDict, total=False):
+    """
+    Vertex AI RAG Engine configuration.
+
+    Example (use existing corpus):
+        {"custom_llm_provider": "vertex_ai", "vector_store_id": "CORPUS_ID", "gcs_bucket": "my-bucket"}
+
+    Requires:
+    - gcloud auth application-default login (for ADC authentication)
+    - Files are uploaded to GCS via litellm.files.create_file, then imported into RAG corpus
+    - GCS bucket must be provided via gcs_bucket or GCS_BUCKET_NAME env var
+    """
+
+    custom_llm_provider: Literal["vertex_ai"]
+    vector_store_id: str  # RAG corpus ID (required for Vertex AI)
+
+    # GCP config
+    vertex_project: Optional[str]  # GCP project ID (uses env VERTEXAI_PROJECT if not set)
+    vertex_location: Optional[str]  # GCP region (default: us-central1)
+    vertex_credentials: Optional[str]  # Path to credentials JSON (uses ADC if not set)
+    gcs_bucket: Optional[str]  # GCS bucket for file uploads (uses env GCS_BUCKET_NAME if not set)
+
+    # Import settings
+    wait_for_import: Optional[bool]  # Wait for import to complete (default: True)
+    import_timeout: Optional[int]  # Timeout in seconds (default: 600)
+
+
 # Union type for vector store options
-RAGIngestVectorStoreOptions = Union[OpenAIVectorStoreOptions, BedrockVectorStoreOptions]
+RAGIngestVectorStoreOptions = Union[
+    OpenAIVectorStoreOptions, BedrockVectorStoreOptions, VertexAIVectorStoreOptions
+]
 
 
 class RAGIngestOptions(TypedDict, total=False):
