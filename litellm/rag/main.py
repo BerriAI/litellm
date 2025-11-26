@@ -12,49 +12,17 @@ __all__ = ["ingest", "aingest"]
 import asyncio
 import contextvars
 from functools import partial
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
 
 import httpx
 
 import litellm
-from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
-from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
-from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
+from litellm.rag.utils import get_rag_ingestion_class
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
 from litellm.utils import client
 
 if TYPE_CHECKING:
     from litellm import Router
-
-
-# Registry of provider-specific ingestion classes
-INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
-    "openai": OpenAIRAGIngestion,
-    "bedrock": BedrockRAGIngestion,
-}
-
-
-def get_ingestion_class(provider: str) -> Type[BaseRAGIngestion]:
-    """
-    Get the ingestion class for a given provider.
-
-    Args:
-        provider: The vector store provider name (e.g., 'openai')
-
-    Returns:
-        The ingestion class for the provider
-
-    Raises:
-        ValueError: If provider is not supported
-    """
-    ingestion_class = INGESTION_REGISTRY.get(provider)
-    if ingestion_class is None:
-        supported = ", ".join(INGESTION_REGISTRY.keys())
-        raise ValueError(
-            f"Provider '{provider}' is not supported for RAG ingestion. "
-            f"Supported providers: {supported}"
-        )
-    return ingestion_class
 
 
 async def _execute_ingest_pipeline(
@@ -82,7 +50,7 @@ async def _execute_ingest_pipeline(
     provider = vector_store_config.get("custom_llm_provider", "openai")
 
     # Get provider-specific ingestion class
-    ingestion_class = get_ingestion_class(provider)
+    ingestion_class = get_rag_ingestion_class(provider)
 
     # Create ingestion instance
     ingestion = ingestion_class(
