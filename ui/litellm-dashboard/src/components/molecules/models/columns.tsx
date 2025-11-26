@@ -1,5 +1,4 @@
 import { KeyIcon, TrashIcon } from "@heroicons/react/outline";
-import { KeyIcon, TrashIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Button, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
