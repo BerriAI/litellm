@@ -7,8 +7,6 @@ so this implementation skips the embedding step and directly uploads files.
 
 from __future__ import annotations
 
-import base64
-import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import httpx
