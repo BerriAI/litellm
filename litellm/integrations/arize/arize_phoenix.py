@@ -1,7 +1,6 @@
 import os
-from typing import TYPE_CHECKING, Any, Union
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
+from datetime import datetime
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
