@@ -210,3 +210,47 @@ def _lazy_import_utils(name: str) -> Any:
         return _get_valid_models
     
     raise AttributeError(f"Utils lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_cost_calculator(name: str) -> Any:
+    """Lazy import for cost_calculator functions."""
+    _globals = _get_litellm_globals()
+    from .cost_calculator import (
+        completion_cost as _completion_cost,
+        cost_per_token as _cost_per_token,
+        response_cost_calculator as _response_cost_calculator,
+    )
+    
+    _cost_functions = {
+        "completion_cost": _completion_cost,
+        "cost_per_token": _cost_per_token,
+        "response_cost_calculator": _response_cost_calculator,
+    }
+    
+    func = _cost_functions[name]
+    _globals[name] = func
+    return func
+
+
+def _lazy_import_litellm_logging(name: str) -> Any:
+    """Lazy import for litellm_logging module."""
+    _globals = _get_litellm_globals()
+    try:
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as _Logging,
+            modify_integration as _modify_integration,
+        )
+        
+        _logging_objects = {
+            "Logging": _Logging,
+            "modify_integration": _modify_integration,
+        }
+        
+        obj = _logging_objects[name]
+        _globals[name] = obj
+        return obj
+    except Exception as e:
+        raise AttributeError(
+            f"module 'litellm' has no attribute {name!r}. "
+            f"Lazy import failed: {e}"
+        ) from e
