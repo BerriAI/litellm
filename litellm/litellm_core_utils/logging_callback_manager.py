@@ -4,6 +4,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.types.utils import CallbacksByType
 
 if TYPE_CHECKING:
@@ -138,6 +139,30 @@ class LoggingCallbackManager:
             return False
         return True
 
+    def _add_custom_callback_generic_api_str(
+        self, callback: str
+    ) -> Union[GenericAPILogger, str]:
+        """
+        litellm_settings:
+            success_callback: ["custom_callback_name"]
+
+        callback_settings:
+            custom_callback_name:
+                callback_type: generic_api
+                endpoint: https://webhook-test.com/30343bc33591bc5e6dc44217ceae3e0a
+                headers:
+                Authorization: Bearer sk-1234
+        """
+        if (
+            callback in litellm.callback_settings
+            and litellm.callback_settings[callback]["callback_type"] == "generic_api"
+        ):
+            return GenericAPILogger(
+                endpoint=litellm.callback_settings[callback]["endpoint"],
+                headers=litellm.callback_settings[callback]["headers"],
+            )
+        return callback
+
     def _safe_add_callback_to_list(
         self,
         callback: Union[CustomLogger, Callable, str],
@@ -151,6 +176,11 @@ class LoggingCallbackManager:
         # Check max callbacks limit first
         if not self._check_callback_list_size(parent_list):
             return
+
+        # Check if the callback is a custom callback
+
+        if isinstance(callback, str):
+            callback = self._add_custom_callback_generic_api_str(callback)
 
         if isinstance(callback, str):
             self._add_string_callback_to_list(
@@ -348,7 +378,6 @@ class LoggingCallbackManager:
         elif callable(callback):
             return getattr(callback, "__name__", str(callback))
         return str(callback)
-    
 
     def get_active_custom_logger_for_callback_name(
         self,
@@ -362,12 +391,16 @@ class LoggingCallbackManager:
         )
 
         # get the custom logger class type
-        custom_logger_class_type = CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name)
+        custom_logger_class_type = (
+            CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name)
+        )
 
         # get the active custom logger
         custom_logger = self.get_custom_loggers_for_type(custom_logger_class_type)
 
         if len(custom_logger) == 0:
-            raise ValueError(f"No active custom logger found for callback name: {callback_name}")
+            raise ValueError(
+                f"No active custom logger found for callback name: {callback_name}"
+            )
 
         return custom_logger[0]

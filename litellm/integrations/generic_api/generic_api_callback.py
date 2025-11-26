@@ -9,11 +9,11 @@ Callback to log events to a Generic API Endpoint
 import asyncio
 import os
 import traceback
-from litellm._uuid import uuid
 from typing import Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
