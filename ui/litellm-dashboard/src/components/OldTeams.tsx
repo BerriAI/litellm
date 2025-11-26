@@ -1139,12 +1139,20 @@ const Teams: React.FC<TeamProps> = ({
                         </Tooltip>
                       </span>
                     }
+                    rules={[
+                      {
+                        required: true,
+                        message: "Please select at least one model",
+                      },
+                    ]}
                     name="models"
                   >
                     <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-                      <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                        All Proxy Models
-                      </Select2.Option>
+                      {(isProxyAdminRole(userRole || "") || userModels.includes("all-proxy-models")) && (
+                        <Select2.Option key="all-proxy-models" value="all-proxy-models">
+                          All Proxy Models
+                        </Select2.Option>
+                      )}
                       <Select2.Option key="no-default-models" value="no-default-models">
                         No Default Models
                       </Select2.Option>
