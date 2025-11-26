@@ -1,4 +1,6 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
+from typing import Any, Dict, List, Optional
+
 import litellm
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.guardrails import *
@@ -128,10 +130,19 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
         ToolPermissionGuardrail,
     )
 
+    rules: Optional[List[Dict[str, Any]]] = None
+    if litellm_params.rules:
+        rules = []
+        for rule in litellm_params.rules:
+            if hasattr(rule, "model_dump"):
+                rules.append(rule.model_dump())
+            else:
+                rules.append(dict(rule))
+
     _tool_permission_callback = ToolPermissionGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
-        rules=litellm_params.rules,
+        rules=rules,
         default_action=getattr(litellm_params, "default_action", "deny"),
         on_disallowed_action=getattr(litellm_params, "on_disallowed_action", "block"),
         default_on=litellm_params.default_on,

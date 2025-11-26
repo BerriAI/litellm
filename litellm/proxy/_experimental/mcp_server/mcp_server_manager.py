@@ -1976,7 +1976,7 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Adding server to registry: {server.server_id} ({server.server_name})"
             )
-            self.add_update_server(server)
+            await self.add_update_server(server)
 
         verbose_logger.debug(
             f"Registry now contains {len(self.get_registry())} servers"
