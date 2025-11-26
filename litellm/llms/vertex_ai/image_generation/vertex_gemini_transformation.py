@@ -122,8 +122,10 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         """
         Get the complete URL for Vertex AI Gemini generateContent API
         """
-        vertex_project = self._resolve_vertex_project()
-        vertex_location = self._resolve_vertex_location()
+        # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
+        # then fall back to environment variables and other sources
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
 
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
@@ -151,8 +153,10 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_base: Optional[str] = None,
     ) -> dict:
         headers = headers or {}
-        vertex_project = self._resolve_vertex_project()
-        vertex_credentials = self._resolve_vertex_credentials()
+        # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
+        # then fall back to environment variables and other sources
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,

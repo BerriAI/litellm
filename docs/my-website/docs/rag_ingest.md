@@ -4,9 +4,8 @@ All-in-one document ingestion pipeline: **Upload → Chunk → Embed → Vector 
 
 | Feature | Supported |
 |---------|-----------|
-| Cost Tracking | ❌ |
 | Logging | ✅ |
-| Supported Providers | `openai`, `bedrock`, `vertex_ai` |
+| Supported Providers | `openai`, `bedrock`, `vertex_ai`, `gemini` |
 
 ## Quick Start
 

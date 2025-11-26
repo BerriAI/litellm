@@ -17,12 +17,46 @@ from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
 import httpx
 
 import litellm
-from litellm.rag.utils import get_rag_ingestion_class
+from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
+from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
+from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
+from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
 from litellm.utils import client
 
 if TYPE_CHECKING:
     from litellm import Router
+
+
+# Registry of provider-specific ingestion classes
+INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
+    "openai": OpenAIRAGIngestion,
+    "bedrock": BedrockRAGIngestion,
+    "gemini": GeminiRAGIngestion,
+}
+
+
+def get_ingestion_class(provider: str) -> Type[BaseRAGIngestion]:
+    """
+    Get the ingestion class for a given provider.
+
+    Args:
+        provider: The vector store provider name (e.g., 'openai')
+
+    Returns:
+        The ingestion class for the provider
+
+    Raises:
+        ValueError: If provider is not supported
+    """
+    ingestion_class = INGESTION_REGISTRY.get(provider)
+    if ingestion_class is None:
+        supported = ", ".join(INGESTION_REGISTRY.keys())
+        raise ValueError(
+            f"Provider '{provider}' is not supported for RAG ingestion. "
+            f"Supported providers: {supported}"
+        )
+    return ingestion_class
 
 
 async def _execute_ingest_pipeline(

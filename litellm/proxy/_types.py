@@ -2647,6 +2647,7 @@ class SpendLogsPayload(TypedDict):
     cache_key: str
     request_tags: str  # json str
     team_id: Optional[str]
+    organization_id: Optional[str]
     end_user: Optional[str]
     requester_ip_address: Optional[str]
     custom_llm_provider: Optional[str]
@@ -3581,6 +3582,10 @@ class BaseDailySpendTransaction(TypedDict):
 
 class DailyTeamSpendTransaction(BaseDailySpendTransaction):
     team_id: str
+
+
+class DailyOrganizationSpendTransaction(BaseDailySpendTransaction):
+    organization_id: str
 
 
 class DailyUserSpendTransaction(BaseDailySpendTransaction):
