@@ -7,6 +7,8 @@ Upload -> (OCR) -> Chunk -> Embed -> Vector Store
 
 from __future__ import annotations
 
+__all__ = ["ingest", "aingest"]
+
 import asyncio
 import contextvars
 from functools import partial
@@ -103,6 +105,7 @@ async def _execute_ingest_pipeline(
 async def aingest(
     ingest_options: Dict[str, Any],
     file_data: Optional[Tuple[str, bytes, str]] = None,
+    file: Optional[Dict[str, str]] = None,
     file_url: Optional[str] = None,
     file_id: Optional[str] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -114,14 +117,14 @@ async def aingest(
     Args:
         ingest_options: Configuration for the ingest pipeline
         file_data: Tuple of (filename, content_bytes, content_type)
+        file: Dict with {filename, content (base64), content_type} - for JSON API
         file_url: URL to fetch file from
         file_id: Existing file ID to use
 
     Example:
         ```python
-        response = await litellm.rag.aingest(
+        response = await litellm.aingest(
             ingest_options={
-                "ocr": {"model": "mistral/mistral-ocr-latest"},
                 "vector_store": {"custom_llm_provider": "openai"}
             },
             file_url="https://example.com/doc.pdf",
@@ -137,6 +140,7 @@ async def aingest(
             ingest,
             ingest_options=ingest_options,
             file_data=file_data,
+            file=file,
             file_url=file_url,
             file_id=file_id,
             timeout=timeout,
@@ -167,6 +171,7 @@ async def aingest(
 def ingest(
     ingest_options: Dict[str, Any],
     file_data: Optional[Tuple[str, bytes, str]] = None,
+    file: Optional[Dict[str, str]] = None,
     file_url: Optional[str] = None,
     file_id: Optional[str] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -178,12 +183,13 @@ def ingest(
     Args:
         ingest_options: Configuration for the ingest pipeline
         file_data: Tuple of (filename, content_bytes, content_type)
+        file: Dict with {filename, content (base64), content_type} - for JSON API
         file_url: URL to fetch file from
         file_id: Existing file ID to use
 
     Example:
         ```python
-        response = litellm.rag.ingest(
+        response = litellm.ingest(
             ingest_options={
                 "vector_store": {"custom_llm_provider": "openai"}
             },
@@ -191,10 +197,20 @@ def ingest(
         )
         ```
     """
+    import base64
+
     local_vars = locals()
     try:
         _is_async = kwargs.pop("aingest", False) is True
         router: Optional["Router"] = kwargs.get("router")
+
+        # Convert file dict to file_data tuple if provided
+        if file is not None and file_data is None:
+            filename = file.get("filename", "document")
+            content_b64 = file.get("content", "")
+            content_type = file.get("content_type", "application/octet-stream")
+            content_bytes = base64.b64decode(content_b64)
+            file_data = (filename, content_bytes, content_type)
 
         if _is_async:
             return _execute_ingest_pipeline(
