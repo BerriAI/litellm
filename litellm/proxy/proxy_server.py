@@ -5483,6 +5483,7 @@ async def audio_transcriptions(
         file_object = io.BytesIO(file_content)
         file_object.name = file.filename
         data["file"] = file_object
+
         try:
             ### CALL HOOKS ### - modify incoming data / reject request before calling the model
             data = await proxy_logging_obj.pre_call_hook(
@@ -5500,7 +5501,7 @@ async def audio_transcriptions(
             )
             response = await llm_call
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise e
         finally:
             file_object.close()  # close the file read in by io library
 
