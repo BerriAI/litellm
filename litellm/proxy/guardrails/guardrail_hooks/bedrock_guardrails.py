@@ -808,6 +808,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             request_data=data, guardrail_name=self.guardrail_name
         )
 
+        return response
+
     ###########  HELPER FUNCTIONS for bedrock guardrails ############################
     ##############################################################################
     ##############################################################################
