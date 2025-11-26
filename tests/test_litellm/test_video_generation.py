@@ -14,6 +14,7 @@ import litellm
 from litellm.types.videos.main import VideoObject, VideoResponse
 from litellm.videos.main import video_generation, avideo_generation, video_status, avideo_status
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.cost_calculator import default_video_cost_calculator
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -812,6 +813,13 @@ def test_openai_video_config_has_async_transform():
     """Ensure OpenAIVideoConfig exposes async_transform_video_content_response at runtime."""
     cfg = OpenAIVideoConfig()
     assert callable(getattr(cfg, "async_transform_video_content_response", None))
+
+
+def test_gemini_video_config_has_async_transform():
+    """Ensure GeminiVideoConfig exposes async_transform_video_content_response at runtime."""
+    cfg = GeminiVideoConfig()
+    assert callable(getattr(cfg, "async_transform_video_content_response", None))
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

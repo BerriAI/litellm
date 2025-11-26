@@ -1,10 +1,13 @@
-from typing import Optional, Union, cast
+from typing import TYPE_CHECKING, Optional, Union, cast
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
 
 import litellm
+
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -89,6 +92,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         client=None,
         atranscription: bool = False,
         provider_config: Optional[BaseAudioTranscriptionConfig] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> TranscriptionResponse:
         """
         Handle audio transcription request
@@ -116,6 +120,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 client=client,
                 max_retries=max_retries,
                 logging_obj=logging_obj,
+                shared_session=shared_session,
             )
 
         openai_client: OpenAI = self._get_openai_client(  # type: ignore
@@ -170,6 +175,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         api_base: Optional[str] = None,
         client=None,
         max_retries=None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         try:
             openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
@@ -179,6 +185,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 timeout=timeout,
                 max_retries=max_retries,
                 client=client,
+                shared_session=shared_session,
             )
 
             ## LOGGING

@@ -29,9 +29,6 @@ class MCPRequestHandler:
 
     LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
 
-    # MCP Protocol Version header
-    MCP_PROTOCOL_VERSION_HEADER_NAME = "MCP-Protocol-Version"
-
     @staticmethod
     async def process_mcp_request(
         scope: Scope,

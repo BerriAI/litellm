@@ -17,7 +17,7 @@ export interface EntitySpendData {
 export interface EntityUsageExportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  entityType: "tag" | "team" | "organization";
+  entityType: "tag" | "team";
   spendData: EntitySpendData;
   dateRange: DateRangePickerValue;
   selectedFilters: string[];
@@ -59,3 +59,4 @@ export interface EntityBreakdown {
     id: string;
   };
 }
+

@@ -28,6 +28,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Running Scripts
 - `poetry run python script.py` - Run Python scripts (use for non-test files)
 
+### GitHub Issue & PR Templates
+When contributing to the project, use the appropriate templates:
+
+**Bug Reports** (`.github/ISSUE_TEMPLATE/bug_report.yml`):
+- Describe what happened vs. what you expected
+- Include relevant log output
+- Specify your LiteLLM version
+
+**Feature Requests** (`.github/ISSUE_TEMPLATE/feature_request.yml`):
+- Describe the feature clearly
+- Explain the motivation and use case
+
+**Pull Requests** (`.github/pull_request_template.md`):
+- Add at least 1 test in `tests/litellm/`
+- Ensure `make test-unit` passes
+
 ## Architecture Overview
 
 LiteLLM is a unified interface for 100+ LLM providers with two main components:

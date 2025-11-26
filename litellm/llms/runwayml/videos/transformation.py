@@ -114,11 +114,16 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
         """
         Validate environment and set up authentication headers.
         RunwayML uses Bearer token authentication via RUNWAYML_API_SECRET.
         """
+        # Use api_key from litellm_params if available, otherwise fall back to other sources
+        if litellm_params and litellm_params.api_key:
+            api_key = api_key or litellm_params.api_key
+        
         api_key = (
             api_key
             or litellm.api_key

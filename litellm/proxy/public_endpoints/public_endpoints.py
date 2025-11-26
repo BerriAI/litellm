@@ -1,13 +1,13 @@
 from typing import List
+import os
+import json
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.public_endpoints.provider_create_metadata import (
-    get_provider_create_metadata,
-)
 from litellm.types.agents import AgentCard
+from litellm.types.mcp import MCPPublicServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -69,6 +69,26 @@ async def get_agents():
 
 
 @router.get(
+    "/public/mcp_hub",
+    tags=["[beta] MCP", "public"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=List[MCPPublicServer],
+)
+async def get_mcp_servers():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    public_mcp_servers = global_mcp_server_manager.get_public_mcp_servers()
+    return [
+        MCPPublicServer(
+            **server.model_dump(),
+        )
+        for server in public_mcp_servers
+    ]
+
+
+@router.get(
     "/public/model_hub/info",
     tags=["public", "model management"],
     response_model=PublicModelHubInfo,
@@ -115,4 +135,14 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
     Return provider metadata required by the dashboard create-model flow.
     """
 
-    return get_provider_create_metadata()
+    provider_create_fields_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "proxy",
+        "public_endpoints",
+        "provider_create_fields.json"
+    )
+
+    with open(provider_create_fields_path, "r") as f:
+        provider_create_fields = json.load(f)
+
+    return provider_create_fields

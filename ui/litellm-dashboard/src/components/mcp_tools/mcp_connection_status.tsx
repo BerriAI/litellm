@@ -6,14 +6,16 @@ import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 
 interface MCPConnectionStatusProps {
   accessToken: string | null;
+  oauthAccessToken?: string | null;
   formValues: Record<string, any>;
   onToolsLoaded?: (tools: any[]) => void;
 }
 
-const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, formValues, onToolsLoaded }) => {
+const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, oauthAccessToken, formValues, onToolsLoaded }) => {
   const { tools, isLoadingTools, toolsError, canFetchTools, fetchTools } = useTestMCPConnection({
     accessToken,
-    formValues,
+    oauthAccessToken,
+    formValues, 
     enabled: true, // Auto-fetch when required fields are available
   });
 

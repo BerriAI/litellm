@@ -116,8 +116,9 @@ class NomaGuardrail(CustomGuardrail):
             "NOMA_API_BASE", NomaGuardrail._DEFAULT_API_BASE
         )
         self.application_id = application_id or os.environ.get(
-            "NOMA_APPLICATION_ID", "litellm"
+            "NOMA_APPLICATION_ID"
         )
+        self.default_application_id = "litellm"
 
         if monitor_mode is None:
             self.monitor_mode = (
@@ -799,7 +800,9 @@ class NomaGuardrail(CustomGuardrail):
                     or request_data.get("metadata", {})
                     .get("headers", {})
                     .get("x-noma-application-id")
-                    or self.application_id,
+                    or self.application_id
+                    or user_auth.key_alias
+                    or self.default_application_id,
                     "ipAddress": request_data.get("metadata", {}).get(
                         "requester_ip_address", None
                     ),

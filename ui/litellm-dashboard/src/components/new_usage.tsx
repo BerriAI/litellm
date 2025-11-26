@@ -6,66 +6,58 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   BarChart,
   Card,
-  Col,
-  DateRangePickerValue,
-  DonutChart,
+  Title,
+  Text,
   Grid,
-  Tab,
+  Col,
   TabGroup,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
   TabList,
+  Tab,
   TabPanel,
   TabPanels,
-  Text,
-  Title,
+  DonutChart,
+  Table,
+  TableHead,
+  TableRow,
+  TableHeaderCell,
+  TableBody,
+  TableCell,
+  DateRangePickerValue,
 } from "@tremor/react";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert } from "antd";
 
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { Button } from "@tremor/react";
-import { all_admin_roles } from "../utils/roles";
-import { ActivityMetrics, processActivityData } from "./activity_metrics";
-import CloudZeroExportModal from "./cloudzero_export_modal";
-import EntityUsage, { EntityList } from "./entity_usage";
-import EntityUsageExportModal from "./EntityUsageExport";
-import { Team } from "./key_team_helpers/key_list";
-import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "./networking";
-import { getProviderLogoAndName } from "./provider_info_helpers";
-import AdvancedDatePicker from "./shared/advanced_date_picker";
-import { ChartLoader } from "./shared/chart_loader";
+import { userDailyActivityCall, userDailyActivityAggregatedCall, tagListCall } from "./networking";
 import { Tag } from "./tag_management/types";
-import TopKeyView from "./top_key_view";
-import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "./usage/types";
-import { valueFormatterSpend } from "./usage/utils/value_formatters";
-import UserAgentActivity from "./user_agent_activity";
 import ViewUserSpend from "./view_user_spend";
+import TopKeyView from "./top_key_view";
+import { ActivityMetrics, processActivityData } from "./activity_metrics";
+import UserAgentActivity from "./user_agent_activity";
+import { DailyData, MetricWithMetadata, KeyMetricWithMetadata } from "./usage/types";
+import EntityUsage from "./entity_usage";
+import { all_admin_roles } from "../utils/roles";
+import { Team } from "./key_team_helpers/key_list";
+import { EntityList } from "./entity_usage";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { valueFormatterSpend } from "./usage/utils/value_formatters";
+import CloudZeroExportModal from "./cloudzero_export_modal";
+import { ChartLoader } from "./shared/chart_loader";
+import { getProviderLogoAndName } from "./provider_info_helpers";
+import EntityUsageExportModal from "./EntityUsageExport";
+import AdvancedDatePicker from "./shared/advanced_date_picker";
+import { Button } from "@tremor/react";
 
 interface NewUsagePageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
   teams: Team[];
-  organizations: Organization[];
   premiumUser: boolean;
 }
 
-const NewUsagePage: React.FC<NewUsagePageProps> = ({
-  accessToken,
-  userRole,
-  userID,
-  teams,
-  organizations,
-  premiumUser,
-}) => {
+const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, userID, teams, premiumUser }) => {
   const [userSpendData, setUserSpendData] = useState<{
     results: DailyData[];
     metadata: any;
@@ -89,7 +81,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
-  const [showOrganizationBanner, setShowOrganizationBanner] = useState(true);
 
   const getAllTags = async () => {
     if (!accessToken) {
@@ -424,11 +415,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             <div className="flex items-end justify-start gap-6 mb-6">
               <TabList variant="solid">
                 {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
-                {all_admin_roles.includes(userRole || "") ? (
-                  <Tab>Organization Usage</Tab>
-                ) : (
-                  <Tab>Your Organization Usage</Tab>
-                )}
                 <Tab>Team Usage</Tab>
                 {all_admin_roles.includes(userRole || "") ? <Tab>Tag Usage</Tab> : <></>}
                 {all_admin_roles.includes(userRole || "") ? <Tab>User Agent Activity</Tab> : <></>}
@@ -749,35 +735,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                     </TabPanel>
                   </TabPanels>
                 </TabGroup>
-              </TabPanel>
-
-              {/* Organization Usage Panel */}
-              <TabPanel>
-                {showOrganizationBanner && (
-                  <Alert
-                    banner
-                    type="info"
-                    message="Organization usage is a new feature."
-                    description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
-                    closable
-                    onClose={() => setShowOrganizationBanner(false)}
-                    className="mb-5"
-                  />
-                )}
-                <EntityUsage
-                  accessToken={accessToken}
-                  entityType="organization"
-                  userID={userID}
-                  userRole={userRole}
-                  dateValue={dateValue}
-                  entityList={
-                    organizations?.map((organization) => ({
-                      label: organization.organization_alias,
-                      value: organization.organization_id,
-                    })) || null
-                  }
-                  premiumUser={premiumUser}
-                />
               </TabPanel>
 
               {/* Team Usage Panel */}

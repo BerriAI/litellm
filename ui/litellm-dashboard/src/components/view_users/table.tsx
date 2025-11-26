@@ -1,11 +1,4 @@
-import {
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  SortingState,
-  useReactTable,
-} from "@tanstack/react-table";
+import { ColumnDef, flexRender, getCoreRowModel, SortingState, useReactTable } from "@tanstack/react-table";
 import React from "react";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell, Select, SelectItem } from "@tremor/react";
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
@@ -167,17 +160,23 @@ export function UserDataTable({
     state: {
       sorting,
     },
-    onSortingChange: (newSorting: any) => {
+    onSortingChange: (updaterOrValue: any) => {
+      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
       setSorting(newSorting);
-      if (newSorting.length > 0) {
+      if (newSorting && Array.isArray(newSorting) && newSorting.length > 0 && newSorting[0]) {
         const sortState = newSorting[0];
-        const sortBy = sortState.id;
-        const sortOrder = sortState.desc ? "desc" : "asc";
-        onSortChange?.(sortBy, sortOrder);
+        if (sortState.id) {
+          const sortBy = sortState.id;
+          const sortOrder = sortState.desc ? "desc" : "asc";
+          onSortChange?.(sortBy, sortOrder);
+        }
+      } else {
+        // Reset to default sort when no sorting is selected
+        onSortChange?.("created_at", "desc");
       }
     },
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
+    manualSorting: true,
     enableSorting: true,
   });
 
@@ -403,7 +402,7 @@ export function UserDataTable({
                           header.id === "actions"
                             ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
                             : ""
-                        }`}
+                        } ${header.column.getCanSort() ? "cursor-pointer hover:bg-gray-50" : ""}`}
                         onClick={header.column.getToggleSortingHandler()}
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -412,7 +411,7 @@ export function UserDataTable({
                               ? null
                               : flexRender(header.column.columnDef.header, header.getContext())}
                           </div>
-                          {header.id !== "actions" && (
+                          {header.id !== "actions" && header.column.getCanSort() && (
                             <div className="w-4">
                               {header.column.getIsSorted() ? (
                                 {

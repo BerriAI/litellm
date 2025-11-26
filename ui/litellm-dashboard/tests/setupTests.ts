@@ -72,3 +72,11 @@ Object.defineProperty(HTMLAnchorElement.prototype, "click", {
 if (!document.getAnimations) {
   document.getAnimations = () => [];
 }
+
+// Mock ResizeObserver for components that use it (e.g., Tremor UI components)
+// This prevents "ResizeObserver is not defined" errors in JSDOM
+global.ResizeObserver = class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};

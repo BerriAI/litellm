@@ -270,7 +270,7 @@ def test_gpt_vision_token_counting():
                 {"type": "text", "text": "What’s in this image?"},
                 {
                     "type": "image_url",
-                    "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+                    "image_url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
                 },
             ],
         }

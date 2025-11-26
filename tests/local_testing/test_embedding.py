@@ -829,12 +829,26 @@ def test_fireworks_embeddings():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_watsonx_embeddings():
+def test_watsonx_embeddings(monkeypatch):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
+    # Mock the IAM token generation to avoid actual API calls
+    monkeypatch.setenv("WATSONX_API_KEY", "mock-api-key")
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
+
     client = HTTPHandler()
+    
+    # Track the actual request made
+    captured_request = {}
 
     def mock_wx_embed_request(url: str, **kwargs):
+        # Capture request details for verification
+        captured_request["url"] = url
+        captured_request["headers"] = kwargs.get("headers", {})
+        captured_request["data"] = kwargs.get("data")
+        
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
@@ -852,12 +866,16 @@ def test_watsonx_embeddings():
             response = litellm.embedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
-                token="secret-token",
                 client=client,
             )
 
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
+        
+        # Verify the request was made correctly
+        assert "Authorization" in captured_request["headers"]
+        assert captured_request["headers"]["Authorization"] == "Bearer mock-watsonx-token"
+        assert "us-south.ml.cloud.ibm.com" in captured_request["url"]
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -865,8 +883,14 @@ def test_watsonx_embeddings():
 
 
 @pytest.mark.asyncio
-async def test_watsonx_aembeddings():
+async def test_watsonx_aembeddings(monkeypatch):
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    # Mock the IAM token generation to avoid actual API calls
+    monkeypatch.setenv("WATSONX_API_KEY", "mock-api-key")
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
 
     client = AsyncHTTPHandler()
 
@@ -897,7 +921,6 @@ async def test_watsonx_aembeddings():
             response = await litellm.aembedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
-                token="secret-token",
                 client=client,
             )
             mock_client.assert_called_once()

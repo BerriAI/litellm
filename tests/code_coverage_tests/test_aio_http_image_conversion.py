@@ -96,7 +96,7 @@ async def test_aiohttp(urls: list[str], iterations: int = 3) -> list[float]:
 
 async def run_comparison():
     urls = [
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+        "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
     ] * 150
 
     print("Testing asyncified version...")

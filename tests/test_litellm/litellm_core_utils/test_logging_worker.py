@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from litellm.constants import LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS
 from litellm.litellm_core_utils.logging_worker import LoggingWorker
 
 
@@ -267,3 +268,58 @@ class TestLoggingWorker:
         assert (
             task3_result["context_accessible"] is False
         ), "Task 3 should not have access to context variable"
+
+    @pytest.mark.asyncio
+    async def test_semaphore_concurrency_limit(self):
+        """Test that the worker respects the semaphore concurrency limit."""
+        worker = LoggingWorker(timeout=5.0, max_queue_size=20, concurrency=2)
+        worker.start()
+
+        running_tasks, max_concurrent, lock = set(), 0, asyncio.Lock()
+        completed = asyncio.Event()
+
+        async def tracked_task(task_id: int):
+            async with lock:
+                running_tasks.add(task_id)
+                nonlocal max_concurrent
+                max_concurrent = max(max_concurrent, len(running_tasks))
+            await asyncio.sleep(0.2)
+            async with lock:
+                running_tasks.remove(task_id)
+                if not running_tasks:
+                    completed.set()
+
+        for i in range(5):
+            worker.enqueue(tracked_task(i))
+
+        await asyncio.wait_for(completed.wait(), timeout=5.0)
+        await worker.stop()
+
+        assert max_concurrent <= 2, f"Max {max_concurrent} exceeded limit 2"
+        assert max_concurrent >= 2, f"Expected 2+ concurrent, got {max_concurrent}"
+
+    @pytest.mark.asyncio
+    async def test_aggressive_queue_clearing(self):
+        """Test that aggressive queue clearing processes tasks when queue is full."""
+        worker = LoggingWorker(timeout=2.0, max_queue_size=4, concurrency=1)
+        worker.start()
+
+        processed, lock = [], asyncio.Lock()
+
+        async def tracked_task(task_id: int):
+            async with lock:
+                processed.append(task_id)
+            await asyncio.sleep(0.01)
+
+        for i in range(4):
+            worker.enqueue(tracked_task(i))
+        await asyncio.sleep(0.1)
+
+        for i in range(4, 8):
+            worker.enqueue(tracked_task(i))
+
+        await asyncio.sleep(LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS + 0.3)
+        await worker.stop()
+        await worker.clear_queue()
+
+        assert len(processed) >= 4, f"Expected 4+ tasks processed, got {len(processed)}"

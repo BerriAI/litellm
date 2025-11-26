@@ -10,6 +10,7 @@ export const AUTH_TYPE = {
   API_KEY: "api_key",
   BEARER_TOKEN: "bearer_token",
   BASIC: "basic",
+  OAUTH2: "oauth2",
 };
 
 export const TRANSPORT = {

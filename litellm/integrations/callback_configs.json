@@ -11,10 +11,10 @@
         "description": "Arize API key for authentication",
         "required": true
       },
-      "arize_space_key": {
+      "arize_space_id": {
         "type": "password",
-        "ui_name": "Space Key",
-        "description": "Arize Space key to identify your workspace",
+        "ui_name": "Space ID",
+        "description": "Arize Space ID to identify your workspace",
         "required": true
       }
     },

@@ -295,6 +295,7 @@ def test_gemini_image_generation():
     [
         "gemini/gemini-2.5-flash-image-preview",
         "gemini/gemini-2.0-flash-preview-image-generation",
+        "gemini/gemini-3-pro-image-preview",
     ],
 )
 def test_gemini_flash_image_preview_models(model_name: str):

@@ -197,6 +197,15 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
+        # Check key-specific aliases
+        if (
+            isinstance(data["model"], str)
+            and user_api_key_dict.aliases
+            and isinstance(user_api_key_dict.aliases, dict)
+            and data["model"] in user_api_key_dict.aliases
+        ):
+            data["model"] = user_api_key_dict.aliases[data["model"]]
+
         ### CALL HOOKS ### - modify incoming data before calling the model
         data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"

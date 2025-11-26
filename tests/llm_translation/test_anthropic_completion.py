@@ -1304,7 +1304,12 @@ def test_anthropic_websearch(optional_params: dict):
     litellm._turn_on_debug()
     params = {
         "model": "anthropic/claude-sonnet-4-5-20250929",
-        "messages": [{"role": "user", "content": "What is the current weather in Tokyo right now?. Make sure to search the web for an answer"}],
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the current weather in Tokyo right now?. Make sure to search the web for an answer",
+            }
+        ],
         **optional_params,
     }
 
@@ -1331,7 +1336,9 @@ def test_anthropic_text_editor():
                 "content": "There'''s a syntax error in my primes.py file. Can you help me fix it?",
             }
         ],
-        "tools": [{"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"}],
+        "tools": [
+            {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"}
+        ],
     }
 
     try:
@@ -1692,6 +1699,7 @@ def test_anthropic_via_responses_api():
     print(f"✓ All {len(events_seen)} events matched expected structure")
     print(f"✓ Received {text_delta_count} text delta chunks")
 
+
 def test_anthropic_strict_parameter_passthrough():
     """Test that the strict parameter in tool parameters is passed through to Anthropic input_schema"""
     args = {
@@ -1730,6 +1738,7 @@ def test_anthropic_strict_parameter_passthrough():
     assert "input_schema" in tool
     assert tool["input_schema"]["strict"] is True
 
+
 def test_anthropic_strict_not_present():
     """Test that the strict parameter in tool parameters is passed through to Anthropic input_schema"""
     args = {
@@ -1766,3 +1775,29 @@ def test_anthropic_strict_not_present():
     tool = mapped_params["tools"][0]
     assert "input_schema" in tool
     assert "strict" not in tool["input_schema"]
+
+
+def test_anthropic_structured_output_chat_completion_api():
+    response = litellm.completion(
+        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "final_output",
+                "strict": True,
+                "schema": {
+                    "description": 'Progress report for the thinking process\n\nThis model represents a snapshot of the agent\'s current progress during\nthe thinking process, providing a brief description of the current activity.\n\nAttributes:\n    agent_doing: Brief description of what the agent is currently doing.\n                Should be kept under 10 words. Example: "Learning about home automation"',
+                    "properties": {
+                        "agent_doing": {"title": "Agent Doing", "type": "string"}
+                    },
+                    "required": ["agent_doing"],
+                    "title": "ThinkingStep",
+                    "type": "object",
+                    "additionalProperties": False,
+                },
+            },
+        },
+    )
+    assert response is not None
+    print(f"response: {response}")

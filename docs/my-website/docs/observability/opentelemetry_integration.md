@@ -8,6 +8,18 @@ OpenTelemetry is a CNCF standard for observability. It connects to any observabi
 
 <Image img={require('../../img/traceloop_dash.png')} />
 
+:::note Change in v1.81.0
+
+From v1.81.0, the request/response will be set as attributes on the parent "Received Proxy Server Request" span by default. This allows you to see the request/response in the parent span in your observability tool.
+
+To use the older behavior with nested "litellm_request" spans, set the following environment variable:
+
+```shell
+USE_OTEL_LITELLM_REQUEST_SPAN=true
+```
+
+:::
+
 ## Getting Started
 
 Install the OpenTelemetry SDK:

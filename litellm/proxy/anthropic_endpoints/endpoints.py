@@ -154,8 +154,13 @@ async def anthropic_response(  # noqa: PLR0915
 
         response = responses[1]
 
+        # Extract model_id from request metadata (set by router during routing)
+        litellm_metadata = data.get("litellm_metadata", {}) or {}
+        model_info = litellm_metadata.get("model_info", {}) or {}
+        model_id = model_info.get("id", "") or ""
+
+        # Get other metadata from hidden_params
         hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
         response_cost = hidden_params.get("response_cost", None) or ""
@@ -216,12 +221,32 @@ async def anthropic_response(  # noqa: PLR0915
                 str(e)
             )
         )
+
+        # Extract model_id from request metadata (same as success path)
+        litellm_metadata = data.get("litellm_metadata", {}) or {}
+        model_info = litellm_metadata.get("model_info", {}) or {}
+        model_id = model_info.get("id", "") or ""
+
+        # Get headers
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=data.get("litellm_call_id", ""),
+            model_id=model_id,
+            version=version,
+            response_cost=0,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            request_data=data,
+            timeout=getattr(e, "timeout", None),
+            litellm_logging_obj=None,
+        )
+
         error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
+            headers=headers,
         )
 
 

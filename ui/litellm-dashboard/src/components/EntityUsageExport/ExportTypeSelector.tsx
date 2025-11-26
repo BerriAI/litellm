@@ -5,7 +5,7 @@ import type { ExportScope } from "./types";
 interface ExportTypeSelectorProps {
   value: ExportScope;
   onChange: (value: ExportScope) => void;
-  entityType: "tag" | "team" | "organization";
+  entityType: "tag" | "team";
 }
 
 const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange, entityType }) => {
@@ -36,3 +36,4 @@ const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange
 };
 
 export default ExportTypeSelector;
+

@@ -1,32 +1,32 @@
-import React, { useState, useEffect } from "react";
-import { Tab, TabGroup, TabList, TabPanels, TabPanel } from "@tremor/react";
+import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import React, { useEffect, useState } from "react";
 
-import {
-  userUpdateUserCall,
-  getPossibleUserRoles,
-  userListCall,
-  UserListResponse,
-  invitationCreateCall,
-  getProxyBaseUrl,
-} from "./networking";
 import { Button } from "@tremor/react";
+import BulkEditUserModal from "./bulk_edit_user";
 import CreateUser from "./create_user_button";
 import EditUserModal from "./edit_user";
-import OnboardingModal from "./onboarding_link";
-import { InvitationLink } from "./onboarding_link";
-import BulkEditUserModal from "./bulk_edit_user";
+import {
+  getPossibleUserRoles,
+  getProxyBaseUrl,
+  invitationCreateCall,
+  userListCall,
+  UserListResponse,
+  userUpdateUserCall,
+} from "./networking";
+import OnboardingModal, { InvitationLink } from "./onboarding_link";
 
-import { userDeleteCall, modelAvailableCall } from "./networking";
+import { updateExistingKeys } from "@/utils/dataUtils";
+import { isAdminRole } from "@/utils/roles";
+import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Typography } from "antd";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import NotificationsManager from "./molecules/notifications_manager";
+import { modelAvailableCall, userDeleteCall } from "./networking";
+import SSOSettings from "./SSOSettings";
 import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
-import SSOSettings from "./SSOSettings";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { updateExistingKeys } from "@/utils/dataUtils";
-import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
-import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "./molecules/notifications_manager";
-import { Modal, Typography, Descriptions } from "antd";
 
 const { Text, Title } = Typography;
 
@@ -377,56 +377,25 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         onSubmit={handleEditSubmit}
       />
 
-      {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen && (
-        <Modal
-          title="Delete User?"
-          open={isDeleteModalOpen}
-          onCancel={cancelDelete}
-          onOk={confirmDelete}
-          okText={isDeletingUser ? "Deleting..." : "Delete"}
-          cancelText="Cancel"
-          cancelButtonProps={{ disabled: isDeletingUser }}
-          okButtonProps={{ danger: true }}
-          confirmLoading={isDeletingUser}
-        >
-          <div className="space-y-4">
-            <Text>Are you sure you want to delete this user? This action cannot be undone.</Text>
-
-            {userToDelete && (
-              <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
-                <Title level={5} className="mb-3 text-gray-900">
-                  User Information
-                </Title>
-                <Descriptions column={1} size="small">
-                  {userToDelete.user_email && (
-                    <Descriptions.Item label={<span className="font-semibold text-gray-700">Email</span>}>
-                      <Text className="text-sm">{userToDelete.user_email}</Text>
-                    </Descriptions.Item>
-                  )}
-                  <Descriptions.Item label={<span className="font-semibold text-gray-700">User ID</span>}>
-                    <Text code className="text-sm">
-                      {userToDelete.user_id}
-                    </Text>
-                  </Descriptions.Item>
-                  {userToDelete.user_role && (
-                    <Descriptions.Item label={<span className="font-semibold text-gray-700">Role</span>}>
-                      <Text className="text-sm">
-                        {possibleUIRoles?.[userToDelete.user_role]?.ui_label || userToDelete.user_role}
-                      </Text>
-                    </Descriptions.Item>
-                  )}
-                  {userToDelete.spend !== undefined && (
-                    <Descriptions.Item label={<span className="font-semibold text-gray-700">Total Spend</span>}>
-                      <Text className="text-sm">${userToDelete.spend.toFixed(2)}</Text>
-                    </Descriptions.Item>
-                  )}
-                </Descriptions>
-              </div>
-            )}
-          </div>
-        </Modal>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete User?"
+        message="Are you sure you want to delete this user? This action cannot be undone."
+        resourceInformationTitle="User Information"
+        resourceInformation={[
+          { label: "Email", value: userToDelete?.user_email },
+          { label: "User ID", value: userToDelete?.user_id, code: true },
+          {
+            label: "Global Proxy Role",
+            value:
+              (userToDelete && possibleUIRoles?.[userToDelete.user_role]?.ui_label) || userToDelete?.user_role || "-",
+          },
+          { label: "Total Spend (USD)", value: userToDelete?.spend?.toFixed(2) },
+        ]}
+        onCancel={cancelDelete}
+        onOk={confirmDelete}
+        confirmLoading={isDeletingUser}
+      />
 
       <OnboardingModal
         isInvitationLinkModalVisible={isInvitationLinkModalVisible}

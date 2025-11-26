@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { testMCPToolsListRequest } from "../components/networking";
+import { AUTH_TYPE } from "@/components/mcp_tools/types";
 
 interface MCPServerConfig {
   server_id?: string;
@@ -19,6 +20,7 @@ interface MCPServerConfig {
 
 interface UseTestMCPConnectionProps {
   accessToken: string | null;
+  oauthAccessToken?: string | null;
   formValues: Record<string, any>;
   enabled?: boolean; // Optional flag to enable/disable auto-fetching
 }
@@ -35,6 +37,7 @@ interface UseTestMCPConnectionReturn {
 
 export const useTestMCPConnection = ({
   accessToken,
+  oauthAccessToken,
   formValues,
   enabled = true,
 }: UseTestMCPConnectionProps): UseTestMCPConnectionReturn => {
@@ -44,13 +47,24 @@ export const useTestMCPConnection = ({
   const [hasShownSuccessMessage, setHasShownSuccessMessage] = useState(false);
 
   // Check if we have the minimum required fields to fetch tools
-  const canFetchTools = !!(formValues.url && formValues.transport && formValues.auth_type && accessToken);
+  const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2;
+  const canFetchTools = !!(
+    formValues.url &&
+    formValues.transport &&
+    formValues.auth_type &&
+    accessToken &&
+    (!requiresOAuthToken || oauthAccessToken)
+  );
 
   const staticHeadersKey = JSON.stringify(formValues.static_headers ?? {});
   const credentialsKey = JSON.stringify(formValues.credentials ?? {});
 
   const fetchTools = async () => {
     if (!accessToken || !formValues.url) {
+      return;
+    }
+
+    if (requiresOAuthToken && !oauthAccessToken) {
       return;
     }
 
@@ -118,7 +132,7 @@ export const useTestMCPConnection = ({
         mcpServerConfig.credentials = credentials;
       }
 
-      const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig);
+      const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig, oauthAccessToken);
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
@@ -166,6 +180,7 @@ export const useTestMCPConnection = ({
     formValues.auth_type,
     accessToken,
     enabled,
+    oauthAccessToken,
     canFetchTools,
     staticHeadersKey,
     credentialsKey,

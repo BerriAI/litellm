@@ -43,6 +43,14 @@ hide_table_of_contents: false
 ## Key Highlights
 [3-5 bullet points of major features - prioritize MCP OAuth 2.0, scheduled key rotations, and major model updates]
 
+## New Providers and Endpoints
+
+### New Providers
+[Table with Provider, Supported Endpoints, Description columns]
+
+### New LLM API Endpoints
+[Optional table for new endpoint additions with Endpoint, Method, Description, Documentation columns]
+
 ## New Models / Updated Models
 #### New Model Support
 [Model pricing table]
@@ -52,9 +60,6 @@ hide_table_of_contents: false
 
 ### Bug Fixes
 [Provider-specific bug fixes organized by provider]
-
-#### New Provider Support
-[New provider integrations]
 
 ## LLM API Endpoints
 #### Features
@@ -70,15 +75,19 @@ hide_table_of_contents: false
 #### Bugs
 [Management-related bug fixes]
 
-## Logging / Guardrail / Prompt Management Integrations
-#### Features
-[Organized by integration provider with proper doc links]
+## AI Integrations
 
-#### Guardrails
+### Logging
+[Logging integrations organized by provider with proper doc links, includes General subsection]
+
+### Guardrails
 [Guardrail-specific features and fixes]
 
-#### Prompt Management
+### Prompt Management
 [Prompt management integrations like BitBucket]
+
+### Secret Managers
+[Secret manager integrations - AWS, HashiCorp Vault, CyberArk, etc.]
 
 ## Spend Tracking, Budgets and Rate Limiting
 [Cost tracking, service tier pricing, rate limiting improvements]
@@ -149,26 +158,34 @@ hide_table_of_contents: false
 - Admin settings updates
 - Management routes and endpoints
 
-**Logging / Guardrail / Prompt Management Integrations:**
+**AI Integrations:**
 - **Structure:**
-  - `#### Features` - organized by integration provider with proper doc links
-  - `#### Guardrails` - guardrail-specific features and fixes
-  - `#### Prompt Management` - prompt management integrations
-  - `#### New Integration` - major new integrations
-- **Integration Categories:**
+  - `### Logging` - organized by integration provider with proper doc links, includes **General** subsection
+  - `### Guardrails` - guardrail-specific features and fixes
+  - `### Prompt Management` - prompt management integrations
+  - `### Secret Managers` - secret manager integrations
+- **Logging Categories:**
   - **[DataDog](../../docs/proxy/logging#datadog)** - group all DataDog-related changes
   - **[Langfuse](../../docs/proxy/logging#langfuse)** - Langfuse-specific features
   - **[Prometheus](../../docs/proxy/logging#prometheus)** - monitoring improvements
   - **[PostHog](../../docs/observability/posthog)** - observability integration
   - **[SQS](../../docs/proxy/logging#sqs)** - SQS logging features
   - **[Opik](../../docs/proxy/logging#opik)** - Opik integration improvements
+  - **[Arize Phoenix](../../docs/observability/arize_phoenix)** - Arize Phoenix integration
+  - **General** - miscellaneous logging features like callback controls, sensitive data masking
   - Other logging providers with proper doc links
 - **Guardrail Categories:**
-  - LakeraAI, Presidio, Noma, and other guardrail providers
+  - LakeraAI, Presidio, Noma, Grayswan, IBM Guardrails, and other guardrail providers
 - **Prompt Management:**
   - BitBucket, GitHub, and other prompt management integrations
+  - Prompt versioning, testing, and UI features
+- **Secret Managers:**
+  - **[AWS Secrets Manager](../../docs/secret_managers)** - AWS secret manager features
+  - **[HashiCorp Vault](../../docs/secret_managers)** - Vault integrations
+  - **[CyberArk](../../docs/secret_managers)** - CyberArk integrations
+  - **General** - cross-secret-manager features
 - Use bullet points under each provider for multiple features
-- Separate logging features from guardrails and prompt management clearly
+- Separate logging, guardrails, prompt management, and secret managers clearly
 
 ### 4. Documentation Linking Strategy
 
@@ -232,6 +249,9 @@ From git diff analysis, create tables like:
 - **Cost breakdown in logging** → Spend Tracking section
 - **MCP configuration/OAuth** → MCP Gateway (NOT General Proxy Improvements)
 - **All documentation PRs** → Documentation Updates section for visibility
+- **Callback controls/logging features** → AI Integrations > Logging > General
+- **Secret manager features** → AI Integrations > Secret Managers
+- **Video generation tag-based routing** → LLM API Endpoints > Video Generation API
 
 ### 7. Writing Style Guidelines
 
@@ -370,10 +390,20 @@ This release has a known issue...
   - **Virtual Keys** - Key rotation and management
   - **Models + Endpoints** - Provider and endpoint management
 
-**Logging Section Expansion:**
-- Rename to "Logging / Guardrail / Prompt Management Integrations"
-- Add **Prompt Management** subsection for BitBucket, GitHub integrations
-- Keep guardrails separate from logging features
+**AI Integrations Section Expansion:**
+- Renamed from "Logging / Guardrail / Prompt Management Integrations" to "AI Integrations"
+- Structure with four main subsections:
+  - **Logging** - with **General** subsection for miscellaneous logging features
+  - **Guardrails** - separate from logging features
+  - **Prompt Management** - BitBucket, GitHub integrations, versioning features
+  - **Secret Managers** - AWS, HashiCorp Vault, CyberArk, etc.
+
+**New Providers and Endpoints Section:**
+- Add section after Key Highlights and before New Models / Updated Models
+- Include tables for:
+  - **New Providers** - Provider name, supported endpoints, description
+  - **New LLM API Endpoints** (optional) - Endpoint, method, description, documentation link
+- Only include major new provider integrations, not minor provider updates
 
 ## Example Command Workflow
 

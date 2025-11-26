@@ -8,7 +8,9 @@ import httpx
 import litellm
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -50,6 +52,23 @@ class BaseResponsesAPIStreamingIterator:
         # set request kwargs
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
+
+        # set hidden params for response headers (e.g., x-litellm-model-id)
+        # This matches ths stream wrapper in litellm/litellm_core_utils/streaming_handler.py
+        _api_base = get_api_base(
+            model=model or "",
+            optional_params=self.logging_obj.model_call_details.get(
+                "litellm_params", {}
+            ),
+        )
+        _model_info: Dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        self._hidden_params = {
+            "model_id": _model_info.get("id", None),
+            "api_base": _api_base,
+        }
+        self._hidden_params["additional_headers"] = process_response_headers(
+            self.response.headers or {}
+        )  # GUARANTEE OPENAI HEADERS IN RESPONSE
 
     def _process_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
         """Process a single chunk of data from the stream"""

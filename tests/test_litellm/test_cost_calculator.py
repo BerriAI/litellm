@@ -19,6 +19,7 @@ from litellm.cost_calculator import (
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.utils import TranscriptionResponse
 
 
 def test_cost_calculator_with_response_cost_in_additional_headers():
@@ -75,6 +76,54 @@ def test_cost_calculator_with_usage():
     )
 
     assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
+
+
+def test_transcription_cost_uses_token_pricing():
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=14,
+        completion_tokens=45,
+        total_tokens=59,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=0, audio_tokens=14
+        ),
+    )
+    response = TranscriptionResponse(text="demo text")
+    response.usage = usage
+
+    cost = completion_cost(
+        completion_response=response,
+        model="gpt-4o-transcribe",
+        custom_llm_provider="openai",
+        call_type="atranscription",
+    )
+
+    expected_cost = (14 * 6e-06) + (45 * 1e-05)
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
+def test_transcription_cost_falls_back_to_duration():
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 10.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="whisper-1",
+        custom_llm_provider="openai",
+        call_type="atranscription",
+    )
+
+    expected_cost = 10.0 * 0.0001
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
 def test_handle_realtime_stream_cost_calculation():

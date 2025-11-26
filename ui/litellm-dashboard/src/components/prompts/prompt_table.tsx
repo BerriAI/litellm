@@ -1,8 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Button } from "@tremor/react";
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, TrashIcon } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
-import { PromptSpec } from "@/components/networking";
+import { CopyOutlined } from "@ant-design/icons";
+import { PromptSpec, modelHubCall } from "@/components/networking";
 import {
   ColumnDef,
   flexRender,
@@ -11,6 +12,8 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { extractModel, getProviderFromModelHub } from "./prompt_utils";
 
 interface PromptTableProps {
   promptsList: PromptSpec[];
@@ -19,6 +22,12 @@ interface PromptTableProps {
   onDeleteClick?: (id: string, name: string) => void;
   accessToken: string | null;
   isAdmin: boolean;
+}
+
+interface ModelGroupInfo {
+  model_group: string;
+  providers: string[];
+  [key: string]: any;
 }
 
 const PromptTable: React.FC<PromptTableProps> = ({
@@ -30,6 +39,28 @@ const PromptTable: React.FC<PromptTableProps> = ({
   isAdmin,
 }) => {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
+  const [modelHubData, setModelHubData] = useState<Map<string, ModelGroupInfo>>(new Map());
+
+  useEffect(() => {
+    const fetchModelHubData = async () => {
+      if (!accessToken) return;
+      
+      try {
+        const response = await modelHubCall(accessToken);
+        if (response?.data) {
+          const modelMap = new Map<string, ModelGroupInfo>();
+          response.data.forEach((model: ModelGroupInfo) => {
+            modelMap.set(model.model_group, model);
+          });
+          setModelHubData(modelMap);
+        }
+      } catch (error) {
+        console.error("Error fetching model hub data:", error);
+      }
+    };
+
+    fetchModelHubData();
+  }, [accessToken]);
 
   // Format date helper function
   const formatDate = (dateString?: string) => {
@@ -38,22 +69,96 @@ const PromptTable: React.FC<PromptTableProps> = ({
     return date.toLocaleString();
   };
 
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+  };
+
   const columns: ColumnDef<PromptSpec>[] = [
     {
       header: "Prompt ID",
       accessorKey: "prompt_id",
-      cell: (info: any) => (
-        <Tooltip title={String(info.getValue() || "")}>
-          <Button
-            size="xs"
-            variant="light"
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-            onClick={() => info.getValue() && onPromptClick?.(info.getValue())}
-          >
-            {info.getValue() ? `${String(info.getValue()).slice(0, 7)}...` : ""}
-          </Button>
-        </Tooltip>
-      ),
+      cell: (info: any) => {
+        const fullId = String(info.getValue() || "");
+        const displayId = fullId.length > 25 ? `${fullId.slice(0, 25)}...` : fullId;
+        return (
+          <div className="flex items-center gap-2">
+            <Tooltip title={fullId}>
+              <Button
+                size="xs"
+                variant="light"
+                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate min-w-[220px] justify-start"
+                onClick={() => info.getValue() && onPromptClick?.(info.getValue())}
+              >
+                {displayId}
+              </Button>
+            </Tooltip>
+            <Tooltip title="Copy prompt ID">
+              <CopyOutlined
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyToClipboard(fullId);
+                }}
+                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
+              />
+            </Tooltip>
+          </div>
+        );
+      },
+    },
+    {
+      header: "Model",
+      accessorKey: "model",
+      cell: ({ row }) => {
+        const prompt = row.original;
+        const model = extractModel(prompt);
+        
+        if (!model) {
+          return <span className="text-xs text-gray-400">-</span>;
+        }
+        
+        const provider = getProviderFromModelHub(model, modelHubData);
+        const { logo } = getProviderLogoAndName(provider || "");
+        
+        return (
+          <Tooltip title={model}>
+            <div className="flex items-center space-x-2">
+              {/* Provider Icon */}
+              <div className="flex-shrink-0">
+                {provider && logo ? (
+                  <img 
+                    src={logo} 
+                    alt={`${provider} logo`}
+                    className="w-4 h-4"
+                    onError={(e) => {
+                      const target = e.currentTarget as HTMLImageElement;
+                      const parent = target.parentElement;
+                      if (!parent || !parent.contains(target)) {
+                        return;
+                      }
+
+                      try {
+                        const fallbackDiv = document.createElement('div');
+                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                        fallbackDiv.textContent = provider?.charAt(0) || '-';
+                        parent.replaceChild(fallbackDiv, target);
+                      } catch (error) {
+                        console.error('Failed to replace provider logo fallback:', error);
+                      }
+                    }}
+                  />
+                ) : (
+                  <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+                    -
+                  </div>
+                )}
+              </div>
+              
+              {/* Model Name */}
+              <span className="max-w-[15ch] truncate block">{model}</span>
+            </div>
+          </Tooltip>
+        );
+      },
     },
     {
       header: "Created At",

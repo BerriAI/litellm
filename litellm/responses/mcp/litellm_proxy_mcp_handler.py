@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.utils import get_server_name_prefix_tool_mcp
+from litellm.proxy._experimental.mcp_server.utils import split_server_prefix_from_name
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse, ToolParam
@@ -110,7 +110,7 @@ class LiteLLM_Proxy_MCP_Handler:
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
             allowed_mcp_server_ids
         )
 
@@ -123,9 +123,11 @@ class LiteLLM_Proxy_MCP_Handler:
         for server in allowed_mcp_servers:
             if server is None:
                 continue
-            server_name = getattr(server, "server_name", None) or getattr(
-                server, "alias", None
-            ) or getattr(server, "name", None)
+            server_name = (
+                getattr(server, "server_name", None)
+                or getattr(server, "alias", None)
+                or getattr(server, "name", None)
+            )
             if isinstance(server_name, str):
                 server_names.append(server_name)
 
@@ -161,7 +163,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 if len(allowed_mcp_servers) == 1:
                     tool_server_map[tool_name] = allowed_mcp_servers[0]
                 else:
-                    tool_server_map[tool_name], _ = get_server_name_prefix_tool_mcp(
+                    tool_server_map[tool_name], _ = split_server_prefix_from_name(
                         tool_name
                     )
 

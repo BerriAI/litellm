@@ -18,6 +18,7 @@ from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..utils import client as wrapper_client
+from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
 azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
@@ -178,11 +179,13 @@ async def _realtime_health_check(
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
+    ssl_context = get_shared_realtime_ssl_context()
     async with websockets.connect(  # type: ignore
         url,
         extra_headers={
             "api-key": api_key,  # type: ignore
         },
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+        ssl=ssl_context,
     ):
         return True

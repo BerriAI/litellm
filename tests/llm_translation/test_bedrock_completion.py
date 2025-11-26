@@ -2582,7 +2582,7 @@ async def test_bedrock_image_url_sync_client():
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                        "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                     },
                 },
             ],
@@ -3434,3 +3434,100 @@ async def test_bedrock_streaming_passthrough_test1(monkeypatch):
         print(mock_callback.call_args.kwargs.keys())
         assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
         assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
+
+
+def test_bedrock_openai_imported_model():
+    """
+    Test that Bedrock imported models using OpenAI format work correctly.
+
+    This test validates:
+    1. The request body follows OpenAI Chat Completions format
+    2. The URL is correctly constructed for Bedrock invoke endpoint
+    3. Messages with system, user roles and image_url content are preserved
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    # Sample base64 image data (truncated for test)
+    sample_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant that can analyze images.",
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Spot the difference between the two images?",
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{sample_base64}"},
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{sample_base64}"},
+                },
+            ],
+        },
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = completion(
+                model="bedrock/openai/arn:aws:bedrock:us-east-1:117159858402:imported-model/m4gc1mrfuddy",
+                messages=messages,
+                max_tokens=300,
+                temperature=0.5,
+                client=client,
+            )
+        except Exception as e:
+            print(f"Exception (expected during mock): {e}")
+
+        mock_post.assert_called_once()
+
+        # Validate URL
+        url = mock_post.call_args.kwargs["url"]
+        print(f"URL: {url}")
+        assert "bedrock-runtime.us-east-1.amazonaws.com" in url
+        assert "arn:aws:bedrock:us-east-1:117159858402:imported-model/m4gc1mrfuddy" in url
+        assert "/invoke" in url
+
+        # Validate request body follows OpenAI format
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        print(f"Request body: {json.dumps(request_body, indent=2)}")
+
+        # Check messages structure
+        assert "messages" in request_body
+        assert len(request_body["messages"]) == 2
+
+        # Check system message
+        system_msg = request_body["messages"][0]
+        assert system_msg["role"] == "system"
+        assert "helpful assistant" in system_msg["content"]
+
+        # Check user message with image content
+        user_msg = request_body["messages"][1]
+        assert user_msg["role"] == "user"
+        assert isinstance(user_msg["content"], list)
+        assert len(user_msg["content"]) == 3
+
+        # Check text content
+        assert user_msg["content"][0]["type"] == "text"
+        assert "Spot the difference" in user_msg["content"][0]["text"]
+
+        # Check image_url content
+        assert user_msg["content"][1]["type"] == "image_url"
+        assert "image_url" in user_msg["content"][1]
+        assert user_msg["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+        assert user_msg["content"][2]["type"] == "image_url"
+        assert "image_url" in user_msg["content"][2]
+
+        # Check max_tokens and temperature
+        assert request_body["max_tokens"] == 300
+        assert request_body["temperature"] == 0.5

@@ -7,7 +7,7 @@ import type { EntitySpendData } from "./types";
 
 interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
-  entityType: "tag" | "team" | "organization";
+  entityType: "tag" | "team";
   spendData: EntitySpendData;
   // Optional filter props
   showFilters?: boolean;

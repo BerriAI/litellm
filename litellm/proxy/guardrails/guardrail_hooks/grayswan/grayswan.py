@@ -38,7 +38,7 @@ class GraySwanGuardrail(CustomGuardrail):
     see: https://docs.grayswan.ai/cygnal/monitor-requests
     """
 
-    SUPPORTED_ON_FLAGGED_ACTIONS = {"block", "monitor"}
+    SUPPORTED_ON_FLAGGED_ACTIONS = {"block", "monitor", "passthrough"}
     DEFAULT_ON_FLAGGED_ACTION = "monitor"
     BASE_API_URL = "https://api.grayswan.ai"
     MONITOR_PATH = "/cygnal/monitor"
@@ -147,7 +147,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return data
 
-        await self.run_grayswan_guardrail(payload)
+        await self.run_grayswan_guardrail(payload, data)
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
@@ -193,7 +193,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return data
 
-        await self.run_grayswan_guardrail(payload)
+        await self.run_grayswan_guardrail(payload, data)
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
@@ -240,7 +240,24 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return response
 
-        await self.run_grayswan_guardrail(payload)
+        await self.run_grayswan_guardrail(payload, data)
+
+        # If passthrough mode and detection info exists, add it to response
+        if self.on_flagged_action == "passthrough" and "metadata" in data:
+            guardrail_detections = data.get("metadata", {}).get(
+                "guardrail_detections", []
+            )
+            if guardrail_detections:
+                # Add guardrail detections to response hidden params for client visibility
+                hidden_params = getattr(response, "_hidden_params", None)
+                if hidden_params is not None:
+                    if not hidden_params:
+                        hidden_params = {}
+                        setattr(response, "_hidden_params", hidden_params)
+
+                    hidden_params["guardrail_detections"] = guardrail_detections
+                    setattr(response, "_hidden_params", hidden_params)
+
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
@@ -250,7 +267,7 @@ class GraySwanGuardrail(CustomGuardrail):
     # Core GraySwan interaction
     # ------------------------------------------------------------------
 
-    async def run_grayswan_guardrail(self, payload: dict):
+    async def run_grayswan_guardrail(self, payload: dict, data: Optional[dict] = None):
         headers = self._prepare_headers()
 
         try:
@@ -273,7 +290,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             raise GraySwanGuardrailAPIError(str(exc)) from exc
 
-        self._process_grayswan_response(result)
+        self._process_grayswan_response(result, data)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -306,7 +323,9 @@ class GraySwanGuardrail(CustomGuardrail):
 
         return payload
 
-    def _process_grayswan_response(self, response_json: Dict[str, Any]) -> None:
+    def _process_grayswan_response(
+        self, response_json: Dict[str, Any], data: Optional[dict] = None
+    ) -> None:
         violation_score = float(response_json.get("violation", 0.0) or 0.0)
         violated_rules = response_json.get("violated_rules", [])
         mutation_detected = response_json.get("mutation")
@@ -338,6 +357,30 @@ class GraySwanGuardrail(CustomGuardrail):
                     "ipi": ipi_detected,
                 },
             )
+        elif self.on_flagged_action == "monitor":
+            verbose_proxy_logger.info(
+                "Gray Swan Guardrail: Monitoring mode - allowing flagged content to proceed"
+            )
+        elif self.on_flagged_action == "passthrough":
+            verbose_proxy_logger.info(
+                "Gray Swan Guardrail: Passthrough mode - storing detection info in metadata"
+            )
+            if data is not None:
+                # Store guardrail detection info in metadata to be included in response
+                if "metadata" not in data:
+                    data["metadata"] = {}
+                if "guardrail_detections" not in data["metadata"]:
+                    data["metadata"]["guardrail_detections"] = []
+
+                detection_info = {
+                    "guardrail": "grayswan",
+                    "flagged": True,
+                    "violation_score": violation_score,
+                    "violated_rules": violated_rules,
+                    "mutation": mutation_detected,
+                    "ipi": ipi_detected,
+                }
+                data["metadata"]["guardrail_detections"].append(detection_info)
 
     def _resolve_threshold(self, threshold: Optional[float]) -> float:
         if threshold is not None:

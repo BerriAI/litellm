@@ -2439,7 +2439,7 @@ Your logs should be available on DynamoDB
     "S": "{'user': 'ishaan-2'}"
   },
   "response": {
-    "S": "EmbeddingResponse(model='text-embedding-ada-002', data=[{'embedding': [-0.03503197431564331, -0.020601635798811913, -0.015375726856291294,
+    "S": "EmbeddingResponse(model='text-embedding-ada-002-v2', data=[{'embedding': [-0.03503197431564331, -0.020601635798811913, -0.015375726856291294,
   }
 }
 ```

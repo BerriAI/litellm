@@ -390,3 +390,151 @@ def test_thought_signature_with_function_call_mode():
     assert "provider_specific_fields" in function
     assert function["provider_specific_fields"]["thought_signature"] == test_signature
     assert tools is None
+
+
+def test_dummy_signature_added_for_gemini_3_conversation_history():
+    """Test that dummy signatures are added when transferring conversation history from older models (like gemini-2.5-flash) to gemini-3."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+    import base64
+
+    # Simulate conversation history from gemini-2.5-flash (no thought signature)
+    assistant_message_from_older_model = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_abc123",
+                "type": "function",
+                "function": {
+                    "name": "get_current_temperature",
+                    "arguments": '{"location": "Paris"}',
+                },
+                "index": 0,
+                # No provider_specific_fields - older model doesn't provide signatures
+            },
+        ],
+    }
+
+    # Convert to Gemini format for gemini-3-pro-preview (should add dummy signature)
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        assistant_message_from_older_model, model="gemini-3-pro-preview"
+    )
+
+    # Verify dummy signature is added
+    assert len(gemini_parts) == 1
+    assert "function_call" in gemini_parts[0]
+    assert "thoughtSignature" in gemini_parts[0]
+    
+    # Verify it's the expected dummy signature (base64 encoded "skip_thought_signature_validator")
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
+    assert gemini_parts[0]["thoughtSignature"] == expected_dummy
+
+
+def test_dummy_signature_not_added_for_gemini_2_5():
+    """Test that dummy signatures are NOT added when target model is not gemini-3."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    # Simulate conversation history from gemini-2.5-flash (no thought signature)
+    assistant_message = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_abc123",
+                "type": "function",
+                "function": {
+                    "name": "get_current_temperature",
+                    "arguments": '{"location": "Paris"}',
+                },
+                "index": 0,
+                # No provider_specific_fields
+            },
+        ],
+    }
+
+    # Convert to Gemini format for gemini-2.5-flash (should NOT add dummy signature)
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        assistant_message, model="gemini-2.5-flash"
+    )
+
+    # Verify no dummy signature is added for non-gemini-3 models
+    assert len(gemini_parts) == 1
+    assert "function_call" in gemini_parts[0]
+    assert "thoughtSignature" not in gemini_parts[0]
+
+
+def test_dummy_signature_not_added_when_signature_exists():
+    """Test that dummy signatures are NOT added when a real signature already exists."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    real_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
+    
+    # Assistant message with existing thought signature
+    assistant_message_with_signature = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_abc123",
+                "type": "function",
+                "function": {
+                    "name": "get_current_temperature",
+                    "arguments": '{"location": "Paris"}',
+                    "provider_specific_fields": {
+                        "thought_signature": real_signature,
+                    },
+                },
+                "index": 0,
+            },
+        ],
+    }
+
+    # Convert to Gemini format for gemini-3-pro-preview
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        assistant_message_with_signature, model="gemini-3-pro-preview"
+    )
+
+    # Verify real signature is preserved, not replaced with dummy
+    assert len(gemini_parts) == 1
+    assert "function_call" in gemini_parts[0]
+    assert "thoughtSignature" in gemini_parts[0]
+    assert gemini_parts[0]["thoughtSignature"] == real_signature
+
+
+def test_dummy_signature_with_function_call_mode():
+    """Test that dummy signatures are added for function_call mode when converting to gemini-3."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+    import base64
+
+    # Assistant message with function_call (not tool_calls) and no signature
+    assistant_message_function_call = {
+        "role": "assistant",
+        "content": None,
+        "function_call": {
+            "name": "get_current_temperature",
+            "arguments": '{"location": "Paris"}',
+            # No provider_specific_fields
+        },
+    }
+
+    # Convert to Gemini format for gemini-3-pro-preview
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        assistant_message_function_call, model="gemini-3-pro-preview"
+    )
+
+    # Verify dummy signature is added
+    assert len(gemini_parts) == 1
+    assert "function_call" in gemini_parts[0]
+    assert "thoughtSignature" in gemini_parts[0]
+    
+    # Verify it's the expected dummy signature
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
+    assert gemini_parts[0]["thoughtSignature"] == expected_dummy
