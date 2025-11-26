@@ -5,7 +5,6 @@ Provides an all-in-one API for document ingestion:
 Upload -> (OCR) -> Chunk -> Embed -> Vector Store
 """
 
-import base64
 from typing import Any, Dict, Optional, Tuple
 
 import orjson
@@ -29,7 +28,11 @@ async def parse_rag_ingest_request(
     request: Request,
 ) -> Tuple[Dict[str, Any], Optional[Tuple[str, bytes, str]], Optional[str], Optional[str]]:
     """
-    Parse RAG ingest request - supports both Form upload and JSON body.
+    Parse RAG ingest request.
+
+    Supports:
+    - Form: file + request JSON in form field
+    - JSON body for URL-based ingestion
 
     Returns:
         Tuple of (ingest_options, file_data, file_url, file_id)
@@ -37,46 +40,35 @@ async def parse_rag_ingest_request(
     headers = _safe_get_request_headers(request)
     content_type = headers.get("content-type", "")
 
-    if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
-        # Form-based upload (like OpenAI files API)
+    file_data = None
+    file_url = None
+    file_id = None
+    ingest_options: Dict[str, Any] = {}
+
+    if "multipart/form-data" in content_type:
+        # Form upload
         form_data = await get_form_data(request)
 
-        ingest_options_str = form_data.get("ingest_options")
-        if not ingest_options_str:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "ingest_options is required"},
-            )
-
-        ingest_options = orjson.loads(ingest_options_str)
-
-        # Handle file upload
-        file_data = None
+        # Get file
         file_obj = form_data.get("file")
         if file_obj is not None and hasattr(file_obj, "read"):
             file_content = await file_obj.read()
             file_data = (file_obj.filename, file_content, file_obj.content_type)
 
-        file_url = form_data.get("file_url")
-        file_id = form_data.get("file_id")
+        # Parse JSON from 'request' form field (contains full request body as JSON)
+        request_json_str = form_data.get("request")
+        if request_json_str:
+            request_data = orjson.loads(request_json_str)
+            ingest_options = request_data.get("ingest_options", {})
+            file_url = request_data.get("file_url")
+            file_id = request_data.get("file_id")
 
     else:
         # JSON body
         data = await _read_request_body(request)
-
         ingest_options = data.get("ingest_options", {})
         file_url = data.get("file_url")
         file_id = data.get("file_id")
-        file_data = None
-
-        # Handle inline file content (base64)
-        if "file" in data and data["file"]:
-            file_obj = data["file"]
-            filename = file_obj.get("filename", "document")
-            content_b64 = file_obj.get("content", "")
-            content_type_str = file_obj.get("content_type", "application/octet-stream")
-            content_bytes = base64.b64decode(content_b64)
-            file_data = (filename, content_bytes, content_type_str)
 
     # Validate
     if file_data is None and file_url is None and file_id is None:
@@ -114,11 +106,9 @@ async def rag_ingest(
     """
     RAG Ingest endpoint - all-in-one document ingestion pipeline.
 
-    Supports two formats:
-    1. Form upload (like OpenAI files API) - simple file upload
-    2. JSON body - for programmatic use with base64 content or URLs
+    Supports form upload (for files) or JSON body (for URLs).
 
-    ## Form Upload (Recommended for files):
+    ## Form upload (for files):
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
         -H "Authorization: Bearer sk-1234" \\
@@ -126,25 +116,23 @@ async def rag_ingest(
         -F 'ingest_options={"vector_store": {"custom_llm_provider": "openai"}}'
     ```
 
-    ## Form Upload for Bedrock:
-    ```bash
-    curl -X POST "http://localhost:4000/v1/rag/ingest" \\
-        -H "Authorization: Bearer sk-1234" \\
-        -F file="@document.pdf" \\
-        -F 'ingest_options={"vector_store": {"custom_llm_provider": "bedrock"}}'
-    ```
-
-    ## JSON Body (for URLs or base64):
+    ## JSON body (for URLs):
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
         -H "Authorization: Bearer sk-1234" \\
         -H "Content-Type: application/json" \\
         -d '{
             "file_url": "https://example.com/document.pdf",
-            "ingest_options": {
-                "vector_store": {"custom_llm_provider": "openai"}
-            }
+            "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}
         }'
+    ```
+
+    ## Bedrock:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/rag/ingest" \\
+        -H "Authorization: Bearer sk-1234" \\
+        -F file="@document.pdf" \\
+        -F 'ingest_options={"vector_store": {"custom_llm_provider": "bedrock"}}'
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -156,7 +144,7 @@ async def rag_ingest(
     )
 
     try:
-        # Parse request (form or JSON)
+        # Parse request
         ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(request)
 
         # Add litellm data
