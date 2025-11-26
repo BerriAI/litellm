@@ -73,57 +73,186 @@ async def test_async_realtime_uses_max_size_parameter():
 
 
 @pytest.mark.asyncio
-async def test_construct_url_uses_legacy_realtime_by_default():
-    """By default we should keep using `/openai/realtime` (beta behavior)."""
-
+async def test_construct_url_default_beta_protocol():
+    """
+    Test that _construct_url uses /openai/realtime (beta) by default.
+    This maintains backwards compatibility.
+    """
     from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
 
     handler = AzureOpenAIRealtime()
-    api_base = "https://my-endpoint.openai.azure.com"
-    api_version = "2024-10-01-preview"
-    model = "gpt-4o-realtime-preview"
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-4o-realtime-preview",
+        api_version="2024-10-01-preview",
+    )
+    
+    assert url.startswith("wss://my-endpoint.openai.azure.com/openai/realtime?")
+    assert "/openai/realtime?" in url
+    assert "/openai/v1/realtime" not in url
+    assert "api-version=2024-10-01-preview" in url
+    assert "deployment=gpt-4o-realtime-preview" in url
 
-    url = handler._construct_url(api_base=api_base, model=model, api_version=api_version)
 
-    assert url.startswith("wss://my-endpoint.openai.azure.com")
-    assert "/openai/realtime" in url
+@pytest.mark.asyncio
+async def test_construct_url_beta_protocol_explicit():
+    """
+    Test that realtime_protocol='beta' explicitly uses /openai/realtime.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-4o-realtime-preview",
+        api_version="2024-10-01-preview",
+        realtime_protocol="beta",
+    )
+    
+    assert "/openai/realtime?" in url
     assert "/openai/v1/realtime" not in url
 
 
 @pytest.mark.asyncio
-async def test_construct_url_uses_v1_when_realtime_protocol_v1_or_ga():
-    """Setting `realtime_protocol` to v1/GA should switch to `/openai/v1/realtime`."""
-
+async def test_construct_url_ga_protocol():
+    """
+    Test that realtime_protocol='GA' uses /openai/v1/realtime (GA path).
+    """
     from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
 
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-4o-realtime-preview",
+        api_version="2024-10-01-preview",
+        realtime_protocol="GA",
+    )
+    
+    assert url.startswith("wss://my-endpoint.openai.azure.com/openai/v1/realtime?")
+    assert "/openai/v1/realtime?" in url
+    # Ensure it doesn't have both paths
+    assert url.count("/realtime") == 1
+    assert "api-version=2024-10-01-preview" in url
+    assert "deployment=gpt-4o-realtime-preview" in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_v1_protocol():
+    """
+    Test that realtime_protocol='v1' also uses /openai/v1/realtime.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-4o-realtime-preview",
+        api_version="2024-10-01-preview",
+        realtime_protocol="v1",
+    )
+    
+    assert "/openai/v1/realtime?" in url
+    assert url.count("/realtime") == 1
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_uses_ga_protocol_end_to_end():
+    """
+    Test that realtime_protocol='GA' flows through async_realtime to construct the correct URL.
+    This is the end-to-end test ensuring the parameter is properly used.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
     api_base = "https://my-endpoint.openai.azure.com"
+    api_key = "test-key"
     api_version = "2024-10-01-preview"
     model = "gpt-4o-realtime-preview"
 
-    # Helper to construct handler URL with a specific realtime_protocol.
-    # We avoid mutating handler attributes directly since type checkers don't
-    # know about `litellm_params` on this class. Instead, we patch the
-    # `_get_realtime_protocol` helper which is what `_construct_url` uses.
+    dummy_websocket = AsyncMock()
+    dummy_logging_obj = MagicMock()
+    mock_backend_ws = AsyncMock()
 
-    # v1 -> /openai/v1/realtime
-    handler_v1 = AzureOpenAIRealtime()
-    with patch.object(handler_v1, "_get_realtime_protocol", return_value="v1"):
-        url_v1 = handler_v1._construct_url(api_base=api_base, model=model, api_version=api_version)
-    assert "/openai/v1/realtime" in url_v1
-    assert "/openai/realtime" not in url_v1
+    class DummyAsyncContextManager:
+        def __init__(self, value):
+            self.value = value
+        async def __aenter__(self):
+            return self.value
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
 
-    # GA (case-insensitive) -> /openai/v1/realtime
-    handler_ga = AzureOpenAIRealtime()
-    with patch.object(handler_ga, "_get_realtime_protocol", return_value="v1"):
-        url_ga = handler_ga._construct_url(api_base=api_base, model=model, api_version=api_version)
-    assert "/openai/v1/realtime" in url_ga
-    assert "/openai/realtime" not in url_ga
+    with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
+         patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+        
+        mock_streaming_instance = MagicMock()
+        mock_realtime_streaming.return_value = mock_streaming_instance
+        mock_streaming_instance.bidirectional_forward = AsyncMock()
 
-    # beta or any other value keeps legacy path
-    handler_beta = AzureOpenAIRealtime()
-    with patch.object(handler_beta, "_get_realtime_protocol", return_value="beta"):
-        url_beta = handler_beta._construct_url(api_base=api_base, model=model, api_version=api_version)
-    assert "/openai/realtime" in url_beta
-    assert "/openai/v1/realtime" not in url_beta
+        await handler.async_realtime(
+            model=model,
+            websocket=dummy_websocket,
+            logging_obj=dummy_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            api_version=api_version,
+            realtime_protocol="GA",
+        )
+
+        # Verify websockets.connect was called with GA URL
+        mock_ws_connect.assert_called_once()
+        called_url = mock_ws_connect.call_args[0][0]
+        assert "/openai/v1/realtime" in called_url
+        assert called_url.startswith("wss://")
+        assert "api-version=2024-10-01-preview" in called_url
+        assert "deployment=gpt-4o-realtime-preview" in called_url
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_default_maintains_backwards_compatibility():
+    """
+    Test that not passing realtime_protocol maintains the original beta behavior.
+    This ensures backwards compatibility for existing deployments.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    api_base = "https://my-endpoint.openai.azure.com"
+    api_key = "test-key"
+    api_version = "2024-10-01-preview"
+    model = "gpt-4o-realtime-preview"
+
+    dummy_websocket = AsyncMock()
+    dummy_logging_obj = MagicMock()
+    mock_backend_ws = AsyncMock()
+
+    class DummyAsyncContextManager:
+        def __init__(self, value):
+            self.value = value
+        async def __aenter__(self):
+            return self.value
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
+         patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+        
+        mock_streaming_instance = MagicMock()
+        mock_realtime_streaming.return_value = mock_streaming_instance
+        mock_streaming_instance.bidirectional_forward = AsyncMock()
+
+        # Call without realtime_protocol parameter
+        await handler.async_realtime(
+            model=model,
+            websocket=dummy_websocket,
+            logging_obj=dummy_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            api_version=api_version,
+        )
+
+        # Verify it still uses the beta path
+        called_url = mock_ws_connect.call_args[0][0]
+        assert "/openai/realtime?" in called_url
+        assert "/openai/v1/realtime" not in called_url
 
 
