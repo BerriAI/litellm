@@ -412,6 +412,7 @@ const sidebars = {
             "proxy/pass_through"
           ]
         },
+        "rag_ingest",
         "realtime",
         "rerank",
         "response_api",
@@ -530,6 +531,7 @@ const sidebars = {
           items: [
             "providers/bedrock",
             "providers/bedrock_embedding",
+            "providers/bedrock_imported",
             "providers/bedrock_image_gen",
             "providers/bedrock_rerank",
             "providers/bedrock_agentcore",
