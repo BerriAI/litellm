@@ -54,6 +54,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
+    populate_request_with_path_params,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool
@@ -1183,68 +1184,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
 
 
-def _populate_request_with_path_params(
-    request_data: dict, request: Request
-) -> dict:
-    """
-    Copy FastAPI path params into the request payload so downstream checks
-    (e.g. vector store RBAC) see them the same way as body params.
-    
-    Since path_params may not be available during dependency injection,
-    we parse the URL path directly for known patterns.
-    """    
-    # Try to get path_params if available (sometimes populated by FastAPI)
-    path_params = getattr(request, "path_params", None)
-    if isinstance(path_params, dict) and path_params:
-        for key, value in path_params.items():
-            if key == "vector_store_id":
-                request_data.setdefault("vector_store_id", value)
-                existing_ids = request_data.get("vector_store_ids")
-                if isinstance(existing_ids, list):
-                    if value not in existing_ids:
-                        existing_ids.append(value)
-                else:
-                    request_data["vector_store_ids"] = [value]
-                continue
-            request_data.setdefault(key, value)
-        verbose_proxy_logger.debug(
-            f"_populate_request_with_path_params: Found path_params, vector_store_ids={request_data.get('vector_store_ids')}"
-        )
-        return request_data
-
-    # Fallback: parse the URL path directly to extract vector_store_id
-    _add_vector_store_id_from_path(request_data=request_data, request=request)
-
-    return request_data
-
-
-def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None:
-    """
-    Parse the request path to find /vector_stores/{vector_store_id}/... segments.
-
-    When found, ensure both vector_store_id and vector_store_ids are populated.
-    """
-    path = request.url.path
-    vector_store_match = re.search(r"/vector_stores/([^/]+)/", path)
-    if vector_store_match:
-        vector_store_id = vector_store_match.group(1)
-        verbose_proxy_logger.debug(
-            f"_populate_request_with_path_params: Extracted vector_store_id={vector_store_id} from path={path}"
-        )
-        request_data.setdefault("vector_store_id", vector_store_id)
-        existing_ids = request_data.get("vector_store_ids")
-        if isinstance(existing_ids, list):
-            if vector_store_id not in existing_ids:
-                existing_ids.append(vector_store_id)
-        else:
-            request_data["vector_store_ids"] = [vector_store_id]
-        verbose_proxy_logger.debug(
-            f"_populate_request_with_path_params: Updated request_data with vector_store_ids={request_data.get('vector_store_ids')}"
-        )
-    else:
-        verbose_proxy_logger.debug(
-            f"_populate_request_with_path_params: No vector_store_id present in path={path}"
-        )
 
 
 @tracer.wrap()
@@ -1268,7 +1207,7 @@ async def user_api_key_auth(
     """
 
     request_data = await _read_request_body(request=request)
-    request_data = _populate_request_with_path_params(
+    request_data = populate_request_with_path_params(
         request_data=request_data, request=request
     )
     route: str = get_request_route(request=request)
