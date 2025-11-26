@@ -1,6 +1,17 @@
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Dict, Iterable, List, Literal, Mapping, Optional, Tuple, Union
+from typing import (
+    IO,
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx
 from openai._legacy_response import (

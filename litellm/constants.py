@@ -1211,3 +1211,7 @@ SENTRY_PII_DENYLIST = [
 COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
     os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
 )
+
+########################### RAG Text Splitter Constants ###########################
+DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
+DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))

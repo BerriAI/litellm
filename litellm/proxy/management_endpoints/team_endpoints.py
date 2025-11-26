@@ -1878,6 +1878,15 @@ async def team_member_delete(
             where={"team_id": data.team_id, "user_id": _uid}
         )
 
+    ## DELETE KEYS CREATED BY USER FOR THIS TEAM
+    if user_ids_to_delete:
+        await prisma_client.db.litellm_verificationtoken.delete_many(
+            where={
+                "user_id": {"in": list(user_ids_to_delete)},
+                "team_id": data.team_id,
+            }
+        )
+
     return existing_team_row
 
 

@@ -38,6 +38,7 @@ import {
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -240,9 +241,10 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [showEditCallback, setShowEditCallback] = useState(false);
   const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(null);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
-  const [callbackToDelete, setCallbackToDelete] = useState<string | null>(null);
+  const [callbackToDelete, setCallbackToDelete] = useState<any | null>(null);
   const [isUpdatingCallback, setIsUpdatingCallback] = useState(false);
   const [isAddingCallback, setIsAddingCallback] = useState(false);
+  const [isDeletingCallback, setIsDeletingCallback] = useState(false);
 
   useEffect(() => {
     if (!accessToken) {
@@ -525,8 +527,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     });
   };
 
-  const handleDeleteCallback = (callbackName: string) => {
-    setCallbackToDelete(callbackName);
+  const handleDeleteCallback = (callback: any) => {
+    setCallbackToDelete(callback);
     setShowDeleteConfirmModal(true);
   };
 
@@ -536,8 +538,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     }
 
     try {
-      await deleteCallback(accessToken, callbackToDelete);
-      NotificationsManager.success(`Callback ${callbackToDelete} deleted successfully`);
+      setIsDeletingCallback(true);
+      await deleteCallback(accessToken, callbackToDelete.name);
+      NotificationsManager.success(`Callback ${callbackToDelete.name} deleted successfully`);
 
       // Refresh the callbacks list
       if (userID && userRole) {
@@ -550,6 +553,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     } catch (error) {
       console.error("Failed to delete callback:", error);
       NotificationsManager.fromBackend(error);
+    } finally {
+      setIsDeletingCallback(false);
     }
   };
 
@@ -577,7 +582,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   setSelectedEditCallback(cb);
                   setShowEditCallback(true);
                 }}
-                onDelete={(cb) => handleDeleteCallback(cb.name)}
+                onDelete={(cb) => handleDeleteCallback(cb)}
                 onTest={async (cb) => {
                   try {
                     await serviceHealthCheck(accessToken, cb.name);
@@ -804,20 +809,22 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         </Form>
       </Modal>
 
-      <Modal
-        title="Confirm Delete"
-        open={showDeleteConfirmModal}
-        onOk={confirmDeleteCallback}
+      <DeleteResourceModal
+        isOpen={showDeleteConfirmModal}
+        title="Delete Callback"
+        message="Are you sure you want to delete this callback? This action cannot be undone."
+        resourceInformationTitle="Callback Information"
+        resourceInformation={[
+          { label: "Callback Name", value: callbackToDelete?.name },
+          { label: "Mode", value: callbackToDelete?.mode || "success" },
+        ]}
         onCancel={() => {
           setShowDeleteConfirmModal(false);
           setCallbackToDelete(null);
         }}
-        okText="Delete"
-        cancelText="Cancel"
-        okButtonProps={{ danger: true }}
-      >
-        <p>Are you sure you want to delete the callback - {callbackToDelete}? This action cannot be undone.</p>
-      </Modal>
+        onOk={confirmDeleteCallback}
+        confirmLoading={isDeletingCallback}
+      />
     </div>
   );
 };
