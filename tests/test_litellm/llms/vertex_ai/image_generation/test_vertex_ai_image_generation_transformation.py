@@ -438,20 +438,18 @@ class TestVertexAIImageGenerationIntegration:
     def test_imagen_get_complete_url(self):
         """Test Imagen config URL generation"""
         config = VertexAIImagenImageGenerationConfig()
-        with patch.object(
-            config, "_resolve_vertex_project", return_value="test-project"
-        ), patch.object(
-            config, "_resolve_vertex_location", return_value="us-central1"
-        ):
-            url = config.get_complete_url(
-                api_base=None,
-                api_key=None,
-                model="imagegeneration@006",
-                optional_params={},
-                litellm_params={},
-            )
-            assert "test-project" in url
-            assert "us-central1" in url
-            assert "imagegeneration@006" in url
-            assert "predict" in url
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="imagegeneration@006",
+            optional_params={},
+            litellm_params={
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+            },
+        )
+        assert "test-project" in url
+        assert "us-central1" in url
+        assert "imagegeneration@006" in url
+        assert "predict" in url
 
