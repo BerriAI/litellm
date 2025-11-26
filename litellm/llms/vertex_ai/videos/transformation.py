@@ -163,7 +163,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
+        litellm_params: Optional[Union[GenericLiteLLMParams, dict]] = None,
     ) -> dict:
         """
         Validate environment and return headers for Vertex AI OCR.
@@ -172,9 +172,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         """
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
-        litellm_params_dict: Dict[str, Any] = (
-            litellm_params.model_dump() if litellm_params else {}
-        )
+        if litellm_params is None:
+            litellm_params_dict: Dict[str, Any] = {}
+        elif isinstance(litellm_params, dict):
+            litellm_params_dict = litellm_params
+        else:
+            litellm_params_dict = litellm_params.model_dump()
         
         vertex_project = VertexBase.safe_get_vertex_ai_project(
             litellm_params=litellm_params_dict
