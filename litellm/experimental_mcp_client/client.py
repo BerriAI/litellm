@@ -8,14 +8,21 @@ from datetime import timedelta
 from typing import Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
 import httpx
-from mcp import ClientSession, StdioServerParameters
+from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
-from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
+from mcp.types import (
+    CallToolRequestParams as MCPCallToolRequestParams,
+    GetPromptRequestParams,
+    GetPromptResult,
+    Prompt,
+    ResourceTemplate,
+)
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
+from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
@@ -289,3 +296,218 @@ class MCPClient:
                 ],  # Empty content for error case
                 isError=True,
             )
+
+    async def list_prompts(self) -> List[Prompt]:
+        """List available prompts from the server."""
+        verbose_logger.debug(
+            f"MCP client listing tools from {self.server_url or 'stdio'}"
+        )
+
+        async def _list_prompts_operation(session: ClientSession):
+            return await session.list_prompts()
+
+        try:
+            result = await self.run_with_session(_list_prompts_operation)
+            prompt_count = len(result.prompts)
+            prompt_names = [prompt.name for prompt in result.prompts]
+            verbose_logger.info(
+                f"MCP client listed {prompt_count} tools from {self.server_url or 'stdio'}: {prompt_names}"
+            )
+            return result.prompts
+        except asyncio.CancelledError:
+            verbose_logger.warning("MCP client list_prompts was cancelled")
+            raise
+        except Exception as e:
+            error_type = type(e).__name__
+            verbose_logger.error(
+                f"MCP client list_prompts failed - "
+                f"Error Type: {error_type}, "
+                f"Error: {str(e)}, "
+                f"Server: {self.server_url or 'stdio'}, "
+                f"Transport: {self.transport_type}"
+            )
+
+            # Check if it's a stream/connection error
+            if "BrokenResourceError" in error_type or "Broken" in error_type:
+                verbose_logger.error(
+                    "MCP client detected broken connection/stream during list_tools - "
+                    "the MCP server may have crashed, disconnected, or timed out"
+                )
+
+            # Return empty list instead of raising to allow graceful degradation
+            return []
+
+    async def get_prompt(
+        self, get_prompt_request_params: GetPromptRequestParams
+    ) -> GetPromptResult:
+        """Fetch a prompt definition from the MCP server."""
+        verbose_logger.info(
+            f"MCP client fetching prompt '{get_prompt_request_params.name}' with arguments: {get_prompt_request_params.arguments}"
+        )
+
+        async def _get_prompt_operation(session: ClientSession):
+            verbose_logger.debug("MCP client sending get_prompt request to session")
+            return await session.get_prompt(
+                name=get_prompt_request_params.name,
+                arguments=get_prompt_request_params.arguments,
+            )
+
+        try:
+            get_prompt_result = await self.run_with_session(_get_prompt_operation)
+            verbose_logger.info(
+                f"MCP client get_prompt '{get_prompt_request_params.name}' completed successfully"
+            )
+            return get_prompt_result
+        except asyncio.CancelledError:
+            verbose_logger.warning("MCP client get_prompt was cancelled")
+            raise
+        except Exception as e:
+            import traceback
+
+            error_trace = traceback.format_exc()
+            verbose_logger.debug(f"MCP client get_prompt traceback:\n{error_trace}")
+
+            # Log detailed error information
+            error_type = type(e).__name__
+            verbose_logger.error(
+                f"MCP client get_prompt failed - "
+                f"Error Type: {error_type}, "
+                f"Error: {str(e)}, "
+                f"Prompt: {get_prompt_request_params.name}, "
+                f"Server: {self.server_url or 'stdio'}, "
+                f"Transport: {self.transport_type}"
+            )
+
+            # Check if it's a stream/connection error
+            if "BrokenResourceError" in error_type or "Broken" in error_type:
+                verbose_logger.error(
+                    "MCP client detected broken connection/stream during get_prompt - "
+                    "the MCP server may have crashed, disconnected, or timed out."
+                )
+
+            raise
+
+    async def list_resources(self) -> list[Resource]:
+        """List available resources from the server."""
+        verbose_logger.debug(
+            f"MCP client listing resources from {self.server_url or 'stdio'}"
+        )
+
+        async def _list_resources_operation(session: ClientSession):
+            return await session.list_resources()
+
+        try:
+            result = await self.run_with_session(_list_resources_operation)
+            resource_count = len(result.resources)
+            resource_names = [resource.name for resource in result.resources]
+            verbose_logger.info(
+                f"MCP client listed {resource_count} resources from {self.server_url or 'stdio'}: {resource_names}"
+            )
+            return result.resources
+        except asyncio.CancelledError:
+            verbose_logger.warning("MCP client list_resources was cancelled")
+            raise
+        except Exception as e:
+            error_type = type(e).__name__
+            verbose_logger.error(
+                f"MCP client list_resources failed - "
+                f"Error Type: {error_type}, "
+                f"Error: {str(e)}, "
+                f"Server: {self.server_url or 'stdio'}, "
+                f"Transport: {self.transport_type}"
+            )
+
+            # Check if it's a stream/connection error
+            if "BrokenResourceError" in error_type or "Broken" in error_type:
+                verbose_logger.error(
+                    "MCP client detected broken connection/stream during list_resources - "
+                    "the MCP server may have crashed, disconnected, or timed out"
+                )
+
+            # Return empty list instead of raising to allow graceful degradation
+            return []
+
+    async def list_resource_templates(self) -> list[ResourceTemplate]:
+        """List available resource templates from the server."""
+        verbose_logger.debug(
+            f"MCP client listing resource templates from {self.server_url or 'stdio'}"
+        )
+
+        async def _list_resource_templates_operation(session: ClientSession):
+            return await session.list_resource_templates()
+
+        try:
+            result = await self.run_with_session(_list_resource_templates_operation)
+            resource_template_count = len(result.resourceTemplates)
+            resource_template_names = [
+                resourceTemplate.name for resourceTemplate in result.resourceTemplates
+            ]
+            verbose_logger.info(
+                f"MCP client listed {resource_template_count} resource templates from {self.server_url or 'stdio'}: {resource_template_names}"
+            )
+            return result.resourceTemplates
+        except asyncio.CancelledError:
+            verbose_logger.warning("MCP client list_resource_templates was cancelled")
+            raise
+        except Exception as e:
+            error_type = type(e).__name__
+            verbose_logger.error(
+                f"MCP client list_resource_templates failed - "
+                f"Error Type: {error_type}, "
+                f"Error: {str(e)}, "
+                f"Server: {self.server_url or 'stdio'}, "
+                f"Transport: {self.transport_type}"
+            )
+
+            # Check if it's a stream/connection error
+            if "BrokenResourceError" in error_type or "Broken" in error_type:
+                verbose_logger.error(
+                    "MCP client detected broken connection/stream during list_resource_templates - "
+                    "the MCP server may have crashed, disconnected, or timed out"
+                )
+
+            # Return empty list instead of raising to allow graceful degradation
+            return []
+
+    async def read_resource(self, url: AnyUrl) -> ReadResourceResult:
+        """Fetch resource contents from the MCP server."""
+        verbose_logger.info(f"MCP client fetching resource '{url}'")
+
+        async def _read_resource_operation(session: ClientSession):
+            verbose_logger.debug("MCP client sending read_resource request to session")
+            return await session.read_resource(url)
+
+        try:
+            read_resource_result = await self.run_with_session(_read_resource_operation)
+            verbose_logger.info(
+                f"MCP client read_resource '{url}' completed successfully"
+            )
+            return read_resource_result
+        except asyncio.CancelledError:
+            verbose_logger.warning("MCP client read_resource was cancelled")
+            raise
+        except Exception as e:
+            import traceback
+
+            error_trace = traceback.format_exc()
+            verbose_logger.debug(f"MCP client read_resource traceback:\n{error_trace}")
+
+            # Log detailed error information
+            error_type = type(e).__name__
+            verbose_logger.error(
+                f"MCP client read_resource failed - "
+                f"Error Type: {error_type}, "
+                f"Error: {str(e)}, "
+                f"Url: {url}, "
+                f"Server: {self.server_url or 'stdio'}, "
+                f"Transport: {self.transport_type}"
+            )
+
+            # Check if it's a stream/connection error
+            if "BrokenResourceError" in error_type or "Broken" in error_type:
+                verbose_logger.error(
+                    "MCP client detected broken connection/stream during read_resource - "
+                    "the MCP server may have crashed, disconnected, or timed out."
+                )
+
+            raise

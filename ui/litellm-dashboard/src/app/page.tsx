@@ -407,7 +407,7 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "api_ref" ? (
                   <APIReferenceView proxySettings={proxySettings} />
-                ) : page == "settings" ? (
+                ) : page == "logging-and-alerts" ? (
                   <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                 ) : page == "budgets" ? (
                   <BudgetPanel accessToken={accessToken} />
@@ -419,7 +419,7 @@ export default function CreateKeyPage() {
                   <PromptsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "transform-request" ? (
                   <TransformRequestPanel accessToken={accessToken} />
-                ) : page == "general-settings" ? (
+                ) : page == "router-settings" ? (
                   <GeneralSettings
                     userID={userID}
                     userRole={userRole}
@@ -428,7 +428,7 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "ui-theme" ? (
                   <UIThemeSettings userID={userID} userRole={userRole} accessToken={accessToken} />
-                ) : page == "cost-tracking-settings" ? (
+                ) : page == "cost-tracking" ? (
                   <CostTrackingSettings userID={userID} userRole={userRole} accessToken={accessToken} />
                 ) : page == "model-hub-table" ? (
                   isAdminRole(userRole) ? (
@@ -480,7 +480,6 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     teams={(teams as Team[]) ?? []}
-                    organizations={(organizations as Organization[]) ?? []}
                     premiumUser={premiumUser}
                   />
                 ) : (

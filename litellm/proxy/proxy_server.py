@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
     Any,
+    Dict,
     List,
     Literal,
     Optional,
@@ -41,6 +42,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.common_utils.callback_utils import normalize_callback_names
+from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -59,6 +61,12 @@ if TYPE_CHECKING:
 else:
     Span = Any
     OpenTelemetry = Any
+
+REALTIME_REQUEST_SCOPE_TEMPLATE: Dict[str, Any] = {
+    "type": "http",
+    "method": "POST",
+    "path": "/v1/realtime",
+}
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -131,6 +139,7 @@ def generate_feedback_box():
 
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from functools import lru_cache
 
 import litellm
 from litellm import Router
@@ -138,6 +147,7 @@ from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
+    _REALTIME_BODY_CACHE_SIZE,
     APSCHEDULER_COALESCE,
     APSCHEDULER_MAX_INSTANCES,
     APSCHEDULER_MISFIRE_GRACE_TIME,
@@ -180,6 +190,9 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
+from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+    router as anthropic_skills_router,
+)
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     get_team_object,
@@ -349,6 +362,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
+from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
@@ -380,6 +394,7 @@ from litellm.proxy.utils import (
     get_server_root_path,
     handle_exception_on_proxy,
     hash_token,
+    model_dump_with_preserved_fields,
     update_spend,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
@@ -1996,6 +2011,16 @@ class ProxyConfig:
             )
             print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
 
+            # Handle os.environ/ variables in litellm_params
+            litellm_params = search_tool.get("litellm_params", {})
+            if litellm_params:
+                for k, v in litellm_params.items():
+                    if isinstance(v, str) and v.startswith("os.environ/"):
+                        _v = v.replace("os.environ/", "")
+                        v = get_secret(_v)
+                        litellm_params[k] = v
+                search_tool["litellm_params"] = litellm_params
+
             # Cast to SearchToolTypedDict for type safety
             try:
                 search_tool_typed: SearchToolTypedDict = SearchToolTypedDict(**search_tool)  # type: ignore
@@ -2692,7 +2717,10 @@ class ProxyConfig:
                     AWSSecretsManagerV2,
                 )
 
-                AWSSecretsManagerV2.load_aws_secret_manager(use_aws_secret_manager=True)
+                AWSSecretsManagerV2.load_aws_secret_manager(
+                    use_aws_secret_manager=True,
+                    key_management_settings=litellm._key_management_settings,
+                )
             elif key_management_system == KeyManagementSystem.AWS_KMS.value:
                 load_aws_kms(use_aws_kms=True)
             elif (
@@ -3582,6 +3610,7 @@ class ProxyConfig:
             verbose_proxy_logger.exception(
                 f"Error in _check_and_reload_model_cost_map: {str(e)}"
             )
+
     def _get_prompt_spec_for_db_prompt(self, db_prompt):
         """
         Convert a DB prompt object to a PromptSpec object.
@@ -3595,7 +3624,7 @@ class ProxyConfig:
             The PromptSpec object
         """
         from litellm.proxy.prompts.prompt_endpoints import create_versioned_prompt_spec
-        
+
         return create_versioned_prompt_spec(db_prompt=db_prompt)
 
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
@@ -3743,6 +3772,7 @@ class ProxyConfig:
     async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
         """
         Initialize search tools from database into the router on startup.
+        Only updates router if there are tools in the database, otherwise preserves config-loaded tools.
         """
         global llm_router
 
@@ -3760,17 +3790,24 @@ class ProxyConfig:
                 f"Loading {len(search_tools)} search tool(s) from database into router"
             )
 
-            if llm_router is not None:
-                # Add search tools to the router
-                await SearchAPIRouter.update_router_search_tools(
-                    router_instance=llm_router, search_tools=search_tools
-                )
-                verbose_proxy_logger.info(
-                    f"Successfully loaded {len(search_tools)} search tool(s) into router"
-                )
+            # Only update router if there are tools in the database
+            # This prevents overwriting config-loaded tools with an empty list
+            if len(search_tools) > 0:
+                if llm_router is not None:
+                    # Add search tools to the router
+                    await SearchAPIRouter.update_router_search_tools(
+                        router_instance=llm_router, search_tools=search_tools
+                    )
+                    verbose_proxy_logger.info(
+                        f"Successfully loaded {len(search_tools)} search tool(s) into router"
+                    )
+                else:
+                    verbose_proxy_logger.debug(
+                        "Router not initialized yet, search tools will be added when router is created"
+                    )
             else:
                 verbose_proxy_logger.debug(
-                    "Router not initialized yet, search tools will be added when router is created"
+                    "No search tools found in database, keeping config-loaded search tools (if any)"
                 )
 
         except Exception as e:
@@ -4843,7 +4880,7 @@ async def chat_completion(  # noqa: PLR0915
             version=version,
         )
         if isinstance(result, BaseModel):
-            return result.model_dump(exclude_none=True, exclude_unset=True)
+            return model_dump_with_preserved_fields(result, exclude_unset=True)
         else:
             return result
     except RejectedRequestError as e:
@@ -5447,6 +5484,7 @@ async def audio_transcriptions(
         file_object = io.BytesIO(file_content)
         file_object.name = file.filename
         data["file"] = file_object
+
         try:
             ### CALL HOOKS ### - modify incoming data / reject request before calling the model
             data = await proxy_logging_obj.pre_call_hook(
@@ -5464,7 +5502,7 @@ async def audio_transcriptions(
             )
             response = await llm_call
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise e
         finally:
             file_object.close()  # close the file read in by io library
 
@@ -5571,12 +5609,25 @@ async def vertex_ai_live_passthrough_endpoint(
 #                          /v1/realtime Endpoints
 
 ######################################################################
-from litellm import _arealtime
+
+
+@lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
+def _realtime_query_params_template(
+    model: str, intent: Optional[str]
+) -> Tuple[Tuple[str, str], ...]:
+    """
+    Build a hashable representation of the realtime query params so we can cache
+    the repetitive model/intent combinations.
+    """
+    params: List[Tuple[str, str]] = [("model", model)]
+    if intent is not None:
+        params.append(("intent", intent))
+    return tuple(params)
 
 
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
-async def websocket_endpoint(
+async def realtime_websocket_endpoint(
     websocket: WebSocket,
     model: str,
     intent: str = fastapi.Query(
@@ -5584,14 +5635,13 @@ async def websocket_endpoint(
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
-    import websockets
 
     await websocket.accept()
 
     # Only use explicit parameters, not all query params
-    query_params: RealtimeQueryParams = {"model": model}
-    if intent is not None:
-        query_params["intent"] = intent
+    query_params = cast(
+        RealtimeQueryParams, dict(_realtime_query_params_template(model, intent))
+    )
 
     data = {
         "model": model,
@@ -5599,23 +5649,18 @@ async def websocket_endpoint(
         "query_params": query_params,  # Only explicit params
     }
 
-    headers = dict(websocket.headers.items())  # Convert headers to dict first
+    # Use raw ASGI headers (already lowercase bytes) to avoid extra work
+    headers_list = list(websocket.scope.get("headers") or [])
 
-    request = Request(
-        scope={
-            "type": "http",
-            "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
-            "method": "POST",
-            "path": "/v1/realtime",
-        }
-    )
+    scope = REALTIME_REQUEST_SCOPE_TEMPLATE.copy()
+    scope["headers"] = headers_list
+
+    request = Request(scope=scope)
 
     request._url = websocket.url
 
     async def return_body():
-        return_string = f'{{"model": "{model}"}}'
-        # return string as bytes
-        return return_string.encode()
+        return _realtime_request_body(model)
 
     request.body = return_body  # type: ignore
 
@@ -7066,7 +7111,9 @@ async def model_info_v2(
         _model["model_info"] = model_info
         # don't return the api key / vertex credentials
         # don't return the llm credentials
-        _model = remove_sensitive_info_from_deployment(_model)
+        _model = remove_sensitive_info_from_deployment(
+            _model, excluded_keys={"litellm_credential_name"}
+        )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
@@ -7533,7 +7580,9 @@ def _get_proxy_model_info(model: dict) -> dict:
             model_info[k] = v
     model["model_info"] = model_info
     # don't return the llm credentials
-    model = remove_sensitive_info_from_deployment(deployment_dict=model)
+    model = remove_sensitive_info_from_deployment(
+        deployment_dict=model, excluded_keys={"litellm_credential_name"}
+    )
 
     return model
 
@@ -7601,7 +7650,8 @@ async def model_info_v1(  # noqa: PLR0915
         )
         _deployment_info_dict = _deployment_info.model_dump()
         _deployment_info_dict = remove_sensitive_info_from_deployment(
-            deployment_dict=_deployment_info_dict
+            deployment_dict=_deployment_info_dict,
+            excluded_keys={"litellm_credential_name"},
         )
         return {"data": _deployment_info_dict}
 
@@ -10108,6 +10158,7 @@ app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
+app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)
 app.include_router(search_router)
@@ -10119,6 +10170,7 @@ app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
 app.include_router(anthropic_router)
+app.include_router(anthropic_skills_router)
 app.include_router(google_router)
 app.include_router(langfuse_router)
 app.include_router(pass_through_router)

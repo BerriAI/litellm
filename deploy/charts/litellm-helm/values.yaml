@@ -3,6 +3,7 @@
 # Declare variables to be passed into your templates.
 
 replicaCount: 1
+# numWorkers: 2
 
 image:
   # Use "ghcr.io/berriai/litellm-database" for optimized image with database
@@ -32,6 +33,15 @@ deploymentAnnotations: {}
 # annotations for litellm pods
 podAnnotations: {}
 podLabels: {}
+
+terminationGracePeriodSeconds: 90
+topologySpreadConstraints: []
+  # - maxSkew: 1
+  #   topologyKey: kubernetes.io/hostname
+  #   whenUnsatisfiable: DoNotSchedule
+  #   labelSelector:
+  #     matchLabels:
+  #       app: litellm
 
 # At the time of writing, the litellm docker image requires write access to the
 #  filesystem on startup so that prisma can install some dependencies.
@@ -248,3 +258,19 @@ pdb:
   maxUnavailable: null   # e.g. 1 or "20%"
   annotations: {}
   labels: {}
+
+serviceMonitor:
+  enabled: false
+  labels: {}
+    # test: test
+  annotations: {}
+    # kubernetes.io/test: test
+  interval: 15s
+  scrapeTimeout: 10s
+  relabelings: []
+  # - targetLabel: __meta_kubernetes_pod_node_name
+  #   replacement: $1
+  #   action: replace
+  namespaceSelector:
+    matchNames: []
+    # - test-namespace
