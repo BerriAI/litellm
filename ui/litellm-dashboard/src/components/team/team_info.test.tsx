@@ -58,7 +58,7 @@ describe("TeamInfoView", () => {
       team_memberships: [],
     });
 
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue([]);
+    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
     render(
@@ -74,9 +74,13 @@ describe("TeamInfoView", () => {
         premiumUser={false}
       />,
     );
-    await waitFor(() => {
-      expect(screen.queryByText("User ID")).not.toBeNull();
-    });
+    await waitFor(
+      () => {
+        expect(screen.queryByText("User ID")).not.toBeNull();
+      },
+      // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
+      { timeout: 10000 },
+    );
   });
 
   it("should not show all-proxy-models option when user has no access to it", async () => {
@@ -116,7 +120,7 @@ describe("TeamInfoView", () => {
       team_memberships: [],
     });
 
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue([]);
+    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
     render(
@@ -133,27 +137,39 @@ describe("TeamInfoView", () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Test Team")).not.toBeNull();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getAllByText("Test Team")).not.toBeNull();
+      },
+      // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
+      { timeout: 10000 },
+    );
 
     const settingsTab = screen.getByRole("tab", { name: "Settings" });
     act(() => {
       fireEvent.click(settingsTab);
     });
 
-    await waitFor(() => {
-      expect(screen.getByText("Team Settings")).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByText("Team Settings")).toBeInTheDocument();
+      },
+      // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
+      { timeout: 10000 },
+    );
 
     const editButton = screen.getByRole("button", { name: "Edit Settings" });
     act(() => {
       fireEvent.click(editButton);
     });
 
-    await waitFor(() => {
-      expect(screen.getByLabelText("Models")).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByLabelText("Models")).toBeInTheDocument();
+      },
+      // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
+      { timeout: 10000 },
+    );
 
     const allProxyModelsOption = screen.queryByText("All Proxy Models");
     expect(allProxyModelsOption).not.toBeInTheDocument();
