@@ -15,6 +15,11 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
+from litellm.types.rag import (
+    RAGIngestOptions,
+    OpenAIVectorStoreOptions,
+    BedrockVectorStoreOptions,
+)
 
 
 class BaseRAGTest(ABC):
@@ -27,15 +32,22 @@ class BaseRAGTest(ABC):
     """
 
     @abstractmethod
-    def get_base_ingest_options(self) -> Dict[str, Any]:
+    def get_base_ingest_options(self) -> RAGIngestOptions:
         """
         Must return the base ingest options for the provider.
 
         Example for OpenAI:
             return {
-                "vector_store": {
-                    "custom_llm_provider": "openai",
-                }
+                "vector_store": OpenAIVectorStoreOptions(
+                    custom_llm_provider="openai",
+                )
+            }
+
+        Example for Bedrock:
+            return {
+                "vector_store": BedrockVectorStoreOptions(
+                    custom_llm_provider="bedrock",
+                )
             }
         """
         pass

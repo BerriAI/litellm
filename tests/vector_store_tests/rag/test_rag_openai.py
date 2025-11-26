@@ -11,18 +11,19 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
+from litellm.types.rag import RAGIngestOptions, OpenAIVectorStoreOptions
 from tests.vector_store_tests.rag.base_rag_tests import BaseRAGTest
 
 
 class TestRAGOpenAI(BaseRAGTest):
     """Test RAG Ingest with OpenAI provider."""
 
-    def get_base_ingest_options(self) -> Dict[str, Any]:
+    def get_base_ingest_options(self) -> RAGIngestOptions:
         """Return OpenAI-specific ingest options."""
         return {
-            "vector_store": {
-                "custom_llm_provider": "openai",
-            },
+            "vector_store": OpenAIVectorStoreOptions(
+                custom_llm_provider="openai",
+            ),
         }
 
     async def query_vector_store(

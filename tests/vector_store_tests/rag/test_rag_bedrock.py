@@ -5,10 +5,9 @@ Requires environment variables:
 - AWS_ACCESS_KEY_ID
 - AWS_SECRET_ACCESS_KEY
 - AWS_REGION_NAME (optional, defaults to us-west-2)
+
+Optional (for using existing KB instead of auto-creating):
 - BEDROCK_KNOWLEDGE_BASE_ID
-- BEDROCK_DATA_SOURCE_ID
-- BEDROCK_S3_BUCKET
-- BEDROCK_S3_PREFIX (optional, defaults to data/)
 """
 
 import os
@@ -20,6 +19,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
+from litellm.types.rag import RAGIngestOptions, BedrockVectorStoreOptions
 from tests.vector_store_tests.rag.base_rag_tests import BaseRAGTest
 
 
@@ -29,28 +29,28 @@ class TestRAGBedrock(BaseRAGTest):
     @pytest.fixture(autouse=True)
     def check_env_vars(self):
         """Check required environment variables before each test."""
-        knowledge_base_id = os.environ.get("BEDROCK_KNOWLEDGE_BASE_ID")
-        data_source_id = os.environ.get("BEDROCK_DATA_SOURCE_ID")
-        s3_bucket = os.environ.get("BEDROCK_S3_BUCKET")
+        aws_key = os.environ.get("AWS_ACCESS_KEY_ID")
+        aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
 
-        if not all([knowledge_base_id, data_source_id, s3_bucket]):
-            pytest.skip(
-                "Skipping Bedrock test: BEDROCK_KNOWLEDGE_BASE_ID, "
-                "BEDROCK_DATA_SOURCE_ID, and BEDROCK_S3_BUCKET required"
-            )
+        if not aws_key or not aws_secret:
+            pytest.skip("Skipping Bedrock test: AWS credentials required")
 
-    def get_base_ingest_options(self) -> Dict[str, Any]:
-        """Return Bedrock-specific ingest options."""
+    def get_base_ingest_options(self) -> RAGIngestOptions:
+        """
+        Return Bedrock-specific ingest options.
+
+        Uses unified interface - no vector_store_id means auto-create KB.
+        If BEDROCK_KNOWLEDGE_BASE_ID is set, uses existing KB.
+        """
+        # Use existing KB if provided, otherwise auto-create
+        existing_kb_id = os.environ.get("BEDROCK_KNOWLEDGE_BASE_ID")
+
         return {
-            "vector_store": {
-                "custom_llm_provider": "bedrock",
-                "knowledge_base_id": os.environ.get("BEDROCK_KNOWLEDGE_BASE_ID"),
-                "data_source_id": os.environ.get("BEDROCK_DATA_SOURCE_ID"),
-                "s3_bucket": os.environ.get("BEDROCK_S3_BUCKET"),
-                "s3_prefix": os.environ.get("BEDROCK_S3_PREFIX", "data/"),
-                "wait_for_ingestion": True,
-                "ingestion_timeout": 120,
-            },
+            "vector_store": BedrockVectorStoreOptions(
+                custom_llm_provider="bedrock",
+                vector_store_id=existing_kb_id,  # None = auto-create
+                # wait_for_ingestion defaults to False - returns immediately
+            ),
         }
 
     async def query_vector_store(
