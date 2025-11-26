@@ -118,6 +118,21 @@ class DBSpendUpdateWriter:
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):
                 payload["endTime"] = payload["endTime"].isoformat()
+            
+            # Override organization_id and team_id from parameters if provided
+            # This ensures the correct values are set even if metadata is missing them
+            # Convert empty strings to None for optional fields to avoid database issues
+            if org_id is not None and org_id != "":
+                payload["organization_id"] = org_id
+            elif payload.get("organization_id") == "":
+                # Convert empty string to None for optional field
+                payload["organization_id"] = None
+            
+            if team_id is not None and team_id != "":
+                payload["team_id"] = team_id
+            elif payload.get("team_id") == "":
+                # Convert empty string to None for optional field
+                payload["team_id"] = None
 
             asyncio.create_task(
                 self._update_user_db(
