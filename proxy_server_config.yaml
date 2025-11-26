@@ -109,7 +109,6 @@ model_list:
       model: azure/gpt-realtime-20250828-standard
       api_version: 2025-04-01-preview
 
-  
 
   # provider specific wildcard routing
   - model_name: "anthropic/*"
@@ -190,8 +189,8 @@ finetune_settings:
 # for /files endpoints
 files_settings:
   - custom_llm_provider: azure
-    api_base: my-azure-endpoint.openai.azure.com
-    api_key: my-azure-api-key
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
     api_version: "2023-03-15-preview"
   - custom_llm_provider: openai
     api_key: os.environ/OPENAI_API_KEY
@@ -205,7 +204,7 @@ router_settings:
   model_group_alias: {"my-special-fake-model-alias-name": "fake-openai-endpoint-3"} 
 
 general_settings: 
-  master_key: sk-PASS # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
+  master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
   store_model_in_db: True
   proxy_budget_rescheduler_min_time: 60
   proxy_budget_rescheduler_max_time: 64
@@ -214,7 +213,7 @@ general_settings:
   # background_health_checks: true
   # use_shared_health_check: true
   # health_check_interval: 30
-  database_url: "postgresql://postgres:3flyV11cQLoo3EJZb9aAf@100.64.1.1/litellm?ssl=disable" # [OPTIONAL] use for token-based auth to proxy
+  # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
 
   pass_through_endpoints:
     - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
