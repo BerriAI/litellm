@@ -114,9 +114,6 @@ class GenericAPILogger(CustomBatchLogger):
         Raises:
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
-        from litellm.proxy.utils import _premium_user_check
-
-        _premium_user_check()
 
         try:
             verbose_logger.debug(
@@ -153,10 +150,6 @@ class GenericAPILogger(CustomBatchLogger):
         - Creates a StandardLoggingPayload
         - Adds to batch queue
         """
-        from litellm.proxy.utils import _premium_user_check
-
-        _premium_user_check()
-
         try:
             verbose_logger.debug(
                 "Generic API Logger - Enters logging function for model %s", kwargs

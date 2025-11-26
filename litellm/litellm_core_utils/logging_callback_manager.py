@@ -139,8 +139,9 @@ class LoggingCallbackManager:
             return False
         return True
 
+    @staticmethod
     def _add_custom_callback_generic_api_str(
-        self, callback: str
+        callback: str,
     ) -> Union[GenericAPILogger, str]:
         """
         litellm_settings:
@@ -180,17 +181,21 @@ class LoggingCallbackManager:
         # Check if the callback is a custom callback
 
         if isinstance(callback, str):
-            callback = self._add_custom_callback_generic_api_str(callback)
+            callback = LoggingCallbackManager._add_custom_callback_generic_api_str(
+                callback
+            )
 
         if isinstance(callback, str):
             self._add_string_callback_to_list(
                 callback=callback, parent_list=parent_list
             )
         elif isinstance(callback, CustomLogger):
+
             self._add_custom_logger_to_list(
                 custom_logger=callback,
                 parent_list=parent_list,
             )
+
         elif callable(callback):
             self._add_callback_function_to_list(
                 callback=callback, parent_list=parent_list
