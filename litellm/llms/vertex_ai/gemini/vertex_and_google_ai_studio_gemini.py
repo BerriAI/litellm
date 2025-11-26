@@ -1092,7 +1092,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 thinking_blocks.append(
                     ChatCompletionThinkingBlock(
                         type="thinking",
-                        thinking=json.dumps(part_copy),
+                        thinking=json.dumps(part_copy, ensure_ascii=False),
                         signature=part["thoughtSignature"],
                     )
                 )

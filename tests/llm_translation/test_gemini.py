@@ -1223,3 +1223,57 @@ def test_gemini_function_args_preserve_unicode():
     assert parsed_args["recipient"] == "José"
     assert "\\u" not in arguments_str
     assert "José" in arguments_str
+
+
+def test_gemini_thinking_blocks_preserve_unicode():
+    """
+    Test that Gemini thinking blocks preserve non-ASCII characters.
+    Follow-up to Issue #16533: Same fix applied to thinking blocks.
+
+    Before fix: "や" becomes "\u3084"
+    After fix: "や" stays as "や"
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    # Test Japanese characters in thinking block
+    parts = [
+        {
+            "text": "これは日本語の思考です",  # Japanese thinking content
+            "thought": True,
+            "thoughtSignature": "test_signature_123"
+        }
+    ]
+
+    config = VertexGeminiConfig()
+    thinking_blocks = config._extract_thinking_blocks_from_parts(parts)
+
+    assert len(thinking_blocks) == 1
+    thinking_str = thinking_blocks[0]["thinking"]
+
+    # Verify no Unicode escape sequences in raw string
+    assert "\\u" not in thinking_str, "Should not contain Unicode escape sequences"
+    assert "これは日本語の思考です" in thinking_str, "Original Japanese characters should be in the string"
+
+    # Verify it's valid JSON and characters are preserved
+    parsed = json.loads(thinking_str)
+    assert parsed["text"] == "これは日本語の思考です"
+
+    # Test Spanish characters in thinking block
+    parts_spanish = [
+        {
+            "text": "¡Esto es un texto en español!",
+            "thought": True,
+            "thoughtSignature": "test_signature_456"
+        }
+    ]
+
+    thinking_blocks = config._extract_thinking_blocks_from_parts(parts_spanish)
+
+    assert len(thinking_blocks) == 1
+    thinking_str = thinking_blocks[0]["thinking"]
+
+    assert "\\u" not in thinking_str, "Should not contain Unicode escape sequences"
+    assert "¡Esto es un texto en español!" in thinking_str
+
+    parsed = json.loads(thinking_str)
+    assert parsed["text"] == "¡Esto es un texto en español!"
