@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import json
 import os
 from typing import TYPE_CHECKING, Any, Union
 
@@ -56,9 +55,7 @@ class WeaveOtelLogger(OpenTelemetry):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _maybe_log_raw_request(
-        self, kwargs, response_obj, start_time, end_time, parent_span
-    ):
+    def _maybe_log_raw_request(self, kwargs, response_obj, start_time, end_time, parent_span):
         """
         Override to skip creating the raw_gen_ai_request child span.
 
@@ -77,9 +74,7 @@ class WeaveOtelLogger(OpenTelemetry):
         _utils.set_attributes(span, kwargs, response_obj, WeaveLLMObsOTELAttributes)
 
         # Set Weave-specific attributes
-        WeaveOtelLogger._set_weave_specific_attributes(
-            span=span, kwargs=kwargs, response_obj=response_obj
-        )
+        WeaveOtelLogger._set_weave_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
 
     @staticmethod
     def _extract_weave_metadata(kwargs: dict) -> dict:
@@ -178,24 +173,24 @@ class WeaveOtelLogger(OpenTelemetry):
         # === Weave "model" attribute ===
         # Maps from: gen_ai.response.model, llm.model_name, ai.model.id
         if model:
-            safe_set_attribute(span, "llm.model_name", model)
+            safe_set_attribute(span, WeaveSpanAttributes.LLM_MODEL_NAME.value, model)
             safe_set_attribute(span, "gen_ai.response.model", model)
 
         # === Weave "provider" attribute ===
         # Maps from: llm.provider, ai.model.provider
         if custom_llm_provider:
-            safe_set_attribute(span, "llm.provider", custom_llm_provider)
+            safe_set_attribute(span, WeaveSpanAttributes.LLM_PROVIDER.value, custom_llm_provider)
 
         # === Weave "kind" attribute ===
         # Maps from: openinference.span.kind, weave.span.kind, traceloop.span.kind
-        safe_set_attribute(span, "openinference.span.kind", "LLM")
+        safe_set_attribute(span, WeaveSpanAttributes.OPENINFERENCE_SPAN_KIND.value, "LLM")
 
         # === Weave "model_parameters" attribute ===
         # Maps from: gen_ai.request, llm.invocation_parameters
         if optional_params:
             # Filter out sensitive fields
             params_to_log = {k: v for k, v in optional_params.items() if k != "secret_fields"}
-            safe_set_attribute(span, "llm.invocation_parameters", safe_dumps(params_to_log))
+            safe_set_attribute(span, WeaveSpanAttributes.LLM_INVOCATION_PARAMETERS.value, safe_dumps(params_to_log))
 
         # === Weave "outputs" attribute ===
         # Maps from: output.value - should be the full response object, not just content
@@ -203,10 +198,10 @@ class WeaveOtelLogger(OpenTelemetry):
         if response_obj:
             if hasattr(response_obj, "model_dump"):
                 # Pydantic model - serialize to dict then JSON
-                safe_set_attribute(span, "output.value", safe_dumps(response_obj.model_dump()))
+                safe_set_attribute(span, WeaveSpanAttributes.OUTPUT_VALUE.value, safe_dumps(response_obj.model_dump()))
             elif hasattr(response_obj, "get"):
                 # Dict-like object
-                safe_set_attribute(span, "output.value", safe_dumps(response_obj))
+                safe_set_attribute(span, WeaveSpanAttributes.OUTPUT_VALUE.value, safe_dumps(response_obj))
 
         # === Weave display_name ===
         # wandb.display_name controls the UI display name
@@ -217,14 +212,14 @@ class WeaveOtelLogger(OpenTelemetry):
             else:
                 display_name = model
         if display_name:
-            safe_set_attribute(span, "wandb.display_name", display_name)
+            safe_set_attribute(span, WeaveSpanAttributes.DISPLAY_NAME.value, display_name)
 
         # Set token usage
         WeaveOtelLogger._set_token_usage(span=span, response_obj=response_obj)
 
         # Set response ID if available
         if response_obj and hasattr(response_obj, "get") and response_obj.get("id"):
-            safe_set_attribute(span, "gen_ai.response.id", response_obj.get("id"))
+            safe_set_attribute(span, WeaveSpanAttributes.GENERATION_ID.value, response_obj.get("id"))
 
     @staticmethod
     def _get_weave_host() -> str | None:
@@ -257,14 +252,11 @@ class WeaveOtelLogger(OpenTelemetry):
         project_id = os.environ.get("WEAVE_PROJECT_ID", None)
 
         if not api_key:
-            raise ValueError(
-                "WANDB_API_KEY must be set for Weave OpenTelemetry integration."
-            )
+            raise ValueError("WANDB_API_KEY must be set for Weave OpenTelemetry integration.")
 
         if not project_id:
             raise ValueError(
-                "WEAVE_PROJECT_ID must be set for Weave OpenTelemetry integration. "
-                "Format: <entity>/<project_name>"
+                "WEAVE_PROJECT_ID must be set for Weave OpenTelemetry integration. Format: <entity>/<project_name>"
             )
 
         # Determine endpoint
@@ -322,9 +314,7 @@ class WeaveOtelLogger(OpenTelemetry):
         dynamic_headers = {}
 
         dynamic_wandb_api_key = standard_callback_dynamic_params.get("wandb_api_key")
-        dynamic_weave_project_id = standard_callback_dynamic_params.get(
-            "weave_project_id"
-        )
+        dynamic_weave_project_id = standard_callback_dynamic_params.get("weave_project_id")
 
         if dynamic_wandb_api_key:
             auth_header = WeaveOtelLogger._get_weave_authorization_header(
