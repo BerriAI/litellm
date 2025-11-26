@@ -1,9 +1,8 @@
+import { KeyIcon, TrashIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
-import { Button, Badge, Icon } from "@tremor/react";
+import { Badge, Button, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
-import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { ModelData } from "../../model_dashboard/types";
-import { TrashIcon, KeyIcon } from "@heroicons/react/outline";
 import { ProviderLogo } from "./ProviderLogo";
 
 export const columns = (

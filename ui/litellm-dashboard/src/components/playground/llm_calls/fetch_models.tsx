@@ -1,6 +1,7 @@
 // fetch_models.ts
 
-import { modelHubCall } from "../../networking";
+import { useModelHub } from "@/app/(dashboard)/hooks/models/useModels";
+import { useMemo } from "react";
 
 export interface ModelGroup {
   model_group: string;
@@ -8,26 +9,34 @@ export interface ModelGroup {
 }
 
 /**
- * Fetches available models using modelHubCall and formats them for the selection dropdown.
+ * Hook that fetches available models using modelHubCall and formats them for the selection dropdown.
  */
-export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
-  try {
-    const fetchedModels = await modelHubCall(accessToken);
-    console.log("model_info:", fetchedModels);
+export const useAvailableModels = (
+  accessToken: string | null,
+): {
+  models: ModelGroup[];
+  isLoading: boolean;
+  error: Error | null;
+} => {
+  const { data: fetchedModels, isLoading, error } = useModelHub(accessToken);
 
-    if (fetchedModels?.data.length > 0) {
-      const models: ModelGroup[] = fetchedModels.data.map((item: any) => ({
-        model_group: item.model_group, // Display the model_group to the user
-        mode: item?.mode, // Save the mode for auto-selection of endpoint type
-      }));
-
-      // Sort models alphabetically by label
-      models.sort((a, b) => a.model_group.localeCompare(b.model_group));
-      return models;
+  const models = useMemo(() => {
+    if (!fetchedModels?.data || fetchedModels.data.length === 0) {
+      return [];
     }
-    return [];
-  } catch (error) {
-    console.error("Error fetching model info:", error);
-    throw error;
-  }
+
+    const formattedModels: ModelGroup[] = fetchedModels.data.map((item: any) => ({
+      model_group: item.model_group,
+      mode: item?.mode,
+    }));
+
+    formattedModels.sort((a, b) => a.model_group.localeCompare(b.model_group));
+    return formattedModels;
+  }, [fetchedModels]);
+
+  return {
+    models,
+    isLoading,
+    error: error as Error | null,
+  };
 };
