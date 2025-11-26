@@ -16,12 +16,14 @@ import base64
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
-import httpx
-
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid4
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.rag.text_splitters import RecursiveCharacterTextSplitter
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
 
@@ -86,12 +88,12 @@ class BaseRAGIngestion(ABC):
             return filename, file_content, content_type, None
 
         if file_url:
-            async with httpx.AsyncClient() as http_client:
-                response = await http_client.get(file_url)
-                response.raise_for_status()
-                file_content = response.content
-                filename = file_url.split("/")[-1] or "document"
-                content_type = response.headers.get("content-type", "application/octet-stream")
+            http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.RAG)
+            response = await http_client.get(file_url)
+            response.raise_for_status()
+            file_content = response.content
+            filename = file_url.split("/")[-1] or "document"
+            content_type = response.headers.get("content-type", "application/octet-stream")
             return filename, file_content, content_type, None
 
         if file_id:
