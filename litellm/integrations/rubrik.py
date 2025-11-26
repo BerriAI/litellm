@@ -101,7 +101,7 @@ class RubrikLogger(CustomBatchLogger):
 
             response = await self.async_httpx_client.post(
                 url=self.webhook_endpoint, 
-                content={"data": data},
+                json={"data": data},
                 headers=headers, 
             ) 
             response.raise_for_status()
