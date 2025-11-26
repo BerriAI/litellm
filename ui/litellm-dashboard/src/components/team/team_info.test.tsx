@@ -137,41 +137,30 @@ describe("TeamInfoView", () => {
       />,
     );
 
-    await waitFor(
-      () => {
-        expect(screen.getAllByText("Test Team")).not.toBeNull();
-      },
-      // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
-      { timeout: 10000 },
-    );
+    await waitFor(() => {
+      expect(screen.getAllByText("Test Team")).not.toBeNull();
+    });
 
     const settingsTab = screen.getByRole("tab", { name: "Settings" });
     act(() => {
       fireEvent.click(settingsTab);
     });
 
-    await waitFor(
-      () => {
-        expect(screen.getByText("Team Settings")).toBeInTheDocument();
-      },
-      // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
-      { timeout: 10000 },
-    );
+    await waitFor(() => {
+      expect(screen.getByText("Team Settings")).toBeInTheDocument();
+    });
 
     const editButton = screen.getByRole("button", { name: "Edit Settings" });
     act(() => {
       fireEvent.click(editButton);
     });
 
-    await waitFor(
-      () => {
-        expect(screen.getByLabelText("Models")).toBeInTheDocument();
-      },
-      // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
-      { timeout: 10000 },
-    );
+    await waitFor(() => {
+      expect(screen.getByLabelText("Models")).toBeInTheDocument();
+    });
 
     const allProxyModelsOption = screen.queryByText("All Proxy Models");
     expect(allProxyModelsOption).not.toBeInTheDocument();
-  });
+  }, // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
+  10000);
 });
