@@ -20,6 +20,9 @@ from typing import (
     Literal,
     get_args,
     TYPE_CHECKING,
+    Tuple,
+    overload,
+    Type,
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
@@ -530,6 +533,7 @@ featherless_ai_models: Set = set()
 palm_models: Set = set()
 groq_models: Set = set()
 azure_models: Set = set()
+azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
@@ -734,6 +738,8 @@ def add_known_models():
             groq_models.add(key)
         elif value.get("litellm_provider") == "azure":
             azure_models.add(key)
+        elif value.get("litellm_provider") == "azure_anthropic":
+            azure_anthropic_models.add(key)
         elif value.get("litellm_provider") == "anyscale":
             anyscale_models.add(key)
         elif value.get("litellm_provider") == "cerebras":
@@ -873,6 +879,7 @@ model_list = list(
     | palm_models
     | groq_models
     | azure_models
+    | azure_anthropic_models
     | anyscale_models
     | cerebras_models
     | galadriel_models
@@ -962,6 +969,7 @@ models_by_provider: dict = {
     "palm": palm_models,
     "groq": groq_models,
     "azure": azure_models | azure_text_models,
+    "azure_anthropic": azure_anthropic_models,
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
@@ -1064,6 +1072,7 @@ from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
+from .llms.azure.anthropic.transformation import AzureAnthropicConfig
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -1174,6 +1183,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation impor
 )
 from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+    AmazonBedrockOpenAIConfig,
 )
 
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
@@ -1299,6 +1311,9 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.watsonx.audio_transcription.transformation import (
+    IBMWatsonXAudioTranscriptionConfig,
+)
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
@@ -1381,6 +1396,7 @@ from .skills.main import (
 )
 from .containers.main import *
 from .ocr.main import *
+from .rag.main import *
 from .search.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
@@ -1415,6 +1431,9 @@ from .vector_stores.vector_store_registry import (
 
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
+
+### RAG ###
+from . import rag
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
@@ -1456,8 +1475,7 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
     global_gitlab_config = config
 
 
-# Lazy import for cost_calculator functions to avoid loading the module at import time
-# This significantly reduces memory usage when importing litellm
+# Lazy loading system for heavy modules to reduce initial import time and memory usage
 def _lazy_import_cost_calculator(name: str) -> Any:
     """Lazy import for cost_calculator functions."""
     from .cost_calculator import (
@@ -1466,49 +1484,60 @@ def _lazy_import_cost_calculator(name: str) -> Any:
         response_cost_calculator as _response_cost_calculator,
     )
     
-    # Map names to imported functions
     _cost_functions = {
         "completion_cost": _completion_cost,
         "cost_per_token": _cost_per_token,
         "response_cost_calculator": _response_cost_calculator,
     }
     
-    # Cache the imported function in the module namespace
     func = _cost_functions[name]
     globals()[name] = func
-    
     return func
 
 
-# Lazy import for litellm_logging to avoid loading the module at import time
-# This significantly reduces memory usage when importing litellm
 def _lazy_import_litellm_logging(name: str) -> Any:
     """Lazy import for litellm_logging module."""
-    from litellm.litellm_core_utils.litellm_logging import (
-        Logging as _Logging,
-        modify_integration as _modify_integration,
-    )
-    
-    # Map names to imported objects
-    _logging_objects = {
-        "Logging": _Logging,
-        "modify_integration": _modify_integration,
-    }
-    
-    # Cache the imported object in the module namespace
-    obj = _logging_objects[name]
-    globals()[name] = obj
-    
-    return obj
+    try:
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as _Logging,
+            modify_integration as _modify_integration,
+        )
+        
+        _logging_objects = {
+            "Logging": _Logging,
+            "modify_integration": _modify_integration,
+        }
+        
+        obj = _logging_objects[name]
+        globals()[name] = obj
+        return obj
+    except Exception as e:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}. "
+            f"Lazy import failed: {e}"
+        ) from e
+
+
+_LAZY_LOAD_REGISTRY: Dict[str, Callable[[str], Any]] = {
+    "completion_cost": _lazy_import_cost_calculator,
+    "cost_per_token": _lazy_import_cost_calculator,
+    "response_cost_calculator": _lazy_import_cost_calculator,
+    "Logging": _lazy_import_litellm_logging,
+    "modify_integration": _lazy_import_litellm_logging,
+}
+
+
+if TYPE_CHECKING:
+    cost_per_token: Callable[..., Tuple[float, float]]
+    completion_cost: Callable[..., float]
+    response_cost_calculator: Any
+    modify_integration: Any
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import for cost_calculator, litellm_logging, and utils functions."""
-    if name in ("completion_cost", "response_cost_calculator", "cost_per_token"):
-        return _lazy_import_cost_calculator(name)
-    
-    if name in ("Logging", "modify_integration"):
-        return _lazy_import_litellm_logging(name)
+    """Lazy import handler for cost_calculator and litellm_logging functions."""
+    if name in _LAZY_LOAD_REGISTRY:
+        return _LAZY_LOAD_REGISTRY[name](name)
     
     # Lazy load utils functions
     _utils_names = (

@@ -1,22 +1,7 @@
 model_list:
-  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
+  - model_name: qwen-25vl-72b
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-east-1
-      custom_llm_provider: bedrock
-  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
-    litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-west-2
-      custom_llm_provider: bedrock
-  - model_name: bedrock/*
-    litellm_params:
-      model: bedrock/*
-      custom_llm_provider: bedrock
-      aws_region_name: us-west-2
-  - model_name: runwayml/*
-    litellm_params:
-      model: runwayml/*
+      model: bedrock/openai/arn:aws:bedrock:us-east-1:046319184608:imported-model/0m2lasirsp6z
 
     
 
