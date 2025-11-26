@@ -77,7 +77,8 @@
     "prismjs": ">=1.30.0",
     "webpack-dev-server": ">=5.2.1",
     "mermaid": ">=11.10.0",
-    "js-yaml": ">=4.1.1"
+    "js-yaml": ">=4.1.1",
+    "glob": ">=11.1.0"
   },
   "engines": {
     "node": ">=18.17.0",

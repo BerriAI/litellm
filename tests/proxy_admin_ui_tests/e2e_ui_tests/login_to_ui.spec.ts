@@ -26,7 +26,7 @@ test("admin login test", async ({ page }) => {
   await loginButton.click();
   const tabs = [
     "Virtual Keys",
-    "Test Key",
+    "Playground",
     "Models",
     "Usage",
     "Teams",

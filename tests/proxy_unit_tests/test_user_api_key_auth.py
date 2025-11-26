@@ -827,6 +827,10 @@ async def test_user_api_key_auth_websocket():
     mock_websocket = MagicMock(spec=WebSocket)
     mock_websocket.query_params = {"model": "some_model"}
     mock_websocket.headers = {"authorization": "Bearer some_api_key"}
+    # Mock the scope attribute that user_api_key_auth_websocket accesses
+    mock_websocket.scope = {"headers": [(b"authorization", b"Bearer some_api_key")]}
+    # Mock the url attribute
+    mock_websocket.url = URL(url="/ws")
 
     # Mock the return value of `user_api_key_auth` when it's called within the `user_api_key_auth_websocket` function
     with patch(

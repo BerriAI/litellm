@@ -74,6 +74,10 @@ Note: Reasoning cannot be turned off on Gemini 2.5 Pro models.
 For **Gemini 3+ models** (e.g., `gemini-3-pro-preview`), LiteLLM automatically maps `reasoning_effort` to the new `thinking_level` parameter instead of `thinking_budget`. The `thinking_level` parameter uses `"low"` or `"high"` values for better control over reasoning depth.
 :::
 
+:::warning Image Models
+**Gemini image models** (e.g., `gemini-3-pro-image-preview`, `gemini-2.0-flash-exp-image-generation`) do **not** support the `thinking_level` parameter. LiteLLM automatically excludes image models from receiving thinking configuration to prevent API errors.
+:::
+
 **Mapping for Gemini 2.5 and earlier models**
 
 | reasoning_effort | thinking | Notes |
@@ -1307,6 +1311,8 @@ curl --location 'http://localhost:4000/v1/chat/completions' \
 4. **Required for Context**: Thought signatures are essential for maintaining reasoning context across multi-turn conversations with function calling. Without them, the model may lose context of its previous reasoning.
 
 5. **Format**: Thought signatures are stored in `provider_specific_fields.thought_signature` of tool calls in the response, and are automatically included when you append the assistant message to your conversation history.
+
+6. **Chat Completions Clients**: With chat completions clients where you cannot control whether or not the previous assistant message is included as-is (ex langchain's ChatOpenAI), LiteLLM also preserves the thought signature by appending it to the tool call id (`call_123__thought__<thought-signature>`) and extracting it back out before sending the outbound request to Gemini. 
 
 ## JSON Mode
 

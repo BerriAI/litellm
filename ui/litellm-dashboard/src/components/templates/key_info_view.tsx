@@ -359,7 +359,7 @@ export default function KeyInfoView({
               icon={TrashIcon}
               variant="secondary"
               onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center"
+              className="flex items-center text-red-500 border-red-500 hover:text-red-700"
             >
               Delete Key
             </Button>
@@ -670,6 +670,17 @@ export default function KeyInfoView({
                             </span>
                           ))
                         : "No pass through routes specified"}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Disable Global Guardrails</Text>
+                    <Text>
+                      {currentKeyData.metadata?.disable_global_guardrails === true ? (
+                        <Badge color="yellow">Enabled - Global guardrails bypassed</Badge>
+                      ) : (
+                        <Badge color="green">Disabled - Global guardrails active</Badge>
+                      )}
                     </Text>
                   </div>
 

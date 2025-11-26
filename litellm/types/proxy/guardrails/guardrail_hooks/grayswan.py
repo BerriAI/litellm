@@ -12,7 +12,7 @@ class GraySwanGuardrailConfigModelOptionalParams(BaseModel):
 
     on_flagged_action: Optional[str] = Field(
         default="monitor",
-        description="Action when a violation is detected: 'block' rejects the call, 'monitor' logs only.",
+        description="Action when a violation is detected: 'block' rejects the call, 'monitor' logs only, 'passthrough' includes detection info in response without blocking.",
     )
     violation_threshold: Optional[float] = Field(
         default=0.5,
