@@ -9,8 +9,6 @@ from fastapi import HTTPException
 sys.path.insert(0, "../../../../../")
 
 import httpx
-from mcp import ReadResourceResult, Resource
-from mcp.types import GetPromptResult, Prompt, ResourceTemplate, TextResourceContents
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
@@ -19,6 +17,8 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
+from mcp import ReadResourceResult, Resource
+from mcp.types import GetPromptResult, Prompt, ResourceTemplate, TextResourceContents
 
 
 class TestMCPServerManager:
@@ -1005,7 +1005,7 @@ class TestMCPServerManager:
         # Case 1: add_prefix=True (default for multi-server) -> expect prefixed
         tools_prefixed = await manager._get_tools_from_server(server, add_prefix=True)
         assert len(tools_prefixed) == 1
-        assert tools_prefixed[0].name == "zapier--send_email"
+        assert tools_prefixed[0].name == "zapier-send_email"
 
         # Case 2: add_prefix=False (single-server) -> expect unprefixed
         tools_unprefixed = await manager._get_tools_from_server(

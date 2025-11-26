@@ -1,15 +1,16 @@
 """
 MCP Server Utilities
 """
-import importlib
+from typing import Tuple, Any
+
 import os
-from typing import Any, Tuple
+import importlib
 
 # Constants
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
 LITELLM_MCP_SERVER_VERSION = "1.0.0"
 LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
-MCP_TOOL_PREFIX_SEPARATOR = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "--")
+MCP_TOOL_PREFIX_SEPARATOR = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
 MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
 
 
@@ -112,7 +113,9 @@ def is_tool_name_prefixed(tool_name: str) -> bool:
     return MCP_TOOL_PREFIX_SEPARATOR in tool_name
 
 
-def validate_mcp_server_name(server_name: str, raise_http_exception: bool = False) -> None:
+def validate_mcp_server_name(
+    server_name: str, raise_http_exception: bool = False
+) -> None:
     """
     Validate that MCP server name does not contain 'MCP_TOOL_PREFIX_SEPARATOR'.
 
@@ -129,6 +132,8 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
             from fastapi import HTTPException
             from starlette import status
 
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message})
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message}
+            )
         else:
             raise Exception(error_message)

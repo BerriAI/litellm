@@ -1088,7 +1088,7 @@ async def test_call_mcp_tool_user_unauthorized_access():
         # Try to call a tool from "restricted_server" - should raise HTTPException with 403 status
         with pytest.raises(HTTPException) as exc_info:
             await call_mcp_tool(
-                name="restricted_server--send_email",
+                name="restricted_server-send_email",
                 arguments={
                     "to": "test@example.com",
                     "subject": "Test",

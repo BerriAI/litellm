@@ -1207,7 +1207,7 @@ async def test_mcp_server_manager_alias_tool_prefixing():
 
         # Verify tool is prefixed with alias
         assert len(tools) == 1
-        assert tools[0].name == "my_alias--send_email"
+        assert tools[0].name == "my_alias-send_email"
 
         # Verify mapping is updated correctly
         assert (
@@ -1215,7 +1215,7 @@ async def test_mcp_server_manager_alias_tool_prefixing():
             == "my_alias"
         )
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping["my_alias--send_email"]
+            test_manager.tool_name_to_mcp_server_name_mapping["my_alias-send_email"]
             == "my_alias"
         )
 
@@ -1267,7 +1267,7 @@ async def test_mcp_server_manager_server_name_tool_prefixing():
 
         # Verify tool is prefixed with server_name (normalized)
         assert len(tools) == 1
-        assert tools[0].name == "Test_Server--send_email"
+        assert tools[0].name == "Test_Server-send_email"
 
         # Verify mapping is updated correctly
         assert (
@@ -1275,7 +1275,7 @@ async def test_mcp_server_manager_server_name_tool_prefixing():
             == "Test Server"
         )
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping["Test_Server--send_email"]
+            test_manager.tool_name_to_mcp_server_name_mapping["Test_Server-send_email"]
             == "Test Server"
         )
 
@@ -1327,7 +1327,7 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
 
         # Verify tool is prefixed with server_id
         assert len(tools) == 1
-        assert tools[0].name == "test-server-123--send_email"
+        assert tools[0].name == "test-server-123-send_email"
 
         # Verify mapping is updated correctly
         assert (
@@ -1336,7 +1336,7 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
         )
         assert (
             test_manager.tool_name_to_mcp_server_name_mapping[
-                "test-server-123--send_email"
+                "test-server-123-send_email"
             ]
             == "test-server-123"
         )
@@ -1487,19 +1487,19 @@ def test_add_server_prefix_to_name():
 
     # Test basic prefixing
     result = add_server_prefix_to_name("send_email", "My Server")
-    assert result == "My_Server--send_email"
+    assert result == "My_Server-send_email"
 
     # Test with server name that already has underscores
     result = add_server_prefix_to_name("create_event", "my_server")
-    assert result == "my_server--create_event"
+    assert result == "my_server-create_event"
 
     # Test with empty name
     result = add_server_prefix_to_name("", "My Server")
-    assert result == "My_Server--"
+    assert result == "My_Server-"
 
     # Test with empty server name
     result = add_server_prefix_to_name("send_email", "")
-    assert result == "--send_email"
+    assert result == "-send_email"
 
 
 def test_get_server_auth_header_with_alias():
