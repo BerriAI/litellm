@@ -139,7 +139,7 @@ async def test_create_mcp_server_direct():
         mock_get_prisma.return_value = mock_prisma
 
         # Mock server manager
-        mock_manager.add_update_server = mock.Mock()
+        mock_manager.add_update_server = mock.AsyncMock()
         mock_manager.reload_servers_from_database = mock.AsyncMock()
 
         # Set up test data
