@@ -455,3 +455,72 @@ class TestVertexAIImageGenerationIntegration:
             assert "imagegeneration@006" in url
             assert "predict" in url
 
+    def test_gemini_get_complete_url_prefers_litellm_params_and_global_base(self):
+        """URL generation uses litellm_params overrides and global host"""
+        config = VertexAIGeminiImageGenerationConfig()
+        with patch.object(
+            config, "_resolve_vertex_project", side_effect=AssertionError("_resolve_vertex_project should not be called")
+        ), patch.object(
+            config, "_resolve_vertex_location", side_effect=AssertionError("_resolve_vertex_location should not be called")
+        ):
+            url = config.get_complete_url(
+                api_base=None,
+                api_key=None,
+                model="gemini-3-pro-image-preview",
+                optional_params={},
+                litellm_params={
+                    "vertex_project": "litellm-project",
+                    "vertex_location": "global",
+                },
+            )
+        assert url.startswith("https://aiplatform.googleapis.com")
+        assert "/projects/litellm-project/locations/global/" in url
+
+    def test_imagen_get_complete_url_prefers_litellm_params(self):
+        """Imagen URL generation should use litellm_params without env lookups"""
+        config = VertexAIImagenImageGenerationConfig()
+        with patch.object(
+            config, "_resolve_vertex_project", side_effect=AssertionError("_resolve_vertex_project should not be called")
+        ), patch.object(
+            config, "_resolve_vertex_location", side_effect=AssertionError("_resolve_vertex_location should not be called")
+        ):
+            url = config.get_complete_url(
+                api_base=None,
+                api_key=None,
+                model="imagegeneration@006",
+                optional_params={},
+                litellm_params={
+                    "vertex_project": "litellm-project",
+                    "vertex_location": "us-west1",
+                },
+            )
+        assert url.startswith("https://us-west1-aiplatform.googleapis.com")
+        assert "/projects/litellm-project/locations/us-west1/" in url
+
+    def test_gemini_validate_environment_uses_litellm_params(self):
+        """validate_environment pulls credentials and project from litellm_params"""
+        config = VertexAIGeminiImageGenerationConfig()
+        with patch.object(
+            config, "_resolve_vertex_project", side_effect=AssertionError("_resolve_vertex_project should not be called")
+        ), patch.object(
+            config, "_resolve_vertex_credentials", side_effect=AssertionError("_resolve_vertex_credentials should not be called")
+        ), patch.object(
+            config, "_ensure_access_token", return_value=("token", None)
+        ) as mock_access_token:
+            headers = config.validate_environment(
+                headers={},
+                model="gemini-3-pro-image-preview",
+                messages=[],
+                optional_params={},
+                litellm_params={
+                    "vertex_project": "litellm-project",
+                    "vertex_location": "us-central1",
+                    "vertex_credentials": "path/to/creds.json",
+                },
+            )
+        mock_access_token.assert_called_once_with(
+            credentials="path/to/creds.json",
+            project_id="litellm-project",
+            custom_llm_provider="vertex_ai",
+        )
+        assert headers.get("Authorization") == "Bearer token"

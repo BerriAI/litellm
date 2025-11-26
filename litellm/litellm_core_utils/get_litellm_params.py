@@ -118,6 +118,7 @@ def get_litellm_params(
         "bucket_name": kwargs.get("bucket_name"),
         "vertex_credentials": kwargs.get("vertex_credentials"),
         "vertex_project": kwargs.get("vertex_project"),
+        "vertex_location": kwargs.get("vertex_location"),
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
         "aws_region_name": kwargs.get("aws_region_name"),

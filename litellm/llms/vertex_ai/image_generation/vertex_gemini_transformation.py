@@ -110,6 +110,27 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             or get_secret_str("VERTEXAI_CREDENTIALS")
         )
 
+    def _get_vertex_project(self, litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.get("vertex_project")
+            or litellm_params.get("vertex_ai_project")
+            or self._resolve_vertex_project()
+        )
+
+    def _get_vertex_location(self, litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.get("vertex_location")
+            or litellm_params.get("vertex_ai_location")
+            or self._resolve_vertex_location()
+        )
+
+    def _get_vertex_credentials(self, litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.get("vertex_credentials")
+            or litellm_params.get("vertex_ai_credentials")
+            or self._resolve_vertex_credentials()
+        )
+
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -122,8 +143,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         """
         Get the complete URL for Vertex AI Gemini generateContent API
         """
-        vertex_project = self._resolve_vertex_project()
-        vertex_location = self._resolve_vertex_location()
+        litellm_params = litellm_params or {}
+        vertex_project = self._get_vertex_project(litellm_params)
+        vertex_location = self._get_vertex_location(litellm_params)
 
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
@@ -136,7 +158,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         if api_base:
             base_url = api_base.rstrip("/")
         else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+            base_url = (
+                "https://aiplatform.googleapis.com"
+                if vertex_location == "global"
+                else f"https://{vertex_location}-aiplatform.googleapis.com"
+            )
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:generateContent"
 
@@ -151,8 +177,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_base: Optional[str] = None,
     ) -> dict:
         headers = headers or {}
-        vertex_project = self._resolve_vertex_project()
-        vertex_credentials = self._resolve_vertex_credentials()
+        litellm_params = litellm_params or {}
+        vertex_project = self._get_vertex_project(litellm_params)
+        vertex_credentials = self._get_vertex_credentials(litellm_params)
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -261,4 +288,3 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         ))
         
         return model_response
-
