@@ -362,6 +362,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
+from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
@@ -1240,7 +1241,7 @@ def cost_tracking():
     global prisma_client
     if prisma_client is not None:
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
-
+        litellm.logging_callback_manager.add_litellm_async_success_callback(_ProxyDBLogger())
 
 async def update_cache(  # noqa: PLR0915
     token: Optional[str],
@@ -2009,6 +2010,16 @@ class ProxyConfig:
                 "search_provider", ""
             )
             print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
+
+            # Handle os.environ/ variables in litellm_params
+            litellm_params = search_tool.get("litellm_params", {})
+            if litellm_params:
+                for k, v in litellm_params.items():
+                    if isinstance(v, str) and v.startswith("os.environ/"):
+                        _v = v.replace("os.environ/", "")
+                        v = get_secret(_v)
+                        litellm_params[k] = v
+                search_tool["litellm_params"] = litellm_params
 
             # Cast to SearchToolTypedDict for type safety
             try:
@@ -3761,6 +3772,7 @@ class ProxyConfig:
     async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
         """
         Initialize search tools from database into the router on startup.
+        Only updates router if there are tools in the database, otherwise preserves config-loaded tools.
         """
         global llm_router
 
@@ -3778,17 +3790,24 @@ class ProxyConfig:
                 f"Loading {len(search_tools)} search tool(s) from database into router"
             )
 
-            if llm_router is not None:
-                # Add search tools to the router
-                await SearchAPIRouter.update_router_search_tools(
-                    router_instance=llm_router, search_tools=search_tools
-                )
-                verbose_proxy_logger.info(
-                    f"Successfully loaded {len(search_tools)} search tool(s) into router"
-                )
+            # Only update router if there are tools in the database
+            # This prevents overwriting config-loaded tools with an empty list
+            if len(search_tools) > 0:
+                if llm_router is not None:
+                    # Add search tools to the router
+                    await SearchAPIRouter.update_router_search_tools(
+                        router_instance=llm_router, search_tools=search_tools
+                    )
+                    verbose_proxy_logger.info(
+                        f"Successfully loaded {len(search_tools)} search tool(s) into router"
+                    )
+                else:
+                    verbose_proxy_logger.debug(
+                        "Router not initialized yet, search tools will be added when router is created"
+                    )
             else:
                 verbose_proxy_logger.debug(
-                    "Router not initialized yet, search tools will be added when router is created"
+                    "No search tools found in database, keeping config-loaded search tools (if any)"
                 )
 
         except Exception as e:
@@ -5465,6 +5484,7 @@ async def audio_transcriptions(
         file_object = io.BytesIO(file_content)
         file_object.name = file.filename
         data["file"] = file_object
+
         try:
             ### CALL HOOKS ### - modify incoming data / reject request before calling the model
             data = await proxy_logging_obj.pre_call_hook(
@@ -5482,7 +5502,7 @@ async def audio_transcriptions(
             )
             response = await llm_call
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise e
         finally:
             file_object.close()  # close the file read in by io library
 
@@ -10138,6 +10158,7 @@ app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
+app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)
 app.include_router(search_router)

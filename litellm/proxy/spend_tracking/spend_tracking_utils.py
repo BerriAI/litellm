@@ -228,7 +228,8 @@ def get_logging_payload(  # noqa: PLR0915
     if call_type in ["ocr", "aocr"]:
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
     else:
-        usage = cast(dict, response_obj).get("usage", None) or {}
+        # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
+        usage = response_obj_dict.get("usage", None) or {}
         if isinstance(usage, litellm.Usage):
             usage = dict(usage)
 

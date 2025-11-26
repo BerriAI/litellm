@@ -348,6 +348,8 @@ class LiteLLMRoutes(enum.Enum):
         # search
         "/search",
         "/v1/search",
+        "/search/{search_tool_name}",
+        "/v1/search/{search_tool_name}",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -1888,6 +1890,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     allowed_routes: Optional[List] = Field(
         None, description="Proxy API Endpoints you want users to be able to access"
+    )
+    reject_clientside_metadata_tags: Optional[bool] = Field(
+        None,
+        description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
     )
     enable_public_model_hub: bool = Field(
         default=False,

@@ -152,6 +152,7 @@ from .litellm_core_utils.prompt_templates.factory import (
 )
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from .llms.anthropic.chat import AnthropicChatCompletion
+from .llms.azure.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -253,6 +254,7 @@ openai_image_variations = OpenAIImageVariationsHandler()
 groq_chat_completions = GroqChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
+azure_anthropic_chat_completions = AzureAnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
 azure_text_completions = AzureTextCompletion()
@@ -2329,6 +2331,70 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
 
             response = anthropic_chat_completions.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                acompletion=acompletion,
+                custom_prompt_dict=litellm.custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,  # for calculating input/output tokens
+                api_key=api_key,
+                logging_obj=logging,
+                headers=headers,
+                timeout=timeout,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+            )
+            if optional_params.get("stream", False) or acompletion is True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                )
+            response = response
+        elif custom_llm_provider == "azure_anthropic":
+            # Azure Anthropic uses same API as Anthropic but with Azure authentication
+            api_key = (
+                api_key
+                or litellm.azure_key
+                or litellm.api_key
+                or get_secret("AZURE_API_KEY")
+                or get_secret("AZURE_OPENAI_API_KEY")
+            )
+            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            # Azure Foundry endpoint format: https://<resource-name>.services.ai.azure.com/anthropic/v1/messages
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("AZURE_API_BASE")
+            )
+            
+            if api_base is None:
+                raise ValueError(
+                    "Missing Azure API Base - Please set `api_base` or `AZURE_API_BASE` environment variable. "
+                    "Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
+                )
+
+            # Ensure the URL ends with /v1/messages
+            api_base = api_base.rstrip("/")
+            if api_base.endswith("/v1/messages"):
+                pass
+            elif api_base.endswith("/anthropic/v1/messages"):
+                pass
+            else:
+                if "/anthropic" in api_base:
+                    parts = api_base.split("/anthropic", 1)
+                    api_base = parts[0] + "/anthropic"
+                else:
+                    api_base = api_base + "/anthropic"
+                api_base = api_base + "/v1/messages"
+
+            response = azure_anthropic_chat_completions.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,

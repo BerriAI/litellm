@@ -6,12 +6,14 @@ import os
 import sys
 from unittest.mock import patch
 
-from litellm.caching.dual_cache import DualCache
 import pytest
+
+from litellm.caching.dual_cache import DualCache
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from fastapi import HTTPException
+
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
@@ -22,9 +24,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
 from litellm.types.utils import (
-    ModelResponse,
-    Choices,
     ChatCompletionMessageToolCall,
+    Choices,
+    ModelResponse,
 )
 
 
@@ -179,6 +181,7 @@ class TestToolPermissionGuardrail:
 
     @pytest.mark.asyncio
     async def test_async_post_call_success_hook_no_tools(self):
+        """Test that async_post_call_success_hook returns response when no tool calls are present."""
         response = ModelResponse(choices=[Choices(message={})])
         user_api_key_dict = UserAPIKeyAuth()
         data = {"guardrails": ["test-tool-permission"]}
@@ -187,10 +190,11 @@ class TestToolPermissionGuardrail:
             result = await self.guardrail.async_post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
-        assert result is None
+        assert result is response
 
     @pytest.mark.asyncio
     async def test_async_post_call_success_hook_with_allowed_tools(self):
+        """Test that async_post_call_success_hook returns response when tool calls are allowed."""
         tool_call = {
             "function": {"name": "Bash", "arguments": "{}"},
             "type": "function",
@@ -203,7 +207,7 @@ class TestToolPermissionGuardrail:
             result = await self.guardrail.async_post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
-        assert result is None
+        assert result is response
 
     @pytest.mark.asyncio
     async def test_async_post_call_success_hook_with_denied_tools_raises(self):
