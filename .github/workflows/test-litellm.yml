@@ -37,7 +37,7 @@ jobs:
     - name: Setup litellm-enterprise as local package
       run: |
         cd enterprise
-        python -m pip install -e .
+        poetry run pip install -e .
         cd ..
     - name: Run tests
       run: |

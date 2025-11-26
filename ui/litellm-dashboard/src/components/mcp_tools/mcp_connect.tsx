@@ -406,7 +406,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
                 code={`{
   "mcpServers": {
     "Zapier_MCP": {
-      "server_url": "${proxyBaseUrl}/mcp",
+      "url": "${proxyBaseUrl}/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
         "x-mcp-servers": ["Zapier_MCP,dev"]

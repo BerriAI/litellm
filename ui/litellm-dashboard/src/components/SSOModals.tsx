@@ -43,8 +43,8 @@ const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       google_client_secret: "GOOGLE_CLIENT_SECRET",
     },
     fields: [
-      { label: "GOOGLE CLIENT ID", name: "google_client_id" },
-      { label: "GOOGLE CLIENT SECRET", name: "google_client_secret" },
+      { label: "Google Client ID", name: "google_client_id" },
+      { label: "Google Client Secret", name: "google_client_secret" },
     ],
   },
   microsoft: {
@@ -54,9 +54,9 @@ const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       microsoft_tenant: "MICROSOFT_TENANT",
     },
     fields: [
-      { label: "MICROSOFT CLIENT ID", name: "microsoft_client_id" },
-      { label: "MICROSOFT CLIENT SECRET", name: "microsoft_client_secret" },
-      { label: "MICROSOFT TENANT", name: "microsoft_tenant" },
+      { label: "Microsoft Client ID", name: "microsoft_client_id" },
+      { label: "Microsoft Client Secret", name: "microsoft_client_secret" },
+      { label: "Microsoft Tenant", name: "microsoft_tenant" },
     ],
   },
   okta: {
@@ -68,18 +68,18 @@ const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
     },
     fields: [
-      { label: "GENERIC CLIENT ID", name: "generic_client_id" },
-      { label: "GENERIC CLIENT SECRET", name: "generic_client_secret" },
+      { label: "Generic Client ID", name: "generic_client_id" },
+      { label: "Generic Client Secret", name: "generic_client_secret" },
       {
-        label: "AUTHORIZATION ENDPOINT",
+        label: "Authorization Endpoint",
         name: "generic_authorization_endpoint",
-        placeholder: "https://your-okta-domain/authorize",
+        placeholder: "https://your-domain/authorize",
       },
-      { label: "TOKEN ENDPOINT", name: "generic_token_endpoint", placeholder: "https://your-okta-domain/token" },
+      { label: "Token Endpoint", name: "generic_token_endpoint", placeholder: "https://your-domain/token" },
       {
-        label: "USERINFO ENDPOINT",
+        label: "Userinfo Endpoint",
         name: "generic_userinfo_endpoint",
-        placeholder: "https://your-okta-domain/userinfo",
+        placeholder: "https://your-domain/userinfo",
       },
     ],
   },
@@ -92,11 +92,11 @@ const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
     },
     fields: [
-      { label: "GENERIC CLIENT ID", name: "generic_client_id" },
-      { label: "GENERIC CLIENT SECRET", name: "generic_client_secret" },
-      { label: "AUTHORIZATION ENDPOINT", name: "generic_authorization_endpoint" },
-      { label: "TOKEN ENDPOINT", name: "generic_token_endpoint" },
-      { label: "USERINFO ENDPOINT", name: "generic_userinfo_endpoint" },
+      { label: "Generic Client ID", name: "generic_client_id" },
+      { label: "Generic Client Secret", name: "generic_client_secret" },
+      { label: "Authorization Endpoint", name: "generic_authorization_endpoint" },
+      { label: "Token Endpoint", name: "generic_token_endpoint" },
+      { label: "Userinfo Endpoint", name: "generic_userinfo_endpoint" },
     ],
   },
 };
@@ -282,7 +282,12 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                           style={{ height: 24, width: 24, marginRight: 12, objectFit: "contain" }}
                         />
                       )}
-                      <span>{value.charAt(0).toUpperCase() + value.slice(1)} SSO</span>
+                      <span>
+                        {value.toLowerCase() === "okta"
+                          ? "Okta / Auth0"
+                          : value.charAt(0).toUpperCase() + value.slice(1)}{" "}
+                        SSO
+                      </span>
                     </div>
                   </Select.Option>
                 ))}
@@ -307,7 +312,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               <TextInput />
             </Form.Item>
             <Form.Item
-              label="PROXY BASE URL"
+              label="Proxy Base URL"
               name="proxy_base_url"
               normalize={(value) => value?.trim()}
               rules={[

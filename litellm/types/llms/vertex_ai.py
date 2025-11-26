@@ -29,9 +29,10 @@ class FileDataType(TypedDict):
     file_uri: str  # the cloud storage uri of storing this file
 
 
-class BlobType(TypedDict):
+class BlobType(TypedDict, total=False):
     mime_type: Required[str]
     data: Required[str]
+    media_resolution: Literal["low", "medium", "high"]
 
 
 class PartType(TypedDict, total=False):
@@ -59,9 +60,10 @@ class HttpxCodeExecutionResult(TypedDict):
     output: str
 
 
-class HttpxBlobType(TypedDict):
+class HttpxBlobType(TypedDict, total=False):
     mimeType: str
     data: str
+    mediaResolution: Literal["low", "medium", "high"]
 
 
 class HttpxPartType(TypedDict, total=False):
@@ -174,14 +176,20 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
+    thinkingLevel: Literal["low", "medium", "high"]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
 GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
 
+GeminiImageSize = Literal["1K", "2K", "4K"]
+
+
 class GeminiImageConfig(TypedDict, total=False):
     aspectRatio: GeminiImageAspectRatio
+    imageSize: GeminiImageSize
+
 
 class PrebuiltVoiceConfig(TypedDict):
     voiceName: str
@@ -258,6 +266,7 @@ class UsageMetadata(TypedDict, total=False):
     promptTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
+    candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
 
 
 class TokenCountDetailsResponse(TypedDict):
