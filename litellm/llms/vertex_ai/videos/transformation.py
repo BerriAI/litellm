@@ -163,7 +163,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
+        litellm_params: Optional[Union[GenericLiteLLMParams, dict]] = None,
     ) -> dict:
         """
         Validate environment and return headers for Vertex AI OCR.
