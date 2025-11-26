@@ -13,7 +13,6 @@ This section covers integrations with various tools and services that can be use
 - **[Prometheus](../proxy/prometheus.md)** - Metrics collection and monitoring
 - **[PagerDuty](../proxy/pagerduty.md)** - Incident response and alerting
 - **[Datadog](../observability/datadog.md)**
-- **[Generic API](./generic_api.md)** - Send logs to any HTTP endpoint
 
 
 Click into each section to learn more about the integrations.

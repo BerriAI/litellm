@@ -1,4 +1,4 @@
-# Generic API Callback
+# Generic API Callback (Webhook)
 
 Send LiteLLM logs to any HTTP endpoint.
 
@@ -12,7 +12,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
-  callbacks: ["custom_api_name"]  # or use "generic_api" for custom endpoints
+  callbacks: ["custom_api_name"]
 
 callback_settings:
   custom_api_name:
@@ -106,4 +106,5 @@ callback_settings:
     batch_size: 100        # default: 100
     flush_interval: 60     # seconds, default: 60
 ```
+
 
