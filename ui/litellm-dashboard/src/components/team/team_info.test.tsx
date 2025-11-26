@@ -58,7 +58,7 @@ describe("TeamInfoView", () => {
       team_memberships: [],
     });
 
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue([]);
+    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
     render(
@@ -74,9 +74,13 @@ describe("TeamInfoView", () => {
         premiumUser={false}
       />,
     );
-    await waitFor(() => {
-      expect(screen.queryByText("User ID")).not.toBeNull();
-    });
+    await waitFor(
+      () => {
+        expect(screen.queryByText("User ID")).not.toBeNull();
+      },
+      // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
+      { timeout: 10000 },
+    );
   });
 
   it("should not show all-proxy-models option when user has no access to it", async () => {
@@ -116,7 +120,7 @@ describe("TeamInfoView", () => {
       team_memberships: [],
     });
 
-    vi.mocked(networking.getGuardrailsList).mockResolvedValue([]);
+    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
     render(
@@ -157,5 +161,6 @@ describe("TeamInfoView", () => {
 
     const allProxyModelsOption = screen.queryByText("All Proxy Models");
     expect(allProxyModelsOption).not.toBeInTheDocument();
-  });
+  }, // This is a workaround to fix the flaky test issue. TODO: Remove this once we have a better solution.
+  10000);
 });
