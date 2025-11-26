@@ -26209,6 +26209,15 @@
         "supports_parallel_function_calling": false,
         "supports_vision": false
     },
+    "watsonx/whisper-large-v3-turbo": {
+        "input_cost_per_second": 0.0001,
+        "output_cost_per_second": 0.0001,
+        "litellm_provider": "watsonx",
+        "mode": "audio_transcription",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "whisper-1": {
         "input_cost_per_second": 0.0001,
         "litellm_provider": "openai",

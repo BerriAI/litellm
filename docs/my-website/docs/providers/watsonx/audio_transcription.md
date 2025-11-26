@@ -3,7 +3,14 @@ import TabItem from '@theme/TabItem';
 
 # WatsonX Audio Transcription
 
-Use WatsonX's Whisper models for audio transcription through LiteLLM.
+## Overview
+
+| Property | Details |
+|----------|---------|
+| Description | WatsonX audio transcription using Whisper models for speech-to-text |
+| Provider Route on LiteLLM | `watsonx/` |
+| Supported Operations | `/v1/audio/transcriptions` |
+| Link to Provider Doc | [IBM WatsonX.ai ↗](https://www.ibm.com/watsonx) |
 
 ## Quick Start
 
