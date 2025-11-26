@@ -33,6 +33,8 @@ This guide covers Anthropic's latest model (Claude Opus 4.5) and its advanced fe
 | Input Examples | Claude Opus 4.5, Sonnet 4.5 |
 | Effort Parameter | Claude Opus 4.5 only |
 
+Supported Providers: [Anthropic](../../docs/providers/anthropic), [Bedrock](../../docs/providers/bedrock), [Vertex AI](../../docs/providers/vertex_partner#vertex-ai---anthropic-claude).
+
 ## Usage
 
 <Tabs>
