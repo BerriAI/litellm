@@ -6,14 +6,7 @@
             "Content-Type": "application/json",
             "Authorization": "Bearer {{environment_variables.SAMPLE_CALLBACK_API_KEY}}"
         },
-        "environment_variables": {
-            "SAMPLE_CALLBACK_URL": {
-                "is_required": false
-            },
-            "SAMPLE_CALLBACK_API_KEY": {
-                "is_required": false
-            }
-        }
+        "environment_variables": ["SAMPLE_CALLBACK_URL", "SAMPLE_CALLBACK_API_KEY"]
     },
     "rubrik": {
         "event_types": ["llm_api_success"],
@@ -22,13 +15,6 @@
             "Content-Type": "application/json",
             "Authorization": "Bearer {{environment_variables.RUBRIK_API_KEY}}"
         },
-        "environment_variables": {
-            "RUBRIK_API_KEY": {
-                "is_required": false
-            },
-            "RUBRIK_WEBHOOK_URL": {
-                "is_required": false
-            }
-        }
+        "environment_variables": ["RUBRIK_API_KEY", "RUBRIK_WEBHOOK_URL"]
     }
 }
