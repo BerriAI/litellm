@@ -62,12 +62,9 @@ model_list:
 litellm_settings:
   callbacks: ["rubrik"]
 
-callback_settings:
-  rubrik:
-    callback_type: generic_api
-    endpoint: https://webhook.site/efc57707-9018-478c-bdf1-2ffaabb2b315
-    headers:
-      Authorization: Bearer sk-1234
+environment_variables:
+  RUBRIK_API_KEY: sk-1234
+  RUBRIK_WEBHOOK_URL: https://webhook.site/efc57707-9018-478c-bdf1-2ffaabb2b315
 ```
 
 b. Start the proxy 
