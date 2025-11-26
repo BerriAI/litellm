@@ -24,8 +24,6 @@ from litellm._uuid import uuid4
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
 from litellm.rag.text_splitters import RecursiveCharacterTextSplitter
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
-from litellm.vector_store_files.main import acreate as vector_store_file_acreate
-from litellm.vector_stores.main import acreate as vector_store_acreate
 
 if TYPE_CHECKING:
     from litellm import Router
