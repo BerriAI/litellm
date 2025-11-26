@@ -183,7 +183,7 @@ class WeaveOtelLogger(OpenTelemetry):
 
         # === Weave "kind" attribute ===
         # Maps from: openinference.span.kind, weave.span.kind, traceloop.span.kind
-        safe_set_attribute(span, WeaveSpanAttributes.OPENINFERENCE_SPAN_KIND.value, "LLM")
+        safe_set_attribute(span, WeaveSpanAttributes.WEAVE_SPAN_KIND.value, "LLM")
 
         # === Weave "model_parameters" attribute ===
         # Maps from: gen_ai.request, llm.invocation_parameters

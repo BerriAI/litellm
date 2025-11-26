@@ -53,7 +53,7 @@ class WeaveSpanAttributes(str, Enum):
     LLM_TOKEN_COUNT_TOTAL = "llm.token_count.total"
 
     # ---- Span kind (recognized by Weave) ----
-    OPENINFERENCE_SPAN_KIND = "openinference.span.kind"
+    WEAVE_SPAN_KIND = "openinference.span.kind"
 
     # ---- Trace-level metadata ----
     TRACE_USER_ID = "user.id"
