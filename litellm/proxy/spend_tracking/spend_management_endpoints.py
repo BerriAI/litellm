@@ -1,5 +1,6 @@
 #### SPEND MANAGEMENT #####
 import collections
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -1610,6 +1611,14 @@ async def calculate_spend(request: SpendCalculateRequest):
 
 
 @router.get(
+    "/spend/logs/v2",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={
+        200: {"model": Dict[str, Any]},
+    },
+)
+@router.get(
     "/spend/logs/ui",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
@@ -1672,16 +1681,16 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     ),
 ):
     """
-    View spend logs for UI with pagination support
+    View spend logs with pagination support.
+    Available at both `/spend/logs/v2` (public API) and `/spend/logs/ui` (internal UI).
 
-    Returns:
-        {
-            "data": List[LiteLLM_SpendLogs],  # Paginated spend logs
-            "total": int,                      # Total number of records
-            "page": int,                       # Current page number
-            "page_size": int,                  # Number of items per page
-            "total_pages": int                 # Total number of pages
-        }
+    Returns paginated response with data, total, page, page_size, and total_pages.
+
+    Example:
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" \
+-H "Authorization: Bearer sk-1234"
+    ```
     """
     from litellm.proxy.proxy_server import prisma_client
 
