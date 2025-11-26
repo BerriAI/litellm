@@ -9,7 +9,7 @@ Callback to log events to a Generic API Endpoint
 import asyncio
 import os
 import traceback
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,12 +22,15 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import StandardLoggingPayload
 
+API_EVENT_TYPES = Literal["llm_api_success", "llm_api_failure"]
+
 
 class GenericAPILogger(CustomBatchLogger):
     def __init__(
         self,
         endpoint: Optional[str] = None,
         headers: Optional[dict] = None,
+        event_types: Optional[List[API_EVENT_TYPES]] = None,
         **kwargs,
     ):
         """
@@ -51,6 +54,7 @@ class GenericAPILogger(CustomBatchLogger):
 
         self.headers: Dict = self._get_headers(headers)
         self.endpoint: str = endpoint
+        self.event_types: Optional[List[API_EVENT_TYPES]] = event_types
         verbose_logger.debug(
             f"in init GenericAPILogger, endpoint {self.endpoint}, headers {self.headers}"
         )
@@ -115,6 +119,9 @@ class GenericAPILogger(CustomBatchLogger):
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
 
+        if self.event_types is not None and "llm_api_success" not in self.event_types:
+            return
+
         try:
             verbose_logger.debug(
                 "Generic API Logger - Enters logging function for model %s", kwargs
@@ -150,6 +157,9 @@ class GenericAPILogger(CustomBatchLogger):
         - Creates a StandardLoggingPayload
         - Adds to batch queue
         """
+        if self.event_types is not None and "llm_api_failure" not in self.event_types:
+            return
+
         try:
             verbose_logger.debug(
                 "Generic API Logger - Enters logging function for model %s", kwargs
