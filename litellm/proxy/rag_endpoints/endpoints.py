@@ -5,6 +5,7 @@ Provides an all-in-one API for document ingestion:
 Upload -> (OCR) -> Chunk -> Embed -> Vector Store
 """
 
+import base64
 from typing import Any, Dict, Optional, Tuple
 
 import orjson
@@ -69,6 +70,23 @@ async def parse_rag_ingest_request(
         ingest_options = data.get("ingest_options", {})
         file_url = data.get("file_url")
         file_id = data.get("file_id")
+
+        # Handle base64-encoded file in JSON body
+        file_obj = data.get("file")
+        if file_obj and isinstance(file_obj, dict):
+            filename = file_obj.get("filename")
+            content_b64 = file_obj.get("content")
+            content_type = file_obj.get("content_type", "application/octet-stream")
+
+            if filename and content_b64:
+                try:
+                    file_content = base64.b64decode(content_b64)
+                    file_data = (filename, file_content, content_type)
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"error": f"Invalid base64 content: {e}"},
+                    )
 
     # Validate
     if file_data is None and file_url is None and file_id is None:
