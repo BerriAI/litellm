@@ -158,9 +158,11 @@ class LoggingCallbackManager:
             callback in litellm.callback_settings
             and litellm.callback_settings[callback]["callback_type"] == "generic_api"
         ):
+            callback_config = litellm.callback_settings[callback]
             return GenericAPILogger(
-                endpoint=litellm.callback_settings[callback]["endpoint"],
-                headers=litellm.callback_settings[callback]["headers"],
+                endpoint=callback_config["endpoint"],
+                headers=callback_config["headers"],
+                event_types=callback_config.get("event_types"),
             )
         return callback
 
