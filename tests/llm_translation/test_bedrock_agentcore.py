@@ -12,10 +12,9 @@ sys.path.insert(
 )
 
 import litellm
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 import pytest
-
-import pytest
+import httpx
 
 @pytest.mark.parametrize(
     "model", [
@@ -366,4 +365,206 @@ def test_bedrock_agentcore_without_api_key_uses_sigv4():
         # Session ID should still be present
         assert "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id" in headers
         assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "sigv4-test-session"
+
+
+def test_agentcore_parse_json_response():
+    """
+    Unit test for JSON response parsing (non-streaming)
+    Verifies that content-type: application/json responses are parsed correctly
+    """
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+
+    config = AmazonAgentCoreConfig()
+
+    # Create a mock JSON response
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {
+        "result": {
+            "role": "assistant",
+            "content": [{"text": "Hello from JSON response"}]
+        }
+    }
+
+    # Parse the response
+    parsed = config._get_parsed_response(mock_response)
+
+    # Verify content extraction
+    assert parsed["content"] == "Hello from JSON response"
+    # JSON responses don't include usage data
+    assert parsed["usage"] is None
+    # Final message should be the result object
+    assert parsed["final_message"] == mock_response.json.return_value["result"]
+
+
+def test_agentcore_parse_sse_response():
+    """
+    Unit test for SSE response parsing (streaming response consumed as text)
+    Verifies that text/event-stream responses are parsed correctly
+    """
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+
+    config = AmazonAgentCoreConfig()
+
+    # Create a mock SSE response with multiple events
+    sse_data = """data: {"event":{"contentBlockDelta":{"delta":{"text":"Hello "}}}}
+
+data: {"event":{"contentBlockDelta":{"delta":{"text":"from SSE"}}}}
+
+data: {"event":{"metadata":{"usage":{"inputTokens":10,"outputTokens":5,"totalTokens":15}}}}
+
+data: {"message":{"role":"assistant","content":[{"text":"Hello from SSE"}]}}
+"""
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.headers = {"content-type": "text/event-stream"}
+    mock_response.text = sse_data
+
+    # Parse the response
+    parsed = config._get_parsed_response(mock_response)
+
+    # Verify content extraction from final message
+    assert parsed["content"] == "Hello from SSE"
+    # SSE responses can include usage data
+    assert parsed["usage"] is not None
+    assert parsed["usage"]["inputTokens"] == 10
+    assert parsed["usage"]["outputTokens"] == 5
+    assert parsed["usage"]["totalTokens"] == 15
+    # Final message should be present
+    assert parsed["final_message"] is not None
+    assert parsed["final_message"]["role"] == "assistant"
+
+
+def test_agentcore_parse_sse_response_without_final_message():
+    """
+    Unit test for SSE response parsing when only deltas are present (no final message)
+    """
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+
+    config = AmazonAgentCoreConfig()
+
+    # Create a mock SSE response with only content deltas
+    sse_data = """data: {"event":{"contentBlockDelta":{"delta":{"text":"First "}}}}
+
+data: {"event":{"contentBlockDelta":{"delta":{"text":"second "}}}}
+
+data: {"event":{"contentBlockDelta":{"delta":{"text":"third"}}}}
+"""
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.headers = {"content-type": "text/event-stream"}
+    mock_response.text = sse_data
+
+    # Parse the response
+    parsed = config._get_parsed_response(mock_response)
+
+    # Content should be concatenated from deltas
+    assert parsed["content"] == "First second third"
+    # No final message
+    assert parsed["final_message"] is None
+
+
+def test_agentcore_transform_response_json():
+    """
+    Integration test for transform_response with JSON response
+    Verifies end-to-end transformation of JSON responses to ModelResponse
+    """
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+    from litellm.types.utils import ModelResponse
+
+    config = AmazonAgentCoreConfig()
+
+    # Create mock JSON response
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {
+        "result": {
+            "role": "assistant",
+            "content": [{"text": "Response from transform_response"}]
+        }
+    }
+    mock_response.status_code = 200
+
+    # Create model response
+    model_response = ModelResponse()
+
+    # Mock logging object
+    mock_logging = MagicMock()
+
+    # Transform the response
+    result = config.transform_response(
+        model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/test",
+        raw_response=mock_response,
+        model_response=model_response,
+        logging_obj=mock_logging,
+        request_data={},
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    # Verify ModelResponse structure
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Response from transform_response"
+    assert result.choices[0].message.role == "assistant"
+    assert result.choices[0].finish_reason == "stop"
+    assert result.choices[0].index == 0
+
+
+def test_agentcore_transform_response_sse():
+    """
+    Integration test for transform_response with SSE response
+    Verifies end-to-end transformation of SSE responses to ModelResponse
+    """
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+    from litellm.types.utils import ModelResponse
+
+    config = AmazonAgentCoreConfig()
+
+    # Create mock SSE response
+    sse_data = """data: {"event":{"contentBlockDelta":{"delta":{"text":"SSE "}}}}
+
+data: {"event":{"contentBlockDelta":{"delta":{"text":"response"}}}}
+
+data: {"event":{"metadata":{"usage":{"inputTokens":20,"outputTokens":10,"totalTokens":30}}}}
+
+data: {"message":{"role":"assistant","content":[{"text":"SSE response"}]}}
+"""
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.headers = {"content-type": "text/event-stream"}
+    mock_response.text = sse_data
+    mock_response.status_code = 200
+
+    # Create model response
+    model_response = ModelResponse()
+
+    # Mock logging object
+    mock_logging = MagicMock()
+
+    # Transform the response
+    result = config.transform_response(
+        model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/test",
+        raw_response=mock_response,
+        model_response=model_response,
+        logging_obj=mock_logging,
+        request_data={},
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    # Verify ModelResponse structure
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "SSE response"
+    assert result.choices[0].message.role == "assistant"
+    assert result.choices[0].finish_reason == "stop"
+
+    # Verify usage data from SSE metadata
+    assert hasattr(result, "usage")
+    assert result.usage.prompt_tokens == 20
+    assert result.usage.completion_tokens == 10
+    assert result.usage.total_tokens == 30
 
