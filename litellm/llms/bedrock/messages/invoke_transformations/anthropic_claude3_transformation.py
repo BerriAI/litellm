@@ -1,7 +1,18 @@
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -13,6 +24,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -129,10 +141,32 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
             
-        # 4. Handle anthropic_beta from user headers
-        anthropic_beta_list = get_anthropic_beta_from_headers(headers)
+        # 4. AUTO-INJECT beta headers based on features used
+        anthropic_beta_list = []
+        
+        # Get user-provided beta headers first
+        user_betas = get_anthropic_beta_from_headers(headers)
+        if user_betas:
+            anthropic_beta_list.extend(user_betas)
+
+        anthropic_model_info = AnthropicModelInfo()
+        tools = anthropic_messages_optional_request_params.get("tools")
+        messages_typed = cast(List[AllMessageValues], messages)
+        auto_betas = anthropic_model_info.get_anthropic_beta_list(
+            model=model,
+            custom_llm_provider="bedrock",
+            tools=tools,
+            optional_params=anthropic_messages_optional_request_params,
+            computer_tool_used=anthropic_model_info.is_computer_tool_used(tools),
+            prompt_caching_set=anthropic_model_info.is_cache_control_set(messages_typed),
+            file_id_used=anthropic_model_info.is_file_id_used(messages_typed),
+            mcp_server_used=anthropic_model_info.is_mcp_server_used(anthropic_messages_optional_request_params.get("mcp_servers")),
+        )
+        anthropic_beta_list.extend(auto_betas)
+        
+        # Remove duplicates and set in request body if any beta headers exist
         if anthropic_beta_list:
-            anthropic_messages_request["anthropic_beta"] = anthropic_beta_list
+            anthropic_messages_request["anthropic_beta"] = list(set(anthropic_beta_list))
             
         return anthropic_messages_request
 
