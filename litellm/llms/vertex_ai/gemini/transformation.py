@@ -28,7 +28,6 @@ from litellm.types.files import (
     get_file_type_from_extension,
     is_gemini_1_5_accepted_file_type,
 )
-from litellm.types.utils import LlmProviders
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -48,7 +47,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
-from litellm.types.utils import GenericImageParsingChunk
+from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
     _check_text_in_content,
@@ -82,6 +81,7 @@ def _process_gemini_image(
     image_url: str, 
     format: Optional[str] = None,
     media_resolution: Optional[Literal["low", "medium", "high"]] = None,
+    model: Optional[str] = None,
 ) -> PartType:
     """
     Given an image URL, return the appropriate PartType for Gemini
@@ -118,16 +118,19 @@ def _process_gemini_image(
             # https links for unsupported mime types and base64 images
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
-            if media_resolution is not None:
-                _blob["media_resolution"] = media_resolution
+            # media_resolution on individual Part objects is exclusive to Gemini 3 models
+            if media_resolution is not None and model is not None:
+                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    _blob["media_resolution"] = media_resolution
             
             # Convert snake_case keys to camelCase for JSON serialization
             # The TypedDict uses snake_case, but the API expects camelCase
             _blob_dict = dict(_blob)
             if "media_resolution" in _blob_dict:
-                _blob_dict["mediaResolution"] = _blob_dict.pop("media_resolution")
+                _blob_dict["media_resolution"] = _blob_dict.pop("media_resolution")
             if "mime_type" in _blob_dict:
-                _blob_dict["mimeType"] = _blob_dict.pop("mime_type")
+                _blob_dict["mime_type"] = _blob_dict.pop("mime_type")
             
             return PartType(inline_data=cast(BlobType, _blob_dict))
         raise Exception("Invalid image received - {}".format(image_url))
@@ -247,6 +250,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 image_url=image_url, 
                                 format=format,
                                 media_resolution=media_resolution,
+                                model=model,
                             )
                             _parts.append(_part)
                         elif element["type"] == "input_audio":
@@ -271,6 +275,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _part = _process_gemini_image(
                                     image_url=openai_image_str,
                                     format=audio_format_modified,
+                                    model=model,
                                 )
                                 _parts.append(_part)
                         elif element["type"] == "file":
@@ -287,6 +292,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _part = _process_gemini_image(
                                     image_url=passed_file, 
                                     format=format,
+                                    model=model,
                                 )
                                 _parts.append(_part)
                             except Exception:
