@@ -4385,23 +4385,7 @@ class StandardLoggingPayloadSetup:
         if response_obj:
             final_response_obj: Optional[Union[dict, str, list]] = response_obj
         elif isinstance(init_response_obj, list) or isinstance(init_response_obj, str):
-            # Convert MCP content objects (TextContent, ImageContent, etc.) to JSON-serializable format
-            if isinstance(init_response_obj, list):
-                serialized_list = []
-                for item in init_response_obj:
-                    # Check if item is a Pydantic BaseModel (MCP content types are Pydantic models)
-                    # This follows the same pattern used at line 4745-4746 for BaseModel objects
-                    if isinstance(item, BaseModel):
-                        # Convert Pydantic model to dict for JSON serialization
-                        serialized_list.append(item.model_dump())
-                    else:
-                        # Already serializable (str, dict, int, float, bool, None, etc.)
-                        # Non-BaseModel objects are kept as-is - they should already be serializable
-                        # or will be handled by json.dumps with default=str if needed
-                        serialized_list.append(item)
-                final_response_obj = serialized_list
-            else:
-                final_response_obj = init_response_obj
+            final_response_obj = init_response_obj
         else:
             final_response_obj = {}
 
