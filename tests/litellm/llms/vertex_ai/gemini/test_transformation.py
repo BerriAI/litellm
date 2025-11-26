@@ -192,3 +192,37 @@ async def test__transform_request_body_image_config_snake_case():
     assert "generationConfig" in rb
     assert "image_config" in rb["generationConfig"]
     assert rb["generationConfig"]["image_config"] == {"aspect_ratio": "16:9"}
+
+
+@pytest.mark.asyncio
+async def test__transform_request_body_image_config_with_image_size():
+    """Test imageSize parameter support in imageConfig"""
+    model = "gemini-3-pro-image-preview"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Generate a 4K image of Tokyo skyline"}
+            ]
+        }
+    ]
+    optional_params = {
+        "imageConfig": {"aspectRatio": "16:9", "imageSize": "4K"},
+        "responseModalities": ["Image"]
+    }
+    litellm_params = {}
+    transform_request_params = {
+        "messages": messages,
+        "model": model,
+        "optional_params": optional_params,
+        "custom_llm_provider": "gemini",
+        "litellm_params": litellm_params,
+        "cached_content": None,
+    }
+
+    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+
+    assert "generationConfig" in rb
+    assert "imageConfig" in rb["generationConfig"]
+    assert rb["generationConfig"]["imageConfig"]["aspectRatio"] == "16:9"
+    assert rb["generationConfig"]["imageConfig"]["imageSize"] == "4K"

@@ -999,7 +999,8 @@ class PromptTokensDetailsWrapper(
 
 
 class ServerToolUse(BaseModel):
-    web_search_requests: Optional[int]
+    web_search_requests: Optional[int] = None
+    tool_search_requests: Optional[int] = None
 
 
 class Usage(CompletionUsage):

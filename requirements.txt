@@ -39,6 +39,7 @@ azure-storage-file-datalake==12.20.0 # for azure buck storage logging
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
+grpcio>=1.62.3,<1.68.0  # Constraint for opentelemetry-exporter-otlp-proto-grpc to avoid resource exhausted bug (https://github.com/grpc/grpc/issues/38290)
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==44.0.1
