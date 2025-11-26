@@ -145,6 +145,7 @@ class RAGIngestResponse(TypedDict, total=False):
     status: Literal["completed", "in_progress", "failed"]
     vector_store_id: str  # The vector store ID (created or existing)
     file_id: Optional[str]  # The file ID in the vector store
+    error: Optional[str]  # Error message if status is "failed"
 
 
 
