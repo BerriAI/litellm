@@ -1357,6 +1357,9 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.watsonx.audio_transcription.transformation import (
+    IBMWatsonXAudioTranscriptionConfig,
+)
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
