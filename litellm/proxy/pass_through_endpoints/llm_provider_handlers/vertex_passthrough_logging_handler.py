@@ -148,6 +148,8 @@ class VertexPassthroughLoggingHandler:
 
             logging_obj.model = model
             logging_obj.model_call_details["model"] = logging_obj.model
+            logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+            logging_obj.custom_llm_provider = "vertex_ai"
             response_cost = litellm.completion_cost(
                 completion_response=litellm_prediction_response,
                 model=model,
@@ -156,6 +158,7 @@ class VertexPassthroughLoggingHandler:
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
+            kwargs["custom_llm_provider"] = "vertex_ai"
             logging_obj.model_call_details["response_cost"] = response_cost
 
             return {

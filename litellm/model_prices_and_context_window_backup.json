@@ -9522,6 +9522,15 @@
         "output_cost_per_token": 0.0,
         "supports_embedding_image_input": true
     },
+    "embed-multilingual-light-v3.0": {
+        "input_cost_per_token": 1e-04,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "supports_embedding_image_input": true
+    },
     "eu.amazon.nova-lite-v1:0": {
         "input_cost_per_token": 7.8e-08,
         "litellm_provider": "bedrock_converse",
