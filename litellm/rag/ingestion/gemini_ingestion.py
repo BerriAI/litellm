@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
-import httpx
-
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.llms.gemini.common_utils import GeminiModelInfo
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 
@@ -139,24 +141,26 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             "displayName": display_name
         }
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json=request_body,
-                headers={"Content-Type": "application/json"},
-                timeout=60.0,
-            )
-            
-            if response.status_code != 200:
-                error_msg = f"Failed to create File Search store: {response.text}"
-                verbose_logger.error(error_msg)
-                raise Exception(error_msg)
-            
-            response_data = response.json()
-            store_name = response_data.get("name", "")
-            
-            verbose_logger.debug(f"Created File Search store: {store_name}")
-            return store_name
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.RAG,
+            params={"timeout": 60.0},
+        )
+        response = await client.post(
+            url,
+            json=request_body,
+            headers={"Content-Type": "application/json"},
+        )
+        
+        if response.status_code != 200:
+            error_msg = f"Failed to create File Search store: {response.text}"
+            verbose_logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        response_data = response.json()
+        store_name = response_data.get("name", "")
+        
+        verbose_logger.debug(f"Created File Search store: {store_name}")
+        return store_name
 
     async def _upload_to_file_search_store(
         self,
@@ -252,26 +256,28 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         verbose_logger.debug(f"Initiating resumable upload: {url}")
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json=request_body,
-                headers=headers,
-                timeout=60.0,
-            )
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.RAG,
+            params={"timeout": 60.0},
+        )
+        response = await client.post(
+            url,
+            json=request_body,
+            headers=headers,
+        )
 
-            if response.status_code not in [200, 201]:
-                error_msg = f"Failed to initiate upload: {response.text}"
-                verbose_logger.error(error_msg)
-                raise Exception(error_msg)
-            verbose_logger.debug(f"Initiate resumable upload response: {response.headers}")
-            # Extract upload URL from response headers
-            upload_url = response.headers.get("x-goog-upload-url")
-            if not upload_url:
-                raise Exception("No upload URL returned in response headers")
+        if response.status_code not in [200, 201]:
+            error_msg = f"Failed to initiate upload: {response.text}"
+            verbose_logger.error(error_msg)
+            raise Exception(error_msg)
+        verbose_logger.debug(f"Initiate resumable upload response: {response.headers}")
+        # Extract upload URL from response headers
+        upload_url = response.headers.get("x-goog-upload-url")
+        if not upload_url:
+            raise Exception("No upload URL returned in response headers")
 
-            verbose_logger.debug(f"Got upload URL: {upload_url}")
-            return upload_url
+        verbose_logger.debug(f"Got upload URL: {upload_url}")
+        return upload_url
 
     async def _upload_file_content(
         self,
@@ -292,28 +298,30 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         verbose_logger.debug(f"Uploading file content ({len(file_content)} bytes)")
 
-        async with httpx.AsyncClient() as client:
-            response = await client.put(
-                upload_url,
-                content=file_content,
-                headers=headers,
-                timeout=300.0,  # Longer timeout for large files
-            )
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.RAG,
+            params={"timeout": 300.0},  # Longer timeout for large files
+        )
+        response = await client.put(
+            upload_url,
+            content=file_content,
+            headers=headers,
+        )
 
-            if response.status_code not in [200, 201]:
-                error_msg = f"Failed to upload file: {response.text}"
-                verbose_logger.error(error_msg)
-                raise Exception(error_msg)
+        if response.status_code not in [200, 201]:
+            error_msg = f"Failed to upload file: {response.text}"
+            verbose_logger.error(error_msg)
+            raise Exception(error_msg)
 
-            # Parse response to get file/document ID
-            try:
-                response_data = response.json()
-                # The response should contain the document name or file reference
-                file_id = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
-                verbose_logger.debug(f"Upload complete. File ID: {file_id}")
-                return file_id
-            except Exception as e:
-                verbose_logger.warning(f"Could not parse upload response: {e}")
-                # Return a placeholder if we can't get the ID
-                return "uploaded"
+        # Parse response to get file/document ID
+        try:
+            response_data = response.json()
+            # The response should contain the document name or file reference
+            file_id = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
+            verbose_logger.debug(f"Upload complete. File ID: {file_id}")
+            return file_id
+        except Exception as e:
+            verbose_logger.warning(f"Could not parse upload response: {e}")
+            # Return a placeholder if we can't get the ID
+            return "uploaded"
 
