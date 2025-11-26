@@ -39,6 +39,8 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 
         if "form" in content_type:
             parsed_body = dict(await request.form())
+            if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
+                parsed_body["metadata"] = json.loads(parsed_body["metadata"])
         else:
             # Read the request body
             body = await request.body()
@@ -230,6 +232,51 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
         else:
             parsed_form_data[key] = value
     return parsed_form_data
+
+
+async def convert_upload_files_to_file_data(
+    form_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Convert FastAPI UploadFile objects to file data tuples for litellm.
+    
+    Converts UploadFile objects to tuples of (filename, content, content_type)
+    which is the format expected by httpx and litellm's HTTP handlers.
+    
+    Args:
+        form_data: Dictionary containing form data with potential UploadFile objects
+        
+    Returns:
+        Dictionary with UploadFile objects converted to file data tuples
+        
+    Example:
+        ```python
+        form_data = await get_form_data(request)
+        data = await convert_upload_files_to_file_data(form_data)
+        # data["files"] is now [(filename, content, content_type), ...]
+        ```
+    """
+    data = {}
+    for key, value in form_data.items():
+        if isinstance(value, list):
+            # Check if it's a list of UploadFile objects
+            if value and hasattr(value[0], "read"):
+                files = []
+                for f in value:
+                    file_content = await f.read()
+                    # Create tuple: (filename, content, content_type)
+                    files.append((f.filename, file_content, f.content_type))
+                data[key] = files
+            else:
+                data[key] = value
+        elif hasattr(value, "read"):
+            # Single UploadFile object - read and convert to list for consistency
+            file_content = await value.read()
+            data[key] = [(value.filename, file_content, value.content_type)]
+        else:
+            # Regular form field
+            data[key] = value
+    return data
 
 
 async def get_request_body(request: Request) -> Dict[str, Any]:

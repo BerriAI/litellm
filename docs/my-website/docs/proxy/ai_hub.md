@@ -238,3 +238,104 @@ curl -X GET 'http://0.0.0.0:4000/public/agent_hub' \
 </TabItem>
 </Tabs>
 
+
+## MCP Servers
+
+### How to use
+
+#### 1. Add MCP Server
+
+Go here for instructions: [MCP Overview](../mcp#adding-your-mcp)
+
+
+#### 2. Make MCP server public
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+Navigate to AI Hub page, and select the MCP tab (`PROXY_BASE_URL/ui/?login=success&page=mcp-server-table`)
+
+<Image img={require('../../img/mcp_server_on_ai_hub.png')} />  
+
+</TabItem>
+<TabItem value="api" label="API">
+
+```bash
+curl -L -X POST 'http://localhost:4000/v1/mcp/make_public' \
+-H 'Authorization: Bearer sk-1234' \ 
+-H 'Content-Type: application/json' \
+-d '{"mcp_server_ids":["e856f9a3-abc6-45b1-9d06-62fa49ac293d"]}'
+```
+
+</TabItem>
+</Tabs>
+
+
+#### 3. View public MCP servers
+
+Users can now discover the MCP server via the public endpoint (`PROXY_BASE_URL/ui/model_hub_table`)
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+<Image img={require('../../img/mcp_on_public_ai_hub.png')} />  
+
+</TabItem>
+<TabItem value="api" label="API">
+
+```bash
+curl -L -X GET 'http://0.0.0.0:4000/public/mcp_hub' \
+-H 'Authorization: Bearer sk-1234'
+```
+
+**Expected Response**
+
+```json
+[
+    {
+        "server_id": "e856f9a3-abc6-45b1-9d06-62fa49ac293d",
+        "name": "deepwiki-mcp",
+        "alias": null,
+        "server_name": "deepwiki-mcp",
+        "url": "https://mcp.deepwiki.com/mcp",
+        "transport": "http",
+        "spec_path": null,
+        "auth_type": "none",
+        "mcp_info": {
+            "server_name": "deepwiki-mcp",
+            "description": "free mcp server "
+        }
+    },
+    {
+        "server_id": "a634819f-3f93-4efc-9108-e49c5b83ad84",
+        "name": "deepwiki_2",
+        "alias": "deepwiki_2",
+        "server_name": "deepwiki_2",
+        "url": "https://mcp.deepwiki.com/mcp",
+        "transport": "http",
+        "spec_path": null,
+        "auth_type": "none",
+        "mcp_info": {
+            "server_name": "deepwiki_2",
+            "mcp_server_cost_info": null
+        }
+    },
+    {
+        "server_id": "33f950e4-2edb-41fa-91fc-0b9581269be6",
+        "name": "edc_mcp_server",
+        "alias": "edc_mcp_server",
+        "server_name": "edc_mcp_server",
+        "url": "http://lelvdckdputildev.itg.ti.com:8085/api/mcp",
+        "transport": "http",
+        "spec_path": null,
+        "auth_type": "none",
+        "mcp_info": {
+            "server_name": "edc_mcp_server",
+            "mcp_server_cost_info": null
+        }
+    }
+]
+```
+
+</TabItem>
+</Tabs>
