@@ -21,16 +21,17 @@ guardrails:
           tool_name: "Bash"
           decision: "allow"
         - id: "allow_github_mcp"
-          tool_name: "mcp__github_*"
+          tool_name: "^mcp__github_.*$"
           decision: "allow"
         - id: "allow_aws_documentation"
-          tool_name: "mcp__aws-documentation_*_documentation"
+          tool_name: "^mcp__aws-documentation_.*_documentation$"
           decision: "allow"
         - id: "deny_read_commands"
           tool_name: "Read"
-          decision: "Deny"
+          decision: "deny"
         - id: "mail-domain"
-          tool_name: "send_email"
+          tool_name: "^send_email$"
+          tool_type: "^function$"
           decision: "allow"
           allowed_param_patterns:
             "to[]": "^.+@berri\\.ai$"
@@ -44,7 +45,8 @@ guardrails:
 
 ```yaml
 - id: "unique_rule_id"           # Unique identifier for the rule
-  tool_name: "pattern"           # Tool name or pattern to match
+  tool_name: "^regex$"           # Regex for tool name (optional, at least one of name/type required)
+  tool_type: "^function$"        # Regex for tool type (optional)
   decision: "allow"              # "allow" or "deny"
   allowed_param_patterns:         # Optional - regex map for argument paths (dot + [] notation)
     "path.to[].field": "^regex$"
