@@ -7,7 +7,9 @@ Callback to log events to a Generic API Endpoint
 """
 
 import asyncio
+import json
 import os
+import re
 import traceback
 from typing import Dict, List, Literal, Optional, Union
 
@@ -25,12 +27,80 @@ from litellm.types.utils import StandardLoggingPayload
 API_EVENT_TYPES = Literal["llm_api_success", "llm_api_failure"]
 
 
+def load_compatible_callbacks() -> Dict:
+    """
+    Load the generic_api_compatible_callbacks.json file
+
+    Returns:
+        Dict: Dictionary of compatible callbacks configuration
+    """
+    try:
+        json_path = os.path.join(
+            os.path.dirname(__file__), "generic_api_compatible_callbacks.json"
+        )
+        with open(json_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        verbose_logger.warning(
+            f"Error loading generic_api_compatible_callbacks.json: {str(e)}"
+        )
+        return {}
+
+
+def is_callback_compatible(callback_name: str) -> bool:
+    """
+    Check if a callback_name exists in the compatible callbacks list
+
+    Args:
+        callback_name: Name of the callback to check
+
+    Returns:
+        bool: True if callback_name exists in the compatible callbacks, False otherwise
+    """
+    compatible_callbacks = load_compatible_callbacks()
+    return callback_name in compatible_callbacks
+
+
+def get_callback_config(callback_name: str) -> Optional[Dict]:
+    """
+    Get the configuration for a specific callback
+
+    Args:
+        callback_name: Name of the callback to get config for
+
+    Returns:
+        Optional[Dict]: Configuration dict for the callback, or None if not found
+    """
+    compatible_callbacks = load_compatible_callbacks()
+    return compatible_callbacks.get(callback_name)
+
+
+def substitute_env_variables(value: str) -> str:
+    """
+    Replace {{environment_variables.VAR_NAME}} patterns with actual environment variable values
+
+    Args:
+        value: String that may contain {{environment_variables.VAR_NAME}} patterns
+
+    Returns:
+        str: String with environment variables substituted
+    """
+    pattern = r"\{\{environment_variables\.([A-Z_]+)\}\}"
+
+    def replace_env_var(match):
+        env_var_name = match.group(1)
+        return os.getenv(env_var_name, "")
+
+    return re.sub(pattern, replace_env_var, value)
+
+
 class GenericAPILogger(CustomBatchLogger):
     def __init__(
         self,
         endpoint: Optional[str] = None,
         headers: Optional[dict] = None,
         event_types: Optional[List[API_EVENT_TYPES]] = None,
+        callback_name: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -39,7 +109,37 @@ class GenericAPILogger(CustomBatchLogger):
         Args:
             endpoint: Optional[str] = None,
             headers: Optional[dict] = None,
+            event_types: Optional[List[API_EVENT_TYPES]] = None,
+            callback_name: Optional[str] = None - If provided, loads config from generic_api_compatible_callbacks.json
         """
+        #########################################################
+        # Check if callback_name is provided and load config
+        #########################################################
+        if callback_name:
+            if is_callback_compatible(callback_name):
+                verbose_logger.debug(
+                    f"Loading configuration for callback: {callback_name}"
+                )
+                callback_config = get_callback_config(callback_name)
+
+                # Use config from JSON if not explicitly provided
+                if callback_config:
+                    if endpoint is None and "endpoint" in callback_config:
+                        endpoint = substitute_env_variables(callback_config["endpoint"])
+
+                    if "headers" in callback_config:
+                        headers = headers or {}
+                        for key, value in callback_config["headers"].items():
+                            if key not in headers:
+                                headers[key] = substitute_env_variables(value)
+
+                    if event_types is None and "event_types" in callback_config:
+                        event_types = callback_config["event_types"]
+            else:
+                verbose_logger.warning(
+                    f"callback_name '{callback_name}' not found in generic_api_compatible_callbacks.json"
+                )
+
         #########################################################
         # Init httpx client
         #########################################################
@@ -55,8 +155,9 @@ class GenericAPILogger(CustomBatchLogger):
         self.headers: Dict = self._get_headers(headers)
         self.endpoint: str = endpoint
         self.event_types: Optional[List[API_EVENT_TYPES]] = event_types
+        self.callback_name: Optional[str] = callback_name
         verbose_logger.debug(
-            f"in init GenericAPILogger, endpoint {self.endpoint}, headers {self.headers}"
+            f"in init GenericAPILogger, callback_name: {self.callback_name}, endpoint {self.endpoint}, headers {self.headers}, event_types: {self.event_types}"
         )
 
         #########################################################

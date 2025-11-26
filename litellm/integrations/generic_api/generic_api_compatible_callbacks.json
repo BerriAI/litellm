@@ -1,0 +1,34 @@
+{
+    "sample_callback": {
+        "event_types": ["llm_api_success", "llm_api_failure"],
+        "endpoint": "{{environment_variables.SAMPLE_CALLBACK_URL}}",
+        "headers": {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer {{environment_variables.SAMPLE_CALLBACK_API_KEY}}"
+        },
+        "environment_variables": {
+            "SAMPLE_CALLBACK_URL": {
+                "is_required": false
+            },
+            "SAMPLE_CALLBACK_API_KEY": {
+                "is_required": false
+            }
+        }
+    },
+    "rubrik": {
+        "event_types": ["llm_api_success"],
+        "endpoint": "{{environment_variables.RUBRIK_WEBHOOK_URL}}",
+        "headers": {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer {{environment_variables.RUBRIK_API_KEY}}"
+        },
+        "environment_variables": {
+            "RUBRIK_API_KEY": {
+                "is_required": false
+            },
+            "RUBRIK_WEBHOOK_URL": {
+                "is_required": false
+            }
+        }
+    }
+}
