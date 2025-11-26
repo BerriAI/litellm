@@ -7380,6 +7380,12 @@ class ProviderConfigManager:
             )
 
             return HostedVLLMAudioTranscriptionConfig()
+        elif litellm.LlmProviders.WATSONX == provider:
+            from litellm.llms.watsonx.audio_transcription.transformation import (
+                IBMWatsonXAudioTranscriptionConfig,
+            )
+
+            return IBMWatsonXAudioTranscriptionConfig()
         return None
 
     @staticmethod
