@@ -370,6 +370,7 @@ general_settings:
 
 #### 2. Make TTS requests
 
+
 ##### Simple Usage (OpenAI Parameters)
 
 You can use standard OpenAI-compatible parameters without any provider-specific configuration:
@@ -425,6 +426,7 @@ curl http://localhost:4000/v1/audio/speech \
           {"pronunciation_dictionary_id": "dict_123", "version_id": "v1"}
       ],
       "voice_settings": {
+
         "speed": 1.1,
         "stability": 0.5,
         "similarity_boost": 0.75
@@ -433,6 +435,7 @@ curl http://localhost:4000/v1/audio/speech \
   }' \
   --output speech.mp3
 ```
+
 
 ```python showLineNumbers title="Advanced TTS with OpenAI SDK"
 from openai import OpenAI

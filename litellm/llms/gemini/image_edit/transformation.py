@@ -1,4 +1,5 @@
 import base64
+import json
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -22,7 +23,7 @@ else:
 
 class GeminiImageEditConfig(BaseImageEditConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
-    SUPPORTED_PARAMS: List[str] = ["size"]
+    SUPPORTED_PARAMS: List[str] = ["size", "n", "response_format", "user"]
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         return list(self.SUPPORTED_PARAMS)
@@ -94,18 +95,26 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         request_body: Dict[str, Any] = {"contents": contents}
 
-        generation_config: Dict[str, Any] = {}
+        # Generation config with responseModalities for image editing
+        generation_config: Dict[str, Any] = {
+            "responseModalities": ["IMAGE"]
+        }
 
+        # Add image-specific configuration
+        image_config: Dict[str, Any] = {}
         if "aspectRatio" in image_edit_optional_request_params:
-            generation_config["aspectRatio"] = image_edit_optional_request_params[
+            image_config["aspect_ratio"] = image_edit_optional_request_params[
                 "aspectRatio"
             ]
 
-        if generation_config:
-            request_body["generationConfig"] = generation_config
+        if image_config:
+            generation_config["image_config"] = image_config
+
+        request_body["generationConfig"] = generation_config
 
         empty_files = cast(RequestFiles, [])
-        return request_body, empty_files
+        payload: Any = json.dumps(request_body).encode('utf-8')
+        return payload, empty_files
 
     def transform_image_edit_response(
         self,
