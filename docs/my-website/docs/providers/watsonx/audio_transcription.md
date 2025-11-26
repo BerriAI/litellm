@@ -1,6 +1,3 @@
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # WatsonX Audio Transcription
 
 ## Overview
@@ -14,8 +11,7 @@ import TabItem from '@theme/TabItem';
 
 ## Quick Start
 
-<Tabs>
-<TabItem value="sdk" label="LiteLLM SDK">
+### **LiteLLM SDK**
 
 ```python showLineNumbers title="transcription.py"
 import litellm
@@ -30,10 +26,7 @@ response = litellm.transcription(
 print(response.text)
 ```
 
-</TabItem>
-<TabItem value="proxy" label="LiteLLM Proxy">
-
-1. Add to your `config.yaml`:
+### **LiteLLM Proxy**
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
@@ -45,17 +38,12 @@ model_list:
       project_id: os.environ/WATSONX_PROJECT_ID
 ```
 
-2. Make a request:
-
-```bash
+```bash title="Request"
 curl http://localhost:4000/v1/audio/transcriptions \
   -H "Authorization: Bearer sk-1234" \
   -F file="@audio.mp3" \
   -F model="whisper-large-v3-turbo"
 ```
-
-</TabItem>
-</Tabs>
 
 ## Supported Parameters
 
@@ -67,4 +55,3 @@ curl http://localhost:4000/v1/audio/transcriptions \
 | `prompt` | string | Optional prompt to guide transcription |
 | `temperature` | float | Sampling temperature (0-1) |
 | `response_format` | string | `json`, `text`, `srt`, `verbose_json`, `vtt` |
-
