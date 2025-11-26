@@ -51,7 +51,7 @@ class BaseRAGIngestion(ABC):
         self.ocr_config = ingest_options.get("ocr")
         self.chunking_strategy = ingest_options.get("chunking_strategy", {"type": "auto"})
         self.embedding_config = ingest_options.get("embedding")
-        self.vector_store_config = ingest_options.get("vector_store", {})
+        self.vector_store_config = ingest_options.get("vector_store") or {}
         self.ingest_name = ingest_options.get("name")
 
     @property

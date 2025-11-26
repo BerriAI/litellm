@@ -78,7 +78,7 @@ async def _execute_ingest_pipeline(
         RAGIngestResponse with status and IDs
     """
     # Get provider from vector store config
-    vector_store_config = ingest_options.get("vector_store", {})
+    vector_store_config = ingest_options.get("vector_store") or {}
     provider = vector_store_config.get("custom_llm_provider", "openai")
 
     # Get provider-specific ingestion class

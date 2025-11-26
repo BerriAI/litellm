@@ -25,6 +25,18 @@ if TYPE_CHECKING:
     from litellm.types.rag import RAGIngestOptions
 
 
+def _get_str_or_none(value: Any) -> Optional[str]:
+    """Cast config value to Optional[str]."""
+    return str(value) if value is not None else None
+
+
+def _get_int(value: Any, default: int) -> int:
+    """Cast config value to int with default."""
+    if value is None:
+        return default
+    return int(value)
+
+
 class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     """
     Bedrock Knowledge Base RAG ingestion.
@@ -64,17 +76,18 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Optional config
         self._data_source_id = self.vector_store_config.get("data_source_id")
         self._s3_bucket = self.vector_store_config.get("s3_bucket")
-        self._s3_prefix: Optional[str] = self.vector_store_config.get("s3_prefix")
+        self._s3_prefix: Optional[str] = str(self.vector_store_config.get("s3_prefix")) if self.vector_store_config.get("s3_prefix") else None
         self.embedding_model = self.vector_store_config.get(
             "embedding_model"
         ) or "amazon.titan-embed-text-v2:0"
 
         self.wait_for_ingestion = self.vector_store_config.get("wait_for_ingestion", False)
-        self.ingestion_timeout: int = self.vector_store_config.get("ingestion_timeout") or 300
+        self.ingestion_timeout: int = _get_int(self.vector_store_config.get("ingestion_timeout"), 300)
 
         # Get AWS region using BaseAWSLLM method
+        _aws_region = self.vector_store_config.get("aws_region_name")
         self.aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
-            aws_region_name=self.vector_store_config.get("aws_region_name")
+            aws_region_name=str(_aws_region) if _aws_region else None
         )
 
         # Will be set during initialization
@@ -289,9 +302,9 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Get credentials for signing
         credentials = self.get_credentials(
-            aws_access_key_id=self.vector_store_config.get("aws_access_key_id"),
-            aws_secret_access_key=self.vector_store_config.get("aws_secret_access_key"),
-            aws_session_token=self.vector_store_config.get("aws_session_token"),
+            aws_access_key_id=_get_str_or_none(self.vector_store_config.get("aws_access_key_id")),
+            aws_secret_access_key=_get_str_or_none(self.vector_store_config.get("aws_secret_access_key")),
+            aws_session_token=_get_str_or_none(self.vector_store_config.get("aws_session_token")),
             aws_region_name=self.aws_region_name,
         )
 
@@ -480,16 +493,16 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Get credentials using BaseAWSLLM's get_credentials method
         credentials = self.get_credentials(
-            aws_access_key_id=self.vector_store_config.get("aws_access_key_id"),
-            aws_secret_access_key=self.vector_store_config.get("aws_secret_access_key"),
-            aws_session_token=self.vector_store_config.get("aws_session_token"),
+            aws_access_key_id=_get_str_or_none(self.vector_store_config.get("aws_access_key_id")),
+            aws_secret_access_key=_get_str_or_none(self.vector_store_config.get("aws_secret_access_key")),
+            aws_session_token=_get_str_or_none(self.vector_store_config.get("aws_session_token")),
             aws_region_name=self.aws_region_name,
-            aws_session_name=self.vector_store_config.get("aws_session_name"),
-            aws_profile_name=self.vector_store_config.get("aws_profile_name"),
-            aws_role_name=self.vector_store_config.get("aws_role_name"),
-            aws_web_identity_token=self.vector_store_config.get("aws_web_identity_token"),
-            aws_sts_endpoint=self.vector_store_config.get("aws_sts_endpoint"),
-            aws_external_id=self.vector_store_config.get("aws_external_id"),
+            aws_session_name=_get_str_or_none(self.vector_store_config.get("aws_session_name")),
+            aws_profile_name=_get_str_or_none(self.vector_store_config.get("aws_profile_name")),
+            aws_role_name=_get_str_or_none(self.vector_store_config.get("aws_role_name")),
+            aws_web_identity_token=_get_str_or_none(self.vector_store_config.get("aws_web_identity_token")),
+            aws_sts_endpoint=_get_str_or_none(self.vector_store_config.get("aws_sts_endpoint")),
+            aws_external_id=_get_str_or_none(self.vector_store_config.get("aws_external_id")),
         )
 
         # Create session with credentials
@@ -546,7 +559,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         if not file_content or not filename:
             verbose_logger.warning("No file content or filename provided for Bedrock ingestion")
-            return self.knowledge_base_id, None
+            return _get_str_or_none(self.knowledge_base_id), None
 
         # Step 1: Upload file to S3
         s3_client = self._get_boto3_client("s3")
@@ -602,5 +615,5 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                     verbose_logger.warning(f"Unknown ingestion status: {status}")
                     break
 
-        return self.knowledge_base_id, s3_key
+        return str(self.knowledge_base_id) if self.knowledge_base_id else None, s3_key
 
