@@ -530,6 +530,7 @@ featherless_ai_models: Set = set()
 palm_models: Set = set()
 groq_models: Set = set()
 azure_models: Set = set()
+azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
@@ -734,6 +735,8 @@ def add_known_models():
             groq_models.add(key)
         elif value.get("litellm_provider") == "azure":
             azure_models.add(key)
+        elif value.get("litellm_provider") == "azure_anthropic":
+            azure_anthropic_models.add(key)
         elif value.get("litellm_provider") == "anyscale":
             anyscale_models.add(key)
         elif value.get("litellm_provider") == "cerebras":
@@ -873,6 +876,7 @@ model_list = list(
     | palm_models
     | groq_models
     | azure_models
+    | azure_anthropic_models
     | anyscale_models
     | cerebras_models
     | galadriel_models
@@ -962,6 +966,7 @@ models_by_provider: dict = {
     "palm": palm_models,
     "groq": groq_models,
     "azure": azure_models | azure_text_models,
+    "azure_anthropic": azure_anthropic_models,
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
@@ -1113,6 +1118,7 @@ from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
+from .llms.azure.anthropic.transformation import AzureAnthropicConfig
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -1223,6 +1229,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation impor
 )
 from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+    AmazonBedrockOpenAIConfig,
 )
 
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
@@ -1430,6 +1439,7 @@ from .skills.main import (
 )
 from .containers.main import *
 from .ocr.main import *
+from .rag.main import *
 from .search.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
@@ -1465,6 +1475,9 @@ from .vector_stores.vector_store_registry import (
 
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
+
+### RAG ###
+from . import rag
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem

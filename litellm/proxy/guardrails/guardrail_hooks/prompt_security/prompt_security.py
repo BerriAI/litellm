@@ -1,13 +1,18 @@
-import os
-import re
 import asyncio
 import base64
+import os
+import re
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Type, Union
+
 from fastapi import HTTPException
+
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, httpxSpecialProvider
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
     Choices,
@@ -15,7 +20,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
-    ModelResponseStream
+    ModelResponseStream,
 )
 
 if TYPE_CHECKING:
@@ -267,8 +272,10 @@ class PromptSecurityGuardrail(CustomGuardrail):
             content = msg.get('content', '')
             # Handle both string and list content types
             if isinstance(content, str):
-                if content.startswith('### '): return False
-                if '"follow_ups": [' in content: return False
+                if content.startswith('### '):
+                    return False
+                if '"follow_ups": [' in content:
+                    return False
             return True
 
         messages = list(filter(lambda msg: good_msg(msg), messages))

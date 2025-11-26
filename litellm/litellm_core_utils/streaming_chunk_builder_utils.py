@@ -18,6 +18,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     Usage,
+    ServerToolUse
 )
 from litellm.utils import print_verbose, token_counter
 
@@ -418,7 +419,8 @@ class ChunkProcessor:
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
-
+        
+        server_tool_use: Optional[ServerToolUse] = None
         web_search_requests: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
@@ -462,6 +464,8 @@ class ChunkProcessor:
                     completion_tokens_details = usage_chunk_dict[
                         "completion_tokens_details"
                     ]
+                if hasattr(usage_chunk, 'server_tool_use') and usage_chunk.server_tool_use is not None:
+                    server_tool_use = usage_chunk.server_tool_use
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
                     and getattr(
@@ -483,6 +487,7 @@ class ChunkProcessor:
             completion_tokens=completion_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            server_tool_use=server_tool_use,
             web_search_requests=web_search_requests,
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
@@ -513,6 +518,9 @@ class ChunkProcessor:
             "cache_read_input_tokens"
         ]
 
+        server_tool_use: Optional[ServerToolUse] = calculated_usage_per_chunk[
+            "server_tool_use"
+        ]
         web_search_requests: Optional[int] = calculated_usage_per_chunk[
             "web_search_requests"
         ]
@@ -576,6 +584,8 @@ class ChunkProcessor:
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
 
+        if server_tool_use is not None:
+            returned_usage.server_tool_use = server_tool_use
         if web_search_requests is not None:
             if returned_usage.prompt_tokens_details is None:
                 returned_usage.prompt_tokens_details = PromptTokensDetailsWrapper(

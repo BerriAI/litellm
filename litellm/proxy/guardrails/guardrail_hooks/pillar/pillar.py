@@ -90,6 +90,10 @@ class PillarGuardrail(CustomGuardrail):
             fallback_on_error: Action when API errors occur ('allow' or 'block')
             timeout: Timeout for API calls in seconds
             **kwargs: Additional arguments passed to parent class
+
+        Note:
+            LiteLLM virtual key context (user_id, team_id, key_alias, etc.) is always
+            automatically passed as X-LiteLLM-* headers to enable application/user tracking.
         """
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key or os.environ.get("PILLAR_API_KEY")
@@ -222,7 +226,7 @@ class PillarGuardrail(CustomGuardrail):
             return data
 
         verbose_proxy_logger.debug("Pillar Guardrail: Pre-call hook")
-        result = await self.run_pillar_guardrail(data)
+        result = await self.run_pillar_guardrail(data, user_api_key_dict)
 
         # Add guardrail name to response headers
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -265,7 +269,7 @@ class PillarGuardrail(CustomGuardrail):
             return data
 
         verbose_proxy_logger.debug("Pillar Guardrail: During-call moderation hook")
-        result = await self.run_pillar_guardrail(data)
+        result = await self.run_pillar_guardrail(data, user_api_key_dict)
 
         # Add guardrail name to response headers
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -315,7 +319,7 @@ class PillarGuardrail(CustomGuardrail):
         post_call_data["messages"] = data.get("messages", []) + response_messages
 
         # Reuse the existing guardrail logic - zero duplication!
-        await self.run_pillar_guardrail(post_call_data)
+        await self.run_pillar_guardrail(post_call_data, user_api_key_dict)
 
         # Add guardrail name to response headers
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -326,12 +330,13 @@ class PillarGuardrail(CustomGuardrail):
     # CORE LOGIC METHOD
     # =========================================================================
 
-    async def run_pillar_guardrail(self, data: dict) -> dict:
+    async def run_pillar_guardrail(self, data: dict, user_api_key_dict: UserAPIKeyAuth) -> dict:
         """
         Core method to run the Pillar guardrail scan.
 
         Args:
             data: Request data containing messages and metadata
+            user_api_key_dict: User API key authentication info containing key context
 
         Returns:
             Original data if safe or in monitor mode
@@ -345,7 +350,7 @@ class PillarGuardrail(CustomGuardrail):
             return data
 
         try:
-            headers = self._prepare_headers()
+            headers = self._prepare_headers(user_api_key_dict)
             payload = self._prepare_payload(data)
 
             response = await self._call_pillar_api(
@@ -403,8 +408,16 @@ class PillarGuardrail(CustomGuardrail):
                 },
             )
 
-    def _prepare_headers(self) -> Dict[str, str]:
-        """Prepare headers for the Pillar API request."""
+    def _prepare_headers(self, user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str]:
+        """
+        Prepare headers for the Pillar API request.
+
+        Args:
+            user_api_key_dict: User API key authentication info containing key context
+
+        Returns:
+            Dictionary of headers to send to Pillar API
+        """
         if not self.api_key:
             msg = (
                 "Couldn't get Pillar API key, either set the `PILLAR_API_KEY` in the environment or "
@@ -415,13 +428,27 @@ class PillarGuardrail(CustomGuardrail):
         headers: Dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-        }
+        }    
 
         # Add Pillar-specific headers based on configuration
         self._set_bool_header(headers, "plr_scanners", self.include_scanners)
         self._set_bool_header(headers, "plr_evidence", self.include_evidence)
         self._set_bool_header(headers, "plr_async", self.async_mode)
         self._set_bool_header(headers, "plr_persist", self.persist_session)
+
+        # Always add LiteLLM virtual key context headers (metadata excluded for security)
+        context_mapping = {
+            "X-LiteLLM-Key-Name": user_api_key_dict.key_name,
+            "X-LiteLLM-Key-Alias": user_api_key_dict.key_alias,
+            "X-LiteLLM-User-Id": user_api_key_dict.user_id,
+            "X-LiteLLM-User-Email": user_api_key_dict.user_email,
+            "X-LiteLLM-Team-Id": user_api_key_dict.team_id,
+            "X-LiteLLM-Team-Name": user_api_key_dict.team_alias,
+            "X-LiteLLM-Org-Id": user_api_key_dict.org_id,
+        }
+        for header_name, value in context_mapping.items():
+            if value:
+                headers[header_name] = str(value)
 
         return headers
 
@@ -516,6 +543,14 @@ class PillarGuardrail(CustomGuardrail):
     def _prepare_payload(self, data: dict) -> Dict[str, Any]:
         """
         Prepare the payload for the Pillar API request following the /api/v1/protect contract.
+
+        This method supports multi-modal content (images, files, audio, video, etc.) as messages
+        are passed through without modification. The messages array can contain any OpenAI-compatible
+        message structure including:
+        - Text content (string)
+        - Multi-modal content blocks (image_url, image_file, audio, video, document, file)
+        - Attachments
+        - Tool calls
 
         Args:
             data: Request data

@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 import httpx
 from httpx._types import RequestFiles
 
+from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
@@ -23,8 +25,6 @@ from litellm.types.videos.utils import (
     encode_video_id_with_provider,
     extract_original_video_id,
 )
-from litellm.images.utils import ImageEditRequestUtils
-from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -163,7 +163,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
+        litellm_params: Optional[Union[GenericLiteLLMParams, dict]] = None,
     ) -> dict:
         """
         Validate environment and return headers for Vertex AI OCR.
@@ -172,10 +172,19 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         """
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
-        litellm_params = litellm_params or {}
+        if litellm_params is None:
+            litellm_params_dict: Dict[str, Any] = {}
+        elif isinstance(litellm_params, dict):
+            litellm_params_dict = litellm_params
+        else:
+            litellm_params_dict = litellm_params.model_dump()
         
-        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
-        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=litellm_params)
+        vertex_project = VertexBase.safe_get_vertex_ai_project(
+            litellm_params=litellm_params_dict
+        )
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
+            litellm_params=litellm_params_dict
+        )
         
         # Get access token from Vertex credentials
         access_token, project_id = self.get_access_token(
