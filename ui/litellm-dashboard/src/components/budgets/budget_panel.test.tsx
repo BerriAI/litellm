@@ -59,7 +59,7 @@ describe("Budget Panel", () => {
     fireEvent.click(rowClickableIcons[1]);
 
     await waitFor(() => {
-      expect(screen.getByText("Delete Budget")).toBeInTheDocument();
+      expect(screen.getByText("Delete Budget?")).toBeInTheDocument();
     });
   });
 });

@@ -705,3 +705,209 @@ async def test_get_tag_objects_batch():
     assert "tag:uncached-1" in cached_keys
     assert "tag:uncached-2" in cached_keys
     assert "tag:uncached-3" in cached_keys
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_raises_404_when_not_found():
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from fastapi import HTTPException
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_team_object(
+            team_id="nonexistent-team",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            check_cache_only=False,
+            check_db_only=True,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "Team doesn't exist in db" in str(exc_info.value.detail)
+
+
+# Reject Client-Side Metadata Tags Tests
+
+
+@pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_enabled_with_tags():
+    """Test that common_checks rejects request when reject_clientside_metadata_tags is True and metadata.tags is present"""
+    from litellm.proxy.auth.auth_checks import common_checks
+    from fastapi import Request
+
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+        "metadata": {"tags": ["custom-tag"]},
+    }
+
+    general_settings = {"reject_clientside_metadata_tags": True}
+
+    # Create a mock request object
+    mock_request = MagicMock(spec=Request)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings=general_settings,
+            route="/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=None,
+            request=mock_request,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.bad_request_error
+    assert "metadata.tags" in exc_info.value.message
+    assert exc_info.value.param == "metadata.tags"
+    assert exc_info.value.code == 400
+
+
+@pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_enabled_without_tags():
+    """Test that common_checks allows request when reject_clientside_metadata_tags is True but no metadata.tags is present"""
+    from litellm.proxy.auth.auth_checks import common_checks
+    from fastapi import Request
+
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+        "metadata": {"custom_field": "value"},  # No tags field
+    }
+
+    general_settings = {"reject_clientside_metadata_tags": True}
+
+    # Create a mock request object
+    mock_request = MagicMock(spec=Request)
+
+    # Should not raise an exception
+    result = await common_checks(
+        request_body=request_body,
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings=general_settings,
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=None,
+        request=mock_request,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_disabled_with_tags():
+    """Test that common_checks allows request with metadata.tags when reject_clientside_metadata_tags is False"""
+    from litellm.proxy.auth.auth_checks import common_checks
+    from fastapi import Request
+
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+        "metadata": {"tags": ["custom-tag"]},
+    }
+
+    general_settings = {"reject_clientside_metadata_tags": False}
+
+    # Create a mock request object
+    mock_request = MagicMock(spec=Request)
+
+    # Should not raise an exception
+    result = await common_checks(
+        request_body=request_body,
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings=general_settings,
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=None,
+        request=mock_request,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_not_set_with_tags():
+    """Test that common_checks allows request with metadata.tags when reject_clientside_metadata_tags is not set"""
+    from litellm.proxy.auth.auth_checks import common_checks
+    from fastapi import Request
+
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+        "metadata": {"tags": ["custom-tag"]},
+    }
+
+    general_settings = {}  # No reject_clientside_metadata_tags setting
+
+    # Create a mock request object
+    mock_request = MagicMock(spec=Request)
+
+    # Should not raise an exception
+    result = await common_checks(
+        request_body=request_body,
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings=general_settings,
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=None,
+        request=mock_request,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_non_llm_route():
+    """Test that reject_clientside_metadata_tags check only applies to LLM API routes"""
+    from litellm.proxy.auth.auth_checks import common_checks
+    from fastapi import Request
+
+    request_body = {
+        "metadata": {"tags": ["custom-tag"]},
+    }
+
+    general_settings = {"reject_clientside_metadata_tags": True}
+
+    # Create a mock request object
+    mock_request = MagicMock(spec=Request)
+
+    # Should not raise an exception for non-LLM route
+    result = await common_checks(
+        request_body=request_body,
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings=general_settings,
+        route="/key/generate",  # Management route, not LLM route
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=None,
+        request=mock_request,
+    )
+
+    assert result is True
