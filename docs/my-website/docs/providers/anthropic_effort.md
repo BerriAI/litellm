@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Anthropic Effort Parameter
 
 Control how many tokens Claude uses when responding with the `effort` parameter, trading off between response thoroughness and token efficiency.
