@@ -3,7 +3,13 @@
 Provide concrete examples of valid tool inputs to help Claude understand how to use your tools more effectively. This is particularly useful for complex tools with nested objects, optional parameters, or format-sensitive inputs.
 
 :::info
-Tool input examples is a beta feature. LiteLLM automatically adds the required `advanced-tool-use-2025-11-20` beta header when it detects tools with the `input_examples` field.
+Tool input examples is a beta feature. LiteLLM automatically detects tools with the `input_examples` field and adds the appropriate beta header based on your provider:
+
+- **Anthropic API & Microsoft Foundry**: `advanced-tool-use-2025-11-20`
+- **Amazon Bedrock**: `advanced-tool-use-2025-11-20` (Claude Opus 4.5 only)
+- **Google Cloud Vertex AI**: Not supported
+
+You don't need to manually specify beta headers—LiteLLM handles this automatically.
 :::
 
 ## When to Use Input Examples
@@ -378,13 +384,14 @@ Input examples work seamlessly with other Anthropic tool features:
 
 ## Provider Support
 
-LiteLLM supports input examples across all Anthropic-compatible providers:
+LiteLLM supports input examples across the following Anthropic-compatible providers:
 
-- **Standard Anthropic API** (`anthropic/claude-sonnet-4-5-20250929`)
-- **Azure Anthropic** (`azure/claude-sonnet-4-5-20250929`)
-- **Vertex AI Anthropic** (`vertex_ai/claude-sonnet-4-5-20250929`)
+- **Standard Anthropic API** (`anthropic/claude-sonnet-4-5-20250929`) ✅
+- **Azure Anthropic / Microsoft Foundry** (`azure/claude-sonnet-4-5-20250929`) ✅
+- **Amazon Bedrock** (`bedrock/invoke/anthropic.claude-opus-4-5-20251101-v1:0`) ✅ (Opus 4.5 only)
+- **Google Cloud Vertex AI** (`vertex_ai/claude-sonnet-4-5-20250929`) ❌ Not supported
 
-The beta header is automatically added when LiteLLM detects tools with `input_examples` field.
+The beta header (`advanced-tool-use-2025-11-20`) is automatically added when LiteLLM detects tools with the `input_examples` field.
 
 ## Troubleshooting
 
