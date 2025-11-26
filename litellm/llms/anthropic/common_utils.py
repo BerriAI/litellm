@@ -151,15 +151,22 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         
         return False
     
-    def is_effort_used(self, optional_params: Optional[dict]) -> bool:
+    def is_effort_used(self, optional_params: Optional[dict], model: Optional[str] = None) -> bool:
         """
-        Check if effort parameter is being used via output_config.
+        Check if effort parameter is being used.
         
-        Returns True if output_config with effort field is present.
+        Returns True if effort-related parameters are present.
         """
         if not optional_params:
             return False
         
+        # Check if reasoning_effort is provided for Claude Opus 4.5
+        if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
+            reasoning_effort = optional_params.get("reasoning_effort")
+            if reasoning_effort and isinstance(reasoning_effort, str):
+                return True
+        
+        # Check if output_config is directly provided
         output_config = optional_params.get("output_config")
         if output_config and isinstance(output_config, dict):
             effort = output_config.get("effort")
@@ -192,6 +199,75 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return computer_tool_beta_mapping.get(
             computer_tool_version, "computer-use-2024-10-22"  # Default fallback
         )
+
+    def get_anthropic_beta_list(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        tools: Optional[List] = None,
+        optional_params: Optional[dict] = None,
+        computer_tool_used: Optional[str] = None,
+        prompt_caching_set: bool = False,
+        file_id_used: bool = False,
+        mcp_server_used: bool = False,
+    ) -> List[str]:
+        """
+        Get list of beta headers based on provider and features used.
+        
+        This method provides provider-specific beta header values for different Anthropic features.
+        Different providers (Anthropic API, Bedrock, VertexAI, Microsoft Foundry) may require
+        different beta header values for the same feature.
+        
+        Returns:
+            List of beta header strings
+        """
+        from litellm.types.llms.anthropic import (
+            ANTHROPIC_EFFORT_BETA_HEADER,
+            ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
+        )
+        
+        betas = []
+        
+        # Detect features
+        tool_search_used = self.is_tool_search_used(tools)
+        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools)
+        input_examples_used = self.is_input_examples_used(tools)
+        effort_used = self.is_effort_used(optional_params, model)
+        
+        # Add beta headers based on provider
+        if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
+            if tool_search_used:
+                betas.append("tool-search-tool-2025-10-19")
+            # VertexAI doesn't support programmatic tool calling or input_examples yet
+        elif custom_llm_provider == "bedrock":
+            # Bedrock: tool-search only for Opus 4.5, advanced-tool-use for programmatic/input_examples
+            if tool_search_used and ("opus-4" in model.lower() or "opus_4" in model.lower()):
+                betas.append("tool-search-tool-2025-10-19")
+            if programmatic_tool_calling_used or input_examples_used:
+                betas.append(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)  # advanced-tool-use-2025-11-20
+        else:  # anthropic, azure (Microsoft Foundry), and others
+            # Direct API and Microsoft Foundry use advanced-tool-use for all
+            if tool_search_used or programmatic_tool_calling_used or input_examples_used:
+                betas.append(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)  # advanced-tool-use-2025-11-20
+        
+        if effort_used:
+            betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
+        
+        if computer_tool_used:
+            beta_header = self.get_computer_tool_beta_header(computer_tool_used)
+            betas.append(beta_header)
+        
+        if prompt_caching_set:
+            betas.append("prompt-caching-2024-07-31")
+        
+        if file_id_used:
+            betas.append("files-api-2025-04-14")
+            betas.append("code-execution-2025-05-22")
+        
+        if mcp_server_used:
+            betas.append("mcp-client-2025-04-04")
+        
+        return list(set(betas))
 
     def get_anthropic_headers(
         self,
@@ -278,7 +354,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         tool_search_used = self.is_tool_search_used(tools=tools)
         programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
         input_examples_used = self.is_input_examples_used(tools=tools)
-        effort_used = self.is_effort_used(optional_params=optional_params)
+        effort_used = self.is_effort_used(optional_params=optional_params, model=model)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )

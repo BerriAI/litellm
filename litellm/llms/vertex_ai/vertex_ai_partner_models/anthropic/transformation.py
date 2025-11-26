@@ -68,6 +68,26 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         )
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
+        
+        tools = optional_params.get("tools")
+        anthropic_beta_list = []
+        
+        auto_betas = self.get_anthropic_beta_list(
+            model=model,
+            custom_llm_provider=self.custom_llm_provider or "vertex_ai",
+            tools=tools,
+            optional_params=optional_params,
+            computer_tool_used=self.is_computer_tool_used(tools),
+            prompt_caching_set=self.is_cache_control_set(messages),
+            file_id_used=self.is_file_id_used(messages),
+            mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
+        )
+        anthropic_beta_list.extend(auto_betas)
+        
+        # Note: VertexAI uses tool-search-tool-2025-10-19 for tool search (different from direct API)
+        if anthropic_beta_list:
+            data["anthropic_beta"] = list(set(anthropic_beta_list))
+        
         return data
 
     def transform_response(
