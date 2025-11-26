@@ -1795,7 +1795,9 @@ def test_media_resolution_from_detail_parameter():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
     
     # Verify media_resolution is set in the inline_data
     # Note: Gemini adds a blank text part when there's no text, so we expect 2 parts
@@ -1837,7 +1839,9 @@ def test_media_resolution_low_detail():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
     
     # Find the part with inline_data
     image_part = None
@@ -1951,7 +1955,9 @@ def test_media_resolution_per_part():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
     
     # Should have one content with multiple parts
     assert len(contents) == 1
@@ -1966,6 +1972,41 @@ def test_media_resolution_per_part():
     image2_part = contents[0]["parts"][2]
     assert "inline_data" in image2_part
     assert image2_part["inline_data"]["mediaResolution"] == "high"
+
+
+def test_media_resolution_only_for_gemini_3_models():
+    """Ensure mediaResolution is not added for non-Gemini 3 models."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image,
+                        "detail": "high",
+                    },
+                }
+            ],
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-2.5-pro"
+    )
+    image_part = None
+    for part in contents[0]["parts"]:
+        if "inline_data" in part:
+            image_part = part
+            break
+    assert image_part is not None
+    assert "inline_data" in image_part
+    assert "mediaResolution" not in image_part["inline_data"]
 
 
 def test_gemini_3_image_models_no_thinking_config():
