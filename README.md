@@ -7,11 +7,13 @@
         <a href="https://railway.app/template/HLP0Ub?referralCode=jch2ME">
           <img src="https://railway.app/button.svg" alt="Deploy on Railway">
         </a>
+        <a href="https://northflank.com/stacks/deploy-litellm">
+          <img src="https://assets.northflank.com/deploy_to_northflank_smm_36700fb050.svg" alt="Deploy on Northflank">
+        </a>
         </p>
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, VertexAI, TogetherAI, Azure, OpenAI, Groq etc.]
         <br>
-    </p>
-<h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">LiteLLM Proxy Server (LLM Gateway)</a> | <a href="https://docs.litellm.ai/docs/enterprise#hosted-litellm-proxy" target="_blank"> Hosted Proxy</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
+    </p>ocs.litellm.ai/docs/simple_proxy" target="_blank">LiteLLM Proxy Server (LLM Gateway)</a> | <a href="https://docs.litellm.ai/docs/enterprise#hosted-litellm-proxy" target="_blank"> Hosted Proxy</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -130,6 +132,7 @@ response = asyncio.run(test_get_response())
 print(response)
 ```
 
+<h4 align="center"><a href="https://d
 ## Streaming ([Docs](https://docs.litellm.ai/docs/completion/stream))
 
 LiteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
