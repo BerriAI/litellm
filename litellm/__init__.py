@@ -20,6 +20,9 @@ from typing import (
     Literal,
     get_args,
     TYPE_CHECKING,
+    Tuple,
+    overload,
+    Type,
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
@@ -1044,8 +1047,6 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 openai_video_generation_models = ["sora-2"]
 
 from .timeout import timeout
-from .cost_calculator import completion_cost
-from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
@@ -1462,7 +1463,6 @@ from .vector_store_files.main import (
     update as vector_store_file_update,
 )
 from .scheduler import *
-from .cost_calculator import response_cost_calculator, cost_per_token
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
@@ -1520,3 +1520,70 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_gitlab_config
     global_gitlab_config = config
+
+
+# Lazy loading system for heavy modules to reduce initial import time and memory usage
+def _lazy_import_cost_calculator(name: str) -> Any:
+    """Lazy import for cost_calculator functions."""
+    from .cost_calculator import (
+        completion_cost as _completion_cost,
+        cost_per_token as _cost_per_token,
+        response_cost_calculator as _response_cost_calculator,
+    )
+    
+    _cost_functions = {
+        "completion_cost": _completion_cost,
+        "cost_per_token": _cost_per_token,
+        "response_cost_calculator": _response_cost_calculator,
+    }
+    
+    func = _cost_functions[name]
+    globals()[name] = func
+    return func
+
+
+def _lazy_import_litellm_logging(name: str) -> Any:
+    """Lazy import for litellm_logging module."""
+    try:
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as _Logging,
+            modify_integration as _modify_integration,
+        )
+        
+        _logging_objects = {
+            "Logging": _Logging,
+            "modify_integration": _modify_integration,
+        }
+        
+        obj = _logging_objects[name]
+        globals()[name] = obj
+        return obj
+    except Exception as e:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}. "
+            f"Lazy import failed: {e}"
+        ) from e
+
+
+_LAZY_LOAD_REGISTRY: Dict[str, Callable[[str], Any]] = {
+    "completion_cost": _lazy_import_cost_calculator,
+    "cost_per_token": _lazy_import_cost_calculator,
+    "response_cost_calculator": _lazy_import_cost_calculator,
+    "Logging": _lazy_import_litellm_logging,
+    "modify_integration": _lazy_import_litellm_logging,
+}
+
+
+if TYPE_CHECKING:
+    cost_per_token: Callable[..., Tuple[float, float]]
+    completion_cost: Callable[..., float]
+    response_cost_calculator: Any
+    modify_integration: Any
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for cost_calculator and litellm_logging functions."""
+    if name in _LAZY_LOAD_REGISTRY:
+        return _LAZY_LOAD_REGISTRY[name](name)
+    
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
