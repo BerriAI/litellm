@@ -7643,6 +7643,12 @@ class ProviderConfigManager:
             )
 
             return MilvusVectorStoreConfig()
+        elif litellm.LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.vector_stores.transformation import (
+                GeminiVectorStoreConfig,
+            )
+
+            return GeminiVectorStoreConfig()
         return None
 
     @staticmethod
