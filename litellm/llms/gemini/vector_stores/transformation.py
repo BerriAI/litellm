@@ -209,7 +209,6 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
                 
                 # Process each grounding chunk
                 for chunk in grounding_chunks:
-                    web_chunk = chunk.get("web")
                     retrieved_context = chunk.get("retrievedContext")
                     
                     if retrieved_context:
@@ -318,7 +317,6 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             store_name = response_data.get("name", "")
             display_name = response_data.get("displayName", "")
             create_time = response_data.get("createTime", "")
-            update_time = response_data.get("updateTime", "")
 
             # Convert ISO timestamp to Unix timestamp
             import datetime
