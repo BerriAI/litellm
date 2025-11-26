@@ -136,14 +136,16 @@ class VectorStoreRegistry:
         vector_store_ids: List[str] = []
 
         # 1. check if vector_store_ids is provided in the non_default_params
-        vector_store_ids = non_default_params.get("vector_store_ids", None) or []
+        vector_store_ids_param = non_default_params.get("vector_store_ids")
+        if isinstance(vector_store_ids_param, list):
+            vector_store_ids.extend(vector_store_ids_param)
 
         # 2. check if vector_store_ids is provided as a tool in the request
         vector_store_ids = self._get_vector_store_ids_from_tool_calls(
             tools=tools, vector_store_ids=vector_store_ids
         )
 
-        return vector_store_ids
+        return list(dict.fromkeys(vector_store_ids))
 
     def get_and_pop_recognised_vector_store_tools(
         self, tools: Optional[List[Dict]] = None, vector_store_ids: Optional[List[str]] = None

@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
@@ -54,6 +55,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
+    populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -1202,6 +1204,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
 
 
+
+
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
@@ -1223,6 +1227,9 @@ async def user_api_key_auth(
     """
 
     request_data = await _read_request_body(request=request)
+    request_data = populate_request_with_path_params(
+        request_data=request_data, request=request
+    )
     route: str = get_request_route(request=request)
 
     ## CHECK IF ROUTE IS ALLOWED
