@@ -599,6 +599,7 @@ async def pass_through_request(  # noqa: PLR0915
     stream: Optional[bool] = None,
     cost_per_request: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
+    guardrails_config: Optional[dict] = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -614,8 +615,13 @@ async def pass_through_request(  # noqa: PLR0915
         query_params: The query params
         stream: Whether to stream the response
         cost_per_request: Optional field - cost per request to the target endpoint
+        custom_llm_provider: Optional field - custom LLM provider for the endpoint
+        guardrails_config: Optional field - guardrails configuration for passthrough endpoint
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
+        PassthroughGuardrailHandler,
+    )
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     #########################################################
@@ -663,6 +669,25 @@ async def pass_through_request(  # noqa: PLR0915
                 url, headers, _parsed_body
             )
         )
+
+        ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
+        # Passthrough endpoints are opt-in only for guardrails
+        # When enabled, collect guardrails from org/team/key levels + passthrough-specific
+        guardrails_to_run = PassthroughGuardrailHandler.collect_guardrails(
+            user_api_key_dict=user_api_key_dict,
+            passthrough_guardrails_config=guardrails_config,
+        )
+        
+        # Add guardrails to metadata if any should run
+        if guardrails_to_run and len(guardrails_to_run) > 0:
+            if _parsed_body is None:
+                _parsed_body = {}
+            if "metadata" not in _parsed_body:
+                _parsed_body["metadata"] = {}
+            _parsed_body["metadata"]["guardrails"] = guardrails_to_run
+            verbose_proxy_logger.debug(
+                f"Added guardrails to passthrough request metadata: {guardrails_to_run}"
+            )
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         _parsed_body = await proxy_logging_obj.pre_call_hook(
@@ -1011,6 +1036,7 @@ def create_pass_through_route(
     custom_llm_provider: Optional[str] = None,
     is_streaming_request: Optional[bool] = False,
     query_params: Optional[dict] = None,
+    guardrails: Optional[Dict[str, Any]] = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -1079,6 +1105,7 @@ def create_pass_through_route(
                 "forward_headers": _forward_headers,
                 "merge_query_params": _merge_query_params,
                 "cost_per_request": cost_per_request,
+                "guardrails": None,
             }
 
             if passthrough_params is not None:
@@ -1096,6 +1123,7 @@ def create_pass_through_route(
             param_cost_per_request = target_params.get(
                 "cost_per_request", cost_per_request
             )
+            param_guardrails = target_params.get("guardrails", None)
 
             # Construct the full target URL with subpath if needed
             full_target = (
@@ -1135,6 +1163,7 @@ def create_pass_through_route(
                 custom_body=final_custom_body,
                 cost_per_request=cast(Optional[float], param_cost_per_request),
                 custom_llm_provider=custom_llm_provider,
+                guardrails_config=param_guardrails,
             )
 
     return endpoint_func
@@ -1769,6 +1798,7 @@ class InitPassThroughEndpointHelpers:
         dependencies: Optional[List],
         cost_per_request: Optional[float],
         endpoint_id: str,
+        guardrails: Optional[dict] = None,
     ):
         """Add exact path route for pass-through endpoint"""
         route_key = f"{endpoint_id}:exact:{path}"
@@ -1799,6 +1829,7 @@ class InitPassThroughEndpointHelpers:
                 merge_query_params,
                 dependencies,
                 cost_per_request=cost_per_request,
+                guardrails=guardrails,
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
@@ -1817,6 +1848,7 @@ class InitPassThroughEndpointHelpers:
                     "merge_query_params": merge_query_params,
                     "dependencies": dependencies,
                     "cost_per_request": cost_per_request,
+                    "guardrails": guardrails,
                 },
             }
 
@@ -1831,6 +1863,7 @@ class InitPassThroughEndpointHelpers:
         dependencies: Optional[List],
         cost_per_request: Optional[float],
         endpoint_id: str,
+        guardrails: Optional[dict] = None,
     ):
         """Add wildcard route for sub-paths"""
         wildcard_path = f"{path}/{{subpath:path}}"
@@ -1863,6 +1896,7 @@ class InitPassThroughEndpointHelpers:
                 dependencies,
                 include_subpath=True,
                 cost_per_request=cost_per_request,
+                guardrails=guardrails,
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
@@ -1879,8 +1913,10 @@ class InitPassThroughEndpointHelpers:
                     "custom_headers": custom_headers,
                     "forward_headers": forward_headers,
                     "merge_query_params": merge_query_params,
+                    "guardrails": guardrails,
                     "dependencies": dependencies,
                     "cost_per_request": cost_per_request,
+                    "guardrails": guardrails,
                 },
             }
 
@@ -2057,6 +2093,9 @@ async def initialize_pass_through_endpoints(
         if _target is None:
             continue
 
+        # Get guardrails config if present
+        _guardrails = endpoint.get("guardrails", None)
+        
         # Add exact path route
         verbose_proxy_logger.debug(
             "Initializing pass through endpoint: %s (ID: %s)", _path, endpoint_id
@@ -2071,6 +2110,7 @@ async def initialize_pass_through_endpoints(
             dependencies=_dependencies,
             cost_per_request=endpoint.get("cost_per_request", None),
             endpoint_id=endpoint_id,
+            guardrails=_guardrails,
         )
 
         visited_endpoints.add(f"{endpoint_id}:exact:{_path}")
@@ -2087,6 +2127,7 @@ async def initialize_pass_through_endpoints(
                 dependencies=_dependencies,
                 cost_per_request=endpoint.get("cost_per_request", None),
                 endpoint_id=endpoint_id,
+                guardrails=_guardrails,
             )
 
             visited_endpoints.add(f"{endpoint_id}:subpath:{_path}")
