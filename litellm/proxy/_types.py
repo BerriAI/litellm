@@ -1693,25 +1693,24 @@ class DynamoDBArgs(LiteLLMPydanticObjectBase):
     assume_role_aws_session_name: Optional[str] = None
 
 
-class PassThroughGuardrailConfig(LiteLLMPydanticObjectBase):
+class PassThroughGuardrailSettings(LiteLLMPydanticObjectBase):
     """
-    Configuration for guardrails on passthrough endpoints.
+    Settings for a specific guardrail on a passthrough endpoint.
     
-    Passthrough endpoints are opt-in only for guardrails. Guardrails configured at 
-    org/team/key levels will NOT execute unless explicitly enabled here.
+    Allows field-level targeting for guardrail execution.
     """
-    enabled: bool = Field(
-        default=False,
-        description="Whether to execute guardrails for this passthrough endpoint. When True, all org/team/key level guardrails will execute along with any passthrough-specific guardrails. When False (default), NO guardrails execute.",
-    )
-    specific: Optional[List[str]] = Field(
+    request_fields: Optional[List[str]] = Field(
         default=None,
-        description="Optional list of guardrail names that are specific to this passthrough endpoint. These will execute in addition to org/team/key level guardrails when enabled=True.",
+        description="JSONPath expressions for input field targeting (pre_call). Examples: 'query', 'documents[*].text', 'messages[*].content'. If not specified, guardrail runs on entire request payload.",
     )
-    target_fields: Optional[List[str]] = Field(
+    response_fields: Optional[List[str]] = Field(
         default=None,
-        description="Optional list of JSON paths to target specific fields for guardrail execution. Examples: 'messages[*].content', 'input', 'messages[?(@.role=='user')].content'. If not specified, guardrails execute on entire payload.",
+        description="JSONPath expressions for output field targeting (post_call). Examples: 'results[*].text', 'output'. If not specified, guardrail runs on entire response payload.",
     )
+
+
+# Type alias for the guardrails dict: guardrail_name -> settings (or None for defaults)
+PassThroughGuardrailsConfig = Dict[str, Optional[PassThroughGuardrailSettings]]
 
 
 class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
@@ -1739,9 +1738,9 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=False,
         description="Whether authentication is required for the pass-through endpoint. If True, requests to the endpoint will require a valid LiteLLM API key.",
     )
-    guardrails: Optional[PassThroughGuardrailConfig] = Field(
+    guardrails: Optional[PassThroughGuardrailsConfig] = Field(
         default=None,
-        description="Guardrail configuration for this passthrough endpoint. When enabled, org/team/key level guardrails will execute along with any passthrough-specific guardrails. Defaults to disabled (no guardrails execute).",
+        description="Guardrails configuration for this passthrough endpoint. Dict keys are guardrail names, values are optional settings for field targeting. When set, all org/team/key level guardrails will also execute. Defaults to None (no guardrails execute).",
     )
 
 

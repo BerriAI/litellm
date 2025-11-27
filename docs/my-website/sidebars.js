@@ -419,7 +419,8 @@ const sidebars = {
               ]
             },
             "pass_through/vllm",
-            "proxy/pass_through"
+            "proxy/pass_through",
+            "proxy/pass_through_guardrails"
           ]
         },
         "rag_ingest",

@@ -374,6 +374,9 @@ class Logging(LiteLLMLoggingBaseClass):
         # Init Caching related details
         self.caching_details: Optional[CachingDetails] = None
 
+        # Passthrough endpoint guardrails config for field targeting
+        self.passthrough_guardrails_config: Optional[Dict[str, Any]] = None
+
         self.model_call_details: Dict[str, Any] = {
             "litellm_trace_id": litellm_trace_id,
             "litellm_call_id": litellm_call_id,
