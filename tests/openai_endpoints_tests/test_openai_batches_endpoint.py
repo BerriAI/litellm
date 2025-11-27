@@ -2,13 +2,16 @@
 ## Tests /batches endpoints
 import pytest
 import asyncio
-import aiohttp, openai
-from openai import OpenAI, AsyncOpenAI
+
+import aiohttp, openai  # noqa: F401
+from openai import AsyncOpenAI, OpenAI
 from typing import Optional, List, Union
 import os
 import sys
 import time
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import litellm.proxy.proxy_server as proxy_server
 
 from litellm.proxy.batches_endpoints.endpoints import create_batch
 
