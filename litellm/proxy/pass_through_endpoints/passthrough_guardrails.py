@@ -261,7 +261,7 @@ class PassthroughGuardrailHandler:
         for guardrail_name in normalized_config.keys():
             guardrails_to_run[guardrail_name] = True
             verbose_proxy_logger.debug(
-                "Added passthrough-specific guardrail: %s", guardrail_name
+                "Added passthrough-specific guardrail"
             )
 
         # Add org/team/key level guardrails using shared helper
@@ -279,12 +279,12 @@ class PassthroughGuardrailHandler:
             if guardrail_name not in guardrails_to_run:
                 guardrails_to_run[guardrail_name] = True
                 verbose_proxy_logger.debug(
-                    "Added inherited guardrail (key/team level): %s", guardrail_name
+                    "Added inherited guardrail (key/team level)"
                 )
 
         verbose_proxy_logger.debug(
-            "Collected guardrails for passthrough endpoint: %s",
-            list(guardrails_to_run.keys()),
+            "Collected total guardrails for passthrough endpoint: %d",
+            len(guardrails_to_run),
         )
 
         return guardrails_to_run if guardrails_to_run else None
