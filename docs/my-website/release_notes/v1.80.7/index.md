@@ -1,5 +1,5 @@
 ---
-title: "v1.80.7-stable - RAG API, Skills API, and Organization Usage"
+title: "v1.80.7-stable - RAG API"
 slug: "v1-80-7"
 date: 2025-11-27T10:00:00
 authors:
@@ -45,8 +45,8 @@ pip install litellm==1.80.7
 
 ## Key Highlights
 
-- **New RAG API** - Unified RAG API with support for Vertex AI RAG engine and OpenAI Vector Stores
-- **Claude Skills API** - Support for Anthropic's new Skills API with extended context and tool calling
+- **New RAG API** -[Unified RAG API with support for Vertex AI RAG engine and OpenAI Vector Stores](../../docs/rag_ingest)
+- **Claude Skills API** - [Support for Anthropic's new Skills API with extended context and tool calling](../docs/skills)
 - **Organization Usage** - Filter and track usage analytics at the organization level
 - **Claude Opus 4.5** - Support for Anthropic's Claude Opus 4.5 via Anthropic, Bedrock, VertexAI
 - **Guardrails for Passthrough** - Guardrails support for pass-through endpoints
@@ -80,6 +80,7 @@ Users can now filter usage statistics by organization, providing the same granul
 | Provider | Supported Endpoints | Description |
 | -------- | ------------------- | ----------- |
 | [Public AI](../../docs/providers/publicai) | Chat completions | Support for publicai.co provider |
+| [Eleven Labs](../../docs/providers/text_to_speech) | Text-to-speech | Text-to-speech provider integration |
 
 ### New LLM API Endpoints
 
@@ -170,13 +171,13 @@ Users can now filter usage statistics by organization, providing the same granul
 - **[Cohere](../../docs/providers/cohere)**
     - Add cost tracking for cohere embed passthrough endpoint - [PR #17029](https://github.com/BerriAI/litellm/pull/17029)
 
+- **[Eleven Labs](../../docs/providers/text_to_speech)**
+    - Integrate eleven labs text-to-speech - [PR #16573](https://github.com/BerriAI/litellm/pull/16573)
+
 ### Bug Fixes
 
 - **[OCI](../../docs/providers/oci)**
     - Fix pydantic validation errors during tool call with streaming - [PR #16899](https://github.com/BerriAI/litellm/pull/16899)
-
-- **[Eleven Labs](../../docs/providers/elevenlabs)**
-    - Integrate eleven labs text-to-speech - [PR #16573](https://github.com/BerriAI/litellm/pull/16573)
 
 ---
 
@@ -184,15 +185,15 @@ Users can now filter usage statistics by organization, providing the same granul
 
 #### Features
 
-- **[Skills API (Anthropic)](../../docs/anthropic_skills_api)**
-    - New API - Claude Skills API with extended context and tool calling - [PR #17042](https://github.com/BerriAI/litellm/pull/17042)
+- **[Skills API (Anthropic)](../../docs/ski)**
+    - New API - Claude Skills API. Create, List, Delete, Update Claude Skills - [PR #17042](https://github.com/BerriAI/litellm/pull/17042), [Docs](../../docs/skills)
 
-- **[RAG API](../../docs/rag/overview)**
-    - New RAG API on LiteLLM AI Gateway - [PR #17109](https://github.com/BerriAI/litellm/pull/17109)
+- **[RAG API](../../docs/rag_ingest)**
+    - New RAG API on LiteLLM AI Gateway (use with OpenAI Vector Store, Bedrock Knowledge Bases, Vertex AI RAG Engine) - [PR #17109](https://github.com/BerriAI/litellm/pull/17109)
     - Add support for Vertex RAG engine - [PR #17117](https://github.com/BerriAI/litellm/pull/17117)
     - Allow internal user keys to access api, allow using litellm credentials with API - [PR #17169](https://github.com/BerriAI/litellm/pull/17169)
 
-- **[Search API](../../docs/providers/openai)**
+- **[Search API](../../docs/search/index)**
     - Add search API logging and cost tracking in LiteLLM Proxy - [PR #17078](https://github.com/BerriAI/litellm/pull/17078)
 
 - **[Responses API](../../docs/response_api)**
@@ -201,10 +202,10 @@ Users can now filter usage statistics by organization, providing the same granul
     - Fix mcp tool call response logging + remove unmapped param error mid-stream - allows gpt-5 web search to work via responses api - [PR #16946](https://github.com/BerriAI/litellm/pull/16946)
     - Add header passing support for MCP tools in Responses API - [PR #16877](https://github.com/BerriAI/litellm/pull/16877)
 
-- **[Images API](../../docs/image_generation)**
+- **[Image Edits API](../../docs/image_generation)**
     - Fix image edit endpoint - [PR #17046](https://github.com/BerriAI/litellm/pull/17046)
 
-- **[Audio API](../../docs/audio_transcription)**
+- **[Audio Transcription API](../../docs/audio_transcription)**
     - Add transcription exception handling for /audio/transcriptions - [PR #16791](https://github.com/BerriAI/litellm/pull/16791)
     - Fix 401 when audio/transcriptions - [PR #17023](https://github.com/BerriAI/litellm/pull/17023)
 
@@ -238,9 +239,6 @@ Users can now filter usage statistics by organization, providing the same granul
 
 #### Features
 
-- **Proxy CLI Auth**
-    - Add enforce user param functionality - [PR #17088](https://github.com/BerriAI/litellm/pull/17088)
-
 - **Virtual Keys**
     - Fix Create Key Duration - [PR #17170](https://github.com/BerriAI/litellm/pull/17170)
 
@@ -260,6 +258,7 @@ Users can now filter usage statistics by organization, providing the same granul
     - Better Loading State for Internal User Page - [PR #17168](https://github.com/BerriAI/litellm/pull/17168)
 
 - **Permission Management**
+    - Add `reject_metadata_tags` to prevent users from sending metadata.tags directly in requests - [PR #17088](https://github.com/BerriAI/litellm/pull/17088)
     - Disable global guardrails by key/team - [PR #16983](https://github.com/BerriAI/litellm/pull/16983)
     - Tool permission argument check - [PR #16982](https://github.com/BerriAI/litellm/pull/16982)
     - Add UI support for configuring tool permission guardrails - [PR #17050](https://github.com/BerriAI/litellm/pull/17050)
@@ -281,21 +280,15 @@ Users can now filter usage statistics by organization, providing the same granul
 - **Infrastructure**
     - Non Root Docker Build - [PR #17060](https://github.com/BerriAI/litellm/pull/17060)
     - Add nodejs and npm to docker image for prisma generate - [PR #16903](https://github.com/BerriAI/litellm/pull/16903)
-    - Upgrade websockets to v15 - [PR #16734](https://github.com/BerriAI/litellm/pull/16734)
     - Bump: version 0.4.8 → 0.4.9 - [PR #17163](https://github.com/BerriAI/litellm/pull/17163)
-    - Building UI - [PR #17212](https://github.com/BerriAI/litellm/pull/17212)
-    - Rebuilding UI - [PR #17213](https://github.com/BerriAI/litellm/pull/17213)
+
+- **Helm**
+    - Enhancement: ServiceMonitor template rendering - [PR #17038](https://github.com/BerriAI/litellm/pull/17038)
 
 #### Bugs
 
 - **Database**
     - Distinguish permission errors from idempotent errors in Prisma migrations - [PR #17064](https://github.com/BerriAI/litellm/pull/17064)
-
-- **MCP Gateway**
-    - Fix missing await - [PR #17103](https://github.com/BerriAI/litellm/pull/17103)
-
-- **Infrastructure**
-    - Enhancement(helm): ServiceMonitor template rendering - [PR #17038](https://github.com/BerriAI/litellm/pull/17038)
 
 ---
 
@@ -350,6 +343,7 @@ Users can now filter usage statistics by organization, providing the same granul
 
 - **Dependency Management**
     - Downgrade grpcio to < 1.68.0 - [PR #17090](https://github.com/BerriAI/litellm/pull/17090)
+    - Upgrade websockets to v15 - [PR #16734](https://github.com/BerriAI/litellm/pull/16734)
 
 - **Database Performance**
     - Optimize date filtering for spend logs queries - [PR #17073](https://github.com/BerriAI/litellm/pull/17073)
