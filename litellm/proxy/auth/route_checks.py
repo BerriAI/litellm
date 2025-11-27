@@ -241,11 +241,11 @@ class RouteChecks:
                     route_allowed = True
                     break
 
-	    if RouteChecks._route_matches_wildcard_pattern(
-		route=route, pattern=allowed_route
-	    ):
-		route_allowed = True
-		break
+                if RouteChecks._route_matches_wildcard_pattern(
+                    route=route, pattern=allowed_route
+                ):
+                    route_allowed = True
+                    break
 
             if not route_allowed:
                 RouteChecks._raise_admin_only_route_exception(
