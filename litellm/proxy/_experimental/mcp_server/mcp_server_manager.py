@@ -2023,25 +2023,6 @@ class MCPServerManager:
                 return server
         return None
 
-    def get_mcp_servers_from_ids(
-        self, server_ids: List[str]
-    ) -> List[MCPServer]:
-        """
-        Get MCP servers from a list of server IDs.
-
-        Args:
-            server_ids: List of server IDs to retrieve
-
-        Returns:
-            List of MCPServer objects corresponding to the provided IDs
-        """
-        servers: List[MCPServer] = []
-        for server_id in server_ids:
-            server = self.get_mcp_server_by_id(server_id)
-            if server:
-                servers.append(server)
-        return servers
-
     def _generate_stable_server_id(
         self,
         server_name: str,
