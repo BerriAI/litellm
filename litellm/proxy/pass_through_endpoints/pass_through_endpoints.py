@@ -1171,7 +1171,7 @@ def create_pass_through_route(
                 custom_body=final_custom_body,
                 cost_per_request=cast(Optional[float], param_cost_per_request),
                 custom_llm_provider=custom_llm_provider,
-                guardrails_config=param_guardrails,
+                guardrails_config=cast(Optional[dict], param_guardrails),
             )
 
     return endpoint_func
