@@ -12,7 +12,9 @@ test.describe("User Info View", () => {
     page,
   }) => {
     // Wait for loading state to disappear
-    await page.waitForSelector('text="Loading users..."', { state: "hidden" });
+    await page.waitForSelector('text="🚅 Loading users..."', {
+      state: "hidden",
+    });
     // Wait for users table to load
     await page.waitForSelector("table");
 
