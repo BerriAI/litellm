@@ -5653,6 +5653,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("MOONSHOT_API_KEY")
+        elif custom_llm_provider == "publicai":
+            if "PUBLICAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("PUBLICAI_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
