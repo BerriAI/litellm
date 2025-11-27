@@ -3,7 +3,14 @@ model_list:
     litellm_params:
       model: bedrock/openai/arn:aws:bedrock:us-east-1:046319184608:imported-model/0m2lasirsp6z
 
-    
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock
+      mode: "pre_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+
 
 # like MCPs/vector stores
 search_tools:
@@ -40,6 +47,14 @@ litellm_settings:
 
 general_settings:
   store_prompts_in_spend_logs: True
+  pass_through_endpoints:
+    - path: "/special/rerank"
+      target: "https://api.cohere.com/v1/rerank"
+      headers:
+        Authorization: "Bearer os.environ/COHERE_API_KEY"
+      guardrails:
+        bedrock-pre-guard:
+          request_fields: ["documents[*].text"]
 
 
 vector_store_registry:
