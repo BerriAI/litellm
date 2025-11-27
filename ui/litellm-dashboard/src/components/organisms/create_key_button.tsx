@@ -904,11 +904,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         : "Premium feature - Upgrade to disable global guardrails by key"
                     }
                   >
-                    <Switch 
-                      disabled={!premiumUser}
-                      checkedChildren="Yes"
-                      unCheckedChildren="No"
-                    />
+                    <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
                   <Form.Item
                     label={
@@ -973,7 +969,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       value={form.getFieldValue("allowed_passthrough_routes")}
                       accessToken={accessToken}
                       placeholder={
-                        !premiumUser ? "Premium feature - Upgrade to set pass through routes by key" : "Select or enter pass through routes"
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set pass through routes by key"
+                          : "Select or enter pass through routes"
                       }
                       disabled={!premiumUser}
                       teamId={selectedCreateKeyTeam ? selectedCreateKeyTeam.team_id : null}
@@ -1181,7 +1179,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         />
                       </div>
                     </AccordionBody>
-                    <Form.Item name="duration" hidden initialValue="">
+                    <Form.Item name="duration" hidden initialValue={null}>
                       <Input />
                     </Form.Item>
                   </Accordion>
