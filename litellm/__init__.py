@@ -1370,6 +1370,7 @@ from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
+from .llms.ragflow.chat.transformation import RAGFlowChatConfig
 from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
 from .llms.oci.chat.transformation import OCIChatConfig

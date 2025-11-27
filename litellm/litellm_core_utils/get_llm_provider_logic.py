@@ -258,6 +258,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
+                    elif endpoint == "localhost:9380/v1":
+                        custom_llm_provider = "ragflow"
+                        dynamic_api_key = get_secret_str("RAGFLOW_API_KEY")
                     elif endpoint == "https://api.v0.dev/v1":
                         custom_llm_provider = "v0"
                         dynamic_api_key = get_secret_str("V0_API_KEY")
@@ -757,6 +760,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "ragflow":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.RAGFlowChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "docker_model_runner":

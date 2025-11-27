@@ -604,6 +604,7 @@ const sidebars = {
         "providers/moonshot",
         "providers/morph",
         "providers/nebius",
+        "providers/ragflow",
         "providers/nlp_cloud",
         "providers/novita",
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
