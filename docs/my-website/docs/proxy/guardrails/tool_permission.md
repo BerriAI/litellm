@@ -7,9 +7,38 @@ import TabItem from '@theme/TabItem';
 LiteLLM provides the LiteLLM Tool Permission Guardrail that lets you control which **tool calls** a model is allowed to invoke, using configurable allow/deny rules. This offers fine-grained, provider-agnostic control over tool execution (e.g., OpenAI Chat Completions `tool_calls`, Anthropic Messages `tool_use`, MCP tools).
 
 ## Quick Start
-### 1. Define Guardrails on your LiteLLM config.yaml 
 
-Define your guardrails under the `guardrails` section
+### LiteLLM UI
+
+#### Step 1: Select Tool Permission Guardrail
+
+Open the LiteLLM Dashboard, click **Add New Guardrail**, and choose **LiteLLM Tool Permission Guardrail**. This loads the rule builder UI.
+
+<Image img={require('../../../img/create_guard_tool_permission.png')} alt="Configure tool permission guardrail in LiteLLM UI" />
+
+#### Step 2: Define Regex Rules
+
+1. Click **Add Rule**.
+2. Enter a unique Rule ID.
+3. Provide a regex for the tool name (e.g., `^mcp__github_.*$`).
+4. Optionally add a regex for tool type (e.g., `^function$`).
+5. Pick **Allow** or **Deny**.
+
+<Image img={require('../../../img/create_rule_tool_permission.png')} alt="Configure tool permission guardrail in LiteLLM UI" />
+
+#### Step 3: Restrict Tool Arguments (Optional)
+
+Select **+ Restrict tool arguments** to attach regex validations to nested paths (dot + `[]` notation). This enforces that sensitive parameters (such as `arguments.to[]`) conform to pre-approved formats.
+
+#### Step 4: Choose Defaults & Actions
+
+- Set the fallback decision (`default_action`) for tools that do not hit any rule.
+- Decide how disallowed tools behave: **Block** halts the request, **Rewrite** strips forbidden tools and returns an error message inside the response.
+- Customize `violation_message_template` if you want branded error copy.
+- Save the guardrail.
+
+### LiteLLM Config.yaml Setup
+
 ```yaml
 guardrails:
   - guardrail_name: "tool-permission-guardrail"
