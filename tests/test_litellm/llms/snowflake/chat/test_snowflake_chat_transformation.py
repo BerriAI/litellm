@@ -313,3 +313,172 @@ class TestSnowflakeToolTransformation:
         assert "tool_choice" in supported_params
         assert "temperature" in supported_params
         assert "max_tokens" in supported_params
+
+
+class TestSnowflakeAuthenticationHeaders:
+    """Test suite for Snowflake authentication header handling"""
+
+    def test_validate_environment_with_jwt(self):
+        """
+        Test that JWT tokens are handled correctly with KEYPAIR_JWT header.
+        """
+        config = SnowflakeConfig()
+        headers = {}
+
+        jwt_token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.test"
+
+        result_headers = config.validate_environment(
+            headers=headers,
+            model="mistral-7b",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key=jwt_token,
+            api_base=None,
+        )
+
+        assert result_headers["Authorization"] == f"Bearer {jwt_token}"
+        assert result_headers["X-Snowflake-Authorization-Token-Type"] == "KEYPAIR_JWT"
+        assert result_headers["Content-Type"] == "application/json"
+        assert result_headers["Accept"] == "application/json"
+
+    def test_validate_environment_with_pat_token(self):
+        """
+        Test that PAT tokens with pat/ prefix are handled correctly.
+        The pat/ prefix should be stripped and PROGRAMMATIC_ACCESS_TOKEN should be used.
+        """
+        config = SnowflakeConfig()
+        headers = {}
+
+        pat_token = "pat/abc123xyz789"
+        expected_token = "abc123xyz789"
+
+        result_headers = config.validate_environment(
+            headers=headers,
+            model="mistral-7b",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key=pat_token,
+            api_base=None,
+        )
+
+        assert result_headers["Authorization"] == f"Bearer {expected_token}"
+        assert result_headers["X-Snowflake-Authorization-Token-Type"] == "PROGRAMMATIC_ACCESS_TOKEN"
+        assert result_headers["Content-Type"] == "application/json"
+        assert result_headers["Accept"] == "application/json"
+
+    def test_validate_environment_missing_api_key(self):
+        """
+        Test that missing API key raises ValueError.
+        """
+        config = SnowflakeConfig()
+        headers = {}
+
+        with pytest.raises(ValueError, match="Missing Snowflake JWT or PAT key"):
+            config.validate_environment(
+                headers=headers,
+                model="mistral-7b",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+                api_base=None,
+            )
+
+
+class TestSnowflakeStreamingHandler:
+    """Test suite for Snowflake streaming response handling"""
+
+    def test_chunk_parser_with_created_field(self):
+        """
+        Test that streaming chunks with 'created' field are parsed correctly.
+        This is the standard case for models like mistral-7b and llama3.3.
+        """
+        from litellm.llms.snowflake.chat.transformation import (
+            SnowflakeChatCompletionStreamingHandler,
+        )
+
+        handler = SnowflakeChatCompletionStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        chunk = {
+            "id": "chatcmpl-123",
+            "created": 1234567890,
+            "model": "mistral-7b",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "Hello"},
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        result = handler.chunk_parser(chunk)
+
+        assert result.id == "chatcmpl-123"
+        assert result.created == 1234567890
+        assert result.model == "mistral-7b"
+        assert result.object == "chat.completion.chunk"
+        assert len(result.choices) == 1
+
+    def test_chunk_parser_without_created_field(self):
+        """
+        Test that streaming chunks WITHOUT 'created' field are parsed correctly.
+        This handles the case for Claude models (sonnet-3.5, sonnet-4-5) which
+        don't include the 'created' field in their streaming responses.
+        """
+        from litellm.llms.snowflake.chat.transformation import (
+            SnowflakeChatCompletionStreamingHandler,
+        )
+
+        handler = SnowflakeChatCompletionStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Chunk without 'created' field (like claude-sonnet-4-5)
+        chunk = {
+            "id": "chatcmpl-456",
+            "model": "claude-sonnet-4-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "Hi there"},
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        result = handler.chunk_parser(chunk)
+
+        assert result.id == "chatcmpl-456"
+        assert result.created is not None  # Should have a default timestamp
+        assert isinstance(result.created, int)  # Should be an integer timestamp
+        assert result.model == "claude-sonnet-4-5"
+        assert result.object == "chat.completion.chunk"
+        assert len(result.choices) == 1
+
+    def test_get_model_response_iterator(self):
+        """
+        Test that SnowflakeConfig returns the custom streaming handler.
+        """
+        from litellm.llms.snowflake.chat.transformation import (
+            SnowflakeChatCompletionStreamingHandler,
+            SnowflakeConfig,
+        )
+
+        config = SnowflakeConfig()
+
+        handler = config.get_model_response_iterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        assert isinstance(handler, SnowflakeChatCompletionStreamingHandler)

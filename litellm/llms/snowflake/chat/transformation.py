@@ -3,13 +3,15 @@ Support for Snowflake REST API
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+import time
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
 
 import httpx
 
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse, ModelResponseStream
 
 from ...openai_like.chat.transformation import OpenAIGPTConfig
 
@@ -187,20 +189,28 @@ class SnowflakeConfig(OpenAIGPTConfig):
         {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "Authorization": "Bearer " + <JWT>,
-            "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT"
+            "Authorization": "Bearer " + <JWT or PAT>,
+            "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT" or "PROGRAMMATIC_ACCESS_TOKEN"
         }
         """
 
         if api_key is None:
-            raise ValueError("Missing Snowflake JWT key")
+            raise ValueError("Missing Snowflake JWT or PAT key")
+
+        # Detect if using PAT token (prefixed with "pat/")
+        token_type = "KEYPAIR_JWT"
+        token = api_key
+
+        if api_key.startswith("pat/"):
+            token_type = "PROGRAMMATIC_ACCESS_TOKEN"
+            token = api_key[4:]  # Strip "pat/" prefix
 
         headers.update(
             {
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "Authorization": "Bearer " + api_key,
-                "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
+                "Authorization": "Bearer " + token,
+                "X-Snowflake-Authorization-Token-Type": token_type,
             }
         )
         return headers
@@ -351,3 +361,54 @@ class SnowflakeConfig(OpenAIGPTConfig):
             **optional_params,
             **extra_body,
         }
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        """
+        Return custom streaming handler for Snowflake that handles missing 'created' field.
+
+        Some Snowflake models (like claude-sonnet-4-5) may not include the 'created' field
+        in their streaming responses, so we need a more defensive chunk parser.
+        """
+        return SnowflakeChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class SnowflakeChatCompletionStreamingHandler(BaseModelResponseIterator):
+    """
+    Custom streaming handler for Snowflake Cortex API.
+
+    Handles cases where the 'created' field might be missing from streaming chunks,
+    which can occur with certain Snowflake models (e.g., claude-sonnet-4-5).
+    """
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        """
+        Parse a streaming chunk from Snowflake, providing defaults for missing fields.
+
+        Args:
+            chunk: The JSON chunk from Snowflake's streaming response
+
+        Returns:
+            ModelResponseStream with all required fields populated
+        """
+        try:
+            # Use current time as default if 'created' field is missing
+            created = chunk.get("created", int(time.time()))
+
+            return ModelResponseStream(
+                id=chunk["id"],
+                object="chat.completion.chunk",
+                created=created,
+                model=chunk["model"],
+                choices=chunk["choices"],
+            )
+        except Exception as e:
+            raise e
