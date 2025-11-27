@@ -1253,7 +1253,8 @@ class SSOAuthenticationHandler:
         Priority order:
         1. CLI state (if provided)
         2. GENERIC_CLIENT_STATE environment variable
-        3. Generated UUID for Okta (if Okta endpoint detected)
+        3. Generated UUID (required by Okta and most OAuth providers)
+
 
         Args:
             state: Optional state parameter (e.g., CLI state)
@@ -1275,13 +1276,8 @@ class SSOAuthenticationHandler:
             generic_client_state = os.getenv("GENERIC_CLIENT_STATE", None)
             if generic_client_state:
                 redirect_params["state"] = generic_client_state
-            elif (
-                generic_authorization_endpoint
-                and "okta" in generic_authorization_endpoint
-            ):
-                redirect_params["state"] = (
-                    uuid.uuid4().hex
-                )  # set state param for okta - required
+            else:
+                redirect_params["state"] = uuid.uuid4().hex
 
         # Handle PKCE (Proof Key for Code Exchange) if enabled
         # Set GENERIC_CLIENT_USE_PKCE=true to enable PKCE for enhanced OAuth security
