@@ -54,6 +54,7 @@ class BurnCloudVideoConfig(BaseVideoConfig):
             headers: dict,
             model: str,
             api_key: Optional[str] = None,
+            litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("BURNCLOUD_API_KEY")
