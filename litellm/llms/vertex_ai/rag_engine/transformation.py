@@ -4,7 +4,7 @@ Transformation utilities for Vertex AI RAG Engine.
 Handles transforming LiteLLM's unified formats to Vertex AI RAG Engine API format.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE

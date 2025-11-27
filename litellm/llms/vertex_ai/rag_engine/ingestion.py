@@ -28,7 +28,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
     from litellm import Router
-    from litellm.types.rag import RAGChunkingStrategy, RAGIngestOptions
+    from litellm.types.rag import RAGIngestOptions
 
 
 def _get_str_or_none(value: Any) -> Optional[str]:
