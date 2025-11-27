@@ -143,7 +143,7 @@ export interface ListPromptsResponse {
 }
 
 export interface Organization {
-  organization_id: string | null;
+  organization_id: string;
   organization_alias: string;
   budget_id: string;
   metadata: Record<string, any>;
@@ -1570,21 +1570,70 @@ export const transformRequestCall = async (accessToken: string, request: object)
   }
 };
 
-export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1) => {
-  /**
-   * Get daily user activity on proxy
-   */
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/daily/activity` : `/user/daily/activity`;
-    const queryParams = new URLSearchParams();
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
-    queryParams.append("page_size", "1000");
-    queryParams.append("page", page.toString());
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
+type DailyActivityQueryValue = string | number | string[] | null | undefined;
+
+const DEFAULT_DAILY_ACTIVITY_PAGE_SIZE = "1000";
+
+const appendDailyActivityQueryParam = (params: URLSearchParams, key: string, value: DailyActivityQueryValue) => {
+  if (value === null || value === undefined) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length > 0) {
+      params.append(key, value.join(","));
     }
+    return;
+  }
+
+  params.append(key, `${value}`);
+};
+
+const buildDailyActivityUrl = (
+  endpoint: string,
+  startTime: Date,
+  endTime: Date,
+  page: number,
+  extraQueryParams?: Record<string, DailyActivityQueryValue>,
+) => {
+  const resolvedEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  const baseUrl = proxyBaseUrl ? `${proxyBaseUrl}${resolvedEndpoint}` : resolvedEndpoint;
+
+  const params = new URLSearchParams();
+  params.append("start_date", formatDate(startTime));
+  params.append("end_date", formatDate(endTime));
+  params.append("page_size", DEFAULT_DAILY_ACTIVITY_PAGE_SIZE);
+  params.append("page", page.toString());
+
+  if (extraQueryParams) {
+    Object.entries(extraQueryParams).forEach(([key, value]) => {
+      appendDailyActivityQueryParam(params, key, value);
+    });
+  }
+
+  const queryString = params.toString();
+  return queryString ? `${baseUrl}?${queryString}` : baseUrl;
+};
+
+type DailyActivityCallOptions = {
+  accessToken: string;
+  endpoint: string;
+  startTime: Date;
+  endTime: Date;
+  page?: number;
+  extraQueryParams?: Record<string, DailyActivityQueryValue>;
+};
+
+const fetchDailyActivity = async ({
+  accessToken,
+  endpoint,
+  startTime,
+  endTime,
+  page = 1,
+  extraQueryParams,
+}: DailyActivityCallOptions) => {
+  try {
+    const url = buildDailyActivityUrl(endpoint, startTime, endTime, page, extraQueryParams);
 
     const response = await fetch(url, {
       method: "GET",
@@ -1604,9 +1653,22 @@ export const userDailyActivityCall = async (accessToken: string, startTime: Date
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error(`Failed to fetch daily activity (${endpoint}):`, error);
     throw error;
   }
+};
+
+export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1) => {
+  /**
+   * Get daily user activity on proxy
+   */
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/user/daily/activity",
+    startTime,
+    endTime,
+    page,
+  });
 };
 
 export const tagDailyActivityCall = async (
@@ -1619,42 +1681,16 @@ export const tagDailyActivityCall = async (
   /**
    * Get daily user activity on proxy
    */
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/daily/activity` : `/tag/daily/activity`;
-    const queryParams = new URLSearchParams();
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
-    queryParams.append("page_size", "1000");
-    queryParams.append("page", page.toString());
-    if (tags) {
-      queryParams.append("tags", tags.join(","));
-    }
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/tag/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      tags,
+    },
+  });
 };
 
 export const teamDailyActivityCall = async (
@@ -1667,43 +1703,36 @@ export const teamDailyActivityCall = async (
   /**
    * Get daily user activity on proxy
    */
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/daily/activity` : `/team/daily/activity`;
-    const queryParams = new URLSearchParams();
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
-    queryParams.append("page_size", "1000");
-    queryParams.append("page", page.toString());
-    if (teamIds) {
-      queryParams.append("team_ids", teamIds.join(","));
-    }
-    queryParams.append("exclude_team_ids", "litellm-dashboard");
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/team/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      team_ids: teamIds,
+      exclude_team_ids: "litellm-dashboard",
+    },
+  });
+};
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
+export const organizationDailyActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  organizationIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/organization/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      organization_ids: organizationIds,
+    },
+  });
 };
 
 export const getTotalSpendCall = async (accessToken: string) => {
