@@ -28,16 +28,41 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
 
 
 class AzureOpenAIRealtime(AzureChatCompletion):
-    def _construct_url(self, api_base: str, model: str, api_version: str) -> str:
+    def _construct_url(
+        self,
+        api_base: str,
+        model: str,
+        api_version: str,
+        realtime_protocol: Optional[str] = None,
+    ) -> str:
         """
-        Example output:
-        "wss://my-endpoint-sweden-berri992.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview";
+        Construct Azure realtime WebSocket URL.
 
+        Args:
+            api_base: Azure API base URL (will be converted from https:// to wss://)
+            model: Model deployment name
+            api_version: Azure API version
+            realtime_protocol: Protocol version to use:
+                - "GA" or "v1": Uses /openai/v1/realtime (GA path)
+                - "beta" or None: Uses /openai/realtime (beta path, default)
+
+        Returns:
+            WebSocket URL string
+
+        Examples:
+            beta/default: "wss://.../openai/realtime?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview"
+            GA/v1:        "wss://.../openai/v1/realtime?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview"
         """
         api_base = api_base.replace("https://", "wss://")
-        return (
-            f"{api_base}/openai/realtime?api-version={api_version}&deployment={model}"
-        )
+
+        # Determine path based on realtime_protocol
+        if realtime_protocol in ("GA", "v1"):
+            path = "/openai/v1/realtime"
+        else:
+            # Default to beta path for backwards compatibility
+            path = "/openai/realtime"
+
+        return f"{api_base}{path}?api-version={api_version}&deployment={model}"
 
     async def async_realtime(
         self,
@@ -50,6 +75,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         azure_ad_token: Optional[str] = None,
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
+        realtime_protocol: Optional[str] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -59,7 +85,9 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         if api_version is None:
             raise ValueError("api_version is required for Azure OpenAI calls")
 
-        url = self._construct_url(api_base, model, api_version)
+        url = self._construct_url(
+            api_base, model, api_version, realtime_protocol=realtime_protocol
+        )
 
         try:
             ssl_context = get_shared_realtime_ssl_context()

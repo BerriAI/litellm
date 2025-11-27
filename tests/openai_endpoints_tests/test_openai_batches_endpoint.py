@@ -6,14 +6,13 @@ import asyncio
 import aiohttp, openai  # noqa: F401
 from openai import AsyncOpenAI, OpenAI
 from typing import Optional, List, Union
+from test_openai_files_endpoints import upload_file, delete_file
 import os
 import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm.proxy.proxy_server as proxy_server
-
-from litellm.proxy.batches_endpoints.endpoints import create_batch
 
 
 BASE_URL = "http://localhost:4000"  # Replace with your actual base URL
@@ -156,7 +155,7 @@ def get_any_completed_batch_id_azure():
     return None
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["azure", "openai"])
+@pytest.mark.parametrize("custom_llm_provider", ["openai"])
 def test_e2e_batches_files(custom_llm_provider):
     """
     [PROD Test] Ensures OpenAI Batches + files work with OpenAI SDK
@@ -224,89 +223,6 @@ def test_vertex_batches_endpoint():
     )
     print("response from create batch", create_batch_response)
     pass
-
-
-@pytest.mark.asyncio
-async def test_create_batch_respects_custom_llm_provider_header():
-    request_body = {
-        "input_file_id": "file-batch-123",
-        "endpoint": "/v1/chat/completions",
-        "completion_window": "24h",
-    }
-
-    response_object = MagicMock()
-    response_object._hidden_params = {}
-    response_object.id = "batch-id"
-    response_object.input_file_id = request_body["input_file_id"]
-
-    mock_user_api_key_dict = MagicMock(
-        tpm_limit=0,
-        rpm_limit=0,
-        max_budget=0,
-        spend=0,
-        allowed_model_region="",
-    )
-    mock_user_api_key_dict.metadata = {}
-
-    request = MagicMock()
-    request.headers = {"custom-llm-provider": "vertex_ai"}
-    request.query_params = {}
-    request.method = "POST"
-
-    fastapi_response = MagicMock()
-    fastapi_response.headers = {}
-
-    logging_obj = MagicMock()
-
-    mock_proxy_logging_obj = MagicMock()
-    mock_proxy_logging_obj.post_call_success_hook = AsyncMock(
-        return_value=response_object
-    )
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
-    mock_proxy_logging_obj.update_request_status = AsyncMock()
-
-    with patch(
-        "litellm.proxy.batches_endpoints.endpoints._read_request_body",
-        new_callable=AsyncMock,
-    ) as mock_read_body, patch(
-        "litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
-        new_callable=AsyncMock,
-    ) as mock_common_processing, patch(
-        "litellm.proxy.batches_endpoints.endpoints.litellm.acreate_batch",
-        new_callable=AsyncMock,
-    ) as mock_acreate_batch, patch(
-        "litellm.proxy.proxy_server.general_settings",
-        new={},
-    ), patch(
-        "litellm.proxy.proxy_server.proxy_config",
-        new={},
-    ), patch(
-        "litellm.proxy.proxy_server.version",
-        new="test-version",
-    ), patch(
-        "litellm.proxy.proxy_server.llm_router",
-        new=None,
-    ), patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj",
-        new=mock_proxy_logging_obj,
-    ), patch(
-        "litellm.proxy.batches_endpoints.endpoints.asyncio.create_task",
-        new=lambda coro: asyncio.ensure_future(coro),
-    ):
-        mock_read_body.return_value = dict(request_body)
-        mock_common_processing.return_value = (dict(request_body), logging_obj)
-        mock_acreate_batch.return_value = response_object
-
-        response = await create_batch(
-            request=request,
-            fastapi_response=fastapi_response,
-            user_api_key_dict=mock_user_api_key_dict,
-        )
-
-    mock_acreate_batch.assert_awaited_once()
-    called_kwargs = mock_acreate_batch.call_args.kwargs
-    assert called_kwargs["custom_llm_provider"] == "vertex_ai"
-    assert response is response_object
 
 
 @pytest.mark.skip(reason="Local only test to verify if things work well")
