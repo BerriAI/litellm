@@ -154,16 +154,29 @@ class LoggingCallbackManager:
                 headers:
                 Authorization: Bearer sk-1234
         """
-        if (
-            callback in litellm.callback_settings
-            and litellm.callback_settings[callback]["callback_type"] == "generic_api"
-        ):
-            callback_config = litellm.callback_settings[callback]
-            return GenericAPILogger(
-                endpoint=callback_config["endpoint"],
-                headers=callback_config["headers"],
-                event_types=callback_config.get("event_types"),
+        callback_config = litellm.callback_settings.get(callback)
+
+        if not isinstance(callback_config, dict):
+            return callback
+
+        if callback_config.get("callback_type") != "generic_api":
+            return callback
+
+        endpoint = callback_config.get("endpoint")
+        headers = callback_config.get("headers")
+
+        if endpoint is None or headers is None:
+            verbose_logger.warning(
+                "generic_api callback '%s' is missing endpoint or headers, skipping.",
+                callback,
             )
+            return callback
+
+        return GenericAPILogger(
+            endpoint=endpoint,
+            headers=headers,
+            event_types=callback_config.get("event_types"),
+        )
         return callback
 
     def _safe_add_callback_to_list(
