@@ -12,7 +12,7 @@ __all__ = ["ingest", "aingest"]
 import asyncio
 import contextvars
 from functools import partial
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Type, Union
 
 import httpx
 
@@ -84,7 +84,7 @@ async def _execute_ingest_pipeline(
     provider = vector_store_config.get("custom_llm_provider", "openai")
 
     # Get provider-specific ingestion class
-    ingestion_class = get_rag_ingestion_class(provider)
+    ingestion_class = get_ingestion_class(provider)
 
     # Create ingestion instance
     ingestion = ingestion_class(
@@ -127,7 +127,10 @@ async def aingest(
         ```python
         response = await litellm.aingest(
             ingest_options={
-                "vector_store": {"custom_llm_provider": "openai"}
+                "vector_store": {
+                    "custom_llm_provider": "openai",
+                    "litellm_credential_name": "my-openai-creds",  # optional
+                }
             },
             file_url="https://example.com/doc.pdf",
         )
@@ -193,7 +196,10 @@ def ingest(
         ```python
         response = litellm.ingest(
             ingest_options={
-                "vector_store": {"custom_llm_provider": "openai"}
+                "vector_store": {
+                    "custom_llm_provider": "openai",
+                    "litellm_credential_name": "my-openai-creds",  # optional
+                }
             },
             file_data=("doc.txt", b"Hello world", "text/plain"),
         )
