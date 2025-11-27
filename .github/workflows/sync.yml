@@ -1,0 +1,36 @@
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # daily at 02:00 UTC (adjust as needed)
+  workflow_dispatch:
+  repository_dispatch:
+    types: [upstream_release]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/upstream-owner/litellm.git
+          git fetch upstream --tags
+      - name: Checkout branch
+        run: |
+          git checkout main
+      - name: Merge upstream/main
+        run: |
+          git merge --ff-only upstream/main || (echo "No fast-forward; creating merge commit" && git merge upstream/main --no-edit)
+      - name: Run tests
+        run: |
+          python -m pip install -r tests/requirements.txt
+          pytest -q
+      - name: Push to origin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push origin main
