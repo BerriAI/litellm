@@ -47,7 +47,7 @@ messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # PublicAI call
 response = completion(
-    model="publicai/swiss-ai-apertus", 
+    model="publicai/swiss-ai/apertus-8b-instruct", 
     messages=messages
 )
 
@@ -67,7 +67,7 @@ messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # PublicAI call with streaming
 response = completion(
-    model="publicai/swiss-ai-apertus", 
+    model="publicai/swiss-ai/apertus-8b-instruct", 
     messages=messages,
     stream=True
 )
@@ -82,9 +82,14 @@ Add the following to your LiteLLM Proxy configuration file:
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
-  - model_name: swiss-ai-apertus
+  - model_name: swiss-ai-apertus-8b
     litellm_params:
-      model: publicai/swiss-ai-apertus
+      model: publicai/swiss-ai/apertus-8b-instruct
+      api_key: os.environ/PUBLICAI_API_KEY
+
+  - model_name: swiss-ai-apertus-70b
+    litellm_params:
+      model: publicai/swiss-ai/apertus-70b-instruct
       api_key: os.environ/PUBLICAI_API_KEY
 ```
 
@@ -110,7 +115,7 @@ client = OpenAI(
 
 # Non-streaming response
 response = client.chat.completions.create(
-    model="swiss-ai-apertus",
+    model="swiss-ai-apertus-8b",
     messages=[{"role": "user", "content": "hello from litellm"}]
 )
 
@@ -128,7 +133,7 @@ client = OpenAI(
 
 # Streaming response
 response = client.chat.completions.create(
-    model="swiss-ai-apertus",
+    model="swiss-ai-apertus-8b",
     messages=[{"role": "user", "content": "hello from litellm"}],
     stream=True
 )
@@ -147,7 +152,7 @@ import litellm
 
 # Configure LiteLLM to use your proxy
 response = litellm.completion(
-    model="litellm_proxy/swiss-ai-apertus",
+    model="litellm_proxy/swiss-ai-apertus-8b",
     messages=[{"role": "user", "content": "hello from litellm"}],
     api_base="http://localhost:4000",
     api_key="your-proxy-api-key"
@@ -161,7 +166,7 @@ import litellm
 
 # Configure LiteLLM to use your proxy with streaming
 response = litellm.completion(
-    model="litellm_proxy/swiss-ai-apertus",
+    model="litellm_proxy/swiss-ai-apertus-8b",
     messages=[{"role": "user", "content": "hello from litellm"}],
     api_base="http://localhost:4000",
     api_key="your-proxy-api-key",
@@ -182,7 +187,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-api-key" \
   -d '{
-    "model": "swiss-ai-apertus",
+    "model": "swiss-ai-apertus-8b",
     "messages": [{"role": "user", "content": "hello from litellm"}]
   }'
 ```
@@ -192,7 +197,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-api-key" \
   -d '{
-    "model": "swiss-ai-apertus",
+    "model": "swiss-ai-apertus-8b",
     "messages": [{"role": "user", "content": "hello from litellm"}],
     "stream": true
   }'
