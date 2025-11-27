@@ -633,7 +633,14 @@ const sidebars = {
         "providers/volcano",
         "providers/voyage",
         "providers/wandb_inference",
-        "providers/watsonx",
+        {
+          type: "category",
+          label: "WatsonX",
+          items: [
+            "providers/watsonx/index",
+            "providers/watsonx/audio_transcription",
+          ]
+        },
         "providers/xai",
         "providers/xinference",
         "providers/burncloud",

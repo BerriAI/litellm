@@ -53,12 +53,14 @@ from typing_extensions import overload
 
 import litellm
 from litellm import (  # type: ignore
-    Logging,
     client,
     exception_type,
     get_litellm_params,
     get_optional_params,
 )
+# Logging is imported lazily when needed to avoid loading litellm_logging at import time
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -1154,7 +1156,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = base_url
         if num_retries is not None:
             max_retries = num_retries
-        logging: Logging = cast(Logging, litellm_logging_obj)
+        logging: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
             return completion_with_fallbacks(**args)
@@ -4162,7 +4164,7 @@ def embedding(  # noqa: PLR0915
 
     litellm_params_dict = get_litellm_params(**kwargs)
 
-    logging: Logging = litellm_logging_obj  # type: ignore
+    logging: LiteLLMLoggingObj = litellm_logging_obj  # type: ignore
     logging.update_environment_variables(
         model=model,
         user=user,
@@ -5899,7 +5901,7 @@ def speech(  # noqa: PLR0915
             kwargs=kwargs,
         )
 
-    logging_obj: Logging = cast(Logging, kwargs.get("litellm_logging_obj"))
+    logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
     logging_obj.update_environment_variables(
         model=model,
         user=user,
@@ -6256,6 +6258,10 @@ async def ahealth_check(
         }
     """
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+    from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
+    
+    # Use cached import helper to lazy-load Logging class (only loads when function is called)
+    Logging = get_litellm_logging_class()
 
     # Map modes to their corresponding health check calls
     #########################################################
@@ -6444,7 +6450,7 @@ def stream_chunk_builder(  # noqa: PLR0915
     messages: Optional[list] = None,
     start_time=None,
     end_time=None,
-    logging_obj: Optional[Logging] = None,
+    logging_obj: Optional["Logging"] = None,
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
         if chunks is None:

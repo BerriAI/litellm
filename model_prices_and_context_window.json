@@ -9522,6 +9522,15 @@
         "output_cost_per_token": 0.0,
         "supports_embedding_image_input": true
     },
+    "embed-multilingual-light-v3.0": {
+        "input_cost_per_token": 1e-04,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "supports_embedding_image_input": true
+    },
     "eu.amazon.nova-lite-v1:0": {
         "input_cost_per_token": 7.8e-08,
         "litellm_provider": "bedrock_converse",
@@ -10127,6 +10136,19 @@
         "mode": "chat",
         "output_cost_per_token": 8.8e-07,
         "source": "https://artificialanalysis.ai/models/glm-4-5-air",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "fireworks_ai/accounts/fireworks/models/glm-4p6": {
+        "input_cost_per_token": 0.55e-06,
+        "output_cost_per_token": 2.19e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 202800,
+        "max_output_tokens": 202800,
+        "max_tokens": 202800,
+        "mode": "chat",
+        "source": "https://fireworks.ai/pricing",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
@@ -19998,6 +20020,25 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
+    "openrouter/anthropic/claude-opus-4.5": {
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159
+    },
     "openrouter/anthropic/claude-sonnet-4.5": {
         "input_cost_per_image": 0.0048,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -26186,6 +26227,15 @@
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
         "supports_vision": false
+    },
+    "watsonx/whisper-large-v3-turbo": {
+        "input_cost_per_second": 0.0001,
+        "output_cost_per_second": 0.0001,
+        "litellm_provider": "watsonx",
+        "mode": "audio_transcription",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
     },
     "whisper-1": {
         "input_cost_per_second": 0.0001,

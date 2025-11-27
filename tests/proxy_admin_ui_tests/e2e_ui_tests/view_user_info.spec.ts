@@ -11,6 +11,10 @@ test.describe("User Info View", () => {
   test("should display user info when clicking on user ID", async ({
     page,
   }) => {
+    // Wait for loading state to disappear
+    await page.waitForSelector('text="🚅 Loading users..."', {
+      state: "hidden",
+    });
     // Wait for users table to load
     await page.waitForSelector("table");
 
