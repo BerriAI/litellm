@@ -164,3 +164,47 @@ class TestAnthropicBetaHeaderSupport:
         
         assert "anthropic_beta" in result
         assert result["anthropic_beta"] == supported_features
+
+    def test_anthropic_beta_excluded_for_non_claude_models(self):
+        """Test that anthropic_beta is NOT included for non-Claude models using provider detection."""
+        config = AmazonAnthropicClaudeMessagesConfig()
+        headers = {"anthropic-beta": "some-beta-feature"}
+
+        # Test with Qwen model (various formats)
+        for qwen_model in ["qwen3-72b", "bedrock/qwen3-72b", "qwen.qwen3-72b-v1:0"]:
+            result = config.transform_anthropic_messages_request(
+                model=qwen_model,
+                messages=[{"role": "user", "content": "test"}],
+                anthropic_messages_optional_request_params={},
+                litellm_params={},
+                headers=headers,
+            )
+            # anthropic_beta should NOT be in the request for non-Claude models
+            assert "anthropic_beta" not in result, f"anthropic_beta should not be present for {qwen_model}"
+
+        # Test with Nova model
+        result_nova = config.transform_anthropic_messages_request(
+            model="us.amazon.nova-pro-v1:0",
+            messages=[{"role": "user", "content": "test"}],
+            anthropic_messages_optional_request_params={},
+            litellm_params={},
+            headers=headers,
+        )
+        assert "anthropic_beta" not in result_nova
+
+        # Test with Claude models (various formats)
+        for claude_model in [
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "bedrock/claude-3-5-sonnet",
+        ]:
+            result_claude = config.transform_anthropic_messages_request(
+                model=claude_model,
+                messages=[{"role": "user", "content": "test"}],
+                anthropic_messages_optional_request_params={},
+                litellm_params={},
+                headers=headers,
+            )
+            # anthropic_beta SHOULD be in the request for Claude models
+            assert "anthropic_beta" in result_claude, f"anthropic_beta should be present for {claude_model}"
+            assert result_claude["anthropic_beta"] == ["some-beta-feature"]
