@@ -966,6 +966,7 @@ export default function ModelInfoView({
                             setIsDirty(false);
                             setIsEditing(false);
                           }}
+                          disabled={isSaving}
                         >
                           Cancel
                         </TremorButton>
