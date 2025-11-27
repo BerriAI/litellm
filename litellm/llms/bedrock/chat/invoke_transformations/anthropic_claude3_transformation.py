@@ -7,6 +7,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -92,28 +93,32 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
 
-        anthropic_beta_list = []
-        
-        user_betas = get_anthropic_beta_from_headers(headers)
-        if user_betas:
-            anthropic_beta_list.extend(user_betas)
-        
-        # Auto-detect and add beta headers using the new method
         tools = optional_params.get("tools")
+        tool_search_used = self.is_tool_search_used(tools)
+        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools)
+        input_examples_used = self.is_input_examples_used(tools)
+
+        beta_set = set(get_anthropic_beta_from_headers(headers))
         auto_betas = self.get_anthropic_beta_list(
             model=model,
-            custom_llm_provider=self.custom_llm_provider or "bedrock",
-            tools=tools,
             optional_params=optional_params,
             computer_tool_used=self.is_computer_tool_used(tools),
             prompt_caching_set=self.is_cache_control_set(messages),
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
         )
-        anthropic_beta_list.extend(auto_betas)
-        
-        if anthropic_beta_list:
-            _anthropic_request["anthropic_beta"] = list(set(anthropic_beta_list))
+        beta_set.update(auto_betas)
+
+        if (
+            tool_search_used
+            and not (programmatic_tool_calling_used or input_examples_used)
+        ):
+            beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
+            if "opus-4" in model.lower() or "opus_4" in model.lower():
+                beta_set.add("tool-search-tool-2025-10-19")
+
+        if beta_set:
+            _anthropic_request["anthropic_beta"] = list(beta_set)
 
         return _anthropic_request
 

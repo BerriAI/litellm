@@ -203,8 +203,6 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def get_anthropic_beta_list(
         self,
         model: str,
-        custom_llm_provider: str,
-        tools: Optional[List] = None,
         optional_params: Optional[dict] = None,
         computer_tool_used: Optional[str] = None,
         prompt_caching_set: bool = False,
@@ -212,43 +210,19 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         mcp_server_used: bool = False,
     ) -> List[str]:
         """
-        Get list of beta headers based on provider and features used.
-        
-        This method provides provider-specific beta header values for different Anthropic features.
-        Different providers (Anthropic API, Bedrock, VertexAI, Microsoft Foundry) may require
-        different beta header values for the same feature.
+        Get list of common beta headers based on the features that are active.
         
         Returns:
             List of beta header strings
         """
         from litellm.types.llms.anthropic import (
             ANTHROPIC_EFFORT_BETA_HEADER,
-            ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
         )
         
         betas = []
         
         # Detect features
-        tool_search_used = self.is_tool_search_used(tools)
-        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools)
-        input_examples_used = self.is_input_examples_used(tools)
         effort_used = self.is_effort_used(optional_params, model)
-        
-        # Add beta headers based on provider
-        if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
-            if tool_search_used:
-                betas.append("tool-search-tool-2025-10-19")
-            # VertexAI doesn't support programmatic tool calling or input_examples yet
-        elif custom_llm_provider == "bedrock":
-            # Bedrock: tool-search only for Opus 4.5, advanced-tool-use for programmatic/input_examples
-            if tool_search_used and ("opus-4" in model.lower() or "opus_4" in model.lower()):
-                betas.append("tool-search-tool-2025-10-19")
-            if programmatic_tool_calling_used or input_examples_used:
-                betas.append(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)  # advanced-tool-use-2025-11-20
-        else:  # anthropic, azure (Microsoft Foundry), and others
-            # Direct API and Microsoft Foundry use advanced-tool-use for all
-            if tool_search_used or programmatic_tool_calling_used or input_examples_used:
-                betas.append(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)  # advanced-tool-use-2025-11-20
         
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
