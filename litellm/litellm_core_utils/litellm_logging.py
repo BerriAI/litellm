@@ -4179,6 +4179,8 @@ class StandardLoggingPayloadSetup:
                 if messages is None:
                     return [{"role": "system", "content": kwargs.get("system")}]
                 elif isinstance(messages, list):
+                    if len(messages) == 0:
+                        return [{"role": "system", "content": kwargs.get("system")}]
                     # check for duplicates
                     if messages[0].get("role") == "system" and messages[0].get(
                         "content"
