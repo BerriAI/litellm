@@ -14,21 +14,16 @@ Key differences from OpenAI:
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from litellm import get_secret_str
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    get_async_httpx_client,
-)
 from litellm.llms.vertex_ai.rag_engine.transformation import VertexAIRAGTransformation
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
-from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
     from litellm import Router
-    from litellm.types.rag import RAGChunkingStrategy, RAGIngestOptions
+    from litellm.types.rag import RAGIngestOptions
 
 
 def _get_str_or_none(value: Any) -> Optional[str]:

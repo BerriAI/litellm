@@ -12,7 +12,7 @@ __all__ = ["ingest", "aingest"]
 import asyncio
 import contextvars
 from functools import partial
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Type, Union
 
 import httpx
 
@@ -84,7 +84,7 @@ async def _execute_ingest_pipeline(
     provider = vector_store_config.get("custom_llm_provider", "openai")
 
     # Get provider-specific ingestion class
-    ingestion_class = get_rag_ingestion_class(provider)
+    ingestion_class = get_ingestion_class(provider)
 
     # Create ingestion instance
     ingestion = ingestion_class(
