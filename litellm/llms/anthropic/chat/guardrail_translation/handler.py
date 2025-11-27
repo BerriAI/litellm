@@ -41,7 +41,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj=None,
+        litellm_logging_obj: Optional[Any] = None,
     ) -> Any:
         """
         Process input messages by applying guardrails to text content.
@@ -146,7 +146,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         response: "AnthropicMessagesResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj=None,
+        litellm_logging_obj: Optional[Any] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to text content.
