@@ -1917,6 +1917,9 @@ async def view_spend_logs(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
+    [DEPRECATED] This endpoint is not paginated and can cause performance issues.
+    Please use `/spend/logs/v2` instead for paginated access to spend logs.
+
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
 
     When start_date and end_date are provided:
