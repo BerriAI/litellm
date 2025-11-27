@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Callable, List, Optional, Set, Type, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Type, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from litellm import _custom_logger_compatible_callbacks_literal
 else:
     _custom_logger_compatible_callbacks_literal = str
+
+_generic_api_logger_cache: Dict[str, GenericAPILogger] = {}
 
 
 class LoggingCallbackManager:
@@ -164,6 +166,7 @@ class LoggingCallbackManager:
 
         endpoint = callback_config.get("endpoint")
         headers = callback_config.get("headers")
+        event_types = callback_config.get("event_types")
 
         if endpoint is None or headers is None:
             verbose_logger.warning(
@@ -172,12 +175,22 @@ class LoggingCallbackManager:
             )
             return callback
 
-        return GenericAPILogger(
+        cached_logger = _generic_api_logger_cache.get(callback)
+        if (
+            isinstance(cached_logger, GenericAPILogger)
+            and cached_logger.endpoint == endpoint
+            and cached_logger.headers == headers
+            and cached_logger.event_types == event_types
+        ):
+            return cached_logger
+
+        new_logger = GenericAPILogger(
             endpoint=endpoint,
             headers=headers,
-            event_types=callback_config.get("event_types"),
+            event_types=event_types,
         )
-        return callback
+        _generic_api_logger_cache[callback] = new_logger
+        return new_logger
 
     def _safe_add_callback_to_list(
         self,
