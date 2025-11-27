@@ -281,6 +281,30 @@ async def test_handle_async_request_uses_env_proxy_per_url(monkeypatch):
     assert proxied_count == 1
 
 
+@pytest.mark.asyncio
+async def test_handle_async_request_proxy_cache_per_host(monkeypatch):
+    """Aiohttp transport should only cache a proxy per host rather than full URL"""
+    proxy_url = "http://proxy.local:3128"
+    monkeypatch.setenv("NO_PROXY", "example.com")
+    monkeypatch.setenv("HTTP_PROXY", proxy_url)
+    monkeypatch.setenv("http_proxy", proxy_url)
+    monkeypatch.setenv("HTTPS_PROXY", proxy_url)
+    monkeypatch.setenv("https_proxy", proxy_url)
+    monkeypatch.delenv("DISABLE_AIOHTTP_TRUST_ENV", raising=False)
+
+    def factory():
+        return _make_mock_session()
+
+    transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
+    request = httpx.Request("GET", "http://foo.com/path1")
+    await transport.handle_async_request(request)
+
+    request = httpx.Request("GET", "http://foo.com/path2")
+    await transport.handle_async_request(request)
+
+    assert len(transport.proxy_cache) == 1
+
+
 def _make_mock_response(should_fail=False, fail_count={"count": 0}):
     """Helper to create a mock aiohttp response"""
 
