@@ -29,9 +29,14 @@ class TestPassthroughGuardrailHandlerIsEnabled:
         result = PassthroughGuardrailHandler.is_enabled({})
         assert result is False
 
-    def test_returns_false_when_config_is_not_dict(self):
-        """Guardrails should be disabled when config is not a dict."""
-        result = PassthroughGuardrailHandler.is_enabled(["pii-detection"])  # type: ignore
+    def test_returns_true_when_config_is_list(self):
+        """Guardrails should be enabled when config is a list of names."""
+        result = PassthroughGuardrailHandler.is_enabled(["pii-detection"])
+        assert result is True
+
+    def test_returns_false_when_config_is_invalid_type(self):
+        """Guardrails should be disabled when config is not a dict or list."""
+        result = PassthroughGuardrailHandler.is_enabled("pii-detection")  # type: ignore
         assert result is False
 
     def test_returns_true_when_config_has_guardrails(self):
@@ -66,6 +71,22 @@ class TestPassthroughGuardrailHandlerGetGuardrailNames:
         }
         result = PassthroughGuardrailHandler.get_guardrail_names(config)
         assert set(result) == {"pii-detection", "content-moderation"}
+
+
+class TestPassthroughGuardrailHandlerNormalizeConfig:
+    """Tests for PassthroughGuardrailHandler.normalize_config method."""
+
+    def test_normalizes_list_to_dict(self):
+        """List of guardrail names should be converted to dict with None values."""
+        config = ["pii-detection", "content-moderation"]
+        result = PassthroughGuardrailHandler.normalize_config(config)
+        assert result == {"pii-detection": None, "content-moderation": None}
+
+    def test_returns_dict_unchanged(self):
+        """Dict config should be returned as-is."""
+        config = {"pii-detection": {"request_fields": ["query"]}}
+        result = PassthroughGuardrailHandler.normalize_config(config)
+        assert result == config
 
 
 class TestPassthroughGuardrailHandlerGetSettings:
