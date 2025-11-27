@@ -1,7 +1,7 @@
 ---
-title: "[PREVIEW] v1.80.5.rc.2 - Gemini 3.0 Support"
-slug: "v1-80-5"
-date: 2025-11-22T10:00:00
+title: "[PREVIEW] v1.80.7.rc.1 - New RAG API"
+slug: "v1-80-7"
+date: 2025-11-27T10:00:00
 authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.5.rc.2
+ghcr.io/berriai/litellm:v1.80.7.rc.1
 ```
 
 </TabItem>
@@ -35,7 +35,7 @@ ghcr.io/berriai/litellm:v1.80.5.rc.2
 <TabItem value="pip" label="Pip">
 
 ```showLineNumbers title="pip install litellm"
-pip install litellm==1.80.5
+pip install litellm==1.80.7
 ```
 
 </TabItem>
@@ -43,11 +43,6 @@ pip install litellm==1.80.5
 
 ---
 
-## Key Highlights
-
-- **Gemini 3** - [Day-0 support for Gemini 3 models with thought signatures](../../blog/gemini_3)
-
----
 
 ### Organization Usage
 
@@ -65,93 +60,3 @@ Users can now filter usage statistics by organization, providing the same granul
 - Consistent filtering experience across all usage and analytics views
 
 ---
-
-### New Providers
-
-| Provider                                                            | Supported Endpoints    | Description                         |
-| ------------------------------------------------------------------- | ---------------------- | ----------------------------------- |
-| **[Docker Model Runner](../../docs/providers/docker_model_runner)** | `/v1/chat/completions` | Run LLM models in Docker containers |
-
----
-
-## New Models / Updated Models
-
-#### New Model Support
-
-| Provider | Model           | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features                                    |
-| -------- | --------------- | -------------- | ------------------- | -------------------- | ------------------------------------------- |
-| Azure    | `azure/gpt-5.1` | 272K           | $1.38               | $11.00               | Reasoning, vision, PDF input, responses API |
-
-#### Features
-
-### Bug Fixes
-
-- **[OpenAI](../../docs/providers/openai)**
-
-- **General**
-
----
-
-## LLM API Endpoints
-
-#### Features
-
-- **[Responses API](../../docs/response_api)**
-
-#### Bugs
-
-- **General**
-
----
-
-## Management Endpoints / UI
-
-#### Features
-
-#### Bugs
-
----
-
-## AI Integrations
-
-### Logging
-
----
-
-## Performance / Loadbalancing / Reliability improvements
-
----
-
-## Documentation Updates
-
-- **Provider Documentation**
-
-- **API Documentation**
-
-- **General Documentation**
-
----
-
-## Infrastructure / CI/CD
-
-- **UI Testing**
-
-- **Dependency Management**
-
-- **Migration**
-
-- **Config**
-
-- **Release Notes**
-
-- **Investigation**
-
----
-
-## New Contributors
-
----
-
-## Full Changelog
-
-**[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.80.0-nightly...v1.80.5.rc.2)**
