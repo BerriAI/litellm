@@ -1811,8 +1811,6 @@ class BaseLLMHTTPHandler:
         forwarded_headers = kwargs.get("headers", None)
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs = kwargs.get("extra_headers", None)
-        print("extra_headers_from_kwargs", extra_headers_from_kwargs)
-        print("provider_specific_headers", provider_specific_headers)
         # Merge all header sources: forwarded < extra_headers < provider_specific
         merged_headers = {}
         if forwarded_headers:
