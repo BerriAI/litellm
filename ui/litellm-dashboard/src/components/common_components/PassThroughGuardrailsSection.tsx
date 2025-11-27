@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Subtitle } from "@tremor/react";
-import { Form, Input, Select, Tooltip, Alert } from "antd";
-import { InfoCircleOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
+import { Form, Select, Tooltip, Alert } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import GuardrailSelector from "../guardrails/GuardrailSelector";
 
 interface PassThroughGuardrailsSectionProps {
