@@ -58,7 +58,7 @@ class PillarGuardrail(CustomGuardrail):
     using the Pillar Security API.
     """
 
-    SUPPORTED_ON_FLAGGED_ACTIONS = ["block", "monitor"]
+    SUPPORTED_ON_FLAGGED_ACTIONS = ["block", "monitor", "mask"]
     DEFAULT_ON_FLAGGED_ACTION = "monitor"
     SUPPORTED_FALLBACK_ACTIONS = ["allow", "block"]
     DEFAULT_FALLBACK_ACTION = "allow"
@@ -86,7 +86,7 @@ class PillarGuardrail(CustomGuardrail):
             guardrail_name: Name of the guardrail instance
             api_key: Pillar API key
             api_base: Pillar API base URL
-            on_flagged_action: Action to take when content is flagged ('block' or 'monitor')
+            on_flagged_action: Action to take when content is flagged ('block' or 'monitor' or 'mask')
             fallback_on_error: Action when API errors occur ('allow' or 'block')
             timeout: Timeout for API calls in seconds
             **kwargs: Additional arguments passed to parent class
@@ -353,8 +353,8 @@ class PillarGuardrail(CustomGuardrail):
                 payload=payload,
             )
 
-            # Process the response - handles blocking or monitoring
-            self._process_pillar_response(response, data)
+            # Process the response - handles blocking or monitoring or masking
+            data = self._process_pillar_response(response, data)
             return data
 
         except Exception as e:
@@ -422,6 +422,7 @@ class PillarGuardrail(CustomGuardrail):
         self._set_bool_header(headers, "plr_evidence", self.include_evidence)
         self._set_bool_header(headers, "plr_async", self.async_mode)
         self._set_bool_header(headers, "plr_persist", self.persist_session)
+        headers["plr_mask"] = "true" if self.on_flagged_action == "mask" else "false"
 
         return headers
 
@@ -586,7 +587,7 @@ class PillarGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug(f"Pillar Guardrail: Analysis complete - flagged={flagged}, session={session_id}")
         return res
 
-    def _process_pillar_response(self, pillar_response: Dict[str, Any], original_data: dict) -> None:
+    def _process_pillar_response(self, pillar_response: Dict[str, Any], original_data: dict) -> dict:
         """
         Process the Pillar API response and handle detections based on configuration.
 
@@ -594,11 +595,14 @@ class PillarGuardrail(CustomGuardrail):
             pillar_response: Response from Pillar API
             original_data: Original request data (modified in-place with session info)
 
+        Returns:
+            Original data if not flagged, modified data if flagged
+
         Raises:
-            HTTPException: If content is flagged and action is 'block'
+            HTTPException: If content is flagged and action is 'block' or 'mask'
         """
         if not pillar_response:
-            return
+            return original_data
 
         flagged = pillar_response.get("flagged", False)
 
@@ -613,11 +617,22 @@ class PillarGuardrail(CustomGuardrail):
                 original_data["metadata"]["pillar_session_id"] = pillar_session_id
 
         if flagged:
+            # Handle the response based on the on_flagged_action configuration
             verbose_proxy_logger.warning("Pillar Guardrail: Threat detected")
+            # Block the request - raise an HTTPException
             if self.on_flagged_action == "block":
                 self._raise_pillar_detection_exception(pillar_response)
+            # Mask the request - return the original data with the masked messages
+            elif self.on_flagged_action == "mask":
+                verbose_proxy_logger.info("Pillar Guardrail: Masking mode - masking flagged content")
+                original_data["messages"] = pillar_response.get("masked_session_messages", [])
+                return original_data
+            # Monitor the request - return the original data
             elif self.on_flagged_action == "monitor":
                 verbose_proxy_logger.info("Pillar Guardrail: Monitoring mode - allowing flagged content to proceed")
+                return original_data
+        # If not flagged, return the original data
+        return original_data
 
     def _raise_pillar_detection_exception(self, pillar_response: Dict[str, Any]) -> None:
         """
@@ -629,14 +644,19 @@ class PillarGuardrail(CustomGuardrail):
         Raises:
             HTTPException: Always raises with security detection details
         """
+
+        pillar_response_dict = {
+            "session_id": pillar_response.get("session_id"),
+        }
+        if self.include_scanners:
+            pillar_response_dict["scanners"] = pillar_response.get("scanners", {})
+        if self.include_evidence:
+            pillar_response_dict["evidence"] = pillar_response.get("evidence", [])
+
         error_detail = {
             "error": "Blocked by Pillar Security Guardrail",
             "detection_message": "Security threats detected",
-            "pillar_response": {
-                "session_id": pillar_response.get("session_id"),
-                "scanners": pillar_response.get("scanners", {}),
-                "evidence": pillar_response.get("evidence", []),
-            },
+            "pillar_response": pillar_response_dict,
         }
 
         verbose_proxy_logger.warning("Pillar Guardrail: Request blocked - Security threats detected")

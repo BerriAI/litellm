@@ -111,6 +111,17 @@ def pillar_monitor_guardrail(env_setup):
 
 
 @pytest.fixture
+def pillar_mask_guardrail(env_setup):
+    """Fixture providing a PillarGuardrail instance in mask mode."""
+    return PillarGuardrail(
+        guardrail_name="pillar-mask",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="mask",
+    )
+
+
+@pytest.fixture
 def user_api_key_dict():
     """Fixture providing UserAPIKeyAuth instance."""
     return UserAPIKeyAuth()
@@ -197,6 +208,31 @@ def pillar_flagged_response():
                 "pii": False,
                 "toxic_language": False,
             },
+        },
+        status_code=200,
+        request=Request(
+            method="POST", url="https://api.pillar.security/api/v1/protect"
+        ),
+    )
+
+
+@pytest.fixture
+def pillar_flagged_response_with_masked_messages():
+    """Fixture providing a flagged Pillar API response with masked messages."""
+    return Response(
+        json={
+            "session_id": "e95a5313-5260-4ca4-ac4b-468a5d591951",
+            "flagged": True,
+            "masked_session_messages": [
+                {
+                    "role": "user",
+                    "content": "Hi, I need help with my account. My email is <EMAIL> and my phone number is <PHONE_NUMBER>. Can you help me reset my password?",
+                },
+                {
+                    "role": "assistant",
+                    "content": "I can help you reset your password. I'll send a reset link to <EMAIL>. Please check your inbox.",
+                },
+            ],
         },
         status_code=200,
         request=Request(
@@ -389,6 +425,100 @@ async def test_pre_call_hook_flagged_content_monitor(
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_flagged_content_mask(
+    pillar_mask_guardrail,
+    user_api_key_dict,
+    dual_cache,
+    pillar_flagged_response_with_masked_messages,
+):
+    """Test pre-call hook replaces messages with masked versions when action is 'mask'."""
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hi, I need help with my account. My email is john.doe@example.com and my phone number is 555-123-4567. Can you help me reset my password?",
+            },
+        ],
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response_with_masked_messages,
+    ):
+        result = await pillar_mask_guardrail.async_pre_call_hook(
+            data=request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    masked_messages = pillar_flagged_response_with_masked_messages.json()[
+        "masked_session_messages"
+    ]
+    assert result["messages"] == masked_messages
+    assert result["model"] == request_data["model"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_mask_header_sent(
+    pillar_mask_guardrail,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_clean_response,
+):
+    """Test that plr_mask header is sent when masking is enabled."""
+    captured_headers: Dict[str, str] = {}
+
+    async def _mock_post(*args, **kwargs):
+        captured_headers.update(kwargs.get("headers", {}))
+        return pillar_clean_response
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=_mock_post,
+    ):
+        await pillar_mask_guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    assert captured_headers.get("plr_mask") == "true"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_mask_header_not_sent_when_monitor(
+    pillar_monitor_guardrail,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_clean_response,
+):
+    """Test that plr_mask header is 'false' when masking is not enabled."""
+    captured_headers: Dict[str, str] = {}
+
+    async def _mock_post(*args, **kwargs):
+        captured_headers.update(kwargs.get("headers", {}))
+        return pillar_clean_response
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=_mock_post,
+    ):
+        await pillar_monitor_guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    assert captured_headers.get("plr_mask") == "false"
+
+
+@pytest.mark.asyncio
 async def test_moderation_hook(
     pillar_guardrail_instance,
     sample_request_data,
@@ -500,6 +630,7 @@ async def test_pre_call_hook_custom_header_overrides(
     assert captured_headers.get("plr_async") == "true"
     assert captured_headers.get("plr_scanners") == "false"
     assert captured_headers.get("plr_evidence") == "false"
+    assert captured_headers.get("plr_mask") == "false"
 
 
 # ============================================================================
@@ -778,6 +909,95 @@ def test_get_config_model():
     config_model = PillarGuardrail.get_config_model()
     assert config_model is not None
     assert hasattr(config_model, "ui_friendly_name")
+
+
+# ============================================================================
+# MASKING TESTS
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_mask_with_pii_in_conversation(
+    pillar_mask_guardrail,
+    user_api_key_dict,
+    dual_cache,
+    pillar_flagged_response_with_masked_messages,
+):
+    """Test masking replaces messages with masked_session_messages containing sanitized PII."""
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hi, I need help with my account. My email is john.doe@example.com and my phone number is 555-123-4567. Can you help me reset my password?",
+            },
+            {
+                "role": "assistant",
+                "content": "I can help you reset your password. I'll send a reset link to john.doe@example.com. Please check your inbox.",
+            },
+        ],
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response_with_masked_messages,
+    ):
+        result = await pillar_mask_guardrail.async_pre_call_hook(
+            data=request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    masked_messages = pillar_flagged_response_with_masked_messages.json()[
+        "masked_session_messages"
+    ]
+    assert result["messages"] == masked_messages
+    # Verify PII was masked
+    assert any(
+        "<EMAIL>" in str(msg.get("content", "")) for msg in result["messages"]
+    )
+    assert any(
+        "<PHONE_NUMBER>" in str(msg.get("content", "")) for msg in result["messages"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_mask_empty_masked_messages_fallback(
+    pillar_mask_guardrail,
+    user_api_key_dict,
+    dual_cache,
+):
+    """Test that empty masked_session_messages results in empty messages list."""
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    response_with_empty_mask = Response(
+        json={
+            "session_id": "test-session",
+            "flagged": True,
+            "masked_session_messages": [],
+        },
+        status_code=200,
+        request=Request(
+            method="POST", url="https://api.pillar.security/api/v1/protect"
+        ),
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response_with_empty_mask,
+    ):
+        result = await pillar_mask_guardrail.async_pre_call_hook(
+            data=request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    assert result["messages"] == []
 
 
 if __name__ == "__main__":
