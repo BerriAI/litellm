@@ -1,31 +1,29 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
+import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
+import { all_admin_roles } from "@/utils/roles";
+import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels, Text } from "@tremor/react";
 import type { FormInstance } from "antd";
+import { Select as AntdSelect, Button, Card, Col, Form, Modal, Row, Tooltip, Typography } from "antd";
 import type { UploadProps } from "antd/es/upload";
-import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import LiteLLMModelNameField from "./litellm_model_name";
-import ConditionalPublicModelName from "./conditional_public_model_name";
-import ProviderSpecificFields from "./provider_specific_fields";
-import AdvancedSettings from "./advanced_settings";
-import { Providers, providerLogoMap } from "../provider_info_helpers";
+import React, { useEffect, useMemo, useState } from "react";
+import TeamDropdown from "../common_components/team_dropdown";
 import type { Team } from "../key_team_helpers/key_list";
 import {
   type CredentialItem,
   type ProviderCreateInfo,
   getGuardrailsList,
-  getProviderCreateMetadata,
   modelAvailableCall,
   tagListCall,
 } from "../networking";
-import ConnectionErrorDisplay from "./model_connection_test";
-import { TEST_MODES } from "./add_model_modes";
-import { Row, Col } from "antd";
-import { Text, Switch } from "@tremor/react";
-import TeamDropdown from "../common_components/team_dropdown";
-import { all_admin_roles } from "@/utils/roles";
-import AddAutoRouterTab from "./add_auto_router_tab";
-import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import { Providers, providerLogoMap } from "../provider_info_helpers";
 import { Tag } from "../tag_management/types";
+import AddAutoRouterTab from "./add_auto_router_tab";
+import { TEST_MODES } from "./add_model_modes";
+import AdvancedSettings from "./advanced_settings";
+import ConditionalPublicModelName from "./conditional_public_model_name";
+import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import LiteLLMModelNameField from "./litellm_model_name";
+import ConnectionErrorDisplay from "./model_connection_test";
+import ProviderSpecificFields from "./provider_specific_fields";
 
 interface AddModelTabProps {
   form: FormInstance; // For the Add Model tab
@@ -76,9 +74,11 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
   // Provider metadata for driving the provider select from backend config
-  const [providerMetadata, setProviderMetadata] = useState<ProviderCreateInfo[] | null>(null);
-  const [isProviderMetadataLoading, setIsProviderMetadataLoading] = useState<boolean>(false);
-  const [providerMetadataError, setProviderMetadataError] = useState<string | null>(null);
+  const {
+    data: providerMetadata,
+    isLoading: isProviderMetadataLoading,
+    error: providerMetadataError,
+  } = useProviderFields();
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -106,37 +106,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
     fetchTags();
   }, [accessToken]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchProviderMetadata = async () => {
-      setIsProviderMetadataLoading(true);
-      setProviderMetadataError(null);
-      try {
-        const metadata = await getProviderCreateMetadata();
-        if (!isMounted) {
-          return;
-        }
-        setProviderMetadata(metadata);
-      } catch (error) {
-        console.error("Failed to fetch provider metadata:", error);
-        if (isMounted) {
-          setProviderMetadataError("Failed to load providers");
-        }
-      } finally {
-        if (isMounted) {
-          setIsProviderMetadataLoading(false);
-        }
-      }
-    };
-
-    fetchProviderMetadata();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   // Test connection when button is clicked
   const handleTestConnection = async () => {
@@ -167,6 +136,12 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
     }
     return [...providerMetadata].sort((a, b) => a.provider_display_name.localeCompare(b.provider_display_name));
   }, [providerMetadata]);
+
+  const providerMetadataErrorText = providerMetadataError
+    ? providerMetadataError instanceof Error
+      ? providerMetadataError.message
+      : "Failed to load providers"
+    : null;
 
   const isAdmin = all_admin_roles.includes(userRole);
 
@@ -232,9 +207,9 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                         });
                       }}
                     >
-                      {providerMetadataError && sortedProviderMetadata.length === 0 && (
+                      {providerMetadataErrorText && sortedProviderMetadata.length === 0 && (
                         <AntdSelect.Option key="__error" value="">
-                          {providerMetadataError}
+                          {providerMetadataErrorText}
                         </AntdSelect.Option>
                       )}
                       {sortedProviderMetadata.map((providerInfo) => {
