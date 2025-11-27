@@ -123,7 +123,8 @@ Users can now filter usage statistics by organization, providing the same granul
 
 - **[Anthropic](../../docs/providers/anthropic)**
     - Add claude opus 4.5 model support - [PR #17043](https://github.com/BerriAI/litellm/pull/17043)
-    - Add day 0 support for anthropic new Skills API features - [PR #17091](https://github.com/BerriAI/litellm/pull/17091)
+    - Add day 0 support for anthropic Tool Search, Programmatic Tool Calling, Input Examples, Effort Parameter - [PR #17091](https://github.com/BerriAI/litellm/pull/17091), [Docs](../../blog/anthropic_opus_4_5_and_advanced_features)
+    - Add Anthropic Effort Parameter support - [PR #17091](https://github.com/BerriAI/litellm/pull/17091)
 
 - **[Bedrock](../../docs/providers/bedrock)**
     - Fix bedrock claude opus 4.5 inference profile - only global currently - [PR #17101](https://github.com/BerriAI/litellm/pull/17101)
