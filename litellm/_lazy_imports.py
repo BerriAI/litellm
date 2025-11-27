@@ -6,7 +6,10 @@ def _get_litellm_globals() -> dict:
     return sys.modules["litellm"].__dict__
 
 # Lazy import for utils module - imports only the requested item by name.
-def _lazy_import_utils(name: str) -> Any:
+# Note: PLR0915 (too many statements) is suppressed because the many if statements
+# are intentional - each attribute is imported individually only when requested,
+# ensuring true lazy imports rather than importing the entire utils module.
+def _lazy_import_utils(name: str) -> Any:  # noqa: PLR0915
     """Lazy import for utils module - imports only the requested item by name."""
     _globals = _get_litellm_globals()
     if name == "exception_type":
