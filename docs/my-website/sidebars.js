@@ -797,10 +797,10 @@ const sidebars = {
               "Learn how to deploy + call models from different providers on LiteLLM",
             slug: "/project",
           },
-          items: [
-            "projects/openai-agents",
+          items: [        
             "projects/smolagents",
             "projects/mini-swe-agent",
+            "projects/openai-agents",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",
