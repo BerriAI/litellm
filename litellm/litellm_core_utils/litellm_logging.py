@@ -165,9 +165,6 @@ try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
     )
-    from litellm_enterprise.enterprise_callbacks.generic_api_callback import (
-        GenericAPILogger,
-    )
     from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
         PagerDutyAlerting,
     )
@@ -180,6 +177,8 @@ try:
     from litellm_enterprise.litellm_core_utils.litellm_logging import (
         StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
     )
+
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 
     EnterpriseStandardLoggingPayloadSetupVAR: Optional[
         Type[EnterpriseStandardLoggingPayloadSetup]
@@ -315,6 +314,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 for m in messages:
                     new_messages.append({"role": "user", "content": m})
                 messages = new_messages
+
         self.model = model
         self.messages = copy.deepcopy(messages)
         self.stream = stream
@@ -4106,10 +4106,8 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> Dict:
         otel:
             message_logging: False
     """
-    from litellm.proxy.proxy_server import callback_settings
-
-    if callback_settings:
-        return dict(callback_settings.get(callback_name, {}))
+    if litellm.callback_settings:
+        return dict(litellm.callback_settings.get(callback_name, {}))
     return {}
 
 
@@ -4185,6 +4183,39 @@ class StandardLoggingPayloadSetup:
             completion_start_time_float = end_time_float
 
         return start_time_float, end_time_float, completion_start_time_float
+
+    @staticmethod
+    def append_system_prompt_messages(
+        kwargs: Optional[Dict] = None, messages: Optional[Any] = None
+    ):
+        """
+        Append system prompt messages to the messages
+        """
+        if kwargs is not None:
+            if kwargs.get("system") is not None and isinstance(
+                kwargs.get("system"), str
+            ):
+                if messages is None:
+                    return [{"role": "system", "content": kwargs.get("system")}]
+                elif isinstance(messages, list):
+                    if len(messages) == 0:
+                        return [{"role": "system", "content": kwargs.get("system")}]
+                    # check for duplicates
+                    if messages[0].get("role") == "system" and messages[0].get(
+                        "content"
+                    ) == kwargs.get("system"):
+                        return messages
+                    messages = [
+                        {"role": "system", "content": kwargs.get("system")}
+                    ] + messages
+                elif isinstance(messages, str):
+                    messages = [
+                        {"role": "system", "content": kwargs.get("system")},
+                        {"role": "user", "content": messages},
+                    ]
+                return messages
+
+        return messages
 
     @staticmethod
     def get_standard_logging_metadata(
@@ -4908,7 +4939,9 @@ def get_standard_logging_object_payload(
             model_group=_model_group,
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
-            messages=kwargs.get("messages"),
+            messages=StandardLoggingPayloadSetup.append_system_prompt_messages(
+                kwargs=kwargs, messages=kwargs.get("messages")
+            ),
             response=final_response_obj,
             model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
                 kwargs.get("optional_params", None) or {}
