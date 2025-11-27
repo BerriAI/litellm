@@ -249,6 +249,12 @@
             "/v1/images/generations"
         ]
     },
+    "amazon.nova-canvas-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 2600,
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06
+    },
     "amazon.nova-lite-v1:0": {
         "input_cost_per_token": 6e-08,
         "litellm_provider": "bedrock_converse",
