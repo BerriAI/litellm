@@ -1693,6 +1693,11 @@ def completion(  # type: ignore # noqa: PLR0915
             if "claude" in model_lower:
                 # Use Azure Anthropic handler for Claude models
                 api_base = AzureFoundryModelInfo.get_api_base(api_base)
+                if api_base is None:
+                    raise ValueError(
+                        "Azure Anthropic requests require an api_base. "
+                        "Set `api_base` or the AZURE_AI_API_BASE env var."
+                    )
                 api_key = AzureFoundryModelInfo.get_api_key(api_key)
                 
                 # Ensure the URL ends with /v1/messages for Anthropic
