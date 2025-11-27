@@ -938,6 +938,37 @@ def responses_api_bridge_check(
     return model_info, model
 
 
+def _should_allow_input_examples(custom_llm_provider: Optional[str], model: str) -> bool:
+    if custom_llm_provider == "anthropic":
+        return True
+    if custom_llm_provider == "azure_ai" or custom_llm_provider == "bedrock" or custom_llm_provider == "vertex_ai":
+        return "claude" in model.lower()
+    return False
+
+
+def _drop_input_examples_from_tool(tool: dict) -> dict:
+    tool_copy = tool.copy()
+    tool_copy.pop("input_examples", None)
+    function = tool_copy.get("function")
+    if isinstance(function, dict):
+        function = function.copy()
+        function.pop("input_examples", None)
+        tool_copy["function"] = function
+    return tool_copy
+
+
+def _drop_input_examples_from_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
+    if tools is None:
+        return None
+    cleaned_tools: List[dict] = []
+    for tool in tools:
+        if isinstance(tool, dict):
+            cleaned_tools.append(_drop_input_examples_from_tool(tool))
+        else:
+            cleaned_tools.append(tool)
+    return cleaned_tools
+
+
 @tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
@@ -1182,6 +1213,11 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base=api_base,
             api_key=api_key,
         )
+
+        if not _should_allow_input_examples(
+            custom_llm_provider=custom_llm_provider, model=model
+        ):
+            tools = _drop_input_examples_from_tools(tools=tools)
 
         if provider_specific_header is not None:
             headers.update(
