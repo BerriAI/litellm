@@ -232,6 +232,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                             model_response.data.append(ImageObject(
                                 b64_json=inline_data["data"],
                                 url=None,
+                                thought_signature=part.get("thoughtSignature"),
                             ))
         else:
             # Original Imagen format - predictions with generated images
