@@ -1,5 +1,7 @@
 # Guardrails on Pass-Through Endpoints
 
+import Image from '@theme/IdealImage';
+
 ## Overview
 
 | Property | Details |
@@ -10,7 +12,41 @@
 
 ## Quick Start
 
-### 1. Define guardrails and pass-through endpoint
+You can configure guardrails on pass-through endpoints either via the **UI** (recommended) or **config file**.
+
+### Using the UI
+
+#### 1. Navigate to Pass-Through Endpoints
+
+Go to **Models + Endpoints** → Click **+ Add Pass-Through Endpoint**
+
+<Image img={require('../../img/pt_guard1.png')} alt="Add guardrails to pass-through endpoint" />
+
+Scroll to the **Guardrails** section and select which guardrails to enforce.
+
+:::tip Default Behavior
+By default, you don't need to specify fields - LiteLLM will JSON dump the entire request/response payload and send it to the guardrail.
+:::
+
+#### 2. Target Specific Fields (Optional)
+
+<Image img={require('../../img/pt_guard2.png')} alt="Configure field-level targeting" />
+
+To check only specific fields instead of the entire payload:
+
+1. Select your guardrails
+2. In **Field Targeting (Optional)**, specify fields for each guardrail
+3. Use the quick-add buttons (`+ query`, `+ documents[*]`) or type custom JSONPath expressions
+4. **Request Fields (pre_call)**: Fields to check before sending to target API
+5. **Response Fields (post_call)**: Fields to check in the response from target API
+
+**Example**: In the screenshot above, we set `query` as a request field, so only the `query` field is sent to the guardrail instead of the entire request.
+
+---
+
+### Using Config File
+
+#### 1. Define guardrails and pass-through endpoint
 
 ```yaml showLineNumbers title="config.yaml"
 guardrails:
@@ -31,13 +67,13 @@ general_settings:
         pii-guard:
 ```
 
-### 2. Start proxy
+#### 2. Start proxy
 
 ```bash
 litellm --config config.yaml
 ```
 
-### 3. Test request
+#### 3. Test request
 
 ```bash
 curl -X POST "http://localhost:4000/v1/rerank" \
