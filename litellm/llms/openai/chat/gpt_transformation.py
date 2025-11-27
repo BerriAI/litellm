@@ -327,7 +327,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: 
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
         ...
 
     @overload
@@ -339,13 +339,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     ) -> List[AllMessageValues]:
         ...
 
-    # fmt: on
+    # # fmt: on
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
-
         async def _async_transform():
             for message in messages:
                 message_content = message.get("content")
@@ -365,8 +364,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                                 cast(OpenAIMessageContentListBlock, content_item),
                             )
                         )
+            
             return messages
-
         if is_async:
             return _async_transform()
         else:
