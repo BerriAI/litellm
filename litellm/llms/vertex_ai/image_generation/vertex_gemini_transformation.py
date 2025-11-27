@@ -298,6 +298,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         model_response.data.append(ImageObject(
                             b64_json=inline_data["data"],
                             url=None,
+                            thought_signature=part.get("thoughtSignature"),
                         ))
 
         if usage_metadata := response_data.get("usageMetadata", None):
