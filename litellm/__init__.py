@@ -1267,6 +1267,7 @@ from .llms.xai.responses.transformation import XAIResponsesAPIConfig
 from .llms.litellm_proxy.responses.transformation import (
     LiteLLMProxyResponsesAPIConfig,
 )
+from .llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,

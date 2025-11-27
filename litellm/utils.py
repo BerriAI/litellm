@@ -7396,6 +7396,8 @@ class ProviderConfigManager:
             return litellm.GithubCopilotResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
+        elif litellm.LlmProviders.VOLCENGINE == provider:
+            return litellm.VolcEngineResponsesAPIConfig()
         return None
 
     @staticmethod
