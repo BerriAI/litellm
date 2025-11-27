@@ -1,5 +1,5 @@
 ---
-title: "v1.80.7-stable - RAG API"
+title: "[Preview] v1.80.7-stable - RAG API"
 slug: "v1-80-7"
 date: 2025-11-27T10:00:00
 authors:
@@ -51,6 +51,53 @@ pip install litellm==1.80.7
 - **Claude Opus 4.5** - Support for Anthropic's Claude Opus 4.5 via Anthropic, Bedrock, VertexAI
 - **Guardrails for Passthrough** - Guardrails support for pass-through endpoints
 - **Public AI Provider** - Support for publicai.co provider
+
+---
+
+### RAG API
+
+<Image
+img={require('../../img/release_notes/rag_api.png')}
+style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+
+Introducing a new RAG API on LiteLLM AI Gateway. You can provide documents (TXT, PDF, DOCX files) to LiteLLM's all-in-one document ingestion pipeline and it will handle OCR recognition, chunking, embedding, and storing data in your vector store of choice (OpenAI, Bedrock, Vertex AI, etc.).
+
+Example usage for ingestion 
+
+```showLineNumbers title="Ingest txt file Bedrock Knowledge Base"
+curl -X POST "http://localhost:4000/v1/rag/ingest" \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"file\": {
+            \"filename\": \"document.txt\",
+            \"content\": \"$(base64 -i document.txt)\",
+            \"content_type\": \"text/plain\"
+        },
+        \"ingest_options\": {
+            \"vector_store\": {
+                \"custom_llm_provider\": \"bedrock\"
+            }
+        }
+    }"
+```
+
+Example usage for querying the vector store
+
+```showLineNumbers title="Search the Bedrock Knowledge Base"
+curl -X POST "http://localhost:4000/v1/vector_stores/vs_692658d337c4819183f2ad8488d12fc9/search" \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "query": "What is LiteLLM?",
+        "custom_llm_provider": "bedrock"
+    }'
+```
+
+[Get Started](../../docs/rag_ingest)
 
 ---
 
@@ -373,7 +420,6 @@ Users can now filter usage statistics by organization, providing the same granul
     - Document event hook usage - [PR #17035](https://github.com/BerriAI/litellm/pull/17035)
     - Link to logging spec in callback docs - [PR #17049](https://github.com/BerriAI/litellm/pull/17049)
     - Add OpenAI Agents SDK to projects - [PR #17203](https://github.com/BerriAI/litellm/pull/17203)
-    - Fix unspecified issue - [PR #17034](https://github.com/BerriAI/litellm/pull/17034)
 
 ---
 
