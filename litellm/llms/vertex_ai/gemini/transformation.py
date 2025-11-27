@@ -124,14 +124,6 @@ def _process_gemini_image(
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
                     _blob["media_resolution"] = media_resolution
             
-            # Convert snake_case keys to camelCase for JSON serialization
-            # The TypedDict uses snake_case, but the API expects camelCase
-            _blob_dict = dict(_blob)
-            if "media_resolution" in _blob_dict:
-                _blob_dict["media_resolution"] = _blob_dict.pop("media_resolution")
-            if "mime_type" in _blob_dict:
-                _blob_dict["mime_type"] = _blob_dict.pop("mime_type")
-            
             return PartType(inline_data=cast(BlobType, _blob_dict))
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
