@@ -190,7 +190,7 @@ class PassthroughGuardrailHandler:
         )
         
         # Add to request metadata so guardrails know which to run
-        from litellm.llms.pass_through.guardrail_translation import (
+        from litellm.proxy.pass_through_endpoints.passthrough_context import (
             set_passthrough_guardrails_config,
         )
 
@@ -202,8 +202,8 @@ class PassthroughGuardrailHandler:
             name: True for name in guardrail_names
         }
         
-        # Store passthrough guardrails config for field targeting
-        set_passthrough_guardrails_config(request_data, guardrails_config)
+        # Store passthrough guardrails config in request-scoped context
+        set_passthrough_guardrails_config(guardrails_config)
         
         return request_data
 
@@ -309,11 +309,11 @@ class PassthroughGuardrailHandler:
         Returns:
             The text to check, or None to use default behavior
         """
-        from litellm.llms.pass_through.guardrail_translation import (
+        from litellm.proxy.pass_through_endpoints.passthrough_context import (
             get_passthrough_guardrails_config,
         )
 
-        passthrough_config = get_passthrough_guardrails_config(data)
+        passthrough_config = get_passthrough_guardrails_config()
         if passthrough_config is None:
             return None
         

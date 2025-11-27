@@ -32,6 +32,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj=None,
     ) -> Any:
         """
         Process input prompt by applying guardrails to text content.
@@ -100,6 +101,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         self,
         response: "TextCompletionResponse",
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj=None,
     ) -> Any:
         """
         Process output response by applying guardrails to completion text.

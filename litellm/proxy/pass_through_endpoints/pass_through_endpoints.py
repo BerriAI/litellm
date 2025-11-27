@@ -689,6 +689,26 @@ async def pass_through_request(  # noqa: PLR0915
                 f"Added guardrails to passthrough request metadata: {guardrails_to_run}"
             )
 
+        ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
+        start_time = datetime.now()
+        logging_obj = Logging(
+            model="unknown",
+            messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=start_time,
+            litellm_call_id=litellm_call_id,
+            function_id="1245",
+        )
+        
+        # Store passthrough guardrails config on logging_obj for field targeting
+        logging_obj.passthrough_guardrails_config = guardrails_config
+        
+        # Store logging_obj in data so guardrails can access it
+        if _parsed_body is None:
+            _parsed_body = {}
+        _parsed_body["litellm_logging_obj"] = logging_obj
+
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         _parsed_body = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
@@ -700,18 +720,6 @@ async def pass_through_request(  # noqa: PLR0915
             params={"timeout": 600},
         )
         async_client = async_client_obj.client
-
-        # create logging object
-        start_time = datetime.now()
-        logging_obj = Logging(
-            model="unknown",
-            messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
-            stream=False,
-            call_type="pass_through_endpoint",
-            start_time=start_time,
-            litellm_call_id=litellm_call_id,
-            function_id="1245",
-        )
         passthrough_logging_payload = PassthroughStandardLoggingPayload(
             url=str(url),
             request_body=_parsed_body,

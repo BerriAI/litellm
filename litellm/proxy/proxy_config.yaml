@@ -53,7 +53,8 @@ general_settings:
       headers:
         Authorization: "Bearer os.environ/COHERE_API_KEY"
       guardrails:
-        - bedrock-pre-guard
+        bedrock-pre-guard:
+          request_fields: ["query"]
 
 
 vector_store_registry:

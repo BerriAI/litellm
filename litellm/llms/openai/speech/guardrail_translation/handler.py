@@ -30,6 +30,7 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj=None,
     ) -> Any:
         """
         Process input text by applying guardrails.
@@ -72,6 +73,7 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         self,
         response: "HttpxBinaryResponseContent",
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj=None,
     ) -> Any:
         """
         Process output - not applicable for text-to-speech.

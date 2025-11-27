@@ -2,75 +2,47 @@
 Pass-Through Endpoint Message Handler for Unified Guardrails
 
 This module provides a handler for passthrough endpoint requests.
-It uses the field targeting configuration from the passthrough config
+It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.proxy._types import (
-    PassThroughGuardrailsConfig,
-    PassThroughGuardrailSettings,
-)
+from litellm.proxy._types import PassThroughGuardrailSettings
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
-
-# Key used to store passthrough guardrails config in request data
-PASSTHROUGH_GUARDRAILS_CONFIG_KEY = "passthrough_guardrails_config"
-
-
-def get_passthrough_guardrails_config(data: dict) -> Optional[dict]:
-    """
-    Get the passthrough guardrails config from request data.
-
-    Checks both metadata and root level for the config.
-    """
-    # Check in metadata first (preferred location)
-    metadata = data.get("metadata", {})
-    if isinstance(metadata, dict) and PASSTHROUGH_GUARDRAILS_CONFIG_KEY in metadata:
-        return metadata[PASSTHROUGH_GUARDRAILS_CONFIG_KEY]
-
-    # Fallback to root level with underscore prefix (legacy)
-    return data.get(f"_{PASSTHROUGH_GUARDRAILS_CONFIG_KEY}")
-
-
-def set_passthrough_guardrails_config(
-    data: dict, config: Optional[PassThroughGuardrailsConfig]
-) -> None:
-    """
-    Set the passthrough guardrails config in request data metadata.
-    """
-    if config is None:
-        return
-    if "metadata" not in data:
-        data["metadata"] = {}
-    data["metadata"][PASSTHROUGH_GUARDRAILS_CONFIG_KEY] = config
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class PassThroughEndpointHandler(BaseTranslation):
     """
     Handler for processing passthrough endpoint requests with guardrails.
 
-    Uses the passthrough_guardrails_config stored in request metadata
+    Uses passthrough_guardrails_config from litellm_logging_obj
     to determine which fields to extract for guardrail processing.
     """
 
     def _get_guardrail_settings(
         self,
-        data: dict,
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"],
         guardrail_name: Optional[str],
     ) -> Optional[PassThroughGuardrailSettings]:
         """
-        Get the guardrail settings for a specific guardrail from passthrough config.
+        Get the guardrail settings for a specific guardrail from logging_obj.
         """
         from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
             PassthroughGuardrailHandler,
         )
 
-        passthrough_config = get_passthrough_guardrails_config(data)
+        if litellm_logging_obj is None:
+            return None
+
+        passthrough_config = getattr(
+            litellm_logging_obj, "passthrough_guardrails_config", None
+        )
         if not passthrough_config or not guardrail_name:
             return None
 
@@ -110,9 +82,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         payload_to_check = {
             k: v
             for k, v in data.items()
-            if not k.startswith("_")
-            and k != "metadata"
-            and k != PASSTHROUGH_GUARDRAILS_CONFIG_KEY
+            if not k.startswith("_") and k not in ("metadata", "litellm_logging_obj")
         }
         verbose_proxy_logger.debug(
             "PassThroughEndpointHandler: Using full payload for guardrail"
@@ -123,6 +93,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> Any:
         """
         Process input by applying guardrails to targeted fields or full payload.
@@ -134,7 +105,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         )
 
         # Get field targeting settings for this guardrail
-        settings = self._get_guardrail_settings(data, guardrail_name)
+        settings = self._get_guardrail_settings(litellm_logging_obj, guardrail_name)
         field_expressions = settings.request_fields if settings else None
 
         # Extract text to check
@@ -158,6 +129,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         self,
         response: Any,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to targeted fields.
@@ -175,7 +147,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         )
 
         # Get field targeting settings for this guardrail
-        settings = self._get_guardrail_settings(response, guardrail_name)
+        settings = self._get_guardrail_settings(litellm_logging_obj, guardrail_name)
         field_expressions = settings.response_fields if settings else None
 
         # Extract text to check
@@ -191,4 +163,3 @@ class PassThroughEndpointHandler(BaseTranslation):
         )
 
         return response
-

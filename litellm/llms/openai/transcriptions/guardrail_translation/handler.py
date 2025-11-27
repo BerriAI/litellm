@@ -30,6 +30,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj=None,
     ) -> Any:
         """
         Process input - not applicable for audio transcription.
@@ -54,6 +55,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         self,
         response: "TranscriptionResponse",
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj=None,
     ) -> Any:
         """
         Process output transcription by applying guardrails to transcribed text.

@@ -34,6 +34,7 @@ class CohereRerankHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj=None,
     ) -> Any:
         """
         Process input query by applying guardrails.
@@ -68,6 +69,7 @@ class CohereRerankHandler(BaseTranslation):
         self,
         response: "RerankResponse",
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj=None,
     ) -> Any:
         """
         Process output response - not applicable for rerank.

@@ -31,6 +31,7 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj=None,
     ) -> Any:
         """
         Process input prompt by applying guardrails to text content.
@@ -72,6 +73,7 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         self,
         response: "ImageResponse",
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj=None,
     ) -> Any:
         """
         Process output response - typically not needed for image generation.
