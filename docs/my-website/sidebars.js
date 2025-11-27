@@ -35,6 +35,7 @@ const sidebars = {
           type: "category",
           "label": "Contributing to Guardrails",
           items: [
+            "adding_provider/generic_guardrail_api",
             "adding_provider/simple_guardrail_tutorial",
             "adding_provider/adding_guardrail_support",
           ]
