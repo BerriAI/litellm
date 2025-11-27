@@ -1151,7 +1151,7 @@
     },
     "azure/claude-haiku-4-5": {
         "input_cost_per_token": 1e-06,
-        "litellm_provider": "azure_anthropic",
+        "litellm_provider": "azure_ai",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
@@ -1169,7 +1169,7 @@
     },
     "azure/claude-opus-4-1": {
         "input_cost_per_token": 1.5e-05,
-        "litellm_provider": "azure_anthropic",
+        "litellm_provider": "azure_ai",
         "max_input_tokens": 200000,
         "max_output_tokens": 32000,
         "max_tokens": 32000,
@@ -1187,7 +1187,7 @@
     },
     "azure/claude-sonnet-4-5": {
         "input_cost_per_token": 3e-06,
-        "litellm_provider": "azure_anthropic",
+        "litellm_provider": "azure_ai",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,

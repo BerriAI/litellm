@@ -64,8 +64,10 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
         _is_function_call = False
         messages = copy.deepcopy(messages)
 
-        # Use AzureAnthropicConfig instead of AnthropicConfig
-        headers = AzureAnthropicConfig().validate_environment(
+        # Use AzureAnthropicConfig for both azure_anthropic and azure_ai Claude models
+        config = AzureAnthropicConfig()
+        
+        headers = config.validate_environment(
             api_key=api_key,
             headers=headers,
             model=model,
@@ -73,15 +75,6 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
             optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
         )
-
-        config = ProviderConfigManager.get_provider_chat_config(
-            model=model,
-            provider=litellm.types.utils.LlmProviders(custom_llm_provider),
-        )
-        if config is None:
-            raise ValueError(
-                f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
-            )
 
         data = config.transform_request(
             model=model,
@@ -183,7 +176,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
                     model=model,
-                    custom_llm_provider="azure_anthropic",
+                    custom_llm_provider="azure_ai",
                     logging_obj=logging_obj,
                     _response_headers=process_anthropic_headers(response_headers),
                 )
