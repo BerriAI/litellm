@@ -83,32 +83,6 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         }
         return aspect_ratio_map.get(size, "1:1")
     
-    def _resolve_vertex_project(self) -> Optional[str]:
-        return (
-            getattr(self, "_vertex_project", None)
-            or os.environ.get("VERTEXAI_PROJECT")
-            or getattr(litellm, "vertex_project", None)
-            or get_secret_str("VERTEXAI_PROJECT")
-        )
-
-    def _resolve_vertex_location(self) -> Optional[str]:
-        return (
-            getattr(self, "_vertex_location", None)
-            or os.environ.get("VERTEXAI_LOCATION")
-            or os.environ.get("VERTEX_LOCATION")
-            or getattr(litellm, "vertex_location", None)
-            or get_secret_str("VERTEXAI_LOCATION")
-            or get_secret_str("VERTEX_LOCATION")
-        )
-
-    def _resolve_vertex_credentials(self) -> Optional[str]:
-        return (
-            getattr(self, "_vertex_credentials", None)
-            or os.environ.get("VERTEXAI_CREDENTIALS")
-            or getattr(litellm, "vertex_credentials", None)
-            or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-            or get_secret_str("VERTEXAI_CREDENTIALS")
-        )
 
     def get_complete_url(
         self,
@@ -122,9 +96,8 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         """
         Get the complete URL for Vertex AI Imagen predict API
         """
-        vertex_project = self._resolve_vertex_project()
-        vertex_location = self._resolve_vertex_location()
-
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params)
+        vertex_location = self.safe_get_vertex_ai_location(litellm_params)
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
@@ -151,8 +124,8 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_base: Optional[str] = None,
     ) -> dict:
         headers = headers or {}
-        vertex_project = self._resolve_vertex_project()
-        vertex_credentials = self._resolve_vertex_credentials()
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params)
+        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params)
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
