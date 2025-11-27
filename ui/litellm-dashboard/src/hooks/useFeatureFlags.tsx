@@ -8,7 +8,7 @@ const getBasePath = () => {
   const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
   const trimmed = raw.replace(/^\/+|\/+$/g, ""); // strip leading/trailing slashes
   const uiPath = trimmed ? `/${trimmed}/` : "/";
-  
+
   // If serverRootPath is set and not "/", prepend it to the UI path
   if (serverRootPath && serverRootPath !== "/") {
     // Remove trailing slash from serverRootPath and ensure uiPath has no leading slash for proper joining
@@ -16,9 +16,9 @@ const getBasePath = () => {
     const cleanUiPath = uiPath.replace(/^\/+/, "");
     return `${cleanServerRoot}/${cleanUiPath}`;
   }
-  
+
   return uiPath;
-}
+};
 
 type Flags = {
   refactoredUIFlag: boolean;
@@ -108,6 +108,23 @@ export const FeatureFlagsProvider = ({ children }: { children: React.ReactNode }
       // Don't redirect if we're already on a UI path (even if serverRootPath hasn't loaded yet)
       // This handles the case where the page is mounted at a custom server root path
       if (current.includes("/ui")) {
+        return;
+      }
+
+      // Whitelist certain routes that should work regardless of the feature flag
+      // This allows new refactored pages to coexist with the old implementation
+      const whitelistedRoutes = ["/keys", "/ui/keys"];
+      const isWhitelisted = whitelistedRoutes.some((route) => {
+        const normalizedRoute = normalize(route);
+        return (
+          current.startsWith(normalizedRoute) ||
+          current === route ||
+          current === normalizedRoute ||
+          current.includes(`${route}/`)
+        );
+      });
+
+      if (isWhitelisted) {
         return;
       }
 
