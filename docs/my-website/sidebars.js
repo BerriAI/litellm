@@ -622,6 +622,7 @@ const sidebars = {
         "providers/ovhcloud",
         "providers/perplexity",
         "providers/petals",
+        "providers/publicai",
         "providers/predibase",
         "providers/recraft",
         "providers/replicate",
