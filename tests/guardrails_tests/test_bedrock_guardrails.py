@@ -731,6 +731,11 @@ async def test_bedrock_guardrail_response_pii_masking_non_streaming():
         print("✓ Non-streaming response PII masking test passed")
 
 @pytest.mark.asyncio
+@patch.dict('os.environ', {
+    'AWS_ACCESS_KEY_ID': 'fake-access-key',
+    'AWS_SECRET_ACCESS_KEY': 'fake-secret-key', 
+    'AWS_DEFAULT_REGION': 'us-east-1'
+})
 async def test_bedrock_guardrail_post_call_returns_response():
     """Test that async_post_call_success_hook returns the response object"""
     from unittest.mock import AsyncMock, MagicMock, patch
