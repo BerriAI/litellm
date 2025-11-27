@@ -114,10 +114,12 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         if model.startswith("vertex_ai/"):
             model_name = model.replace("vertex_ai/", "")
 
+        # If a custom api_base is provided, use it directly
+        # This allows users to use proxies or mock endpoints
         if api_base:
-            base_url = api_base.rstrip("/")
-        else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+            return api_base.rstrip("/")
+
+        base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:generateContent"
 
@@ -132,6 +134,14 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_base: Optional[str] = None,
     ) -> dict:
         headers = headers or {}
+        # If a custom api_base is provided, skip credential validation
+        # This allows users to use proxies or mock endpoints without needing Vertex AI credentials
+        _api_base = litellm_params.get("api_base") or api_base
+        if _api_base is not None:
+            return headers
+        
+        # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
+        # then fall back to environment variables and other sources
         vertex_project = self.safe_get_vertex_ai_project(litellm_params)
         vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params)
         access_token, _ = self._ensure_access_token(
