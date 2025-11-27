@@ -798,6 +798,7 @@ const sidebars = {
             slug: "/project",
           },
           items: [
+            "projects/openai-agents",
             "projects/smolagents",
             "projects/mini-swe-agent",
             "projects/Docq.AI",
