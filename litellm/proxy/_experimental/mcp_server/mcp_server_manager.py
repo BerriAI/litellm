@@ -1735,7 +1735,7 @@ class MCPServerManager:
             if extra_headers is None:
                 extra_headers = {}
             for header in mcp_server.extra_headers:
-                if header in raw_headers:
+                if isinstance(header, str) and header in raw_headers:
                     extra_headers[header] = raw_headers[header]
 
         if mcp_server.static_headers:
