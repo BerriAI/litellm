@@ -87,7 +87,9 @@ class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
         return optional_params
 
     @staticmethod
-    def get_outputText(completion_response: dict, model_response: "ModelResponse") -> str:
+    def get_outputText(
+        completion_response: dict, model_response: "ModelResponse"
+    ) -> str:
         """This function extracts the output text from a bedrock mistral completion.
         As a side effect, it updates the finish reason for a model response.
 
@@ -101,11 +103,17 @@ class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
         """
         if "choices" in completion_response:
             outputText = completion_response["choices"][0]["message"]["content"]
-            model_response.choices[0].finish_reason = completion_response["choices"][0]["finish_reason"]
+            model_response.choices[0].finish_reason = completion_response["choices"][0][
+                "finish_reason"
+            ]
         elif "outputs" in completion_response:
             outputText = completion_response["outputs"][0]["text"]
-            model_response.choices[0].finish_reason = completion_response["outputs"][0]["stop_reason"]
+            model_response.choices[0].finish_reason = completion_response["outputs"][0][
+                "stop_reason"
+            ]
         else:
-            raise BedrockError(message="Unexpected mistral completion response", status_code=400)
+            raise BedrockError(
+                message="Unexpected mistral completion response", status_code=400
+            )
 
         return outputText

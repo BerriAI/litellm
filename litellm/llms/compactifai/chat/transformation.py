@@ -76,7 +76,9 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
                     # Convert tool calls to content for JSON mode
                     tool_calls = message.get("tool_calls", [])
                     if len(tool_calls) == 1:
-                        message["content"] = tool_calls[0]["function"].get("arguments", "")
+                        message["content"] = tool_calls[0]["function"].get(
+                            "arguments", ""
+                        )
                         message["tool_calls"] = None
 
         returned_response = ModelResponse(**response_json)

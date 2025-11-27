@@ -888,7 +888,6 @@ def cancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
-
         try:
             if model is not None:
                 _, custom_llm_provider, _, _ = get_llm_provider(

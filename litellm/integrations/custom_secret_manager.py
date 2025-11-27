@@ -100,9 +100,7 @@ class CustomSecretManager(BaseSecretManager):
         """
         super().__init__()
         self.secret_manager_name = secret_manager_name or "custom_secret_manager"
-        verbose_logger.info(
-            "Initialized custom secret manager"
-        )
+        verbose_logger.info("Initialized custom secret manager")
 
     @abstractmethod
     async def async_read_secret(

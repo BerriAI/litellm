@@ -121,7 +121,7 @@ class BaseVideoConfig(ABC):
     ) -> Tuple[str, Dict]:
         """
         Transform the video content request into a URL and data/params
-        
+
         Returns:
             Tuple[str, Dict]: (url, params) for the video content request
         """
@@ -144,13 +144,13 @@ class BaseVideoConfig(ABC):
         Async transform video content download response to bytes.
         Optional method - providers can override if they need async transformations
         (e.g., RunwayML for downloading video from CloudFront URL).
-        
+
         Default implementation falls back to sync transform_video_content_response.
-        
+
         Args:
             raw_response: Raw HTTP response
             logging_obj: Logging object
-            
+
         Returns:
             Video content as bytes
         """
@@ -172,7 +172,7 @@ class BaseVideoConfig(ABC):
     ) -> Tuple[str, Dict]:
         """
         Transform the video remix request into a URL and data
-        
+
         Returns:
             Tuple[str, Dict]: (url, data) for the video remix request
         """
@@ -200,7 +200,7 @@ class BaseVideoConfig(ABC):
     ) -> Tuple[str, Dict]:
         """
         Transform the video list request into a URL and params
-        
+
         Returns:
             Tuple[str, Dict]: (url, params) for the video list request
         """
@@ -212,7 +212,7 @@ class BaseVideoConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
-    ) -> Dict[str,str]:
+    ) -> Dict[str, str]:
         pass
 
     @abstractmethod
@@ -225,7 +225,7 @@ class BaseVideoConfig(ABC):
     ) -> Tuple[str, Dict]:
         """
         Transform the video delete request into a URL and data
-        
+
         Returns:
             Tuple[str, Dict]: (url, data) for the video delete request
         """
@@ -249,7 +249,7 @@ class BaseVideoConfig(ABC):
     ) -> Tuple[str, Dict]:
         """
         Transform the video retrieve request into a URL and data/params
-        
+
         Returns:
             Tuple[str, Dict]: (url, params) for the video retrieve request
         """

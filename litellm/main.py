@@ -58,6 +58,7 @@ from litellm import (  # type: ignore
     get_litellm_params,
     get_optional_params,
 )
+
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -295,7 +296,6 @@ MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStr
 
 
 class LiteLLM:
-
     def __init__(
         self,
         *,
@@ -562,7 +562,6 @@ async def acompletion(
 
     fallbacks = fallbacks or litellm.model_fallbacks
     if fallbacks is not None:
-        
         response = await async_completion_with_fallbacks(
             **completion_kwargs, kwargs={"fallbacks": fallbacks, **kwargs}
         )
@@ -1137,7 +1136,6 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
-
         (
             model,
             messages,
@@ -2113,7 +2111,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             try:
                 if use_base_llm_http_handler:
-
                     response = base_llm_http_handler.completion(
                         model=model,
                         messages=messages,
@@ -2371,12 +2368,8 @@ def completion(  # type: ignore # noqa: PLR0915
             )
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             # Azure Foundry endpoint format: https://<resource-name>.services.ai.azure.com/anthropic/v1/messages
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret("AZURE_API_BASE")
-            )
-            
+            api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+
             if api_base is None:
                 raise ValueError(
                     "Missing Azure API Base - Please set `api_base` or `AZURE_API_BASE` environment variable. "
@@ -3261,9 +3254,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -3611,7 +3604,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
         elif custom_llm_provider == "gradient_ai":
-
             api_base = litellm.api_base or api_base
             response = base_llm_http_handler.completion(
                 model=model,
@@ -5363,9 +5355,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -5835,9 +5827,7 @@ def speech(  # noqa: PLR0915
     custom_llm_provider: Optional[str] = None,
     aspeech: Optional[bool] = None,
     **kwargs,
-) -> Union[
-    HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
-]:
+) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -5881,7 +5871,9 @@ def speech(  # noqa: PLR0915
             kwargs=kwargs,
         )
 
-    logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
+    logging_obj: LiteLLMLoggingObj = cast(
+        LiteLLMLoggingObj, kwargs.get("litellm_logging_obj")
+    )
     logging_obj.update_environment_variables(
         model=model,
         user=user,
@@ -6239,7 +6231,7 @@ async def ahealth_check(
     """
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
-    
+
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging = get_litellm_logging_class()
 
@@ -6499,9 +6491,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         thinking_blocks = [
             chunk
@@ -6512,9 +6504,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = (
-                processor.get_combined_thinking_content(thinking_blocks)
-            )
+            response["choices"][0]["message"][
+                "thinking_blocks"
+            ] = processor.get_combined_thinking_content(thinking_blocks)
 
         reasoning_chunks = [
             chunk
@@ -6525,9 +6517,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         annotation_chunks = [
             chunk

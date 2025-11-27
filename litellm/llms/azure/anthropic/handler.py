@@ -233,4 +233,3 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
             encoding=encoding,
             json_mode=json_mode,
         )
-

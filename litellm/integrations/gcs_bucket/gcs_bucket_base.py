@@ -72,10 +72,10 @@ class GCSBucketBase(CustomBatchLogger):
         from litellm import vertex_chat_completion
 
         # Get project_id from environment if available, otherwise None
-        # This helps support use of this library to auth to pull secrets 
+        # This helps support use of this library to auth to pull secrets
         # from Secret Manager.
         project_id = os.getenv("GOOGLE_SECRET_MANAGER_PROJECT_ID")
-        
+
         _auth_header, vertex_project = vertex_chat_completion._ensure_access_token(
             credentials=self.path_service_account_json,
             project_id=project_id,

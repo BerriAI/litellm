@@ -279,7 +279,7 @@ async def aresponses_api_with_mcp(
             user_api_key_auth = kwargs.get("litellm_metadata", {}).get(
                 "user_api_key_auth"
             )
-            
+
             # Extract MCP auth headers from the request to pass to MCP server
             secret_fields: Optional[Dict[str, Any]] = kwargs.get("secret_fields")
             (
@@ -291,7 +291,7 @@ async def aresponses_api_with_mcp(
                 secret_fields=secret_fields,
                 tools=tools,
             )
-            
+
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=tool_server_map,
                 tool_calls=tool_calls,
@@ -576,13 +576,16 @@ def responses(
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
-        
+
         #########################################################
         # Update input with provider-specific file IDs if managed files are used
         #########################################################
-        input = cast(Union[str, ResponseInputParam], update_responses_input_with_model_file_ids(input=input))
+        input = cast(
+            Union[str, ResponseInputParam],
+            update_responses_input_with_model_file_ids(input=input),
+        )
         local_vars["input"] = input
-        
+
         #########################################################
         # Native MCP Responses API
         #########################################################
@@ -617,11 +620,11 @@ def responses(
             )
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         local_vars.update(kwargs)
@@ -815,11 +818,11 @@ def delete_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if responses_api_provider_config is None:
@@ -995,11 +998,11 @@ def get_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if responses_api_provider_config is None:
@@ -1152,11 +1155,11 @@ def list_input_items(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if responses_api_provider_config is None:
@@ -1310,11 +1313,11 @@ def cancel_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if responses_api_provider_config is None:

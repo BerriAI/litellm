@@ -102,7 +102,9 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             # with message "Connection closed.". Treat this as a graceful
             # end-of-stream so downstream consumers don't error.
             if "Connection closed" in str(e):
-                verbose_logger.debug("Upstream closed streaming connection; ending iterator gracefully")
+                verbose_logger.debug(
+                    "Upstream closed streaming connection; ending iterator gracefully"
+                )
                 return
             raise
         except aiohttp.http_exceptions.TransferEncodingError as e:
@@ -197,7 +199,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                             asyncio.create_task(old_session.close())
                         except RuntimeError:
                             # Different event loop - can't schedule task, rely on GC
-                            verbose_logger.debug("Old session from different loop, relying on GC")
+                            verbose_logger.debug(
+                                "Old session from different loop, relying on GC"
+                            )
                 except Exception as e:
                     verbose_logger.debug(f"Error closing old session: {e}")
 
@@ -215,7 +219,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 self.client = ClientSession()
 
         return self.client
-    
+
     async def _make_aiohttp_request(
         self,
         client_session: ClientSession,
@@ -226,20 +230,20 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
     ) -> ClientResponse:
         """
         Helper function to make an aiohttp request with the given parameters.
-        
+
         Args:
             client_session: The aiohttp ClientSession to use
             request: The httpx Request to send
             timeout: Timeout settings dict with 'connect', 'read', 'pool' keys
             proxy: Optional proxy URL
             sni_hostname: Optional SNI hostname for SSL
-            
+
         Returns:
             ClientResponse from aiohttp
         """
         from aiohttp import ClientTimeout
         from yarl import URL as YarlURL
-        
+
         try:
             data = request.content
         except httpx.RequestNotRead:
@@ -262,9 +266,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             proxy=proxy,
             server_hostname=sni_hostname,
         ).__aenter__()
-        
+
         return response
-    
+
     async def handle_async_request(
         self,
         request: httpx.Request,
@@ -290,14 +294,16 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         except RuntimeError as e:
             # Handle the case where session was closed between our check and actual use
             if "Session is closed" in str(e):
-                verbose_logger.debug(f"Session closed during request, retrying with new session: {e}")
+                verbose_logger.debug(
+                    f"Session closed during request, retrying with new session: {e}"
+                )
                 # Force creation of a new session
                 if hasattr(self, "_client_factory") and callable(self._client_factory):
                     self.client = self._client_factory()
                 else:
                     self.client = ClientSession()
                 client_session = self.client
-                
+
                 # Retry the request with the new session
                 with map_aiohttp_exceptions():
                     response = await self._make_aiohttp_request(
@@ -317,7 +323,6 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             content=AiohttpResponseStream(response),
             request=request,
         )
-    
 
     async def _get_proxy_settings(self, request: httpx.Request):
         proxy = None
@@ -331,21 +336,20 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 verbose_logger.debug(f"Error reading proxy env: {e}")
 
         return proxy
-    
 
     def _proxy_from_env(self, url: httpx.URL) -> typing.Optional[str]:
         """
         Return proxy URL from env for the given request URL
 
         Only check the proxy env settings once, this is a costly operation for CPU % usage
-        
+
         ."""
         #########################################################
         # Check if we've already checked the proxy env settings
         #########################################################
         if self.checked_proxy_env_settings is True:
             return self.proxy
-        
+
         #########################################################
         # set self.checked_proxy_env_settings to True
         #########################################################

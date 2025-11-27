@@ -1237,9 +1237,9 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
-                standard_logging_mcp_tool_call
-            )
+            litellm_logging_obj.model_call_details[
+                "mcp_tool_call_metadata"
+            ] = standard_logging_mcp_tool_call
             litellm_logging_obj.model = f"MCP: {name}"
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
@@ -1741,14 +1741,16 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> Tuple[
-        Optional[UserAPIKeyAuth],
-        Optional[str],
-        Optional[List[str]],
-        Optional[Dict[str, Dict[str, str]]],
-        Optional[Dict[str, str]],
-        Optional[Dict[str, str]],
-    ]:
+    def get_auth_context() -> (
+        Tuple[
+            Optional[UserAPIKeyAuth],
+            Optional[str],
+            Optional[List[str]],
+            Optional[Dict[str, Dict[str, str]]],
+            Optional[Dict[str, str]],
+            Optional[Dict[str, str]],
+        ]
+    ):
         """
         Get the UserAPIKeyAuth from the auth context variable.
 

@@ -87,10 +87,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 targetted_index += len(messages)
 
             if 0 <= targetted_index < len(messages):
-                messages[targetted_index] = (
-                    AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                        messages[targetted_index], control
-                    )
+                messages[
+                    targetted_index
+                ] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                    messages[targetted_index], control
                 )
             else:
                 verbose_logger.warning(

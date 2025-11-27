@@ -27,7 +27,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         self,
         **kwargs,
     ):
-
         # store kwargs as optional_params
         self.optional_params = kwargs
 

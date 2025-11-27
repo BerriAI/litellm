@@ -241,6 +241,8 @@ class VectorStoreIndexEndpoints(TypedDict):
     write: List[
         Tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
     ]  # endpoints for writing a vector store index
+
+
 VECTOR_STORE_OPENAI_PARAMS = Literal[
     "filters",
     "max_num_results",
@@ -249,14 +251,14 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
 ]
 
 
-
 @dataclass
 class VectorStoreToolParams:
     """Parameters extracted from a file_search tool definition"""
+
     filters: Optional[Dict] = None
     max_num_results: Optional[int] = None
     ranking_options: Optional[Dict] = None
-    
+
     def to_dict(self) -> Dict:
         """Convert to dict, excluding None values"""
         return {
