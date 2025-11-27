@@ -4,7 +4,7 @@ RAG utility functions.
 Provides provider configuration utilities similar to ProviderConfigManager.
 """
 
-from typing import TYPE_CHECKING, Optional, Type
+from typing import TYPE_CHECKING, Type
 
 if TYPE_CHECKING:
     from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
