@@ -37,6 +37,29 @@ def _get_int(value: Any, default: int) -> int:
     return int(value)
 
 
+def _normalize_principal_arn(caller_arn: str, account_id: str) -> str:
+    """
+    Normalize a caller ARN to the format required by OpenSearch data access policies.
+    
+    OpenSearch Serverless data access policies require:
+    - IAM users: arn:aws:iam::account-id:user/user-name
+    - IAM roles: arn:aws:iam::account-id:role/role-name
+    
+    But get_caller_identity() returns for assumed roles:
+    - arn:aws:sts::account-id:assumed-role/role-name/session-name
+    
+    This function converts assumed-role ARNs to the proper IAM role ARN format.
+    """
+    if ":assumed-role/" in caller_arn:
+        # Extract role name from assumed-role ARN
+        # Format: arn:aws:sts::ACCOUNT:assumed-role/ROLE-NAME/SESSION-NAME
+        parts = caller_arn.split("/")
+        if len(parts) >= 2:
+            role_name = parts[1]
+            return f"arn:aws:iam::{account_id}:role/{role_name}"
+    return caller_arn
+
+
 class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     """
     Bedrock Knowledge Base RAG ingestion.
@@ -193,7 +216,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         )
 
         # Step 3: Create OpenSearch index
-        self._create_opensearch_index(collection_name)
+        await self._create_opensearch_index(collection_name)
 
         # Step 4: Create IAM role for Bedrock
         role_arn = await self._create_bedrock_role(unique_id, account_id, collection_arn)
@@ -262,7 +285,11 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Create data access policy - include both root and actual caller ARN
         # This ensures the credentials being used have access to the collection
-        principals = [f"arn:aws:iam::{account_id}:root", caller_arn]
+        # Normalize the caller ARN (convert assumed-role ARN to IAM role ARN if needed)
+        normalized_caller_arn = _normalize_principal_arn(caller_arn, account_id)
+        verbose_logger.debug(f"Caller ARN: {caller_arn}, Normalized: {normalized_caller_arn}")
+        
+        principals = [f"arn:aws:iam::{account_id}:root", normalized_caller_arn]
         # Deduplicate in case caller is root
         principals = list(set(principals))
         
@@ -302,8 +329,8 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         return collection_name, collection_arn
 
-    def _create_opensearch_index(self, collection_name: str):
-        """Create vector index in OpenSearch collection."""
+    async def _create_opensearch_index(self, collection_name: str):
+        """Create vector index in OpenSearch collection with retry logic."""
         from opensearchpy import OpenSearch, RequestsHttpConnection
         from requests_aws4auth import AWS4Auth
 
@@ -355,8 +382,34 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             },
         }
 
-        client.indices.create(index=index_name, body=index_body)
-        verbose_logger.info(f"Created OpenSearch index: {index_name}")
+        # Retry logic for index creation - data access policy may take time to propagate
+        max_retries = 8
+        retry_delay = 20  # seconds
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                client.indices.create(index=index_name, body=index_body)
+                verbose_logger.info(f"Created OpenSearch index: {index_name}")
+                return
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
+                if "authorization_exception" in error_str.lower() or "security_exception" in error_str.lower():
+                    verbose_logger.warning(
+                        f"OpenSearch index creation attempt {attempt + 1}/{max_retries} failed due to authorization. "
+                        f"Waiting {retry_delay}s for policy propagation..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                else:
+                    # Non-auth error, raise immediately
+                    raise
+        
+        # All retries exhausted
+        raise RuntimeError(
+            f"Failed to create OpenSearch index after {max_retries} attempts. "
+            f"Data access policy may not have propagated. Last error: {last_error}"
+        )
 
     async def _create_bedrock_role(
         self, unique_id: str, account_id: str, collection_arn: str
