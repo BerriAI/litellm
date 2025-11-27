@@ -7380,6 +7380,12 @@ class ProviderConfigManager:
             )
 
             return HostedVLLMAudioTranscriptionConfig()
+        elif litellm.LlmProviders.WATSONX == provider:
+            from litellm.llms.watsonx.audio_transcription.transformation import (
+                IBMWatsonXAudioTranscriptionConfig,
+            )
+
+            return IBMWatsonXAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -7613,6 +7619,12 @@ class ProviderConfigManager:
             )
 
             return MilvusVectorStoreConfig()
+        elif litellm.LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.vector_stores.transformation import (
+                GeminiVectorStoreConfig,
+            )
+
+            return GeminiVectorStoreConfig()
         return None
 
     @staticmethod

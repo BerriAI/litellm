@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Text, Grid, Col } from "@tremor/react";
+import { useQueryClient } from "@tanstack/react-query";
 import { CredentialItem, credentialListCall, CredentialsResponse } from "@/components/networking";
 
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
@@ -9,7 +10,6 @@ import { getDisplayModelName } from "@/components/view_model/model_name_display"
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
 import { DateRangePickerValue } from "@tremor/react";
 import {
-  modelInfoCall,
   modelCostMap,
   modelMetricsCall,
   streamingModelMetricsCall,
@@ -22,6 +22,7 @@ import {
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
 } from "@/components/networking";
+import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { Form } from "antd";
 import { Typography } from "antd";
 import { RefreshIcon } from "@heroicons/react/outline";
@@ -152,6 +153,14 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+
+  const queryClient = useQueryClient();
+  const {
+    data: modelDataResponse,
+    isLoading: isLoadingModels,
+    refetch: refetchModels,
+  } = useModelsInfo(accessToken, userID, userRole);
+
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
     setProviderModels(_providerModels);
@@ -180,6 +189,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const uploadProps: UploadProps = {
     name: "file",
     accept: ".json",
+    pastable: false,
     beforeUpload: (file) => {
       if (file.type === "application/json") {
         const reader = new FileReader();
@@ -207,6 +217,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     // Update the 'lastRefreshed' state to the current date and time
     const currentDate = new Date();
     setLastRefreshed(currentDate.toLocaleString());
+    // Invalidate and refetch models data using React Query
+    queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+    refetchModels();
   };
 
   const handleSaveRetrySettings = async () => {
@@ -239,13 +252,11 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   };
 
   useEffect(() => {
-    if (!accessToken || !token || !userRole || !userID) {
+    if (!accessToken || !token || !userRole || !userID || !modelDataResponse) {
       return;
     }
     const fetchData = async () => {
       try {
-        // Replace with your actual API call for model data
-        const modelDataResponse = await modelInfoCall(accessToken, userID, userRole);
         setModelData(modelDataResponse);
         const _providerSettings = await modelSettingsCall(accessToken);
         if (_providerSettings) {
@@ -372,7 +383,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       }
     };
 
-    if (accessToken && token && userRole && userID) {
+    if (accessToken && token && userRole && userID && modelDataResponse) {
       fetchData();
     }
 
@@ -383,11 +394,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     if (modelMap == null) {
       fetchModelMap();
     }
+  }, [accessToken, token, userRole, userID, modelDataResponse]);
 
-    handleRefreshClick();
-  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed, selectedTeam]);
-
-  if (!modelData) {
+  if (!modelData || isLoadingModels) {
     return <div>Loading...</div>;
   }
 
@@ -597,15 +606,25 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
               setEditModalVisible={setEditModalVisible}
               setSelectedModel={setSelectedModel}
               onModelUpdate={(updatedModel) => {
-                // Update the model in the modelData.data array
-                const updatedModelData = {
-                  ...modelData,
-                  data: modelData.data.map((model: any) =>
-                    model.model_info.id === updatedModel.model_info.id ? updatedModel : model,
-                  ),
-                };
-                setModelData(updatedModelData);
-                // Trigger a refresh to update UI
+                // Handle model deletion
+                if (updatedModel.deleted) {
+                  const updatedModelData = {
+                    ...modelData,
+                    data: modelData.data.filter((model: any) => model.model_info.id !== updatedModel.model_info.id),
+                  };
+                  setModelData(updatedModelData);
+                } else {
+                  // Update the model in the modelData.data array
+                  const updatedModelData = {
+                    ...modelData,
+                    data: modelData.data.map((model: any) =>
+                      model.model_info.id === updatedModel.model_info.id ? updatedModel : model,
+                    ),
+                  };
+                  setModelData(updatedModelData);
+                }
+                // Invalidate cache and trigger a refresh to update UI
+                queryClient.invalidateQueries({ queryKey: ["models", "list"] });
                 handleRefreshClick();
               }}
               modelAccessGroups={availableModelAccessGroups}

@@ -24,6 +24,10 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
     litellm_settings: dict,
     callback_specific_params: dict = {},
 ):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.logging_callback_manager import (
+        LoggingCallbackManager,
+    )
     from litellm.proxy.proxy_server import prisma_client
 
     verbose_proxy_logger.debug(
@@ -32,6 +36,11 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
     if isinstance(value, list):
         imported_list: List[Any] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
+            # check if callback is a custom logger compatible callback
+            if isinstance(callback, str):
+                callback = LoggingCallbackManager._add_custom_callback_generic_api_str(
+                    callback
+                )
             if (
                 isinstance(callback, str)
                 and callback in litellm._known_custom_logger_compatible_callbacks
@@ -259,6 +268,8 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     **azure_content_safety_params,
                 )
                 imported_list.append(azure_content_safety_obj)
+            elif isinstance(callback, CustomLogger):
+                imported_list.append(callback)
             else:
                 verbose_proxy_logger.debug(
                     f"{blue_color_code} attempting to import custom calback={callback} {reset_color_code}"
