@@ -3439,6 +3439,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )
+            if api_key is not None and "Authorization" not in headers:
+                headers["Authorization"] = f"Bearer {api_key}"
+
             response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -3472,6 +3475,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 or os.environ.get("OLLAMA_API_KEY")
                 or litellm.api_key
             )
+            if api_key is not None and "Authorization" not in headers:
+                headers["Authorization"] = f"Bearer {api_key}"
+
 
             response = base_llm_http_handler.completion(
                 model=model,
