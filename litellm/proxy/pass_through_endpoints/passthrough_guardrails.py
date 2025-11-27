@@ -7,7 +7,7 @@ Handles guardrail execution for passthrough endpoints with:
 - Automatic inheritance from org/team/key levels when enabled
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -16,6 +16,13 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.pass_through_endpoints.jsonpath_extractor import JsonPathExtractor
+
+# Type for raw guardrails config input (before normalization)
+# Can be a list of names or a dict with settings
+PassThroughGuardrailsConfigInput = Union[
+    List[str],  # Simple list: ["guard-1", "guard-2"]
+    PassThroughGuardrailsConfig,  # Dict: {"guard-1": {"request_fields": [...]}}
+]
 
 
 class PassthroughGuardrailHandler:
@@ -26,46 +33,77 @@ class PassthroughGuardrailHandler:
     - Guardrails only run when explicitly configured on the endpoint
     - Supports field-level targeting using JSONPath expressions
     - Automatically inherits org/team/key level guardrails when enabled
+    
+    Guardrails can be specified as:
+    - List format (simple): ["guardrail-1", "guardrail-2"]
+    - Dict format (with settings): {"guardrail-1": {"request_fields": ["query"]}}
     """
 
     @staticmethod
+    def normalize_config(
+        guardrails_config: Optional[PassThroughGuardrailsConfigInput],
+    ) -> Optional[PassThroughGuardrailsConfig]:
+        """
+        Normalize guardrails config to dict format.
+        
+        Accepts:
+        - List of guardrail names: ["g1", "g2"] -> {"g1": None, "g2": None}
+        - Dict with settings: {"g1": {"request_fields": [...]}}
+        - None: returns None
+        """
+        if guardrails_config is None:
+            return None
+        
+        # Already a dict - return as-is
+        if isinstance(guardrails_config, dict):
+            return guardrails_config
+        
+        # List of guardrail names - convert to dict
+        if isinstance(guardrails_config, list):
+            return {name: None for name in guardrails_config}
+        
+        verbose_proxy_logger.debug(
+            "Passthrough guardrails config is not a dict or list, got: %s",
+            type(guardrails_config),
+        )
+        return None
+
+    @staticmethod
     def is_enabled(
-        guardrails_config: Optional[PassThroughGuardrailsConfig],
+        guardrails_config: Optional[PassThroughGuardrailsConfigInput],
     ) -> bool:
         """
         Check if guardrails are enabled for a passthrough endpoint.
         
         Passthrough endpoints are opt-in only - guardrails only run when 
-        the guardrails config dict is set with at least one guardrail.
+        the guardrails config is set with at least one guardrail.
         """
-        if guardrails_config is None:
+        normalized = PassthroughGuardrailHandler.normalize_config(guardrails_config)
+        if normalized is None:
             return False
-        
-        if not isinstance(guardrails_config, dict):
-            return False
-        
-        return len(guardrails_config) > 0
+        return len(normalized) > 0
 
     @staticmethod
     def get_guardrail_names(
-        guardrails_config: Optional[PassThroughGuardrailsConfig],
+        guardrails_config: Optional[PassThroughGuardrailsConfigInput],
     ) -> List[str]:
         """Get the list of guardrail names configured for a passthrough endpoint."""
-        if not PassthroughGuardrailHandler.is_enabled(guardrails_config):
+        normalized = PassthroughGuardrailHandler.normalize_config(guardrails_config)
+        if normalized is None:
             return []
-        
-        return list(guardrails_config.keys())  # type: ignore
+        return list(normalized.keys())
 
     @staticmethod
     def get_settings(
-        guardrails_config: Optional[PassThroughGuardrailsConfig],
+        guardrails_config: Optional[PassThroughGuardrailsConfigInput],
         guardrail_name: str,
     ) -> Optional[PassThroughGuardrailSettings]:
         """Get settings for a specific guardrail from the passthrough config."""
-        if guardrails_config is None:
+        normalized = PassthroughGuardrailHandler.normalize_config(guardrails_config)
+        if normalized is None:
             return None
         
-        settings = guardrails_config.get(guardrail_name)
+        settings = normalized.get(guardrail_name)
         if settings is None:
             return None
         
@@ -152,6 +190,10 @@ class PassthroughGuardrailHandler:
         )
         
         # Add to request metadata so guardrails know which to run
+        from litellm.llms.pass_through.guardrail_translation import (
+            set_passthrough_guardrails_config,
+        )
+
         if "metadata" not in request_data:
             request_data["metadata"] = {}
         
@@ -161,20 +203,24 @@ class PassthroughGuardrailHandler:
         }
         
         # Store passthrough guardrails config for field targeting
-        request_data["_passthrough_guardrails_config"] = guardrails_config
+        set_passthrough_guardrails_config(request_data, guardrails_config)
         
         return request_data
 
     @staticmethod
     def collect_guardrails(
         user_api_key_dict: UserAPIKeyAuth,
-        passthrough_guardrails_config: Optional[Dict[str, Any]],
+        passthrough_guardrails_config: Optional[PassThroughGuardrailsConfigInput],
     ) -> Optional[Dict[str, bool]]:
         """
         Collect guardrails for a passthrough endpoint.
 
         Passthrough endpoints are opt-in only for guardrails. Guardrails only run when
-        the guardrails config dict is set with at least one guardrail.
+        the guardrails config is set with at least one guardrail.
+
+        Accepts both list and dict formats:
+        - List: ["guardrail-1", "guardrail-2"]
+        - Dict: {"guardrail-1": {"request_fields": [...]}}
 
         When enabled, this function collects:
         - Passthrough-specific guardrails from the config
@@ -182,7 +228,7 @@ class PassthroughGuardrailHandler:
 
         Args:
             user_api_key_dict: User API key authentication info
-            passthrough_guardrails_config: Dict of guardrail_name -> settings
+            passthrough_guardrails_config: List or Dict of guardrail names/settings
 
         Returns:
             Dict of guardrail names to run (format: {guardrail_name: True}), or None
@@ -191,20 +237,18 @@ class PassthroughGuardrailHandler:
             _add_guardrails_from_key_or_team_metadata,
         )
 
-        # Check if passthrough guardrails are enabled (opt-in check)
-        if passthrough_guardrails_config is None:
+        # Normalize config to dict format (handles both list and dict)
+        normalized_config = PassthroughGuardrailHandler.normalize_config(
+            passthrough_guardrails_config
+        )
+
+        if normalized_config is None:
             verbose_proxy_logger.debug(
                 "Passthrough guardrails not configured, skipping guardrail collection"
             )
             return None
 
-        if not isinstance(passthrough_guardrails_config, dict):
-            verbose_proxy_logger.debug(
-                "Passthrough guardrails config is not a dict, skipping"
-            )
-            return None
-
-        if len(passthrough_guardrails_config) == 0:
+        if len(normalized_config) == 0:
             verbose_proxy_logger.debug(
                 "Passthrough guardrails config is empty, skipping"
             )
@@ -214,7 +258,7 @@ class PassthroughGuardrailHandler:
         guardrails_to_run: Dict[str, bool] = {}
 
         # Add passthrough-specific guardrails
-        for guardrail_name in passthrough_guardrails_config.keys():
+        for guardrail_name in normalized_config.keys():
             guardrails_to_run[guardrail_name] = True
             verbose_proxy_logger.debug(
                 "Added passthrough-specific guardrail: %s", guardrail_name
@@ -265,7 +309,11 @@ class PassthroughGuardrailHandler:
         Returns:
             The text to check, or None to use default behavior
         """
-        passthrough_config = data.get("_passthrough_guardrails_config")
+        from litellm.llms.pass_through.guardrail_translation import (
+            get_passthrough_guardrails_config,
+        )
+
+        passthrough_config = get_passthrough_guardrails_config(data)
         if passthrough_config is None:
             return None
         
