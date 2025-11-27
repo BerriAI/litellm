@@ -53,12 +53,14 @@ from typing_extensions import overload
 
 import litellm
 from litellm import (  # type: ignore
-    Logging,
     client,
     exception_type,
     get_litellm_params,
     get_optional_params,
 )
+# Logging is imported lazily when needed to avoid loading litellm_logging at import time
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -105,7 +107,7 @@ from litellm.utils import (
     ProviderConfigManager,
     Usage,
     _get_model_info_helper,
-    add_openai_metadata,
+    get_requester_metadata,
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
@@ -152,6 +154,7 @@ from .litellm_core_utils.prompt_templates.factory import (
 )
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from .llms.anthropic.chat import AnthropicChatCompletion
+from .llms.azure.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -256,6 +259,7 @@ sap_gen_ai_hub_chat_completions = GenAIHubOrchestration()
 sap_gen_ai_hub_emb = GenAIHubOrchestration()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
+azure_anthropic_chat_completions = AzureAnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
 azure_text_completions = AzureTextCompletion()
@@ -1155,7 +1159,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = base_url
         if num_retries is not None:
             max_retries = num_retries
-        logging: Logging = cast(Logging, litellm_logging_obj)
+        logging: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
             return completion_with_fallbacks(**args)
@@ -2117,10 +2121,12 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            if litellm.enable_preview_features:
-                metadata_payload = add_openai_metadata(metadata)
-                if metadata_payload is not None:
-                    optional_params["metadata"] = metadata_payload
+            if (
+                litellm.enable_preview_features and metadata is not None
+            ):  # [PREVIEW] allow metadata to be passed to OPENAI
+                openai_metadata = get_requester_metadata(metadata)
+                if openai_metadata is not None:
+                    optional_params["metadata"] = openai_metadata
 
             ## LOAD CONFIG - if set
             config = litellm.OpenAIConfig.get_config()
@@ -2358,6 +2364,70 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
 
             response = anthropic_chat_completions.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                acompletion=acompletion,
+                custom_prompt_dict=litellm.custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,  # for calculating input/output tokens
+                api_key=api_key,
+                logging_obj=logging,
+                headers=headers,
+                timeout=timeout,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+            )
+            if optional_params.get("stream", False) or acompletion is True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                )
+            response = response
+        elif custom_llm_provider == "azure_anthropic":
+            # Azure Anthropic uses same API as Anthropic but with Azure authentication
+            api_key = (
+                api_key
+                or litellm.azure_key
+                or litellm.api_key
+                or get_secret("AZURE_API_KEY")
+                or get_secret("AZURE_OPENAI_API_KEY")
+            )
+            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            # Azure Foundry endpoint format: https://<resource-name>.services.ai.azure.com/anthropic/v1/messages
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("AZURE_API_BASE")
+            )
+            
+            if api_base is None:
+                raise ValueError(
+                    "Missing Azure API Base - Please set `api_base` or `AZURE_API_BASE` environment variable. "
+                    "Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
+                )
+
+            # Ensure the URL ends with /v1/messages
+            api_base = api_base.rstrip("/")
+            if api_base.endswith("/v1/messages"):
+                pass
+            elif api_base.endswith("/anthropic/v1/messages"):
+                pass
+            else:
+                if "/anthropic" in api_base:
+                    parts = api_base.split("/anthropic", 1)
+                    api_base = parts[0] + "/anthropic"
+                else:
+                    api_base = api_base + "/anthropic"
+                api_base = api_base + "/v1/messages"
+
+            response = azure_anthropic_chat_completions.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -4046,7 +4116,11 @@ def embedding(  # noqa: PLR0915
     azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
     aembedding: Optional[bool] = kwargs.get("aembedding", None)
     extra_headers = kwargs.get("extra_headers", None)
-    headers = kwargs.get("headers", None)
+    headers = kwargs.get("headers", None) or extra_headers
+    if headers is None:
+        headers = {}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
@@ -4121,7 +4195,7 @@ def embedding(  # noqa: PLR0915
 
     litellm_params_dict = get_litellm_params(**kwargs)
 
-    logging: Logging = litellm_logging_obj  # type: ignore
+    logging: LiteLLMLoggingObj = litellm_logging_obj  # type: ignore
     logging.update_environment_variables(
         model=model,
         user=user,
@@ -4357,7 +4431,7 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
                 api_base=api_base,
                 print_verbose=print_verbose,
-                extra_headers=extra_headers,
+                extra_headers=headers,
                 api_key=api_key,
             )
         elif custom_llm_provider == "triton":
@@ -5806,7 +5880,9 @@ def speech(  # noqa: PLR0915
     custom_llm_provider: Optional[str] = None,
     aspeech: Optional[bool] = None,
     **kwargs,
-) -> HttpxBinaryResponseContent:
+) -> Union[
+    HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
+]:
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -5850,7 +5926,7 @@ def speech(  # noqa: PLR0915
             kwargs=kwargs,
         )
 
-    logging_obj: Logging = cast(Logging, kwargs.get("litellm_logging_obj"))
+    logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
     logging_obj.update_environment_variables(
         model=model,
         user=user,
@@ -5866,7 +5942,11 @@ def speech(  # noqa: PLR0915
         },
         custom_llm_provider=custom_llm_provider,
     )
-    response: Optional[HttpxBinaryResponseContent] = None
+    response: Union[
+        HttpxBinaryResponseContent,
+        Coroutine[Any, Any, HttpxBinaryResponseContent],
+        None,
+    ] = None
     if (
         custom_llm_provider == "openai"
         or custom_llm_provider in litellm.openai_compatible_providers
@@ -6004,6 +6084,58 @@ def speech(  # noqa: PLR0915
                 aspeech=aspeech,
                 litellm_params=litellm_params_dict,
             )
+    elif custom_llm_provider == "elevenlabs":
+        from litellm.llms.elevenlabs.text_to_speech.transformation import (
+            ElevenLabsTextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = ElevenLabsTextToSpeechConfig()
+
+        elevenlabs_config = cast(
+            ElevenLabsTextToSpeechConfig, text_to_speech_provider_config
+        )
+
+        voice_id = voice if isinstance(voice, str) else None
+        if voice_id is None or not voice_id.strip():
+            raise litellm.BadRequestError(
+                message="'voice' must resolve to an ElevenLabs voice id for ElevenLabs TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+        voice_id = voice_id.strip()
+
+        query_params = kwargs.pop(
+            ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY, None
+        )
+        if isinstance(query_params, dict):
+            litellm_params_dict[
+                ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY
+            ] = query_params
+
+        litellm_params_dict[
+            ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY
+        ] = voice_id
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice_id,
+            text_to_speech_provider_config=elevenlabs_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         generic_optional_params = GenericLiteLLMParams(**kwargs)
 
@@ -6151,6 +6283,10 @@ async def ahealth_check(
         }
     """
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+    from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
+    
+    # Use cached import helper to lazy-load Logging class (only loads when function is called)
+    Logging = get_litellm_logging_class()
 
     # Map modes to their corresponding health check calls
     #########################################################
@@ -6339,7 +6475,7 @@ def stream_chunk_builder(  # noqa: PLR0915
     messages: Optional[list] = None,
     start_time=None,
     end_time=None,
-    logging_obj: Optional[Logging] = None,
+    logging_obj: Optional["Logging"] = None,
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
         if chunks is None:

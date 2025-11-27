@@ -39,11 +39,12 @@ azure-storage-file-datalake==12.20.0 # for azure buck storage logging
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
+grpcio>=1.62.3,<1.68.0  # Constraint for opentelemetry-exporter-otlp-proto-grpc to avoid resource exhausted bug (https://github.com/grpc/grpc/issues/38290)
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==44.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.4.6 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.4.9 # for proxy extras - e.g. prisma migrations
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env
 tiktoken==0.8.0 # for calculating usage
@@ -55,7 +56,7 @@ jinja2==3.1.6 # for prompt templates
 aiohttp==3.12.14 # for network calls
 aioboto3==13.4.0 # for async sagemaker calls
 tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
-pydantic==2.10.2 # proxy + openai req.
+pydantic>=2.11,<3 # proxy + openai req. + mcp
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
 soundfile==0.12.1 # for audio file processing

@@ -690,3 +690,184 @@ async def test_check_duplicate_user_email_case_insensitive(mocker):
     await _check_duplicate_user_email(
         None, mock_prisma_client
     )  # Should not raise exception
+
+
+def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
+    """
+    Test that _process_keys_for_user_info filters out keys with team_id='litellm-dashboard'
+    
+    UI session tokens (team_id='litellm-dashboard') should be excluded from user info responses
+    to prevent confusion, as these are automatically created during dashboard login.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _process_keys_for_user_info,
+    )
+
+    # Create mock keys with different team_ids
+    mock_key_dashboard = MagicMock()
+    mock_key_dashboard.model_dump.return_value = {
+        "token": "sk-dashboard-token",
+        "team_id": UI_SESSION_TOKEN_TEAM_ID,
+        "user_id": "test-user",
+        "key_alias": "dashboard-session-key",
+    }
+    
+    mock_key_regular = MagicMock()
+    mock_key_regular.model_dump.return_value = {
+        "token": "sk-regular-token",
+        "team_id": "regular-team",
+        "user_id": "test-user",
+        "key_alias": "regular-key",
+    }
+    
+    mock_key_no_team = MagicMock()
+    mock_key_no_team.model_dump.return_value = {
+        "token": "sk-no-team-token",
+        "team_id": None,
+        "user_id": "test-user",
+        "key_alias": "no-team-key",
+    }
+
+    keys = [mock_key_dashboard, mock_key_regular, mock_key_no_team]
+
+    # Mock general_settings and litellm_master_key_hash (they're imported from proxy_server)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.litellm_master_key_hash",
+        "different-hash",
+    )
+
+    # Call the function
+    result = _process_keys_for_user_info(keys=keys, all_teams=None)
+
+    # Verify that dashboard key is filtered out
+    assert len(result) == 2, "Should return 2 keys (dashboard key filtered out)"
+    
+    # Verify dashboard key is not in results
+    result_team_ids = [key.get("team_id") for key in result]
+    assert UI_SESSION_TOKEN_TEAM_ID not in result_team_ids, "Dashboard key should be filtered out"
+    
+    # Verify regular keys are included
+    assert "regular-team" in result_team_ids, "Regular team key should be included"
+    assert None in result_team_ids, "No-team key should be included"
+    
+    # Verify the correct keys are returned
+    result_tokens = [key.get("token") for key in result]
+    assert "sk-regular-token" in result_tokens, "Regular key should be included"
+    assert "sk-no-team-token" in result_tokens, "No-team key should be included"
+    assert "sk-dashboard-token" not in result_tokens, "Dashboard key should not be included"
+
+
+def test_process_keys_for_user_info_handles_none_keys(monkeypatch):
+    """
+    Test that _process_keys_for_user_info handles None keys gracefully
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _process_keys_for_user_info,
+    )
+
+    # Mock general_settings and litellm_master_key_hash (they're imported from proxy_server)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.litellm_master_key_hash",
+        "different-hash",
+    )
+
+    # Call with None keys
+    result = _process_keys_for_user_info(keys=None, all_teams=None)
+
+    # Should return empty list
+    assert result == [], "Should return empty list when keys is None"
+
+
+def test_process_keys_for_user_info_handles_empty_keys(monkeypatch):
+    """
+    Test that _process_keys_for_user_info handles empty keys list
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _process_keys_for_user_info,
+    )
+
+    # Mock general_settings and litellm_master_key_hash (they're imported from proxy_server)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.litellm_master_key_hash",
+        "different-hash",
+    )
+
+    # Call with empty list
+    result = _process_keys_for_user_info(keys=[], all_teams=None)
+
+    # Should return empty list
+    assert result == [], "Should return empty list when keys is empty"
+
+
+@pytest.mark.asyncio
+async def test_get_users_user_id_partial_match(mocker):
+    """
+    Test that /user/list endpoint uses partial matching for single user_id
+    and exact matching for multiple user_ids.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_data = {
+        "user_id": "test-user-partial-match",
+        "user_email": "test@example.com",
+        "user_role": "internal_user",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.model_dump.return_value = mock_user_data
+
+    captured_where_conditions = {}
+
+    async def mock_find_many(*args, **kwargs):
+        if "where" in kwargs:
+            captured_where_conditions.update(kwargs["where"])
+        return [mock_user_row]
+
+    async def mock_count(*args, **kwargs):
+        return 1
+
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    async def mock_get_user_key_counts(*args, **kwargs):
+        return {"test-user-partial-match": 0}
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_key_counts",
+        mock_get_user_key_counts,
+    )
+
+    captured_where_conditions.clear()
+    await get_users(user_ids="test-user", page=1, page_size=1)
+
+    assert "user_id" in captured_where_conditions
+    assert "contains" in captured_where_conditions["user_id"]
+    assert captured_where_conditions["user_id"]["contains"] == "test-user"
+    assert captured_where_conditions["user_id"]["mode"] == "insensitive"
+
+    captured_where_conditions.clear()
+    await get_users(user_ids="user1,user2,user3", page=1, page_size=1)
+
+    assert "user_id" in captured_where_conditions
+    assert "in" in captured_where_conditions["user_id"]
+    assert captured_where_conditions["user_id"]["in"] == ["user1", "user2", "user3"]
