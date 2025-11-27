@@ -327,6 +327,11 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         collection_arn = status_response["collectionDetails"][0]["arn"]
         verbose_logger.info(f"Created OpenSearch collection: {collection_name}")
 
+        # Wait for data access policy to propagate before returning
+        # AWS recommends waiting 60+ seconds for policy propagation
+        verbose_logger.debug("Waiting for data access policy to propagate (60s)...")
+        await asyncio.sleep(60)
+
         return collection_name, collection_arn
 
     async def _create_opensearch_index(self, collection_name: str):
