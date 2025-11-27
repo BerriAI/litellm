@@ -329,7 +329,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         #########################################################
         # Check if we've already checked the proxy env settings
         #########################################################
-        proxy_cache_key = str(url)
+        proxy_cache_key = url.host
 
         if proxy_cache_key in self.proxy_cache:
             return self.proxy_cache[proxy_cache_key]
