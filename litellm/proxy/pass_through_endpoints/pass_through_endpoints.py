@@ -1913,7 +1913,6 @@ class InitPassThroughEndpointHelpers:
                     "custom_headers": custom_headers,
                     "forward_headers": forward_headers,
                     "merge_query_params": merge_query_params,
-                    "guardrails": guardrails,
                     "dependencies": dependencies,
                     "cost_per_request": cost_per_request,
                     "guardrails": guardrails,
