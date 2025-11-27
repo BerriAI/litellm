@@ -4,7 +4,7 @@ JSONPath Extractor Module
 Extracts field values from data using simple JSONPath-like expressions.
 """
 
-from typing import Any, List, Optional, Union
+from typing import Any, List, Union
 
 from litellm._logging import verbose_proxy_logger
 
