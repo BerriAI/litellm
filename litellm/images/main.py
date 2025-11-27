@@ -10,7 +10,8 @@ from litellm import client, exception_type, get_litellm_params
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
-from litellm.litellm_core_utils.litellm_logging import Logging, Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -350,6 +351,10 @@ def image_generation(  # noqa: PLR0915
                 raise ValueError(
                     f"image generation config is not supported for {custom_llm_provider}"
                 )
+
+            # Resolve api_base from litellm.api_base if not explicitly provided
+            _api_base = api_base or litellm.api_base
+            litellm_params_dict["api_base"] = _api_base
 
             return llm_http_handler.image_generation_handler(
                 api_key=api_key,

@@ -122,6 +122,16 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         """
         Get the complete URL for Vertex AI Imagen predict API
         """
+        # Use the model name as provided, handling vertex_ai prefix
+        model_name = model
+        if model.startswith("vertex_ai/"):
+            model_name = model.replace("vertex_ai/", "")
+
+        # If a custom api_base is provided, use it directly
+        # This allows users to use proxies or mock endpoints
+        if api_base:
+            return api_base.rstrip("/")
+
         # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
         # then fall back to environment variables and other sources
         vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
@@ -130,15 +140,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
-        # Use the model name as provided, handling vertex_ai prefix
-        model_name = model
-        if model.startswith("vertex_ai/"):
-            model_name = model.replace("vertex_ai/", "")
-
-        if api_base:
-            base_url = api_base.rstrip("/")
-        else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+        base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:predict"
 
@@ -153,6 +155,13 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_base: Optional[str] = None,
     ) -> dict:
         headers = headers or {}
+        
+        # If a custom api_base is provided, skip credential validation
+        # This allows users to use proxies or mock endpoints without needing Vertex AI credentials
+        _api_base = litellm_params.get("api_base") or api_base
+        if _api_base is not None:
+            return headers
+        
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
         vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
