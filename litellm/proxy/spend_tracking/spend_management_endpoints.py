@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -1628,6 +1628,7 @@ async def calculate_spend(request: SpendCalculateRequest):
     },
 )
 async def ui_view_spend_logs(  # noqa: PLR0915
+    request: Request,
     api_key: Optional[str] = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
@@ -1711,13 +1712,24 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
-        # Convert the date strings to datetime objects
-        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc
-        )
-        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc
-        )
+        is_v2 = "/spend/logs/v2" in request.url.path
+        formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
+
+        def parse_date(date_str: str) -> datetime:
+            date_str = date_str.strip()
+            for fmt in formats:
+                try:
+                    return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+            expected = "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'" if is_v2 else "'YYYY-MM-DD HH:MM:SS'"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid date format: {date_str}. Expected: {expected}",
+            )
+
+        start_date_obj = parse_date(start_date)
+        end_date_obj = parse_date(end_date)
 
         # Convert to ISO format strings for Prisma
         start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
