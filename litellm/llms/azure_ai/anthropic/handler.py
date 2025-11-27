@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Callable, Union
 
 import httpx
 
-import litellm
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -55,7 +54,6 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
         Completion method that uses Azure authentication instead of Anthropic's x-api-key.
         All other logic is the same as AnthropicChatCompletion.
         """
-        from litellm.utils import ProviderConfigManager
 
         optional_params = copy.deepcopy(optional_params)
         stream = optional_params.pop("stream", None)
