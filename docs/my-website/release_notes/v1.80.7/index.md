@@ -96,11 +96,28 @@ Users can now filter usage statistics by organization, providing the same granul
 
 | Provider | Model | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
 | -------- | ----- | -------------- | ------------------- | -------------------- | -------- |
-| Anthropic | `claude-opus-4-5` | 200K | $15.00 | $75.00 | Chat, reasoning, vision, function calling |
-| Bedrock | `bedrock/anthropic.claude-opus-4-5-20250929-v1:0` | 200K | $15.00 | $75.00 | Chat, reasoning, vision, function calling |
-| OpenRouter | `openrouter/anthropic/claude-opus-4-5` | 200K | $15.00 | $75.00 | Chat, reasoning, vision, function calling |
-| Fireworks AI | `fireworks_ai/accounts/fireworks/models/glm-4p6` | Varies | Pricing varies | Pricing varies | Chat, function calling |
-| Gemini | `gemini-3-pro-image-preview` | Varies | Pricing varies | Pricing varies | Image generation with custom sizes |
+| Anthropic | `claude-opus-4-5-20251101` | 200K | $5.00 | $25.00 | Chat, reasoning, vision, function calling, prompt caching |
+| Bedrock | `anthropic.claude-opus-4-5-20251101-v1:0` | 200K | $5.00 | $25.00 | Chat, reasoning, vision, function calling, prompt caching |
+| Bedrock | `us.anthropic.claude-opus-4-5-20251101-v1:0` | 200K | $5.00 | $25.00 | Chat, reasoning, vision, function calling, prompt caching |
+| Bedrock | `amazon.nova-canvas-v1:0` | - | - | $0.06/image | Image generation |
+| OpenRouter | `openrouter/anthropic/claude-opus-4.5` | 200K | $5.00 | $25.00 | Chat, reasoning, vision, function calling, prompt caching |
+| Vertex AI | `vertex_ai/claude-opus-4-5` | 200K | $5.00 | $25.00 | Chat, reasoning, vision, function calling, prompt caching |
+| Vertex AI | `vertex_ai/claude-opus-4-5@20251101` | 200K | $5.00 | $25.00 | Chat, reasoning, vision, function calling, prompt caching |
+| Azure | `azure_ai/claude-opus-4-1` | 200K | $15.00 | $75.00 | Chat, reasoning, vision, function calling, prompt caching |
+| Azure | `azure_ai/claude-sonnet-4-5` | 200K | $3.00 | $15.00 | Chat, reasoning, vision, function calling, prompt caching |
+| Azure | `azure_ai/claude-haiku-4-5` | 200K | $1.00 | $5.00 | Chat, reasoning, vision, function calling, prompt caching |
+| Fireworks AI | `fireworks_ai/accounts/fireworks/models/glm-4p6` | 202K | $0.55 | $2.19 | Chat, function calling |
+| Public AI | `publicai/swiss-ai/apertus-8b-instruct` | 8K | Free | Free | Chat, function calling |
+| Public AI | `publicai/swiss-ai/apertus-70b-instruct` | 8K | Free | Free | Chat, function calling |
+| Public AI | `publicai/aisingapore/Gemma-SEA-LION-v4-27B-IT` | 8K | Free | Free | Chat, function calling |
+| Public AI | `publicai/BSC-LT/salamandra-7b-instruct-tools-16k` | 16K | Free | Free | Chat, function calling |
+| Public AI | `publicai/BSC-LT/ALIA-40b-instruct_Q8_0` | 8K | Free | Free | Chat, function calling |
+| Public AI | `publicai/allenai/Olmo-3-7B-Instruct` | 32K | Free | Free | Chat, function calling |
+| Public AI | `publicai/aisingapore/Qwen-SEA-LION-v4-32B-IT` | 32K | Free | Free | Chat, function calling |
+| Public AI | `publicai/allenai/Olmo-3-7B-Think` | 32K | Free | Free | Chat, function calling, reasoning |
+| Public AI | `publicai/allenai/Olmo-3-32B-Think` | 32K | Free | Free | Chat, function calling, reasoning |
+| Cohere | `embed-multilingual-light-v3.0` | 1K | $0.10 | - | Embeddings, supports images |
+| WatsonX | `watsonx/whisper-large-v3-turbo` | - | $0.0001/sec | - | Audio transcription |
 
 #### Features
 
@@ -148,6 +165,9 @@ Users can now filter usage statistics by organization, providing the same granul
 
 - **[Public AI](../../docs/providers/publicai)**
     - Add Provider publicai.co - [PR #17230](https://github.com/BerriAI/litellm/pull/17230)
+
+- **[Cohere](../../docs/providers/cohere)**
+    - Add cost tracking for cohere embed passthrough endpoint - [PR #17029](https://github.com/BerriAI/litellm/pull/17029)
 
 ### Bug Fixes
 
@@ -302,16 +322,6 @@ Users can now filter usage statistics by organization, providing the same granul
 
 - **General**
     - AI gateway prompt management documentation - [PR #16990](https://github.com/BerriAI/litellm/pull/16990)
-
----
-
-## Spend Tracking, Budgets and Rate Limiting
-
-- **Cost Tracking**
-    - Add search API logging and cost tracking in LiteLLM Proxy - [PR #17078](https://github.com/BerriAI/litellm/pull/17078)
-
-- **Database Optimization**
-    - Optimize date filtering for spend logs queries - [PR #17073](https://github.com/BerriAI/litellm/pull/17073)
 
 ---
 
