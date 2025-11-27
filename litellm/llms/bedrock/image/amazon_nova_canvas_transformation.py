@@ -3,7 +3,6 @@ from typing import Any, Dict, List, Optional
 
 from openai.types.image import Image
 
-from litellm import get_model_info
 from litellm.types.llms.bedrock import (
     AmazonNovaCanvasColorGuidedGenerationParams,
     AmazonNovaCanvasColorGuidedRequest,
@@ -15,6 +14,7 @@ from litellm.types.llms.bedrock import (
     AmazonNovaCanvasTextToImageRequest,
     AmazonNovaCanvasTextToImageResponse,
 )
+from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.utils import ImageResponse
 
 
@@ -207,6 +207,7 @@ class AmazonNovaCanvasConfig:
         size: Optional[str] = None,
         optional_params: Optional[dict] = None,
     ) -> float:
+        get_model_info = get_cached_model_info()
         model_info = get_model_info(
             model=model,
             custom_llm_provider="bedrock",

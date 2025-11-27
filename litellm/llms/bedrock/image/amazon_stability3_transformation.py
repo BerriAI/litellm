@@ -3,12 +3,12 @@ from typing import List, Optional
 
 from openai.types.image import Image
 
-from litellm import get_model_info
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.llms.bedrock import (
     AmazonStability3TextToImageRequest,
     AmazonStability3TextToImageResponse,
 )
+from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.utils import ImageResponse
 
 
@@ -115,6 +115,7 @@ class AmazonStability3Config:
             size: Optional[str] = None,
             optional_params: Optional[dict] = None,
     ) -> float:
+        get_model_info = get_cached_model_info()
         model_info = get_model_info(
             model=model,
             custom_llm_provider="bedrock",
