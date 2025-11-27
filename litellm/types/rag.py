@@ -41,11 +41,19 @@ class OpenAIVectorStoreOptions(TypedDict, total=False):
 
     Example (use existing):
         {"custom_llm_provider": "openai", "vector_store_id": "vs_xxx"}
+
+    Example (with credentials):
+        {"custom_llm_provider": "openai", "litellm_credential_name": "my-openai-creds"}
     """
 
     custom_llm_provider: Literal["openai"]
     vector_store_id: Optional[str]  # Existing VS ID (auto-creates if not provided)
     ttl_days: Optional[int]  # Time-to-live in days for indexed content
+
+    # Credentials (loaded from litellm.credential_list if litellm_credential_name is provided)
+    litellm_credential_name: Optional[str]  # Credential name to load from litellm.credential_list
+    api_key: Optional[str]  # Direct API key (alternative to litellm_credential_name)
+    api_base: Optional[str]  # Direct API base (alternative to litellm_credential_name)
 
 
 class BedrockVectorStoreOptions(TypedDict, total=False):
@@ -57,6 +65,9 @@ class BedrockVectorStoreOptions(TypedDict, total=False):
 
     Example (use existing KB):
         {"custom_llm_provider": "bedrock", "vector_store_id": "KB_ID"}
+
+    Example (with credentials):
+        {"custom_llm_provider": "bedrock", "litellm_credential_name": "my-aws-creds"}
 
     Auto-creation creates: S3 bucket, OpenSearch Serverless collection,
     IAM role, Knowledge Base, and Data Source.
@@ -72,6 +83,9 @@ class BedrockVectorStoreOptions(TypedDict, total=False):
     data_source_id: Optional[str]  # For existing KB: override auto-detected DS
     wait_for_ingestion: Optional[bool]  # Wait for completion (default: False - returns immediately)
     ingestion_timeout: Optional[int]  # Timeout in seconds if wait_for_ingestion=True (default: 300)
+
+    # Credentials (loaded from litellm.credential_list if litellm_credential_name is provided)
+    litellm_credential_name: Optional[str]  # Credential name to load from litellm.credential_list
 
     # AWS auth (uses BaseAWSLLM)
     aws_access_key_id: Optional[str]
@@ -160,6 +174,7 @@ class RAGIngestResponse(TypedDict, total=False):
     status: Literal["completed", "in_progress", "failed"]
     vector_store_id: str  # The vector store ID (created or existing)
     file_id: Optional[str]  # The file ID in the vector store
+    error: Optional[str]  # Error message if status is "failed"
 
 
 

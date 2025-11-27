@@ -379,6 +379,11 @@ class LiteLLMRoutes(enum.Enum):
     #########################################################
     passthrough_routes_wildcard = [f"{route}/*" for route in mapped_pass_through_routes]
 
+    litellm_native_routes = [
+        "/rag/ingest",
+        "/v1/rag/ingest",
+    ]
+
     anthropic_routes = [
         "/v1/messages",
         "/v1/messages/count_tokens",
@@ -416,6 +421,7 @@ class LiteLLMRoutes(enum.Enum):
         + passthrough_routes_wildcard
         + apply_guardrail_routes
         + mcp_routes
+        + litellm_native_routes
     )
     info_routes = [
         "/key/info",

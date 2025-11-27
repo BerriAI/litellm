@@ -61,6 +61,26 @@ class BaseRAGIngestion(ABC):
         )
         self.ingest_name = ingest_options.get("name")
 
+        # Load credentials from litellm_credential_name if provided in vector_store config
+        self._load_credentials_from_config()
+
+    def _load_credentials_from_config(self) -> None:
+        """
+        Load credentials from litellm_credential_name if provided in vector_store config.
+
+        This allows users to specify a credential name in the vector_store config
+        which will be resolved from litellm.credential_list.
+        """
+        from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+        credential_name = self.vector_store_config.get("litellm_credential_name")
+        if credential_name and litellm.credential_list:
+            credential_values = CredentialAccessor.get_credential_values(credential_name)
+            # Merge credentials into vector_store_config (don't overwrite existing values)
+            for key, value in credential_values.items():
+                if key not in self.vector_store_config:
+                    self.vector_store_config[key] = value
+
     @property
     def custom_llm_provider(self) -> str:
         """Get the vector store provider."""
@@ -317,5 +337,6 @@ class BaseRAGIngestion(ABC):
                 status="failed",
                 vector_store_id="",
                 file_id=None,
+                error=str(e),
             )
 
