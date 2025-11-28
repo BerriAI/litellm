@@ -968,8 +968,18 @@ https://railway.app
 **Step 2:** Set `PORT` = 4000 on Railway Environment Variables
 
 </TabItem>
-</Tabs>
+<TabItem value="northflank" label="Northflank">
 
+### Northflank 
+
+https://northflank.com
+
+Click the button below to deploy to Northflank
+
+[![Deploy on Northflank](https://assets.northflank.com/deploy_to_northflank_smm_36700fb050.svg)](https://northflank.com/stacks/deploy-litellm)
+
+</TabItem>
+</Tabs>
 
 ## Extras 
 

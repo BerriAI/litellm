@@ -7,6 +7,9 @@
         <a href="https://railway.app/template/HLP0Ub?referralCode=jch2ME">
           <img src="https://railway.app/button.svg" alt="Deploy on Railway">
         </a>
+        <a href="https://northflank.com/stacks/deploy-litellm">
+          <img src="https://assets.northflank.com/deploy_to_northflank_smm_36700fb050.svg" alt="Deploy on Northflank">
+        </a>
         </p>
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, VertexAI, TogetherAI, Azure, OpenAI, Groq etc.]
         <br>
