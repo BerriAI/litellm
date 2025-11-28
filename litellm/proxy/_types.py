@@ -527,6 +527,7 @@ class LiteLLMRoutes(enum.Enum):
             "/public/model_hub",
             "/public/agent_hub",
             "/public/mcp_hub",
+            "/public/litellm_model_cost_map",
         ]
     )
 
@@ -549,7 +550,6 @@ class LiteLLMRoutes(enum.Enum):
         "/global/predict/spend/logs",
         "/global/activity",
         "/health/services",
-        "/get/litellm_model_cost_map",
     ] + info_routes
 
     internal_user_routes = (
