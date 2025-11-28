@@ -1323,3 +1323,124 @@ async def test_default_priority_shared_pool():
     print(f"   - 3 keys without priority share ONE pool: {desc_a[0]['value']}")
     print(f"   - Shared pool limit: {desc_a[0]['rate_limit']['requests_per_unit']} RPM")
     print(f"   - Explicit priority 'prod' uses separate pool: {desc_prod[0]['value']}")
+
+
+@pytest.mark.asyncio
+async def test_team_metadata_priority():
+    """
+    Test that priority can be read from team metadata when not present in key metadata.
+    
+    Also verifies that team metadata priority takes precedence over key metadata priority.
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    
+    litellm.priority_reservation = {"high": 0.8, "low": 0.2}
+    
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    
+    model = "test-team-priority"
+    total_tpm = 1000
+    
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": total_tpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    
+    # Test 1: Priority from team metadata only
+    team_priority_user = UserAPIKeyAuth()
+    team_priority_user.metadata = {}
+    team_priority_user.team_metadata = {"priority": "high"}
+    team_priority_user.user_id = "team_priority_user"
+    
+    team_descriptors = handler._create_priority_based_descriptors(
+        model=model,
+        user_api_key_dict=team_priority_user,
+        priority="high",
+    )
+    
+    assert len(team_descriptors) == 1
+    team_descriptor = team_descriptors[0]
+    expected_high_tpm = int(total_tpm * 0.8)
+    actual_high_tpm = team_descriptor["rate_limit"]["tokens_per_unit"]
+    
+    assert actual_high_tpm == expected_high_tpm, (
+        f"Team priority 'high' should get {expected_high_tpm} TPM (80%), got {actual_high_tpm}"
+    )
+    assert team_descriptor["value"] == f"{model}:high"
+    
+    # Test 2: Team metadata priority takes precedence over key metadata
+    override_user = UserAPIKeyAuth()
+    override_user.metadata = {"priority": "low"}
+    override_user.team_metadata = {"priority": "high"}
+    override_user.user_id = "override_user"
+    
+    override_descriptors = handler._create_priority_based_descriptors(
+        model=model,
+        user_api_key_dict=override_user,
+        priority="high",
+    )
+    
+    assert len(override_descriptors) == 1
+    override_descriptor = override_descriptors[0]
+    expected_high_tpm = int(total_tpm * 0.8)
+    actual_high_tpm = override_descriptor["rate_limit"]["tokens_per_unit"]
+    
+    assert actual_high_tpm == expected_high_tpm, (
+        f"Team priority 'high' should take precedence and get {expected_high_tpm} TPM (80%), got {actual_high_tpm}"
+    )
+    assert override_descriptor["value"] == f"{model}:high"
+    
+    # Test 3: Key metadata priority when no team metadata
+    key_only_user = UserAPIKeyAuth()
+    key_only_user.metadata = {"priority": "low"}
+    key_only_user.team_metadata = {}
+    key_only_user.user_id = "key_only_user"
+    
+    key_only_descriptors = handler._create_priority_based_descriptors(
+        model=model,
+        user_api_key_dict=key_only_user,
+        priority="low",
+    )
+    
+    assert len(key_only_descriptors) == 1
+    key_only_descriptor = key_only_descriptors[0]
+    expected_low_tpm = int(total_tpm * 0.2)
+    actual_low_tpm = key_only_descriptor["rate_limit"]["tokens_per_unit"]
+    
+    assert actual_low_tpm == expected_low_tpm, (
+        f"Key priority 'low' should get {expected_low_tpm} TPM (20%), got {actual_low_tpm}"
+    )
+    assert key_only_descriptor["value"] == f"{model}:low"
+    
+    # Test 4: No priority in either metadata uses default
+    no_priority_user = UserAPIKeyAuth()
+    no_priority_user.metadata = {}
+    no_priority_user.team_metadata = {}
+    no_priority_user.user_id = "no_priority_user"
+    
+    no_priority_descriptors = handler._create_priority_based_descriptors(
+        model=model,
+        user_api_key_dict=no_priority_user,
+        priority=None,
+    )
+    
+    assert len(no_priority_descriptors) == 1
+    no_priority_descriptor = no_priority_descriptors[0]
+    assert no_priority_descriptor["value"] == f"{model}:default_pool"
+    
+    print("✅ Team metadata priority test passed:")
+    print(f"   - Priority from team metadata: {team_descriptor['value']} = {actual_high_tpm} TPM")
+    print(f"   - Team priority takes precedence: {override_descriptor['value']} = {actual_high_tpm} TPM")
+    print(f"   - Key priority when no team: {key_only_descriptor['value']} = {actual_low_tpm} TPM")
+    print(f"   - No priority uses default pool: {no_priority_descriptor['value']}")
