@@ -40,7 +40,9 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         }
 
         # Create a kwargs dict with standard_logging_object containing guardrail information
-        kwargs = {"standard_logging_object": {"guardrail_information": [ guardrail_info ]}}
+        kwargs = {
+            "standard_logging_object": {"guardrail_information": [guardrail_info]}
+        }
 
         # Call the method
         otel._create_guardrail_span(kwargs=kwargs, context=None)
@@ -248,7 +250,9 @@ class TestOpenTelemetry(unittest.TestCase):
         }
 
         # Create a kwargs dict with standard_logging_object containing guardrail information
-        kwargs = {"standard_logging_object": {"guardrail_information": [ guardrail_info ]}}
+        kwargs = {
+            "standard_logging_object": {"guardrail_information": [guardrail_info]}
+        }
 
         # Call the method
         otel._create_guardrail_span(kwargs=kwargs, context=None)
@@ -618,8 +622,6 @@ class TestOpenTelemetry(unittest.TestCase):
         # But other attributes from OTEL_RESOURCE_ATTRIBUTES should still be present
         self.assertEqual(attributes.get("extra.attr"), "extra-value")
 
-
-
     def test_handle_success_spans_only(self):
         # make sure neither events nor metrics is on
         os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
@@ -769,6 +771,7 @@ class TestOpenTelemetry(unittest.TestCase):
         result = otel._get_span_name(kwargs)
         self.assertEqual(result, LITELLM_REQUEST_SPAN_NAME)
 
+    @patch("litellm.log_raw_request_response", True)
     @patch("litellm.turn_off_message_logging", False)
     def test_maybe_log_raw_request_creates_span(self):
         """Test _maybe_log_raw_request creates span when logging enabled"""
@@ -807,6 +810,52 @@ class TestOpenTelemetry(unittest.TestCase):
         )
 
         mock_tracer.start_span.assert_not_called()
+
+    @patch("litellm.log_raw_request_response", False)
+    @patch("litellm.turn_off_message_logging", False)
+    def test_maybe_log_raw_request_skips_when_log_raw_request_is_false(self):
+        """
+        Test that _maybe_log_raw_request skips creating a span when the global
+        litellm.log_raw_request_response setting is False.
+        """
+
+        otel = OpenTelemetry()
+        otel.message_logging = True
+        mock_tracer = MagicMock()
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+
+        kwargs = {"litellm_params": {"metadata": {}}}
+        otel._maybe_log_raw_request(
+            kwargs, {}, datetime.now(), datetime.now(), MagicMock()
+        )
+
+        # Assert
+        mock_tracer.start_span.assert_not_called()
+
+    @patch("litellm.log_raw_request_response", True)
+    @patch("litellm.turn_off_message_logging", False)
+    def test_maybe_log_raw_request_creates_span_when_log_raw_request_is_true(self):
+        """
+        Test that _maybe_log_raw_request creates a span when the global
+        litellm.log_raw_request_response setting is explicitly True.
+        """
+
+        otel = OpenTelemetry()
+        otel.message_logging = True
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+        mock_tracer.start_span.return_value = mock_span
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+        otel.set_raw_request_attributes = MagicMock()
+        otel._to_ns = MagicMock(return_value=1234567890)
+
+        kwargs = {"litellm_params": {"metadata": {}}}
+        otel._maybe_log_raw_request(
+            kwargs, {}, datetime.now(), datetime.now(), MagicMock()
+        )
+
+        # Assert
+        mock_tracer.start_span.assert_called_once()
 
 
 class TestOpenTelemetryHeaderSplitting(unittest.TestCase):
