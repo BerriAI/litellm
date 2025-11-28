@@ -443,23 +443,23 @@ response_with_detections = Response(
         "required_action": {
             "action_type": "anonymize_action",
             "policy_name": "PII",
-            "chat_redaction_result": {
-                "all_redacted_messages": [
-                    {
-                        "content": "Hi my name is [NAME_1]",
-                        "role": "user",
-                        "additional_contents": [],
-                        "received_message_id": "0",
-                        "extra_fields": {},
-                    }
-                ],
-                "redacted_new_message": {
+        },
+        "redacted_chat": {
+            "all_redacted_messages": [
+                {
                     "content": "Hi my name is [NAME_1]",
                     "role": "user",
                     "additional_contents": [],
                     "received_message_id": "0",
                     "extra_fields": {},
-                },
+                }
+            ],
+            "redacted_new_message": {
+                "content": "Hi my name is [NAME_1]",
+                "role": "user",
+                "additional_contents": [],
+                "received_message_id": "0",
+                "extra_fields": {},
             },
         },
     },
