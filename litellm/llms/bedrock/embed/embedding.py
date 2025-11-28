@@ -377,7 +377,7 @@ class BedrockEmbedding(BaseAWSLLM):
             is_async_invoke=is_async_invoke,
         )
 
-    def embeddings(
+    def embeddings(  # noqa: PLR0915
         self,
         model: str,
         input: List[str],
