@@ -1329,6 +1329,22 @@
         "rerank": false
       }
     },
+    "publicai": {
+      "display_name": "PublicAI (`publicai`)",
+      "url": "https://docs.litellm.ai/docs/providers/publicai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "predibase": {
       "display_name": "Predibase (`predibase`)",
       "url": "https://docs.litellm.ai/docs/providers/predibase",

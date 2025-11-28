@@ -419,7 +419,8 @@ const sidebars = {
               ]
             },
             "pass_through/vllm",
-            "proxy/pass_through"
+            "proxy/pass_through",
+            "proxy/pass_through_guardrails"
           ]
         },
         "rag_ingest",
@@ -621,6 +622,7 @@ const sidebars = {
         "providers/ovhcloud",
         "providers/perplexity",
         "providers/petals",
+        "providers/publicai",
         "providers/predibase",
         "providers/recraft",
         "providers/replicate",
@@ -814,9 +816,10 @@ const sidebars = {
               "Learn how to deploy + call models from different providers on LiteLLM",
             slug: "/project",
           },
-          items: [
+          items: [        
             "projects/smolagents",
             "projects/mini-swe-agent",
+            "projects/openai-agents",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",
