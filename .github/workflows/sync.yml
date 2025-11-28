@@ -24,7 +24,7 @@ jobs:
           git checkout main
       - name: Merge upstream/main
         run: |
-          git merge --ff-only upstream/main || (echo "No fast-forward; creating merge commit" && git merge upstream/main --no-edit
+            git merge --ff-only upstream/main || (echo "No fast-forward; creating merge commit" && git merge upstream/main --no-edit)
       - name: Push to origin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
