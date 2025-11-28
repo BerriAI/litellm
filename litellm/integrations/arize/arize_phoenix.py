@@ -1,17 +1,19 @@
 import os
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
+from datetime import datetime
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
+from litellm.types.services import ServiceLoggerPayload
+from litellm.integrations.opentelemetry import OpenTelemetry
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
     from litellm.types.integrations.arize import Protocol as _Protocol
-
-    from .opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
@@ -25,7 +27,11 @@ else:
 ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://otlp.arize.com/v1/traces"
 
 
-class ArizePhoenixLogger:
+class ArizePhoenixLogger(OpenTelemetry):
+    def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
+        ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj)
+        return
+
     @staticmethod
     def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
@@ -97,3 +103,46 @@ class ArizePhoenixLogger:
             endpoint=endpoint,
             project_name=project_name,
         )
+
+    async def async_service_success_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        parent_otel_span: Optional[Span] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[datetime, float]] = None,
+        event_metadata: Optional[dict] = None,
+    ):
+        pass  # suppress additional spans
+
+    async def async_service_failure_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        error: Optional[str] = "",
+        parent_otel_span: Optional[Span] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[float, datetime]] = None,
+        event_metadata: Optional[dict] = None,
+    ):
+        pass  # suppress additional spans
+
+    def create_litellm_proxy_request_started_span(
+        self,
+        start_time: datetime,
+        headers: dict,
+    ):
+        pass  # suppress additional spans
+
+    async def async_health_check(self):
+
+        config = self.get_arize_phoenix_config()
+
+        if not config.otlp_auth_headers:
+            return {
+                "status": "unhealthy",
+                "error_message": "PHOENIX_API_KEY environment variable not set",
+            }
+
+        return {
+            "status": "healthy",
+            "message": "Arize-Phoenix credentials are configured properly",
+        }
