@@ -6,6 +6,12 @@ Sync Microsoft SSO Groups, Members with LiteLLM Teams.
 
 <Image img={require('../../img/litellm_entra_id.png')}  style={{ width: '800px', height: 'auto' }} />
 
+:::tip Need continuous, automatic group sync?
+LiteLLM syncs groups and members with SSO only on account creation.   
+If you require **always-on, real-time synchronisation**—for example, when a user is added to a group and you want the change reflected in LiteLLM, ensure you
+follow the [SCIM integration guide](./scim_litellm.md) to set this up.
+:::
+
 <br />
 <br />
 
