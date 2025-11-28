@@ -279,10 +279,27 @@ async def aresponses_api_with_mcp(
             user_api_key_auth = kwargs.get("litellm_metadata", {}).get(
                 "user_api_key_auth"
             )
+            
+            # Extract MCP auth headers from the request to pass to MCP server
+            secret_fields: Optional[Dict[str, Any]] = kwargs.get("secret_fields")
+            (
+                mcp_auth_header,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers_from_request,
+            ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+                secret_fields=secret_fields,
+                tools=tools,
+            )
+            
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=tool_server_map,
                 tool_calls=tool_calls,
                 user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers_from_request,
             )
 
             if tool_results:
@@ -523,7 +540,7 @@ def responses(
     )
 
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aresponses", False) is True
 

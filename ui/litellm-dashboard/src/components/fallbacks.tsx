@@ -1,9 +1,10 @@
 import { PlayIcon, TrashIcon } from "@heroicons/react/outline";
 import { Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
-import { Modal, Tooltip } from "antd";
+import { Tooltip } from "antd";
 import openai from "openai";
 import React, { useEffect, useState } from "react";
 import AddFallbacks from "./add_fallbacks";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import NotificationsManager from "./molecules/notifications_manager";
 import { getCallbacksCall, setCallbacksCall } from "./networking";
 
@@ -68,6 +69,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
   const [isDeleting, setIsDeleting] = useState(false);
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -85,6 +87,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
 
   const handleDeleteClick = (fallbackEntry: FallbackEntry) => {
     setFallbackToDelete(fallbackEntry);
+    setIsDeleteModalOpen(true);
   };
 
   const handleDeleteConfirm = async () => {
@@ -100,10 +103,11 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
 
     const updatedFallbacks = routerSettings["fallbacks"]
       .map((dict: FallbackEntry) => {
-        if (key in dict && Array.isArray(dict[key])) {
-          delete dict[key];
+        const newDict = { ...dict };
+        if (key in newDict && Array.isArray(newDict[key])) {
+          delete newDict[key];
         }
-        return dict;
+        return newDict;
       })
       .filter((dict: FallbackEntry) => Object.keys(dict).length > 0);
 
@@ -124,11 +128,13 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
       NotificationsManager.fromBackend("Failed to update router settings: " + error);
     } finally {
       setIsDeleting(false);
+      setIsDeleteModalOpen(false);
       setFallbackToDelete(null);
     }
   };
 
   const handleDeleteCancel = () => {
+    setIsDeleteModalOpen(false);
     setFallbackToDelete(null);
   };
 
@@ -183,20 +189,22 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
             )}
         </TableBody>
       </Table>
-      {fallbackToDelete && (
-        <Modal
-          title="Delete Fallback"
-          open={fallbackToDelete !== null}
-          onOk={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-          confirmLoading={isDeleting}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
-        >
-          <p>Are you sure you want to delete fallback: {Object.keys(fallbackToDelete)[0]} ?</p>
-          <p>This action cannot be undone.</p>
-        </Modal>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete Fallback?"
+        message="Are you sure you want to delete this fallback? This action cannot be undone."
+        resourceInformationTitle="Fallback Information"
+        resourceInformation={[
+          {
+            label: "Model Name",
+            value: fallbackToDelete ? Object.keys(fallbackToDelete)[0] : "",
+            code: true,
+          },
+        ]}
+        onCancel={handleDeleteCancel}
+        onOk={handleDeleteConfirm}
+        confirmLoading={isDeleting}
+      />
     </>
   );
 };

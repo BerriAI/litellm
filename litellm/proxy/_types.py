@@ -348,6 +348,8 @@ class LiteLLMRoutes(enum.Enum):
         # search
         "/search",
         "/v1/search",
+        "/search/{search_tool_name}",
+        "/v1/search/{search_tool_name}",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -377,9 +379,16 @@ class LiteLLMRoutes(enum.Enum):
     #########################################################
     passthrough_routes_wildcard = [f"{route}/*" for route in mapped_pass_through_routes]
 
+    litellm_native_routes = [
+        "/rag/ingest",
+        "/v1/rag/ingest",
+    ]
+
     anthropic_routes = [
         "/v1/messages",
         "/v1/messages/count_tokens",
+        "/v1/skills",
+        "/v1/skills/{skill_id}",
     ]
 
     mcp_routes = [
@@ -412,6 +421,7 @@ class LiteLLMRoutes(enum.Enum):
         + passthrough_routes_wildcard
         + apply_guardrail_routes
         + mcp_routes
+        + litellm_native_routes
     )
     info_routes = [
         "/key/info",
@@ -1683,6 +1693,26 @@ class DynamoDBArgs(LiteLLMPydanticObjectBase):
     assume_role_aws_session_name: Optional[str] = None
 
 
+class PassThroughGuardrailSettings(LiteLLMPydanticObjectBase):
+    """
+    Settings for a specific guardrail on a passthrough endpoint.
+    
+    Allows field-level targeting for guardrail execution.
+    """
+    request_fields: Optional[List[str]] = Field(
+        default=None,
+        description="JSONPath expressions for input field targeting (pre_call). Examples: 'query', 'documents[*].text', 'messages[*].content'. If not specified, guardrail runs on entire request payload.",
+    )
+    response_fields: Optional[List[str]] = Field(
+        default=None,
+        description="JSONPath expressions for output field targeting (post_call). Examples: 'results[*].text', 'output'. If not specified, guardrail runs on entire response payload.",
+    )
+
+
+# Type alias for the guardrails dict: guardrail_name -> settings (or None for defaults)
+PassThroughGuardrailsConfig = Dict[str, Optional[PassThroughGuardrailSettings]]
+
+
 class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     id: Optional[str] = Field(
         default=None,
@@ -1707,6 +1737,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     auth: bool = Field(
         default=False,
         description="Whether authentication is required for the pass-through endpoint. If True, requests to the endpoint will require a valid LiteLLM API key.",
+    )
+    guardrails: Optional[PassThroughGuardrailsConfig] = Field(
+        default=None,
+        description="Guardrails configuration for this passthrough endpoint. Dict keys are guardrail names, values are optional settings for field targeting. When set, all org/team/key level guardrails will also execute. Defaults to None (no guardrails execute).",
     )
 
 
@@ -1861,6 +1895,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     allowed_routes: Optional[List] = Field(
         None, description="Proxy API Endpoints you want users to be able to access"
+    )
+    reject_clientside_metadata_tags: Optional[bool] = Field(
+        None,
+        description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
     )
     enable_public_model_hub: bool = Field(
         default=False,
@@ -2622,6 +2660,7 @@ class SpendLogsPayload(TypedDict):
     cache_key: str
     request_tags: str  # json str
     team_id: Optional[str]
+    organization_id: Optional[str]
     end_user: Optional[str]
     requester_ip_address: Optional[str]
     custom_llm_provider: Optional[str]
@@ -3556,6 +3595,10 @@ class BaseDailySpendTransaction(TypedDict):
 
 class DailyTeamSpendTransaction(BaseDailySpendTransaction):
     team_id: str
+
+
+class DailyOrganizationSpendTransaction(BaseDailySpendTransaction):
+    organization_id: str
 
 
 class DailyUserSpendTransaction(BaseDailySpendTransaction):

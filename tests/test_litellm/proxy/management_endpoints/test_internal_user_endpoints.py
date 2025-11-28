@@ -812,3 +812,62 @@ def test_process_keys_for_user_info_handles_empty_keys(monkeypatch):
 
     # Should return empty list
     assert result == [], "Should return empty list when keys is empty"
+
+
+@pytest.mark.asyncio
+async def test_get_users_user_id_partial_match(mocker):
+    """
+    Test that /user/list endpoint uses partial matching for single user_id
+    and exact matching for multiple user_ids.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_data = {
+        "user_id": "test-user-partial-match",
+        "user_email": "test@example.com",
+        "user_role": "internal_user",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.model_dump.return_value = mock_user_data
+
+    captured_where_conditions = {}
+
+    async def mock_find_many(*args, **kwargs):
+        if "where" in kwargs:
+            captured_where_conditions.update(kwargs["where"])
+        return [mock_user_row]
+
+    async def mock_count(*args, **kwargs):
+        return 1
+
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    async def mock_get_user_key_counts(*args, **kwargs):
+        return {"test-user-partial-match": 0}
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_key_counts",
+        mock_get_user_key_counts,
+    )
+
+    captured_where_conditions.clear()
+    await get_users(user_ids="test-user", page=1, page_size=1)
+
+    assert "user_id" in captured_where_conditions
+    assert "contains" in captured_where_conditions["user_id"]
+    assert captured_where_conditions["user_id"]["contains"] == "test-user"
+    assert captured_where_conditions["user_id"]["mode"] == "insensitive"
+
+    captured_where_conditions.clear()
+    await get_users(user_ids="user1,user2,user3", page=1, page_size=1)
+
+    assert "user_id" in captured_where_conditions
+    assert "in" in captured_where_conditions["user_id"]
+    assert captured_where_conditions["user_id"]["in"] == ["user1", "user2", "user3"]

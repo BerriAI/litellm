@@ -399,7 +399,13 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     async def _execute_tool_calls(
-        tool_server_map: dict[str, str], tool_calls: List[Any], user_api_key_auth: Any
+        tool_server_map: dict[str, str], 
+        tool_calls: List[Any], 
+        user_api_key_auth: Any,
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -437,6 +443,10 @@ class LiteLLM_Proxy_MCP_Handler:
                     name=tool_name,
                     arguments=parsed_arguments,
                     user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
                     proxy_logging_obj=proxy_logging_obj,
                 )
 

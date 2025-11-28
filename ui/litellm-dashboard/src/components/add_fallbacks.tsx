@@ -2,13 +2,12 @@
  * Modal to add fallbacks to the proxy router config
  */
 
-import React, { useState, useEffect } from "react";
 import { Button } from "@tremor/react";
-import { SearchSelect, SearchSelectItem } from "@tremor/react";
-import { setCallbacksCall } from "./networking";
-import { Modal, Form } from "antd";
-import { fetchAvailableModels, ModelGroup } from "./playground/llm_calls/fetch_models";
+import { Form, Modal, Select } from "antd";
+import React, { useEffect, useState } from "react";
 import NotificationManager from "./molecules/notifications_manager";
+import { setCallbacksCall } from "./networking";
+import { fetchAvailableModels, ModelGroup } from "./playground/llm_calls/fetch_models";
 
 interface AddFallbacksProps {
   models?: string[];
@@ -134,10 +133,10 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({ models, accessToken, router
                 rules={[{ required: true, message: "Please select the primary model that needs fallbacks" }]}
                 className="!mb-0"
               >
-                <SearchSelect
+                <Select
                   placeholder="Select the model that needs fallback protection"
-                  value={selectedModel}
-                  onValueChange={(value: string) => {
+                  value={selectedModel || undefined}
+                  onChange={(value: string) => {
                     setSelectedModel(value);
                     // Remove the selected model from fallbacks if it was selected
                     const updatedFallbacks = selectedFallbacks.filter((model) => model !== value);
@@ -145,15 +144,18 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({ models, accessToken, router
                     form.setFieldValue("models", updatedFallbacks);
                     form.setFieldValue("model_name", value);
                   }}
+                  showSearch
+                  allowClear
+                  style={{ width: "100%" }}
                 >
                   {Array.from(new Set(modelInfo.map((option) => option.model_group))).map(
                     (model: string, index: number) => (
-                      <SearchSelectItem key={index} value={model}>
+                      <Select.Option key={index} value={model}>
                         {model}
-                      </SearchSelectItem>
+                      </Select.Option>
                     ),
                   )}
-                </SearchSelect>
+                </Select>
                 <p className="text-sm text-gray-500 mt-1">This is the primary model that users will request</p>
               </Form.Item>
 
@@ -200,26 +202,29 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({ models, accessToken, router
                   )}
 
                   {/* Model selector */}
-                  <SearchSelect
+                  <Select
                     placeholder="Add a fallback model"
-                    value=""
-                    onValueChange={(value: string) => {
+                    value={undefined}
+                    onChange={(value: string) => {
                       if (value && !selectedFallbacks.includes(value)) {
                         const newFallbacks = [...selectedFallbacks, value];
                         setSelectedFallbacks(newFallbacks);
                         form.setFieldValue("models", newFallbacks);
                       }
                     }}
+                    showSearch
+                    allowClear
+                    style={{ width: "100%" }}
                   >
                     {Array.from(new Set(modelInfo.map((option) => option.model_group)))
                       .filter((data: string) => data !== selectedModel && !selectedFallbacks.includes(data))
                       .sort()
                       .map((model: string) => (
-                        <SearchSelectItem key={model} value={model}>
+                        <Select.Option key={model} value={model}>
                           {model}
-                        </SearchSelectItem>
+                        </Select.Option>
                       ))}
-                  </SearchSelect>
+                  </Select>
                 </div>
                 <p className="text-sm text-gray-500 mt-1">
                   <strong>Order matters:</strong> Models will be tried in the order shown above (1st, 2nd, 3rd, etc.)
