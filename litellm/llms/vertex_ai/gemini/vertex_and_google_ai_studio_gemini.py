@@ -237,6 +237,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return False
 
     def _supports_penalty_parameters(self, model: str) -> bool:
+        # Gemini 3 models do not support penalty parameters
+        if VertexGeminiConfig._is_gemini_3_or_newer(model):
+            return False
         unsupported_models = ["gemini-2.5-pro-preview-06-05"]
         if model in unsupported_models:
             return False
@@ -901,13 +904,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
-            thinking_config = optional_params.get("thinkingConfig", {})
-            if (
-                "thinkingLevel" not in thinking_config
-                and "thinkingBudget" not in thinking_config
-            ):
-                thinking_config["thinkingLevel"] = "low"
-                optional_params["thinkingConfig"] = thinking_config
+            # Only add thinkingLevel if model supports it (exclude image models)
+            if "image" not in model.lower():
+                thinking_config = optional_params.get("thinkingConfig", {})
+                if (
+                    "thinkingLevel" not in thinking_config
+                    and "thinkingBudget" not in thinking_config
+                ):
+                    thinking_config["thinkingLevel"] = "low"
+                    optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
 
@@ -1344,7 +1349,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
 
     @staticmethod
-    def _calculate_usage(
+    def _calculate_usage(  # noqa: PLR0915
         completion_response: Union[
             GenerateContentResponseBody, BidiGenerateContentServerMessage
         ],
@@ -1379,6 +1384,30 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     response_tokens_details.audio_tokens = detail.get("tokenCount", 0)
         #########################################################
 
+        ## CANDIDATES TOKEN DETAILS (e.g., for image generation models) ##
+        if "candidatesTokensDetails" in usage_metadata:
+            if response_tokens_details is None:
+                response_tokens_details = CompletionTokensDetailsWrapper()
+            for detail in usage_metadata["candidatesTokensDetails"]:
+                modality = detail.get("modality")
+                token_count = detail.get("tokenCount", 0)
+                if modality == "TEXT":
+                    response_tokens_details.text_tokens = token_count
+                elif modality == "AUDIO":
+                    response_tokens_details.audio_tokens = token_count
+                elif modality == "IMAGE":
+                    response_tokens_details.image_tokens = token_count
+
+            # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
+            # candidatesTokenCount includes all modalities, so: text = total - (image + audio)
+            if response_tokens_details.text_tokens is None:
+                candidates_token_count = usage_metadata.get("candidatesTokenCount", 0)
+                image_tokens = response_tokens_details.image_tokens or 0
+                audio_tokens_candidate = response_tokens_details.audio_tokens or 0
+                calculated_text_tokens = candidates_token_count - image_tokens - audio_tokens_candidate
+                response_tokens_details.text_tokens = calculated_text_tokens
+        #########################################################
+
         if "promptTokensDetails" in usage_metadata:
             for detail in usage_metadata["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
@@ -1387,6 +1416,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     text_tokens = detail.get("tokenCount", 0)
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
+            # Also add reasoning tokens to response_tokens_details
+            if response_tokens_details is None:
+                response_tokens_details = CompletionTokensDetailsWrapper()
+            response_tokens_details.reasoning_tokens = reasoning_tokens
 
         ## adjust 'text_tokens' to subtract cached tokens
         if (

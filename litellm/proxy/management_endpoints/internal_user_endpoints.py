@@ -1462,13 +1462,19 @@ async def get_users(
     where_conditions: Dict[str, Any] = {}
 
     if role:
-        where_conditions["user_role"] = role  # Exact match instead of contains
+        where_conditions["user_role"] = role
 
     if user_ids and isinstance(user_ids, str):
         user_id_list = [uid.strip() for uid in user_ids.split(",") if uid.strip()]
-        where_conditions["user_id"] = {
-            "in": user_id_list,
-        }
+        if len(user_id_list) == 1:
+            where_conditions["user_id"] = {
+                "contains": user_id_list[0],
+                "mode": "insensitive",
+            }
+        else:
+            where_conditions["user_id"] = {
+                "in": user_id_list,
+            }
 
     if user_email is not None and isinstance(user_email, str):
         where_conditions["user_email"] = {

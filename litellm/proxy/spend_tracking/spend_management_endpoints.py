@@ -1427,7 +1427,7 @@ async def _get_spend_report_for_time_range(
         LEFT JOIN
             "LiteLLM_TeamTable" t ON s.team_id = t.team_id
         WHERE
-            s."startTime"::DATE >= $1::date AND s."startTime"::DATE <= $2::date
+            s."startTime" >= $1::date AND s."startTime" < ($2::date + INTERVAL '1 day')
         GROUP BY
             t.team_alias
         ORDER BY
@@ -1441,7 +1441,7 @@ async def _get_spend_report_for_time_range(
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
-        WHERE "startTime"::DATE >= $1::date AND "startTime"::DATE <= $2::date
+        WHERE "startTime" >= $1::date AND "startTime" < ($2::date + INTERVAL '1 day')
         GROUP BY individual_request_tag
         ORDER BY total_spend DESC;
         """
