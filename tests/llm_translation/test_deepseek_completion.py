@@ -97,7 +97,7 @@ async def test_deepseek_provider_async_completion(stream):
 
     # Check request body
     request_body = json.loads(call_args.kwargs["data"])
-    assert call_args.kwargs["url"] == "https://api.deepseek.com/beta/chat/completions"
+    assert call_args.kwargs["url"] == "https://api.deepseek.com/v1/chat/completions"
     assert (
         request_body["model"] == "deepseek-reasoner"
     )  # Model name should be stripped of provider prefix
