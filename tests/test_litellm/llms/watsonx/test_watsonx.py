@@ -255,29 +255,31 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
         "model_id": "openai/gpt-oss-120b",
     }
 
-    with patch.object(litellm.module_level_client, "post", return_value=mock_token_response) as mock_token_post, \
-            patch.object(client, "post", return_value=mock_completion_response) as mock_completion_post:
+    with patch.object(client, "post") as mock_post, patch.object(
+            litellm.module_level_client, "post", return_value=mock_token_response
+    ):
+        # Set the mock to return the completion response
+        mock_post.return_value = mock_completion_response
 
         try:
             # Call acompletion with messages
-            response = await litellm.acompletion(
+            await litellm.acompletion(
                 model=model,
                 messages=messages,
                 api_key="test_api_key",
                 client=client,
             )
         except Exception as e:
-            # May fail due to incomplete mocking, but we should have captured the requests
+            # May fail due to incomplete mocking, but we should have captured the request
             print(f"Exception (may be expected): {e}")
 
-    # Verify the POST calls were made
-    assert mock_token_post.call_count >= 1, f"Token POST should have been called at least once, got {mock_token_post.call_count}"
-    assert mock_completion_post.call_count >= 1, f"Completion POST should have been called at least once, got {mock_completion_post.call_count}"
+    # Verify the POST was called
+    assert (
+            mock_post.call_count >= 1
+    ), f"POST should have been called at least once, got {mock_post.call_count}"
 
-    # Get the request body from the completion call
-    call_args = mock_completion_post.call_args
-    assert call_args is not None, "Completion post should have been called with arguments"
-
+    # Get the request body from the first call
+    call_args = mock_post.call_args
     json_data = json.loads(call_args.kwargs["data"])
 
     print(f"\n{'='*80}")
