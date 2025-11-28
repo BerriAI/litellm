@@ -117,6 +117,7 @@ async def test_construct_url_beta_protocol_explicit():
 async def test_construct_url_ga_protocol():
     """
     Test that realtime_protocol='GA' uses /openai/v1/realtime (GA path).
+    GA path uses ?model= instead of ?api-version=&deployment= format.
     """
     from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
 
@@ -132,8 +133,10 @@ async def test_construct_url_ga_protocol():
     assert "/openai/v1/realtime?" in url
     # Ensure it doesn't have both paths
     assert url.count("/realtime") == 1
-    assert "api-version=2024-10-01-preview" in url
-    assert "deployment=gpt-4o-realtime-preview" in url
+    # GA path uses model= query param, not api-version and deployment
+    assert "model=gpt-4o-realtime-preview" in url
+    assert "api-version" not in url
+    assert "deployment" not in url
 
 
 @pytest.mark.asyncio
@@ -203,8 +206,10 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
         called_url = mock_ws_connect.call_args[0][0]
         assert "/openai/v1/realtime" in called_url
         assert called_url.startswith("wss://")
-        assert "api-version=2024-10-01-preview" in called_url
-        assert "deployment=gpt-4o-realtime-preview" in called_url
+        # GA path uses model= query param, not api-version and deployment
+        assert "model=gpt-4o-realtime-preview" in called_url
+        assert "api-version" not in called_url
+        assert "deployment" not in called_url
 
 
 @pytest.mark.asyncio
