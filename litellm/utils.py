@@ -7187,8 +7187,6 @@ class ProviderConfigManager:
             return litellm.AzureAIStudioConfig()
         elif litellm.LlmProviders.AZURE_TEXT == provider:
             return litellm.AzureOpenAITextConfig()
-        elif litellm.LlmProviders.AZURE_ANTHROPIC == provider:
-            return litellm.AzureAnthropicConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMChatConfig()
         elif litellm.LlmProviders.NLP_CLOUD == provider:
@@ -7392,12 +7390,6 @@ class ProviderConfigManager:
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
-        elif litellm.LlmProviders.AZURE_ANTHROPIC == provider:
-            from litellm.llms.azure.anthropic.messages_transformation import (
-                AzureAnthropicMessagesConfig,
-            )
-
-            return AzureAnthropicMessagesConfig()
         return None
 
     @staticmethod
