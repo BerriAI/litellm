@@ -867,6 +867,10 @@ def test_initialize_specialized_endpoints():
         "retrieve_container",
         "adelete_container",
         "delete_container",
+        "acreate_skill",
+        "alist_skills",
+        "aget_skill",
+        "adelete_skill",
     ]
 
     for endpoint in specialized_endpoints:
@@ -1068,5 +1072,35 @@ def test_initialize_container_endpoints():
     ]
 
     for endpoint in container_endpoints:
+        assert hasattr(router, endpoint)
+        assert callable(getattr(router, endpoint))
+
+
+def test_initialize_skills_endpoints():
+    """
+    Test that _initialize_skills_endpoints correctly sets up skills endpoints.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "anthropic/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    router._initialize_skills_endpoints()
+
+    skills_endpoints = [
+        "acreate_skill",
+        "alist_skills",
+        "aget_skill",
+        "adelete_skill",
+    ]
+
+    for endpoint in skills_endpoints:
         assert hasattr(router, endpoint)
         assert callable(getattr(router, endpoint))

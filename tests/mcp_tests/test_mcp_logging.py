@@ -2,7 +2,6 @@ import os
 import sys
 import pytest
 import asyncio
-import json
 from typing import Optional
 from unittest.mock import AsyncMock, patch
 
@@ -106,7 +105,7 @@ async def test_mcp_cost_tracking():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload = test_logger.standard_logging_payload
-            print("logged_standard_logging_payload", json.dumps(logged_standard_logging_payload, indent=4))
+            print("logged_standard_logging_payload", logged_standard_logging_payload)
             
             # Add assertions
             assert response is not None
@@ -208,7 +207,7 @@ async def test_mcp_cost_tracking_per_tool():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload_1 = test_logger.standard_logging_payload
-            print("logged_standard_logging_payload_1", json.dumps(logged_standard_logging_payload_1, indent=4))
+            print("logged_standard_logging_payload_1", logged_standard_logging_payload_1)
             
             # Verify expensive tool cost
             assert logged_standard_logging_payload_1 is not None, "Standard logging payload 1 should not be None"
@@ -229,7 +228,7 @@ async def test_mcp_cost_tracking_per_tool():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload_2 = test_logger.standard_logging_payload
-            print("logged_standard_logging_payload_2", json.dumps(logged_standard_logging_payload_2, indent=4))
+            print("logged_standard_logging_payload_2", logged_standard_logging_payload_2)
             
             # Verify cheap tool cost
             assert logged_standard_logging_payload_2 is not None, "Standard logging payload 2 should not be None"
@@ -340,6 +339,6 @@ async def test_mcp_tool_call_hook():
 
             # check logged standard logging payload
             logged_standard_logging_payload = test_logger.standard_logging_payload
-            print("logged_standard_logging_payload", json.dumps(logged_standard_logging_payload, indent=4))
+            print("logged_standard_logging_payload", logged_standard_logging_payload)
             assert logged_standard_logging_payload is not None, "Standard logging payload should not be None"
             assert logged_standard_logging_payload["response_cost"] == 1.42

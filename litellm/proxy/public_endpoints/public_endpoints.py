@@ -1,12 +1,11 @@
 from typing import List
+import os
+import json
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.public_endpoints.provider_create_metadata import (
-    get_provider_create_metadata,
-)
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -136,4 +135,14 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
     Return provider metadata required by the dashboard create-model flow.
     """
 
-    return get_provider_create_metadata()
+    provider_create_fields_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "proxy",
+        "public_endpoints",
+        "provider_create_fields.json"
+    )
+
+    with open(provider_create_fields_path, "r") as f:
+        provider_create_fields = json.load(f)
+
+    return provider_create_fields

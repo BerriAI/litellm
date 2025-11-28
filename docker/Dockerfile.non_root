@@ -20,24 +20,33 @@ COPY . .
 ENV LITELLM_NON_ROOT=true
 
 # Build Admin UI
-RUN mkdir -p /tmp/litellm_ui && \
-  cd ui/litellm-dashboard && \
-  if [ -f "../../enterprise/enterprise_ui/enterprise_colors.json" ]; then \
-    cp ../../enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
-  fi && \
-  npm install && \
-  npm run build && \
-  cp -r ./out/* /tmp/litellm_ui/ && \
-  cd /tmp/litellm_ui && \
+RUN mkdir -p /tmp/litellm_ui
+
+RUN npm install -g npm@latest && npm cache clean --force
+
+RUN cd /app/ui/litellm-dashboard && \
+  if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
+    cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
+  fi
+
+RUN cd /app/ui/litellm-dashboard && rm -f package-lock.json
+
+RUN cd /app/ui/litellm-dashboard && npm install --legacy-peer-deps
+
+RUN cd /app/ui/litellm-dashboard && npm run build
+
+RUN cp -r /app/ui/litellm-dashboard/out/* /tmp/litellm_ui/
+
+RUN cd /tmp/litellm_ui && \
   for html_file in *.html; do \
     if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
       folder_name="${html_file%.html}" && \
       mkdir -p "$folder_name" && \
       mv "$html_file" "$folder_name/index.html"; \
     fi; \
-  done && \
-  cd /app/ui/litellm-dashboard && \
-  rm -rf ./out
+  done
+
+RUN cd /app/ui/litellm-dashboard && rm -rf ./out
 
 # Build package and wheel dependencies
 RUN rm -rf dist/* && python -m build && \

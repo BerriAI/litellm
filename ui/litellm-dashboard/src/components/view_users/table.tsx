@@ -1,14 +1,8 @@
-import {
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  SortingState,
-  useReactTable,
-} from "@tanstack/react-table";
+import { ColumnDef, flexRender, getCoreRowModel, SortingState, useReactTable } from "@tanstack/react-table";
 import React from "react";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell, Select, SelectItem } from "@tremor/react";
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+import { Skeleton } from "antd";
 import { UserInfo } from "./types";
 import UserInfoView from "./user_info_view";
 import { columns as createColumns } from "./columns";
@@ -167,17 +161,23 @@ export function UserDataTable({
     state: {
       sorting,
     },
-    onSortingChange: (newSorting: any) => {
+    onSortingChange: (updaterOrValue: any) => {
+      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
       setSorting(newSorting);
-      if (newSorting.length > 0) {
+      if (newSorting && Array.isArray(newSorting) && newSorting.length > 0 && newSorting[0]) {
         const sortState = newSorting[0];
-        const sortBy = sortState.id;
-        const sortOrder = sortState.desc ? "desc" : "asc";
-        onSortChange?.(sortBy, sortOrder);
+        if (sortState.id) {
+          const sortBy = sortState.id;
+          const sortOrder = sortState.desc ? "desc" : "asc";
+          onSortChange?.(sortBy, sortOrder);
+        }
+      } else {
+        // Reset to default sort when no sorting is selected
+        onSortChange?.("created_at", "desc");
       }
     },
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
+    manualSorting: true,
     enableSorting: true,
   });
 
@@ -349,40 +349,53 @@ export function UserDataTable({
 
           {/* Results Count and Pagination */}
           <div className="flex justify-between items-center">
-            <span className="text-sm text-gray-700">
-              Showing{" "}
-              {userListResponse && userListResponse.users && userListResponse.users.length > 0
-                ? (userListResponse.page - 1) * userListResponse.page_size + 1
-                : 0}{" "}
-              -{" "}
-              {userListResponse && userListResponse.users
-                ? Math.min(userListResponse.page * userListResponse.page_size, userListResponse.total)
-                : 0}{" "}
-              of {userListResponse ? userListResponse.total : 0} results
-            </span>
+            {isLoading ? (
+              <Skeleton.Input active style={{ width: 192, height: 20 }} />
+            ) : (
+              <span className="text-sm text-gray-700">
+                Showing{" "}
+                {userListResponse && userListResponse.users && userListResponse.users.length > 0
+                  ? (userListResponse.page - 1) * userListResponse.page_size + 1
+                  : 0}{" "}
+                -{" "}
+                {userListResponse && userListResponse.users
+                  ? Math.min(userListResponse.page * userListResponse.page_size, userListResponse.total)
+                  : 0}{" "}
+                of {userListResponse ? userListResponse.total : 0} results
+              </span>
+            )}
 
             {/* Pagination Buttons */}
             <div className="flex space-x-2">
-              <button
-                onClick={() => handlePageChange(currentPage - 1)}
-                disabled={currentPage === 1}
-                className={`px-3 py-1 text-sm border rounded-md ${
-                  currentPage === 1 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "hover:bg-gray-50"
-                }`}
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => handlePageChange(currentPage + 1)}
-                disabled={!userListResponse || currentPage >= userListResponse.total_pages}
-                className={`px-3 py-1 text-sm border rounded-md ${
-                  !userListResponse || currentPage >= userListResponse.total_pages
-                    ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                    : "hover:bg-gray-50"
-                }`}
-              >
-                Next
-              </button>
+              {isLoading ? (
+                <>
+                  <Skeleton.Button active size="small" style={{ width: 80, height: 30 }} />
+                  <Skeleton.Button active size="small" style={{ width: 60, height: 30 }} />
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className={`px-3 py-1 text-sm border rounded-md ${
+                      currentPage === 1 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "hover:bg-gray-50"
+                    }`}
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={!userListResponse || currentPage >= userListResponse.total_pages}
+                    className={`px-3 py-1 text-sm border rounded-md ${
+                      !userListResponse || currentPage >= userListResponse.total_pages
+                        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                        : "hover:bg-gray-50"
+                    }`}
+                  >
+                    Next
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -403,7 +416,7 @@ export function UserDataTable({
                           header.id === "actions"
                             ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
                             : ""
-                        }`}
+                        } ${header.column.getCanSort() ? "cursor-pointer hover:bg-gray-50" : ""}`}
                         onClick={header.column.getToggleSortingHandler()}
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -412,7 +425,7 @@ export function UserDataTable({
                               ? null
                               : flexRender(header.column.columnDef.header, header.getContext())}
                           </div>
-                          {header.id !== "actions" && (
+                          {header.id !== "actions" && header.column.getCanSort() && (
                             <div className="w-4">
                               {header.column.getIsSorted() ? (
                                 {

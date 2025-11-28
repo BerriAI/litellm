@@ -953,6 +953,8 @@ async def test_get_team_redis(client_no_auth):
 
     redis_cache = RedisCache()
 
+    from fastapi import HTTPException
+
     with patch.object(
         redis_cache,
         "async_get_cache",
@@ -966,7 +968,7 @@ async def test_get_team_redis(client_no_auth):
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=AsyncMock(),
             )
-        except Exception as e:
+        except HTTPException:
             pass
 
         mock_client.assert_called_once()

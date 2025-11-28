@@ -13,7 +13,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
 
 import litellm
@@ -185,6 +185,24 @@ async def common_checks(
         if RouteChecks.is_llm_api_route(route=route) and "user" not in request_body:
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
+            )
+    
+    # 6.1 [OPTIONAL] If 'reject_clientside_metadata_tags' enabled - reject request if it has client-side 'metadata.tags'
+    if (
+        general_settings.get("reject_clientside_metadata_tags", None) is not None
+        and general_settings["reject_clientside_metadata_tags"] is True
+    ):
+        if (
+            RouteChecks.is_llm_api_route(route=route)
+            and "metadata" in request_body
+            and isinstance(request_body["metadata"], dict)
+            and "tags" in request_body["metadata"]
+        ):
+            raise ProxyException(
+                message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via API key metadata.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="metadata.tags",
+                code=status.HTTP_400_BAD_REQUEST,
             )
     # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     if (
@@ -1274,7 +1292,7 @@ async def get_team_object(
     - if not, then raise an error
 
     Raises:
-        - Exception: If team doesn't exist in db or cache
+        - HTTPException: If team doesn't exist in db or cache (status_code=404)
     """
     if prisma_client is None:
         raise Exception(
@@ -1296,8 +1314,11 @@ async def get_team_object(
             return cached_team_obj
 
         if check_cache_only:
-            raise Exception(
-                f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+                },
             )
 
     # else, check db
@@ -1313,8 +1334,11 @@ async def get_team_object(
             team_id_upsert=team_id_upsert,
         )
     except Exception:
-        raise Exception(
-            f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+            },
         )
 
 

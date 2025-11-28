@@ -56,6 +56,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
     ) -> Any:
         """
         Process input by applying guardrails to text content.
@@ -177,6 +178,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         self,
         response: "ResponsesAPIResponse",
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to text content.

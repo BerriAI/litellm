@@ -1785,7 +1785,7 @@ jobs:
             - audio_coverage
   installing_litellm_on_python:
     docker:
-      - image: circleci/python:3.8
+      - image: cimg/python:3.11
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -3389,7 +3389,9 @@ jobs:
             nvm use 20
 
             cd ui/litellm-dashboard
-            npm ci || npm install
+            # Remove node_modules and package-lock to ensure clean install (fixes optional deps issue)
+            rm -rf node_modules package-lock.json
+            npm install
 
             # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
             CI=true npm run test -- --run --coverage \

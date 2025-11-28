@@ -391,7 +391,7 @@ export default function ModelInfoView({
             icon={TrashIcon}
             variant="secondary"
             onClick={() => setIsDeleteModalOpen(true)}
-            className="flex items-center text-red-500 border-red-500"
+            className="flex items-center text-red-500 border-red-500 hover:text-red-700"
             disabled={!canEditModel}
             data-testid="delete-model-button"
           >
@@ -966,6 +966,7 @@ export default function ModelInfoView({
                             setIsDirty(false);
                             setIsEditing(false);
                           }}
+                          disabled={isSaving}
                         >
                           Cancel
                         </TremorButton>

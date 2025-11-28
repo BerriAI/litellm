@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Form, Typography, Select, Modal, Tag, Steps } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import {
@@ -16,6 +16,9 @@ import GuardrailProviderFields from "./guardrail_provider_fields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import NotificationsManager from "../molecules/notifications_manager";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
+import ToolPermissionRulesEditor, {
+  ToolPermissionConfig,
+} from "./tool_permission/ToolPermissionRulesEditor";
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
@@ -100,6 +103,20 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   // Content Filter state
   const [selectedPatterns, setSelectedPatterns] = useState<any[]>([]);
   const [blockedWords, setBlockedWords] = useState<any[]>([]);
+  const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>({
+    rules: [],
+    default_action: "deny",
+    on_disallowed_action: "block",
+    violation_message_template: "",
+  });
+
+  const isToolPermissionProvider = useMemo(() => {
+    if (!selectedProvider) {
+      return false;
+    }
+    const providerValue = guardrail_provider_map[selectedProvider];
+    return (providerValue || "").toLowerCase() === "tool_permission";
+  }, [selectedProvider]);
 
   // Fetch guardrail UI settings + provider params on mount / accessToken change
   useEffect(() => {
@@ -145,6 +162,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedCategories([]);
     setGlobalSeverityThreshold(2);
     setCategorySpecificThresholds({});
+
+    setToolPermissionConfig({
+      rules: [],
+      default_action: "deny",
+      on_disallowed_action: "block",
+      violation_message_template: "",
+    });
   };
 
   const handleEntitySelect = (entity: string) => {
@@ -225,6 +249,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedCategories([]);
     setGlobalSeverityThreshold(2);
     setCategorySpecificThresholds({});
+    setSelectedPatterns([]);
+    setBlockedWords([]);
+    setToolPermissionConfig({
+      rules: [],
+      default_action: "deny",
+      on_disallowed_action: "block",
+      violation_message_template: "",
+    });
     setCurrentStep(0);
   };
 
@@ -312,6 +344,20 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           NotificationsManager.fromBackend("Invalid JSON in configuration");
           setLoading(false);
           return;
+        }
+      }
+
+      if (guardrailProvider === "tool_permission") {
+        if (toolPermissionConfig.rules.length === 0) {
+          NotificationsManager.fromBackend("Add at least one tool permission rule");
+          setLoading(false);
+          return;
+        }
+        guardrailData.litellm_params.rules = toolPermissionConfig.rules;
+        guardrailData.litellm_params.default_action = toolPermissionConfig.default_action;
+        guardrailData.litellm_params.on_disallowed_action = toolPermissionConfig.on_disallowed_action;
+        if (toolPermissionConfig.violation_message_template) {
+          guardrailData.litellm_params.violation_message_template = toolPermissionConfig.violation_message_template;
         }
       }
 
@@ -535,11 +581,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         </Form.Item>
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        <GuardrailProviderFields
-          selectedProvider={selectedProvider}
-          accessToken={accessToken}
-          providerParams={providerParams}
-        />
+        {!isToolPermissionProvider && (
+          <GuardrailProviderFields
+            selectedProvider={selectedProvider}
+            accessToken={accessToken}
+            providerParams={providerParams}
+          />
+        )}
       </>
     );
   };
@@ -593,7 +641,20 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   };
 
   const renderOptionalParams = () => {
-    if (!selectedProvider || !providerParams) return null;
+    if (!selectedProvider) return null;
+
+    if (isToolPermissionProvider) {
+      return (
+        <ToolPermissionRulesEditor
+          value={toolPermissionConfig}
+          onChange={setToolPermissionConfig}
+        />
+      );
+    }
+
+    if (!providerParams) {
+      return null;
+    }
 
     console.log("guardrail_provider_map: ", guardrail_provider_map);
     console.log("selectedProvider: ", selectedProvider);

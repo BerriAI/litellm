@@ -548,6 +548,7 @@ async def new_team(  # noqa: PLR0915
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -688,8 +689,7 @@ async def new_team(  # noqa: PLR0915
                     },
                 )
 
-
-            if (data.max_budget is not None and user_api_key_dict.user_id is not None):
+            if data.max_budget is not None and user_api_key_dict.user_id is not None:
                 # Fetch user object to get max_budget
                 user_obj = await get_user_object(
                     user_id=user_api_key_dict.user_id,
@@ -699,7 +699,7 @@ async def new_team(  # noqa: PLR0915
                 )
 
                 if (
-                    user_obj is not None 
+                    user_obj is not None
                     and user_obj.max_budget is not None
                     and data.max_budget > user_obj.max_budget
                 ):
@@ -1116,6 +1116,7 @@ async def update_team(
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -1875,6 +1876,15 @@ async def team_member_delete(
     for _uid in user_ids_to_delete:
         await prisma_client.db.litellm_teammembership.delete_many(
             where={"team_id": data.team_id, "user_id": _uid}
+        )
+
+    ## DELETE KEYS CREATED BY USER FOR THIS TEAM
+    if user_ids_to_delete:
+        await prisma_client.db.litellm_verificationtoken.delete_many(
+            where={
+                "user_id": {"in": list(user_ids_to_delete)},
+                "team_id": data.team_id,
+            }
         )
 
     return existing_team_row
@@ -3247,11 +3257,6 @@ async def team_member_permissions(
         check_cache_only=False,
         check_db_only=True,
     )
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found for team_id={team_id}"},
-        )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
@@ -3320,11 +3325,6 @@ async def update_team_member_permissions(
         check_cache_only=False,
         check_db_only=True,
     )
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found for team_id={data.team_id}"},
-        )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
