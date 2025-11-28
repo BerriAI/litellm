@@ -1,0 +1,7 @@
+# CODEOWNERS file for LiteLLM
+# This file defines who can review and approve changes to specific files
+
+# Model prices and context window configuration
+# This file contains sensitive pricing and model information that should be reviewed by the team
+# Requires 2 approvals from @berriai/litellm-team (configured in repository settings)
+/model_prices_and_context_window.json @berriai/litellm-team
