@@ -326,6 +326,7 @@ posthog = None
 slack_app = None
 alerts_channel = None
 heliconeLogger = None
+rubrikLogger = None
 athinaLogger = None
 promptLayerLogger = None
 langsmithLogger = None
