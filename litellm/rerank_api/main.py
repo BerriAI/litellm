@@ -425,6 +425,46 @@ def rerank(  # noqa: PLR0915
                 client=client,
                 model_response=model_response,
             )
+        elif _custom_llm_provider == litellm.LlmProviders.BURNCLOUD:
+            # Implement BurnCloud rerank logic
+            api_key = (
+                    dynamic_api_key
+                    or optional_params.api_key
+                    or litellm.api_key
+                    or get_secret_str("BURNCLOUD_API_KEY")
+            )
+
+            api_base = (
+                    dynamic_api_base
+                    or optional_params.api_base
+                    or litellm.api_base
+                    or get_secret_str("BURNCLOUD_API_BASE")
+            )
+
+            if api_base is None:
+                raise Exception(
+                    "Invalid api base. api_base=None. Set in call or via `BURNCLOUD_API_BASE` env var."
+                )
+
+            if api_key is None:
+                raise Exception(
+                    "Invalid api key. api_key=None. Set in call or via `BURNCLOUD_API_KEY` env var."
+                )
+
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
         else:
             # Generic handler for all providers that use base_llm_http_handler
             # Provider-specific logic (API key validation, URL generation, etc.)

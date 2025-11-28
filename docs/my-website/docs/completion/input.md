@@ -62,10 +62,11 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 | Ollama | ✅| ✅ | ✅ | ✅| ✅ | ✅ || ✅|| | || ✅||| | ✅ ||| ||
 | Databricks | ✅| ✅ | ✅ | ✅| ✅ | ✅ || || | || ||| |||| ||
 | ClarifAI | ✅| ✅ | ✅ | | ✅ | ✅ || || | || ||| |||| ||
-| Github | ✅| ✅ | ✅ | ✅| ✅ | ✅ | ✅ | ✅| ✅ | ✅| ✅|| || ✅ | ✅ (model dependent) | ✅ (model dependent) || ||
+| Github | ✅| ✅ | ✅ | ✅| ✅ | ✅ | ✅ | ✅| ✅ | ✅| ✅|| || ✅ | ✅ (model dependent) | ✅ (model dependent) || |||
 | Novita AI| ✅| ✅ || ✅| ✅ | ✅ | ✅ | ✅| ✅ | ✅| || ✅||| |||| ||
 | Bytez | ✅| ✅ || ✅| ✅ | | | ✅|| || || || || || ||
 | OVHCloud AI Endpoints | ✅ | | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | | | | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | |
+| BurnCloud | ✅ | ✅ |  | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | ✅ | |  |  |  |  |  |  | |
 
 :::note
 
@@ -195,7 +196,7 @@ def completion(
 - `timeout`: *int (optional)* - Timeout in seconds for completion requests (Defaults to 600 seconds)
 
 - `logprobs`: * bool (optional)* - Whether to return log probabilities of the output tokens or not. If true returns the log probabilities of each output token returned in the content of message
-        
+  
 - `top_logprobs`: *int (optional)* - An integer between 0 and 5 specifying the number of most likely tokens to return at each token position, each with an associated log probability. `logprobs` must be set to true if this parameter is used.
 
 - `safety_identifier`: *string (optional)* - A unique identifier for tracking and managing safety-related requests. This parameter helps with safety monitoring and compliance tracking.
