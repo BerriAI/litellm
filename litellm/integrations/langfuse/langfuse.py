@@ -530,7 +530,7 @@ class LangFuseLogger:
                         clean_metadata[key] = value
 
             # Add default langfuse tags
-            tags = self.add_default_langfuse_tags(
+            tags = LangFuseLogger.add_default_langfuse_tags(
                 tags=tags, kwargs=kwargs, metadata=metadata
             )
 
@@ -825,7 +825,8 @@ class LangFuseLogger:
             return []
         return standard_logging_object.get("request_tags", []) or []
 
-    def add_default_langfuse_tags(self, tags, kwargs, metadata):
+    @staticmethod
+    def add_default_langfuse_tags(tags, kwargs, metadata):
         """
         Helper function to add litellm default langfuse tags
 
