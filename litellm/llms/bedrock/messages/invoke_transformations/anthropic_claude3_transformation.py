@@ -128,11 +128,16 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 3. `model` is not allowed in request body for bedrock invoke
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
-            
-        # 4. Handle anthropic_beta from user headers
-        anthropic_beta_list = get_anthropic_beta_from_headers(headers)
-        if anthropic_beta_list:
-            anthropic_messages_request["anthropic_beta"] = anthropic_beta_list
+
+        # 4. Handle anthropic_beta from user headers - ONLY for Claude models
+        # Use robust provider detection to avoid sending unsupported headers to non-Claude models
+        from litellm import BedrockLLM
+
+        bedrock_provider = BedrockLLM.get_bedrock_invoke_provider(model=model)
+        if bedrock_provider == "anthropic":
+            anthropic_beta_list = get_anthropic_beta_from_headers(headers)
+            if anthropic_beta_list:
+                anthropic_messages_request["anthropic_beta"] = anthropic_beta_list
             
         return anthropic_messages_request
 
