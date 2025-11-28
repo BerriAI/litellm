@@ -168,16 +168,18 @@ describe("EntityUsage", () => {
   });
 
   it("should render with organization entity type and call organization API", async () => {
-    const { getByText, getAllByText } = render(<EntityUsage {...defaultProps} entityType="organization" />);
+    render(<EntityUsage {...defaultProps} entityType="organization" />);
 
     await waitFor(() => {
       expect(mockOrganizationDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(getByText("Organization Spend Overview")).toBeInTheDocument();
+    expect(screen.getByText("Organization Spend Overview")).toBeInTheDocument();
 
-    const spendElements = getAllByText("$100.50");
-    expect(spendElements.length).toBeGreaterThan(0);
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$100.50");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
   });
 
   it("should switch between tabs", async () => {
