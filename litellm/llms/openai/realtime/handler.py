@@ -11,6 +11,7 @@ from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
+from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..openai import OpenAIChatCompletion
 
 
@@ -55,6 +56,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         url = self._construct_url(api_base, query_params)
 
         try:
+            ssl_context = get_shared_realtime_ssl_context()
             async with websockets.connect(  # type: ignore
                 url,
                 extra_headers={
@@ -62,6 +64,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "OpenAI-Beta": "realtime=v1",
                 },
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=ssl_context,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket, cast(ClientConnection, backend_ws), logging_obj

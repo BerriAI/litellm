@@ -25,6 +25,23 @@ def set_global_prompt_directory(directory: str) -> None:
 
     litellm.global_prompt_directory = directory  # type: ignore
 
+def _get_prompt_data_from_dotprompt_content(dotprompt_content: str) -> dict:
+    """
+    Get the prompt data from the dotprompt content.
+
+    The UI stores prompts under `dotprompt_content` in the database. This function parses the content and returns the prompt data in the format expected by the prompt manager.
+    """
+    from .prompt_manager import PromptManager
+
+    # Parse the dotprompt content to extract frontmatter and content
+    temp_manager = PromptManager()
+    metadata, content = temp_manager._parse_frontmatter(dotprompt_content)
+    
+    # Convert to prompt_data format
+    return {
+        "content": content.strip(),
+        "metadata": metadata
+    }
 
 def prompt_initializer(
     litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec"
@@ -41,6 +58,11 @@ def prompt_initializer(
         )
 
     prompt_file = getattr(litellm_params, "prompt_file", None)
+    
+    # Handle dotprompt_content from database
+    dotprompt_content = getattr(litellm_params, "dotprompt_content", None)
+    if dotprompt_content and not prompt_data and not prompt_file:
+        prompt_data = _get_prompt_data_from_dotprompt_content(dotprompt_content)
 
     try:
         dot_prompt_manager = DotpromptManager(

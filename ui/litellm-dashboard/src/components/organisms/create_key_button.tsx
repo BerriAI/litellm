@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
 import { Text, Title, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Button as Button2, Modal, Form, Input, Select, Radio } from "antd";
+import { Button as Button2, Modal, Form, Input, Select, Radio, Switch } from "antd";
 import NumericalInput from "../shared/numerical_input";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import SchemaFormFields from "../common_components/check_openapi_schema";
@@ -882,6 +882,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <Form.Item
                     label={
                       <span>
+                        Disable Global Guardrails{" "}
+                        <Tooltip title="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="disable_global_guardrails"
+                    className="mt-4"
+                    valuePropName="checked"
+                    help={
+                      premiumUser
+                        ? "Bypass global guardrails for this key"
+                        : "Premium feature - Upgrade to disable global guardrails by key"
+                    }
+                  >
+                    <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
                         Prompts{" "}
                         <Tooltip title="Allow this key to use specific prompt templates">
                           <a
@@ -942,7 +969,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       value={form.getFieldValue("allowed_passthrough_routes")}
                       accessToken={accessToken}
                       placeholder={
-                        !premiumUser ? "Premium feature - Upgrade to set pass through routes by key" : "Select or enter pass through routes"
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set pass through routes by key"
+                          : "Select or enter pass through routes"
                       }
                       disabled={!premiumUser}
                       teamId={selectedCreateKeyTeam ? selectedCreateKeyTeam.team_id : null}
@@ -1150,6 +1179,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         />
                       </div>
                     </AccordionBody>
+                    <Form.Item name="duration" hidden initialValue={null}>
+                      <Input />
+                    </Form.Item>
                   </Accordion>
                   <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
