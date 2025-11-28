@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
     GraySwanGuardrail,
     GraySwanGuardrailAPIError,
+    PassthroughResponseException,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -110,7 +111,11 @@ async def test_run_guardrail_posts_payload(
 
     captured = {}
 
-    def fake_process(response_json: dict, data: Optional[dict] = None) -> None:
+    def fake_process(
+        response_json: dict,
+        data: Optional[dict] = None,
+        hook_type: Optional[GuardrailEventHooks] = None,
+    ) -> None:
         captured["response"] = response_json
 
     monkeypatch.setattr(grayswan_guardrail, "_process_grayswan_response", fake_process)
@@ -139,14 +144,72 @@ async def test_run_guardrail_raises_api_error(
         await grayswan_guardrail.run_grayswan_guardrail(payload)
 
 
-def test_process_response_passthrough_stores_detection_info() -> None:
-    """Test that passthrough mode stores detection info in metadata without blocking."""
+def test_process_response_passthrough_raises_exception_in_pre_call() -> None:
+    """Test that passthrough mode raises PassthroughResponseException in pre_call hook."""
     guardrail = GraySwanGuardrail(
         guardrail_name="grayswan-passthrough",
         api_key="test-key",
         on_flagged_action="passthrough",
         violation_threshold=0.2,
         event_hook=GuardrailEventHooks.pre_call,
+    )
+
+    data = {"messages": [{"role": "user", "content": "test"}], "model": "gpt-4"}
+    response_json = {
+        "violation": 0.8,
+        "violated_rules": [1, 2],
+        "mutation": True,
+        "ipi": False,
+    }
+
+    # Should raise PassthroughResponseException
+    with pytest.raises(PassthroughResponseException) as exc:
+        guardrail._process_grayswan_response(
+            response_json, data, GuardrailEventHooks.pre_call
+        )
+
+    assert "Gray Swan Cygnal Guardrail" in exc.value.message
+    assert exc.value.model == "gpt-4"
+    assert exc.value.detection_info["violation_score"] == 0.8
+    assert exc.value.detection_info["violated_rules"] == [1, 2]
+
+
+def test_process_response_passthrough_raises_exception_in_during_call() -> None:
+    """Test that passthrough mode raises PassthroughResponseException in during_call hook."""
+    guardrail = GraySwanGuardrail(
+        guardrail_name="grayswan-passthrough",
+        api_key="test-key",
+        on_flagged_action="passthrough",
+        violation_threshold=0.2,
+        event_hook=GuardrailEventHooks.during_call,
+    )
+
+    data = {"messages": [{"role": "user", "content": "test"}], "model": "gpt-4"}
+    response_json = {
+        "violation": 0.8,
+        "violated_rules": [1, 2],
+        "mutation": True,
+        "ipi": False,
+    }
+
+    # Should raise PassthroughResponseException
+    with pytest.raises(PassthroughResponseException) as exc:
+        guardrail._process_grayswan_response(
+            response_json, data, GuardrailEventHooks.during_call
+        )
+
+    assert "Gray Swan Cygnal Guardrail" in exc.value.message
+    assert exc.value.model == "gpt-4"
+
+
+def test_process_response_passthrough_stores_detection_info_in_post_call() -> None:
+    """Test that passthrough mode stores detection info in post_call hook (not exception)."""
+    guardrail = GraySwanGuardrail(
+        guardrail_name="grayswan-passthrough",
+        api_key="test-key",
+        on_flagged_action="passthrough",
+        violation_threshold=0.2,
+        event_hook=GuardrailEventHooks.post_call,
     )
 
     data = {"messages": [{"role": "user", "content": "test"}]}
@@ -157,8 +220,10 @@ def test_process_response_passthrough_stores_detection_info() -> None:
         "ipi": False,
     }
 
-    # Should not raise an exception
-    guardrail._process_grayswan_response(response_json, data)
+    # Should NOT raise an exception in post_call
+    guardrail._process_grayswan_response(
+        response_json, data, GuardrailEventHooks.post_call
+    )
 
     # Verify detection info was stored in metadata
     assert "metadata" in data
@@ -174,8 +239,8 @@ def test_process_response_passthrough_stores_detection_info() -> None:
     assert detection["ipi"] is False
 
 
-def test_process_response_passthrough_does_not_store_if_under_threshold() -> None:
-    """Test that passthrough mode doesn't store anything if violation is under threshold."""
+def test_process_response_passthrough_does_not_raise_if_under_threshold() -> None:
+    """Test that passthrough mode doesn't raise exception if violation is under threshold."""
     guardrail = GraySwanGuardrail(
         guardrail_name="grayswan-passthrough",
         api_key="test-key",
@@ -184,14 +249,49 @@ def test_process_response_passthrough_does_not_store_if_under_threshold() -> Non
         event_hook=GuardrailEventHooks.pre_call,
     )
 
-    data = {"messages": [{"role": "user", "content": "test"}]}
+    data = {"messages": [{"role": "user", "content": "test"}], "model": "gpt-4"}
     response_json = {
         "violation": 0.3,
         "violated_rules": [],
     }
 
-    # Should not raise an exception
-    guardrail._process_grayswan_response(response_json, data)
+    # Should not raise an exception since under threshold
+    guardrail._process_grayswan_response(
+        response_json, data, GuardrailEventHooks.pre_call
+    )
 
     # Should not have any detection info since it didn't exceed threshold
     assert "guardrail_detections" not in data.get("metadata", {})
+
+
+def test_format_violation_message() -> None:
+    """Test that violation message is formatted correctly."""
+    guardrail = GraySwanGuardrail(
+        guardrail_name="grayswan-passthrough",
+        api_key="test-key",
+        on_flagged_action="passthrough",
+        violation_threshold=0.5,
+        event_hook=GuardrailEventHooks.post_call,
+    )
+
+    detections = [
+        {
+            "guardrail": "grayswan",
+            "flagged": True,
+            "violation_score": 0.85,
+            "violated_rules": [1, 3, 5],
+            "mutation": True,
+            "ipi": False,
+        }
+    ]
+
+    message = guardrail._format_violation_message(detections)
+
+    # Check new message format
+    assert "Sorry I can't help with that" in message
+    assert "Gray Swan Cygnal Guardrail" in message
+    assert "violation score of 0.85" in message
+    assert "violating the rule(s): 1, 3, 5" in message
+    assert "Mutation effort to make the harmful intention disguised was DETECTED" in message
+    # IPI should not be in message since it's False
+    assert "Indirect Prompt Injection was DETECTED" not in message

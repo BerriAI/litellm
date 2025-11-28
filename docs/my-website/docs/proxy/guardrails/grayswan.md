@@ -73,6 +73,17 @@ Gray Swan can run during `pre_call`, `during_call`, and `post_call` stages. Comb
 | `during_call`| Parallel to call  | User input only       | Low-latency monitoring without blocking |
 | `post_call`  | After response    | Full conversation     | Scan output for policy violations, leaked secrets, or IPI |
 
+
+When using `during_call` with `on_flagged_action: block` or `on_flagged_action: passthrough`:
+
+- **The LLM call runs in parallel** with the guardrail check using `asyncio.gather`
+- **LLM tokens are still consumed** even if the guardrail detects a violation
+- The guardrail exception prevents the response from reaching the user, but **does not cancel the running LLM task**
+- This means you pay full LLM costs while returning an error/passthrough message to the user
+
+**Recommendation:** For cost-sensitive applications, use `pre_call` and `post_call` instead of `during_call` for blocking or passthrough modes. Reserve `during_call` for `monitor` mode where you want low-latency logging without impacting the user experience.
+
+
 <Tabs>
 <TabItem value="monitor" label="Monitor Only">
 
@@ -132,6 +143,24 @@ guardrails:
 Provides the strongest enforcement by inspecting both prompts and responses.
 
 </TabItem>
+<TabItem value="passthrough" label="Passthrough Mode">
+
+```yaml
+guardrails:
+  - guardrail_name: "cygnal-passthrough"
+    litellm_params:
+      guardrail: grayswan
+      mode: [pre_call, post_call]
+      api_key: os.environ/GRAYSWAN_API_KEY
+      optional_params:
+        on_flagged_action: passthrough
+        violation_threshold: 0.5
+      default_on: true
+```
+
+Allows requests to proceed without raising a 400 error when content is flagged. Instead of blocking, the model response content is replaced with a detailed violation message including violation score, violated rules, and detection flags (mutation, IPI). **Supported Response Formats:** OpenAI chat/text completions, Anthropic Messages API. Other response types (embeddings, images, etc.) will log a warning and return unchanged.
+
+</TabItem>
 </Tabs>
 
 ---
@@ -142,7 +171,7 @@ Provides the strongest enforcement by inspecting both prompts and responses.
 |---------------------------------------|-----------------|-------------|
 | `api_key`                             | string          | Gray Swan Cygnal API key. Reads from `GRAYSWAN_API_KEY` if omitted. |
 | `mode`                                | string or list  | Guardrail stages (`pre_call`, `during_call`, `post_call`). |
-| `optional_params.on_flagged_action`   | string          | `monitor` (log only), `block` (raise `HTTPException`), or `passthrough` (include detection info in response without blocking). |
+| `optional_params.on_flagged_action`   | string          | `monitor` (log only), `block` (raise `HTTPException`), or `passthrough` (replace response content with violation message, no 400 error). |
 | `.optional_params.violation_threshold`| number (0-1)    | Scores at or above this value are considered violations. |
 | `optional_params.reasoning_mode`      | string          | `off`, `hybrid`, or `thinking`. Enables Cygnal's reasoning capabilities. |
 | `optional_params.categories`          | object          | Map of custom category names to descriptions. |
