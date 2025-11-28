@@ -9,7 +9,10 @@ Control how many tokens Claude uses when responding with the `effort` parameter,
 
 The `effort` parameter allows you to control how eager Claude is about spending tokens when responding to requests. This gives you the ability to trade off between response thoroughness and token efficiency, all with a single model.
 
-**Note**: The effort parameter is currently in beta and only supported by Claude Opus 4.5. You must include the beta header `effort-2025-11-24` when using this feature (LiteLLM automatically adds this header when `output_config` with `effort` is detected).
+**Note**: The effort parameter is currently in beta and only supported by Claude Opus 4.5. LiteLLM automatically adds the `effort-2025-11-24` beta header when:
+- `reasoning_effort` parameter is provided (for Claude Opus 4.5 only)
+
+For Claude Opus 4.5, `reasoning_effort="medium"`—both are automatically mapped to the correct format.
 
 ## How Effort Works
 
@@ -52,9 +55,7 @@ response = litellm.completion(
         "role": "user",
         "content": "Analyze the trade-offs between microservices and monolithic architectures"
     }],
-    output_config={
-        "effort": "medium"
-    }
+    reasoning_effort="medium"  # Automatically mapped to output_config for Opus 4.5
 )
 
 print(response.choices[0].message.content)
@@ -217,11 +218,14 @@ response = litellm.completion(
 
 The effort parameter is supported across all Anthropic-compatible providers:
 
-- **Standard Anthropic**: ✅ Supported (Claude Opus 4.5)
-- **Azure Anthropic**: ✅ Supported (Claude Opus 4.5)
-- **Vertex AI Anthropic**: ✅ Supported (Claude Opus 4.5)
+- **Standard Anthropic API**: ✅ Supported (Claude Opus 4.5)
+- **Azure Anthropic / Microsoft Foundry**: ✅ Supported (Claude Opus 4.5)
+- **Amazon Bedrock**: ✅ Supported (Claude Opus 4.5)
+- **Google Cloud Vertex AI**: ✅ Supported (Claude Opus 4.5)
 
-LiteLLM automatically handles the beta header injection for all providers.
+LiteLLM automatically handles:
+- Beta header injection (`effort-2025-11-24`) for all providers
+- Parameter mapping: `reasoning_effort` → `output_config={"effort": ...}` for Claude Opus 4.5
 
 ## Usage and Pricing
 
@@ -242,9 +246,12 @@ print(f"Total tokens: {response.usage.total_tokens}")
 
 ### Beta header not being added
 
-LiteLLM automatically adds the `effort-2025-11-24` beta header when `output_config` with `effort` is detected. If you're not seeing the header:
+LiteLLM automatically adds the `effort-2025-11-24` beta header when:
+- `reasoning_effort` parameter is provided (for Claude Opus 4.5 only)
 
-1. Ensure you're using `output_config` with an `effort` field
+If you're not seeing the header:
+
+1. Ensure you're using `reasoning_effort` parameter
 2. Verify the model is Claude Opus 4.5
 3. Check that LiteLLM version supports this feature
 

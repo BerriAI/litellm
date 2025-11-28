@@ -829,11 +829,21 @@ class AmazonConverseConfig(BaseConfig):
             user_betas = get_anthropic_beta_from_headers(headers)
             anthropic_beta_list.extend(user_betas)
 
+        # Filter out tool search tools - Bedrock Converse API doesn't support them
+        filtered_tools = []
+        if original_tools:
+            for tool in original_tools:
+                tool_type = tool.get("type", "")
+                if tool_type in ("tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"):
+                    # Tool search not supported in Converse API - skip it
+                    continue
+                filtered_tools.append(tool)
+
         # Only separate tools if computer use tools are actually present
-        if original_tools and self.is_computer_use_tool_used(original_tools, model):
+        if filtered_tools and self.is_computer_use_tool_used(filtered_tools, model):
             # Separate computer use tools from regular function tools
             computer_use_tools, regular_tools = self._separate_computer_use_tools(
-                original_tools, model
+                filtered_tools, model
             )
 
             # Process regular function tools using existing logic
@@ -849,7 +859,7 @@ class AmazonConverseConfig(BaseConfig):
                 additional_request_params["tools"] = transformed_computer_tools
         else:
             # No computer use tools, process all tools as regular tools
-            bedrock_tools = _bedrock_tools_pt(original_tools)
+            bedrock_tools = _bedrock_tools_pt(filtered_tools)
 
         # Set anthropic_beta in additional_request_params if we have any beta features
         if anthropic_beta_list:

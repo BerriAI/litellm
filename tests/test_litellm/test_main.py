@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 
+from litellm import main as litellm_main
+
 
 @pytest.fixture(autouse=True)
 def add_api_keys_to_env(monkeypatch):
@@ -291,6 +293,30 @@ def test_bedrock_latency_optimized_inference():
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert json_data["performanceConfig"]["latency"] == "optimized"
+
+
+def test_strip_input_examples_for_non_anthropic_providers():
+    tools = [
+        {
+            "type": "function",
+            "name": "example_tool",
+            "input_examples": [{"foo": "bar"}],
+            "function": {
+                "name": "example_tool",
+                "input_examples": [{"foo": "bar"}],
+            },
+        }
+    ]
+
+    assert not litellm_main._should_allow_input_examples(
+        custom_llm_provider="openai", model="gpt-4o-mini"
+    )
+
+    cleaned = litellm_main._drop_input_examples_from_tools(tools=tools)
+
+    assert isinstance(cleaned, list)
+    assert "input_examples" not in cleaned[0]
+    assert "input_examples" not in cleaned[0]["function"]
 
 
 def test_custom_provider_with_extra_headers():
