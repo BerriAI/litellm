@@ -353,6 +353,7 @@ async def test_simple_acompletion():
     assert resp.choices[0].message.content == "Hi!"
 
 
+
 def test_simple_completion_streaming():
     my_custom_llm = MyCustomLLM()
     litellm.custom_provider_map = [
