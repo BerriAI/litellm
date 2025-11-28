@@ -739,7 +739,37 @@ class RedisCache(BaseCache):
                 cached_response
             )  # Convert string to dictionary
         except Exception:
-            cached_response = ast.literal_eval(cached_response)
+            try:
+                cached_response = ast.literal_eval(cached_response)
+                # Validate and normalize queue data if it's a list of tuples
+                # This handles scheduler queue deserialization
+                if isinstance(cached_response, list):
+                    normalized_queue = []
+                    for item in cached_response:
+                        if isinstance(item, (tuple, list)) and len(item) == 2:
+                            try:
+                                # Ensure priority is int and request_id is str
+                                priority = int(item[0]) if not isinstance(item[0], int) else item[0]
+                                request_id = str(item[1]) if not isinstance(item[1], str) else item[1]
+                                normalized_queue.append((priority, request_id))
+                            except (ValueError, TypeError):
+                                # Skip invalid items
+                                verbose_logger.warning(
+                                    f"Skipping invalid queue item during deserialization: {item}"
+                                )
+                                continue
+                        else:
+                            # Not a queue item, keep as-is
+                            normalized_queue.append(item)
+                    cached_response = normalized_queue
+            except Exception as e:
+                # If deserialization fails completely, log warning and return empty list for lists
+                verbose_logger.warning(
+                    f"Failed to deserialize cached response from Redis: {e}"
+                )
+                # Return empty list if it looks like it should be a list, otherwise None
+                if isinstance(cached_response, str) and cached_response.startswith("["):
+                    cached_response = []
         return cached_response
 
     def get_cache(self, key, parent_otel_span: Optional[Span] = None, **kwargs):
