@@ -137,11 +137,69 @@ When using Anthropic models with `thinking` enabled and tool calling, you **must
 3. When these clients reconstruct the assistant message for the next turn, the thinking blocks are lost
 4. Anthropic rejects the request because the assistant message doesn't start with a thinking block
 
+:::tip LiteLLM supports thinking_blocks
+LiteLLM's `completion()` API **does support** sending `thinking_blocks` in assistant messages. If you're using LiteLLM directly (not through an OpenAI-compatible client), you can preserve and resend `thinking_blocks` and everything will work correctly.
+:::
+
 **Solutions:**
 
-1. **For client developers**: Explicitly handle and resend the `thinking_blocks` field (see example below)
-2. **Disable extended thinking** when using tools with OpenAI-compatible clients that don't support `thinking_blocks`
-3. **Use Anthropic's native API** directly instead of OpenAI-compatible endpoints
+1. **Use LiteLLM's built-in workaround** (recommended): Set `litellm.modify_params = True` and LiteLLM will automatically handle this incompatibility by dropping the `thinking` param when `thinking_blocks` are missing (see below)
+2. **For client developers**: Explicitly handle and resend the `thinking_blocks` field (see example below)
+3. **Disable extended thinking** when using tools with OpenAI-compatible clients that don't support `thinking_blocks`
+4. **Use Anthropic's native API** directly instead of OpenAI-compatible endpoints
+
+### LiteLLM Built-in Workaround
+
+LiteLLM can automatically handle this incompatibility when `modify_params=True` is set. If the client sends a request with `thinking` enabled but the assistant message with `tool_calls` is missing `thinking_blocks`, LiteLLM will automatically drop the `thinking` param for that turn to avoid the error.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+import litellm
+
+# Enable automatic parameter modification
+litellm.modify_params = True
+
+# Now this will work even if thinking_blocks are missing from the assistant message
+response = litellm.completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    thinking={"type": "enabled", "budget_tokens": 1024},
+    tools=[...],
+    messages=[
+        {"role": "user", "content": "What's the weather in Madrid?"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Madrid"}'}}]
+            # Note: thinking_blocks is missing here - LiteLLM will handle it
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "22°C sunny"}
+    ]
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml showLineNumbers title="config.yaml"
+litellm_settings:
+  modify_params: true  # Enable automatic parameter modification
+
+model_list:
+  - model_name: claude-thinking
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      thinking:
+        type: enabled
+        budget_tokens: 1024
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+When `modify_params=True` and LiteLLM drops the `thinking` param, the model will **not** use extended thinking for that specific turn. The conversation will continue normally, but without reasoning for that response.
+:::
 
 **Correct way to include `thinking_blocks`:**
 
