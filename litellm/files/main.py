@@ -416,8 +416,7 @@ def file_retrieve(
             )
         elif custom_llm_provider == "anthropic":
             api_base, api_key = AnthropicModelInfo.get_api_credentials(
-                optional_params.api_base or litellm.api_base,
-                optional_params.api_key or litellm.api_key,
+                optional_params.api_base, optional_params.api_key
             )
             response = anthropic_files_instance.retrieve_file(
                 _is_async=_is_async,
@@ -597,8 +596,7 @@ def file_delete(
             )
         elif custom_llm_provider == "anthropic":
             api_base, api_key = AnthropicModelInfo.get_api_credentials(
-                optional_params.api_base or litellm.api_base,
-                optional_params.api_key or litellm.api_key,
+                optional_params.api_base, optional_params.api_key
             )
             response = anthropic_files_instance.delete_file(
                 _is_async=_is_async,
@@ -766,8 +764,7 @@ def file_list(
             )
         elif custom_llm_provider == "anthropic":
             api_base, api_key = AnthropicModelInfo.get_api_credentials(
-                optional_params.api_base or litellm.api_base,
-                optional_params.api_key or litellm.api_key,
+                optional_params.api_base, optional_params.api_key
             )
             response = anthropic_files_instance.list_files(
                 _is_async=_is_async,
@@ -982,8 +979,7 @@ def file_content(
             )
         elif custom_llm_provider == "anthropic":
             api_base, api_key = AnthropicModelInfo.get_api_credentials(
-                optional_params.api_base or litellm.api_base,
-                optional_params.api_key or litellm.api_key,
+                optional_params.api_base, optional_params.api_key
             )
             response = anthropic_files_instance.file_content(
                 _is_async=_is_async,
