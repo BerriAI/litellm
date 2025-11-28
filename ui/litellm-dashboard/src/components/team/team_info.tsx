@@ -142,6 +142,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isTeamSaving, setIsTeamSaving] = useState(false);
 
   console.log("userModels in team info", userModels);
 
@@ -310,6 +311,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const handleTeamUpdate = async (values: any) => {
     try {
       if (!accessToken) return;
+      setIsTeamSaving(true);
 
       let parsedMetadata = {};
       try {
@@ -387,6 +389,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       fetchTeamInfo();
     } catch (error) {
       console.error("Error updating team:", error);
+    } finally {
+      setIsTeamSaving(false);
     }
   };
 
@@ -770,10 +774,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
                     <div className="flex justify-end items-center gap-2">
-                      <TremorButton variant="secondary" onClick={() => setIsEditing(false)}>
+                      <TremorButton variant="secondary" onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
                         Cancel
                       </TremorButton>
-                      <TremorButton type="submit">Save Changes</TremorButton>
+                      <TremorButton type="submit" loading={isTeamSaving}>
+                        Save Changes
+                      </TremorButton>
                     </div>
                   </div>
                 </Form>

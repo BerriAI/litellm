@@ -95,6 +95,7 @@ export function KeyEditView({
   );
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
+  const [isKeySaving, setIsKeySaving] = useState(false);
 
   const fetchMcpAccessGroups = async () => {
     if (!accessToken) return;
@@ -236,8 +237,17 @@ export function KeyEditView({
 
   console.log("premiumUser:", premiumUser);
 
+  const handleSubmit = async (values: any) => {
+    try {
+      setIsKeySaving(true);
+      await onSubmit(values);
+    } finally {
+      setIsKeySaving(false);
+    }
+  };
+
   return (
-    <Form form={form} onFinish={onSubmit} initialValues={initialValues} layout="vertical">
+    <Form form={form} onFinish={handleSubmit} initialValues={initialValues} layout="vertical">
       <Form.Item label="Key Alias" name="key_alias">
         <TextInput />
       </Form.Item>
@@ -403,11 +413,7 @@ export function KeyEditView({
         name="disable_global_guardrails"
         valuePropName="checked"
       >
-        <Switch 
-          disabled={!premiumUser}
-          checkedChildren="Yes"
-          unCheckedChildren="No"
-        />
+        <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
       </Form.Item>
 
       <Form.Item label="Tags" name="tags">
@@ -573,10 +579,12 @@ export function KeyEditView({
 
       <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
         <div className="flex justify-end items-center gap-2">
-          <TremorButton variant="secondary" onClick={onCancel}>
+          <TremorButton variant="secondary" onClick={onCancel} disabled={isKeySaving}>
             Cancel
           </TremorButton>
-          <TremorButton type="submit">Save Changes</TremorButton>
+          <TremorButton type="submit" loading={isKeySaving}>
+            Save Changes
+          </TremorButton>
         </div>
       </div>
     </Form>
