@@ -2129,7 +2129,7 @@ class ImageObject(OpenAIImage):
     b64_json: The base64-encoded JSON of the generated image, if response_format is b64_json.
     url: The URL of the generated image, if response_format is url (default).
     revised_prompt: The prompt that was used to generate the image, if there was any revision to the prompt.
-    thought_signature: The thought signature returned by Gemini image generation models (used for interactive image editing).
+    provider_specific_fields: Provider-specific fields not part of OpenAI spec.
 
     https://platform.openai.com/docs/api-reference/images/object
     """
@@ -2137,11 +2137,12 @@ class ImageObject(OpenAIImage):
     b64_json: Optional[str] = None
     url: Optional[str] = None
     revised_prompt: Optional[str] = None
-    thought_signature: Optional[str] = None
+    provider_specific_fields: Optional[Dict[str, Any]] = None
 
-    def __init__(self, b64_json=None, url=None, revised_prompt=None, thought_signature=None, **kwargs):
+    def __init__(self, b64_json=None, url=None, revised_prompt=None, provider_specific_fields=None, **kwargs):
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)  # type: ignore
-        self.thought_signature = thought_signature
+        if provider_specific_fields:
+            self.provider_specific_fields = provider_specific_fields
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator

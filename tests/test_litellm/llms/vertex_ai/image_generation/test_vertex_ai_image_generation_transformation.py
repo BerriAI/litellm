@@ -269,7 +269,7 @@ class TestVertexAIGeminiImageGenerationConfig:
 
         assert len(result.data) == 1
         assert result.data[0].b64_json == "base64_encoded_image_data"
-        assert result.data[0].thought_signature == "test_signature_abc123"
+        assert result.data[0].provider_specific_fields["thought_signature"] == "test_signature_abc123"
 
 
 class TestVertexAIImagenImageGenerationConfig:
