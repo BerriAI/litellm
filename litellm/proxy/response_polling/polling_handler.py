@@ -1,0 +1,210 @@
+"""
+Response Polling Handler for Background Responses with Cache
+"""
+import asyncio
+import json
+from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+
+from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid4
+from litellm.caching.redis_cache import RedisCache
+from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
+
+
+class ResponsePollingHandler:
+    """Handles polling-based responses with Redis cache"""
+    
+    CACHE_KEY_PREFIX = "litellm:polling:response:"
+    POLLING_ID_PREFIX = "litellm_poll_"  # Clear prefix to identify polling IDs
+    
+    def __init__(self, redis_cache: Optional[RedisCache] = None, ttl: int = 3600):
+        self.redis_cache = redis_cache
+        self.ttl = ttl  # Time-to-live for cache entries (default: 1 hour)
+    
+    @classmethod
+    def generate_polling_id(cls) -> str:
+        """Generate a unique UUID for polling with clear prefix"""
+        return f"{cls.POLLING_ID_PREFIX}{uuid4()}"
+    
+    @classmethod
+    def is_polling_id(cls, response_id: str) -> bool:
+        """Check if a response_id is a polling ID"""
+        return response_id.startswith(cls.POLLING_ID_PREFIX)
+    
+    @classmethod
+    def get_cache_key(cls, polling_id: str) -> str:
+        """Get Redis cache key for a polling ID"""
+        return f"{cls.CACHE_KEY_PREFIX}{polling_id}"
+    
+    async def create_initial_state(
+        self,
+        polling_id: str,
+        request_data: Dict[str, Any],
+    ) -> ResponsesAPIResponse:
+        """
+        Create initial state in Redis for a polling request
+        
+        Uses OpenAI ResponsesAPIResponse object:
+        https://platform.openai.com/docs/api-reference/responses/object
+        
+        Args:
+            polling_id: Unique identifier for this polling request
+            request_data: Original request data
+        
+        Returns:
+            ResponsesAPIResponse object following OpenAI spec
+        """
+        created_timestamp = int(datetime.now(timezone.utc).timestamp())
+        
+        # Create OpenAI-compliant response object
+        response = ResponsesAPIResponse(
+            id=polling_id,
+            object="response",
+            status="queued",  # OpenAI native status
+            created_at=created_timestamp,
+            output=[],
+            metadata=request_data.get("metadata", {}),
+            usage=None,
+        )
+        
+        cache_key = self.get_cache_key(polling_id)
+        
+        if self.redis_cache:
+            # Store ResponsesAPIResponse directly in Redis
+            await self.redis_cache.async_set_cache(
+                key=cache_key,
+                value=response.model_dump_json(),  # Pydantic v2 method
+                ttl=self.ttl,
+            )
+            verbose_proxy_logger.debug(
+                f"Created initial polling state for {polling_id} with TTL={self.ttl}s"
+            )
+        
+        return response
+    
+    async def update_state(
+        self,
+        polling_id: str,
+        status: Optional[ResponsesAPIStatus] = None,
+        output_item: Optional[Dict] = None,
+        usage: Optional[Dict] = None,
+        error: Optional[Dict] = None,
+        incomplete_details: Optional[Dict] = None,
+    ) -> None:
+        """
+        Update the polling state in Redis
+        
+        Uses OpenAI Response object format with native status types:
+        https://platform.openai.com/docs/api-reference/responses/object
+        
+        Args:
+            polling_id: Unique identifier for this polling request
+            status: OpenAI ResponsesAPIStatus value
+            output_item: Output item to add/update
+            usage: Usage information
+            error: Error dict (automatically sets status to "failed")
+            incomplete_details: Details for incomplete responses
+        """
+        if not self.redis_cache:
+            return
+        
+        cache_key = self.get_cache_key(polling_id)
+        
+        # Get current state
+        cached_state = await self.redis_cache.async_get_cache(cache_key)
+        if not cached_state:
+            verbose_proxy_logger.warning(
+                f"No cached state found for polling_id: {polling_id}"
+            )
+            return
+        
+        # Parse existing ResponsesAPIResponse from cache
+        state = json.loads(cached_state)
+        
+        # Update status (using OpenAI native status values)
+        if status:
+            state["status"] = status
+        
+        # Add output item (e.g., message, function_call)
+        if output_item:
+            # Check if we're updating an existing output item or adding new
+            item_id = output_item.get("id")
+            if item_id:
+                # Update existing item
+                found = False
+                for i, existing_item in enumerate(state["output"]):
+                    if existing_item.get("id") == item_id:
+                        state["output"][i] = output_item
+                        found = True
+                        break
+                if not found:
+                    state["output"].append(output_item)
+            else:
+                state["output"].append(output_item)
+        
+        # Update usage
+        if usage:
+            state["usage"] = usage
+        
+        # Handle error (sets status to OpenAI's "failed")
+        if error:
+            state["status"] = "failed"
+            state["error"] = error  # Use OpenAI's 'error' field
+        
+        # Handle incomplete details
+        if incomplete_details:
+            state["incomplete_details"] = incomplete_details
+        
+        # Update cache with configured TTL
+        await self.redis_cache.async_set_cache(
+            key=cache_key,
+            value=json.dumps(state),
+            ttl=self.ttl,
+        )
+        
+        output_count = len(state.get("output", []))
+        verbose_proxy_logger.debug(
+            f"Updated polling state for {polling_id}: status={state['status']}, output_items={output_count}"
+        )
+    
+    async def get_state(self, polling_id: str) -> Optional[Dict[str, Any]]:
+        """Get current polling state from Redis"""
+        if not self.redis_cache:
+            return None
+        
+        cache_key = self.get_cache_key(polling_id)
+        cached_state = await self.redis_cache.async_get_cache(cache_key)
+        
+        if cached_state:
+            return json.loads(cached_state)
+        
+        return None
+    
+    async def cancel_polling(self, polling_id: str) -> bool:
+        """
+        Cancel a polling request
+        
+        Following OpenAI Response object format for cancelled status
+        """
+        await self.update_state(
+            polling_id=polling_id,
+            status="cancelled",
+        )
+        return True
+    
+    async def delete_polling(self, polling_id: str) -> bool:
+        """Delete a polling request from cache"""
+        if not self.redis_cache:
+            return False
+        
+        cache_key = self.get_cache_key(polling_id)
+        # Redis client's delete method
+        if hasattr(self.redis_cache, 'redis_async_client'):
+            async_client = self.redis_cache.init_async_client()
+            await async_client.delete(cache_key)
+            return True
+        
+        return False
+
+
