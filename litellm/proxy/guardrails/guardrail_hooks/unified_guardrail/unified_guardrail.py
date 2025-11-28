@@ -86,6 +86,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         data = await endpoint_translation.process_input_messages(
             data=data,
             guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=data.get("litellm_logging_obj"),
         )
 
         # Add guardrail to applied guardrails header
@@ -148,6 +149,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         response = await endpoint_translation.process_output_response(
             response=response,  # type: ignore
             guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=data.get("litellm_logging_obj"),
         )
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(

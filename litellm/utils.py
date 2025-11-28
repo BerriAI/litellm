@@ -6959,11 +6959,11 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
         except Exception as e:
             if isinstance(e, KeyError):
                 raise Exception(
-                    f"Invalid message={m} at index {idx}. Please ensure all messages are valid OpenAI chat completion messages."
+                    f"Invalid message at index {idx}. Please ensure all messages are valid OpenAI chat completion messages."
                 )
             if "invalid content type" in str(e):
                 raise Exception(
-                    f"Invalid user message={m} at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
+                    f"Invalid user message at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
                 )
             else:
                 raise e
@@ -7151,8 +7151,6 @@ class ProviderConfigManager:
             return litellm.AzureAIStudioConfig()
         elif litellm.LlmProviders.AZURE_TEXT == provider:
             return litellm.AzureOpenAITextConfig()
-        elif litellm.LlmProviders.AZURE_ANTHROPIC == provider:
-            return litellm.AzureAnthropicConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMChatConfig()
         elif litellm.LlmProviders.NLP_CLOUD == provider:
@@ -7346,12 +7344,6 @@ class ProviderConfigManager:
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
-        elif litellm.LlmProviders.AZURE_ANTHROPIC == provider:
-            from litellm.llms.azure.anthropic.messages_transformation import (
-                AzureAnthropicMessagesConfig,
-            )
-
-            return AzureAnthropicMessagesConfig()
         return None
 
     @staticmethod

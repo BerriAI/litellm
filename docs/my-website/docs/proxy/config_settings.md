@@ -576,6 +576,8 @@ router_settings:
 | GENERIC_USER_PROVIDER_ATTRIBUTE | Attribute specifying the user's provider
 | GENERIC_USER_ROLE_ATTRIBUTE | Attribute specifying the user's role
 | GENERIC_USERINFO_ENDPOINT | Endpoint to fetch user information in generic OAuth
+| GENERIC_LOGGER_ENDPOINT | Endpoint URL for the Generic Logger callback to send logs to
+| GENERIC_LOGGER_HEADERS | JSON string of headers to include in Generic Logger callback requests
 | GEMINI_API_BASE | Base URL for Gemini API. Default is https://generativelanguage.googleapis.com
 | GALILEO_BASE_URL | Base URL for Galileo platform
 | GALILEO_PASSWORD | Password for Galileo authentication
