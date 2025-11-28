@@ -276,37 +276,33 @@ To avoid issues with predictability, difficulties in rollback, and inconsistent 
 
 :::
 
-Use this when you want to use litellm helm chart as a dependency for other charts. The `litellm-helm` OCI is hosted here [https://github.com/BerriAI/litellm/pkgs/container/litellm-helm](https://github.com/BerriAI/litellm/pkgs/container/litellm-helm)
-
-#### Step 1. Pull the litellm helm chart
+#### Step 1. Initialize an empty config file
 
 ```bash
-helm pull oci://ghcr.io/berriai/litellm-helm
-
-# Pulled: ghcr.io/berriai/litellm-helm:0.1.2
-# Digest: sha256:7d3ded1c99c1597f9ad4dc49d84327cf1db6e0faa0eeea0c614be5526ae94e2a
+touch chart-config.yaml
 ```
 
-#### Step 2. Unzip litellm helm
-Unzip the specific version that was pulled in Step 1
+#### Step 2. Install the helm chart
 
 ```bash
-tar -zxvf litellm-helm-0.1.2.tgz
+helm install --create-namespace --namespace=litellm --values=chart-config.yaml litellm oci://ghcr.io/berriai/litellm-helm
 ```
 
-#### Step 3. Install litellm helm
+#### Step 3. Expose and access the service via localhost
 
 ```bash
-helm install lite-helm ./litellm-helm
-```
-
-#### Step 4. Expose the service to localhost
-
-```bash
-kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
+kubectl --namespace=prod port-forward deploy/litellm 4000:http
 ```
 
 Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
+
+#### Step 4. Adjust configuration in chart-config.yaml
+
+For reference on what you can configure, look at the readme and `values.yaml` [where  the Helm chart is being maintained](https://github.com/BerriAI/litellm/tree/main/deploy/charts/litellm-helm).
+
+```bash
+helm upgrade --namespace=litellm --values=chart-config.yaml litellm oci://ghcr.io/berriai/litellm-helm
+```
 
 **That's it ! That's the quick start to deploy litellm**
 
@@ -540,7 +536,7 @@ helm install lite-helm ./litellm-helm
 #### Step 4. Expose the service to localhost
 
 ```bash
-kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
+kubectl --namespace=litellm port-forward svc/ 8080:$CONTAINER_PORT
 ```
 
 Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
