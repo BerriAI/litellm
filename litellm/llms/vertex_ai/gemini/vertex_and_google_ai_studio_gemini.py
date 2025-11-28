@@ -1089,6 +1089,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         thinking_blocks: List[ChatCompletionThinkingBlock] = []
         for part in parts:
             if "thoughtSignature" in part:
+                # Skip parts with empty text content to avoid adding '{"text": ""}' to reasoning_content
+                text_content = part.get("text", "")
+                if not text_content:
+                    continue
                 part_copy = part.copy()
                 part_copy.pop("thoughtSignature")
                 thinking_blocks.append(

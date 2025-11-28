@@ -874,7 +874,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 or log_raw_request_response is True
             ):
                 _litellm_params = self.model_call_details.get("litellm_params", {})
-                _metadata = _litellm_params.get("metadata", {}) or {}
+                if _litellm_params.get("metadata") is None:
+                    _litellm_params["metadata"] = {}
+                _metadata = _litellm_params["metadata"]
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
                     if turn_off_message_logging is True:
