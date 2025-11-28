@@ -862,6 +862,7 @@ BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
     "cohere",
     "amazon",
     "twelvelabs",
+    "nova",
 ]
 
 BEDROCK_CONVERSE_MODELS = [
@@ -922,6 +923,7 @@ cohere_embedding_models: set = set(
 bedrock_embedding_models: set = set(
     [
         "amazon.titan-embed-text-v1",
+        "amazon.nova-2-multimodal-embeddings-v1:0",
         "cohere.embed-english-v3",
         "cohere.embed-multilingual-v3",
         "cohere.embed-v4:0",
