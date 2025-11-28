@@ -7,7 +7,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 25
 
     steps:
     - uses: actions/checkout@v4
@@ -41,4 +41,4 @@ jobs:
         cd ..
     - name: Run tests
       run: |
-        poetry run pytest tests/test_litellm --tb=short -vv --maxfail=10 -n 2 --durations=50
+        poetry run pytest tests/test_litellm --tb=short -vv --maxfail=10 -n 4 --durations=50
