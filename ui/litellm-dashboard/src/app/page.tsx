@@ -40,7 +40,6 @@ import UIThemeSettings from "@/components/ui_theme_settings";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
-import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldTeams from "@/components/OldTeams";
 import { SearchTools } from "@/components/search_tools";
@@ -147,7 +146,6 @@ export default function CreateKeyPage() {
   const [createClicked, setCreateClicked] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
-  const { refactoredUIFlag } = useFeatureFlags();
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -480,6 +478,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     teams={(teams as Team[]) ?? []}
+                    organizations={(organizations as Organization[]) ?? []}
                     premiumUser={premiumUser}
                   />
                 ) : (

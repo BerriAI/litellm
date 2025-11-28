@@ -46,7 +46,9 @@ class TestBaseResponsesAPIStreamingIterator:
         """
         # Mock dependencies
         mock_response = Mock()
+        mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
         mock_config = Mock(spec=BaseResponsesAPIConfig)
         
         # Create a mock ResponsesAPIResponse for the completed event
@@ -116,7 +118,9 @@ class TestBaseResponsesAPIStreamingIterator:
         """
         # Mock dependencies
         mock_response = Mock()
+        mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
         mock_config = Mock(spec=BaseResponsesAPIConfig)
         
         # Create a mock OutputTextDeltaEvent (not a completed event)
@@ -171,7 +175,9 @@ class TestBaseResponsesAPIStreamingIterator:
         """
         # Mock dependencies
         mock_response = Mock()
+        mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
         mock_config = Mock(spec=BaseResponsesAPIConfig)
         
         # Create the iterator instance
@@ -195,7 +201,9 @@ class TestBaseResponsesAPIStreamingIterator:
         """
         # Mock dependencies
         mock_response = Mock()
+        mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
         mock_config = Mock(spec=BaseResponsesAPIConfig)
         
         # Create the iterator instance
@@ -219,7 +227,9 @@ class TestBaseResponsesAPIStreamingIterator:
         """
         # Mock dependencies
         mock_response = Mock()
+        mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
         mock_config = Mock(spec=BaseResponsesAPIConfig)
         
         # Create the iterator instance

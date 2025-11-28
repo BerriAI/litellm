@@ -9,7 +9,8 @@ export type ToolPermissionOnDisallowedAction = "block" | "rewrite";
 
 export interface ToolPermissionRuleConfig {
   id: string;
-  tool_name: string;
+  tool_name?: string;
+  tool_type?: string;
   decision: ToolPermissionDecision;
   allowed_param_patterns?: Record<string, string>;
 }
@@ -67,7 +68,6 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
       ...config.rules,
       {
         id: `rule_${Math.random().toString(36).slice(2, 8)}`,
-        tool_name: "",
         decision: "allow" as ToolPermissionDecision,
         allowed_param_patterns: undefined,
       },
@@ -195,8 +195,8 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
         <div>
           <Text className="text-lg font-semibold">LiteLLM Tool Permission Guardrail</Text>
           <Text className="text-sm text-gray-500">
-            Use wildcards (e.g., mcp__github_*) to scope which tools can run and optionally constrain
-            payload fields.
+            Provide regex patterns (e.g., ^mcp__github_.*$) for tool names or types and optionally
+            constrain payload fields.
           </Text>
         </div>
         {!disabled && (
@@ -242,12 +242,32 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({
                   />
                 </div>
                 <div>
-                  <Text className="text-sm font-medium">Tool Name / Pattern</Text>
+                  <Text className="text-sm font-medium">Tool Name (optional)</Text>
                   <Input
                     disabled={disabled}
-                    placeholder="mcp__github_*"
-                    value={rule.tool_name}
-                    onChange={(e) => updateRule(index, { tool_name: e.target.value })}
+                    placeholder="^mcp__github_.*$"
+                    value={rule.tool_name ?? ""}
+                    onChange={(e) =>
+                      updateRule(index, {
+                        tool_name: e.target.value.trim() === "" ? undefined : e.target.value,
+                      })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 mt-4">
+                <div>
+                  <Text className="text-sm font-medium">Tool Type (optional)</Text>
+                  <Input
+                    disabled={disabled}
+                    placeholder="^function$"
+                    value={rule.tool_type ?? ""}
+                    onChange={(e) =>
+                      updateRule(index, {
+                        tool_type: e.target.value.trim() === "" ? undefined : e.target.value,
+                      })
+                    }
                   />
                 </div>
               </div>

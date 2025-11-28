@@ -2239,6 +2239,227 @@ class TestGenericResponseConvertorNestedAttributes:
             assert result.display_name == "user-sub-123"  # Top-level attribute works
 
 
+class TestGetGenericSSORedirectParams:
+    """Test _get_generic_sso_redirect_params state parameter priority handling"""
+
+    def test_state_priority_cli_state_provided(self):
+        """
+        Test that CLI state takes highest priority when provided
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        cli_state = "litellm-session-token:sk-test123"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": "env_state_value"}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=cli_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == cli_state
+            assert code_verifier is None  # PKCE not enabled by default
+
+    def test_state_priority_env_variable_when_no_cli_state(self):
+        """
+        Test that GENERIC_CLIENT_STATE environment variable is used when CLI state is not provided
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        env_state = "custom_env_state_value"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": env_state}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=None,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == env_state
+            assert code_verifier is None
+
+    def test_state_priority_generated_uuid_fallback(self):
+        """
+        Test that a UUID is generated when neither CLI state nor env variable is provided
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange - no CLI state and no env variable
+        with patch.dict(os.environ, {}, clear=False):
+            # Remove GENERIC_CLIENT_STATE if it exists
+            os.environ.pop("GENERIC_CLIENT_STATE", None)
+            
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=None,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert "state" in redirect_params
+            assert redirect_params["state"] is not None
+            assert len(redirect_params["state"]) == 32  # UUID hex is 32 chars
+            assert code_verifier is None
+
+    def test_state_with_pkce_enabled(self):
+        """
+        Test that PKCE parameters are generated when GENERIC_CLIENT_USE_PKCE is enabled
+        """
+        import base64
+        import hashlib
+
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        test_state = "test_state_123"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=test_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert state
+            assert redirect_params["state"] == test_state
+            
+            # Assert PKCE parameters
+            assert code_verifier is not None
+            assert len(code_verifier) == 43  # Standard PKCE verifier length
+            assert "code_challenge" in redirect_params
+            assert "code_challenge_method" in redirect_params
+            assert redirect_params["code_challenge_method"] == "S256"
+            
+            # Verify code_challenge is correctly derived from code_verifier
+            expected_challenge_bytes = hashlib.sha256(
+                code_verifier.encode("utf-8")
+            ).digest()
+            expected_challenge = (
+                base64.urlsafe_b64encode(expected_challenge_bytes)
+                .decode("utf-8")
+                .rstrip("=")
+            )
+            assert redirect_params["code_challenge"] == expected_challenge
+
+    def test_state_with_pkce_disabled(self):
+        """
+        Test that PKCE parameters are NOT generated when GENERIC_CLIENT_USE_PKCE is false
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        test_state = "test_state_456"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "false"}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=test_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == test_state
+            assert code_verifier is None
+            assert "code_challenge" not in redirect_params
+            assert "code_challenge_method" not in redirect_params
+
+    def test_state_priority_cli_state_overrides_env_with_pkce(self):
+        """
+        Test that CLI state takes priority over env variable even when PKCE is enabled
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        cli_state = "cli_state_priority"
+        env_state = "env_state_should_not_be_used"
+        
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": env_state,
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=cli_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == cli_state  # CLI state takes priority
+            assert redirect_params["state"] != env_state
+            
+            # PKCE should still be generated
+            assert code_verifier is not None
+            assert "code_challenge" in redirect_params
+            assert "code_challenge_method" in redirect_params
+
+    def test_empty_string_state_uses_env_variable(self):
+        """
+        Test that empty string state is treated as None and uses env variable
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        env_state = "env_state_for_empty_cli"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": env_state}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state="",  # Empty string
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert - empty string is falsy, so env variable should be used
+            # Note: This tests current implementation behavior
+            # If empty string should be treated differently, implementation needs update
+            assert redirect_params["state"] == env_state
+
+    def test_multiple_calls_generate_different_uuids(self):
+        """
+        Test that multiple calls without state generate different UUIDs
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange - no state provided
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GENERIC_CLIENT_STATE", None)
+            
+            # Act
+            params1, _ = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                state=None,
+                generic_authorization_endpoint="https://auth.example.com/authorize",
+            )
+            params2, _ = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                state=None,
+                generic_authorization_endpoint="https://auth.example.com/authorize",
+            )
+
+            # Assert
+            assert params1["state"] != params2["state"]
+            assert len(params1["state"]) == 32
+            assert len(params2["state"]) == 32
+
+
 class TestPKCEFunctionality:
     """Test PKCE (Proof Key for Code Exchange) functionality"""
 

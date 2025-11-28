@@ -16,7 +16,7 @@ Azure Foundry supports the following Claude models:
 | Property | Details |
 |-------|-------|
 | Description | Claude models deployed via Microsoft Azure Foundry. Uses the same API as Anthropic's Messages API but with Azure authentication. |
-| Provider Route on LiteLLM | `azure/` (add this prefix to Claude model names - e.g. `azure/claude-sonnet-4-5`) |
+| Provider Route on LiteLLM | `azure_ai/` (add this prefix to Claude model names - e.g. `azure_ai/claude-sonnet-4-5`) |
 | Provider Doc | [Azure Foundry Claude Models ↗](https://learn.microsoft.com/en-us/azure/ai-services/foundry-models/claude) |
 | API Endpoint | `https://<resource-name>.services.ai.azure.com/anthropic/v1/messages` |
 | Supported Endpoints | `/chat/completions`, `/anthropic/v1/messages`|
@@ -68,7 +68,7 @@ os.environ["AZURE_API_BASE"] = "https://<resource-name>.services.ai.azure.com/an
 
 # Make a completion request
 response = completion(
-    model="azure/claude-sonnet-4-5",
+    model="azure_ai/claude-sonnet-4-5",
     messages=[
         {"role": "user", "content": "What are 3 things to visit in Seattle?"}
     ],
@@ -85,7 +85,7 @@ print(response)
 import litellm
 
 response = litellm.completion(
-    model="azure/claude-sonnet-4-5",
+    model="azure_ai/claude-sonnet-4-5",
     api_base="https://<resource-name>.services.ai.azure.com/anthropic",
     api_key="your-azure-api-key",
     messages=[
@@ -101,7 +101,7 @@ response = litellm.completion(
 import litellm
 
 response = litellm.completion(
-    model="azure/claude-sonnet-4-5",
+    model="azure_ai/claude-sonnet-4-5",
     api_base="https://<resource-name>.services.ai.azure.com/anthropic",
     azure_ad_token="your-azure-ad-token",
     messages=[
@@ -117,7 +117,7 @@ response = litellm.completion(
 from litellm import completion
 
 response = completion(
-    model="azure/claude-sonnet-4-5",
+    model="azure_ai/claude-sonnet-4-5",
     messages=[
         {"role": "user", "content": "Write a short story"}
     ],
@@ -136,7 +136,7 @@ for chunk in response:
 from litellm import completion
 
 response = completion(
-    model="azure/claude-sonnet-4-5",
+    model="azure_ai/claude-sonnet-4-5",
     messages=[
         {"role": "user", "content": "What's the weather in Seattle?"}
     ],
@@ -181,7 +181,7 @@ export AZURE_API_BASE="https://<resource-name>.services.ai.azure.com/anthropic"
 model_list:
   - model_name: claude-sonnet-4-5
     litellm_params:
-      model: azure/claude-sonnet-4-5
+      model: azure_ai/claude-sonnet-4-5
       api_base: https://<resource-name>.services.ai.azure.com/anthropic
       api_key: os.environ/AZURE_API_KEY
 ```
@@ -331,7 +331,7 @@ os.environ["AZURE_API_BASE"] = "https://my-resource.services.ai.azure.com/anthro
 
 # Make a request
 response = completion(
-    model="azure/claude-sonnet-4-5",
+    model="azure_ai/claude-sonnet-4-5",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Explain quantum computing in simple terms."}
@@ -358,7 +358,7 @@ Or pass it directly:
 
 ```python
 response = completion(
-    model="azure/claude-sonnet-4-5",
+    model="azure_ai/claude-sonnet-4-5",
     api_base="https://<resource-name>.services.ai.azure.com/anthropic",
     # ...
 )

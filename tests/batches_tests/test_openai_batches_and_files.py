@@ -447,6 +447,18 @@ mock_vertex_batch_response = {
     "completionStats": {"successfulCount": 0, "failedCount": 0, "remainingCount": 100},
 }
 
+mock_vertex_list_response = {
+    "batchPredictionJobs": [
+        mock_vertex_batch_response,
+        {
+            **mock_vertex_batch_response,
+            "name": "projects/123456789/locations/us-central1/batchPredictionJobs/test-batch-id-789",
+            "state": "JOB_STATE_SUCCEEDED",
+        },
+    ],
+    "nextPageToken": "",
+}
+
 
 @pytest.mark.asyncio
 async def test_avertex_batch_prediction(monkeypatch):
@@ -533,3 +545,35 @@ async def test_avertex_batch_prediction(monkeypatch):
             print("retrieved_batch=", retrieved_batch)
 
             assert retrieved_batch.id == "test-batch-id-456"
+
+
+@pytest.mark.asyncio
+async def test_vertex_list_batches(monkeypatch):
+    monkeypatch.setenv("GCS_BUCKET_NAME", "litellm-local")
+    monkeypatch.setenv("VERTEXAI_PROJECT", "litellm-test-project")
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-central1")
+
+    monkeypatch.setattr(
+        "litellm.llms.vertex_ai.batches.handler.VertexAIBatchPrediction._ensure_access_token",
+        lambda self, credentials, project_id, custom_llm_provider: ("mock-token", "litellm-test-project"),
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
+    ) as mock_get:
+        mock_get_response = MagicMock()
+        mock_get_response.json.return_value = mock_vertex_list_response
+        mock_get_response.status_code = 200
+        mock_get_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_get_response
+
+        list_response = await litellm.alist_batches(
+            custom_llm_provider="vertex_ai",
+            limit=2,
+        )
+
+        assert list_response["object"] == "list"
+        assert list_response["has_more"] is False
+        assert len(list_response["data"]) == 2
+        assert list_response["data"][0].id == "test-batch-id-456"
+        assert list_response["data"][1].id == "test-batch-id-789"

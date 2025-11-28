@@ -4,9 +4,8 @@ All-in-one document ingestion pipeline: **Upload → Chunk → Embed → Vector 
 
 | Feature | Supported |
 |---------|-----------|
-| Cost Tracking | ❌ |
 | Logging | ✅ |
-| Supported Providers | `openai`, `bedrock` |
+| Supported Providers | `openai`, `bedrock`, `vertex_ai`, `gemini` |
 
 ## Quick Start
 
@@ -45,6 +44,28 @@ curl -X POST "http://localhost:4000/v1/rag/ingest" \
         \"ingest_options\": {
             \"vector_store\": {
                 \"custom_llm_provider\": \"bedrock\"
+            }
+        }
+    }"
+```
+
+### Vertex AI RAG Engine
+
+```bash showLineNumbers title="Ingest to Vertex AI RAG Corpus"
+curl -X POST "http://localhost:4000/v1/rag/ingest" \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"file\": {
+            \"filename\": \"document.txt\",
+            \"content\": \"$(base64 -i document.txt)\",
+            \"content_type\": \"text/plain\"
+        },
+        \"ingest_options\": {
+            \"vector_store\": {
+                \"custom_llm_provider\": \"vertex_ai\",
+                \"vector_store_id\": \"your-corpus-id\",
+                \"gcs_bucket\": \"your-gcs-bucket\"
             }
         }
     }"
@@ -196,6 +217,26 @@ When `vector_store_id` is omitted, LiteLLM automatically creates:
 - Data Source
 :::
 
+### vector_store (Vertex AI)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `custom_llm_provider` | string | - | `"vertex_ai"` |
+| `vector_store_id` | string | **required** | RAG corpus ID |
+| `gcs_bucket` | string | **required** | GCS bucket for file uploads |
+| `vertex_project` | string | env `VERTEXAI_PROJECT` | GCP project ID |
+| `vertex_location` | string | `us-central1` | GCP region |
+| `vertex_credentials` | string | ADC | Path to credentials JSON |
+| `wait_for_import` | boolean | `true` | Wait for import to complete |
+| `import_timeout` | integer | `600` | Timeout in seconds (if waiting) |
+
+:::info Vertex AI Prerequisites
+1. Create a RAG corpus in Vertex AI console or via API
+2. Create a GCS bucket for file uploads
+3. Authenticate via `gcloud auth application-default login`
+4. Install: `pip install 'google-cloud-aiplatform>=1.60.0'`
+:::
+
 ## Input Examples
 
 ### File (Base64)
@@ -223,5 +264,42 @@ curl -X POST "http://localhost:4000/v1/rag/ingest" \
         "file_url": "https://example.com/document.pdf",
         "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}
     }'
+```
+
+## Chunking Strategy
+
+Control how documents are split into chunks before embedding. Specify `chunking_strategy` in `ingest_options`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `chunk_size` | integer | `1000` | Maximum size of each chunk |
+| `chunk_overlap` | integer | `200` | Overlap between consecutive chunks |
+
+### Vertex AI RAG Engine
+
+Vertex AI RAG Engine supports custom chunking via the `chunking_strategy` parameter. Chunks are processed server-side during import.
+
+```bash showLineNumbers title="Vertex AI with custom chunking"
+curl -X POST "http://localhost:4000/v1/rag/ingest" \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"file\": {
+            \"filename\": \"document.txt\",
+            \"content\": \"$(base64 -i document.txt)\",
+            \"content_type\": \"text/plain\"
+        },
+        \"ingest_options\": {
+            \"chunking_strategy\": {
+                \"chunk_size\": 500,
+                \"chunk_overlap\": 100
+            },
+            \"vector_store\": {
+                \"custom_llm_provider\": \"vertex_ai\",
+                \"vector_store_id\": \"your-corpus-id\",
+                \"gcs_bucket\": \"your-gcs-bucket\"
+            }
+        }
+    }"
 ```
 

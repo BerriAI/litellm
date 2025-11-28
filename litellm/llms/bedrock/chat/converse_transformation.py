@@ -580,6 +580,20 @@ class AmazonConverseConfig(BaseConfig):
                 non_default_params=non_default_params, optional_params=optional_params
             )
 
+        final_is_thinking_enabled = self.is_thinking_enabled(optional_params)
+        if (
+            final_is_thinking_enabled
+            and "tool_choice" in optional_params
+        ):
+            tool_choice_block = optional_params["tool_choice"]
+            if isinstance(tool_choice_block, dict):
+                if "any" in tool_choice_block or "tool" in tool_choice_block:
+                    verbose_logger.info(
+                        f"{model} does not support forced tool use (tool_choice='required' or specific tool) "
+                        f"when reasoning is enabled. Changing tool_choice to 'auto'."
+                    )
+                    optional_params["tool_choice"] = ToolChoiceValuesBlock(auto={})
+
         return optional_params
 
     def _translate_response_format_param(

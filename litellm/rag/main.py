@@ -19,6 +19,7 @@ import httpx
 import litellm
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
+from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
 from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
 from litellm.utils import client
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
     "openai": OpenAIRAGIngestion,
     "bedrock": BedrockRAGIngestion,
+    "gemini": GeminiRAGIngestion,
 }
 
 
@@ -125,7 +127,10 @@ async def aingest(
         ```python
         response = await litellm.aingest(
             ingest_options={
-                "vector_store": {"custom_llm_provider": "openai"}
+                "vector_store": {
+                    "custom_llm_provider": "openai",
+                    "litellm_credential_name": "my-openai-creds",  # optional
+                }
             },
             file_url="https://example.com/doc.pdf",
         )
@@ -191,7 +196,10 @@ def ingest(
         ```python
         response = litellm.ingest(
             ingest_options={
-                "vector_store": {"custom_llm_provider": "openai"}
+                "vector_store": {
+                    "custom_llm_provider": "openai",
+                    "litellm_credential_name": "my-openai-creds",  # optional
+                }
             },
             file_data=("doc.txt", b"Hello world", "text/plain"),
         )

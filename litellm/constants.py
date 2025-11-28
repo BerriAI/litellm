@@ -139,6 +139,7 @@ DEFAULT_SSL_CIPHERS = os.getenv(
 REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_team_spend_update_buffer"
+REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_org_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 10000))
@@ -383,6 +384,7 @@ LITELLM_CHAT_PROVIDERS = [
     "nebius",
     "dashscope",
     "moonshot",
+    "publicai",
     "v0",
     "heroku",
     "oci",
@@ -525,6 +527,7 @@ openai_compatible_endpoints: List = [
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
+    "https://platform.publicai.co/v1",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
@@ -570,6 +573,7 @@ openai_compatible_providers: List = [
     "nebius",
     "dashscope",
     "moonshot",
+    "publicai",
     "v0",
     "morph",
     "lambda_ai",
@@ -592,6 +596,7 @@ openai_text_completion_compatible_providers: List = (
         "nebius",
         "dashscope",
         "moonshot",
+        "publicai",
         "v0",
         "lambda_ai",
         "hyperbolic",

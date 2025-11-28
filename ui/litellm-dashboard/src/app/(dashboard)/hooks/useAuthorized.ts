@@ -67,7 +67,7 @@ const useAuthorized = () => {
     userRole: formatUserRole(decoded?.user_role ?? null),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
-    showSSOBanner: decoded?.login_method === "username_password" ?? false,
+    showSSOBanner: decoded?.login_method === "username_password",
   };
 };
 

@@ -22,17 +22,16 @@ def _is_non_openai_azure_model(model: str) -> bool:
     return False
 
 
-def _is_azure_anthropic_model(model: str) -> Optional[str]:
+def _is_azure_claude_model(model: str) -> bool:
+    """
+    Check if a model name contains 'claude' (case-insensitive).
+    Used to detect Claude models that need Anthropic-specific handling.
+    """
     try:
-        model_parts = model.split("/", 1)
-        if len(model_parts) > 1:
-            model_name = model_parts[1].lower()
-            # Check if model name contains claude
-            if "claude" in model_name or model_name.startswith("claude"):
-                return model_parts[1]  # Return model name without "azure/" prefix
+        model_lower = model.lower()
+        return "claude" in model_lower or model_lower.startswith("claude")
     except Exception:
-        pass
-    return None
+        return False
 
 
 def handle_cohere_chat_model_custom_llm_provider(
@@ -136,11 +135,6 @@ def get_llm_provider(  # noqa: PLR0915
         # AZURE AI-Studio Logic - Azure AI Studio supports AZURE/Cohere
         # If User passes azure/command-r-plus -> we should send it to cohere_chat/command-r-plus
         if model.split("/", 1)[0] == "azure":
-            # Check if it's an Azure Anthropic model (claude models)
-            azure_anthropic_model = _is_azure_anthropic_model(model)
-            if azure_anthropic_model:
-                custom_llm_provider = "azure_anthropic"
-                return azure_anthropic_model, custom_llm_provider, dynamic_api_key, api_base
             if _is_non_openai_azure_model(model):
                 custom_llm_provider = "openai"
                 return model, custom_llm_provider, dynamic_api_key, api_base
@@ -258,6 +252,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
+                    elif endpoint == "platform.publicai.co/v1":
+                        custom_llm_provider = "publicai"
+                        dynamic_api_key = get_secret_str("PUBLICAI_API_KEY")
                     elif endpoint == "https://api.v0.dev/v1":
                         custom_llm_provider = "v0"
                         dynamic_api_key = get_secret_str("V0_API_KEY")
@@ -757,6 +754,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "publicai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.PublicAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "docker_model_runner":

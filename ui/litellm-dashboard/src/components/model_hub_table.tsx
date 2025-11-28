@@ -1,25 +1,32 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import { CopyOutlined } from "@ant-design/icons";
+import { Table as TableInstance } from "@tanstack/react-table";
+import { Badge, Button, Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
+import { Modal } from "antd";
+import { Copy } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { modelHubCall, modelHubPublicModelsCall, getAgentsList, getProxyBaseUrl, fetchMCPServers } from "./networking";
-import { getConfigFieldSetting } from "./networking";
-import { ModelDataTable } from "./model_dashboard/table";
-import { modelHubColumns } from "./model_hub_table_columns";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { isAdminRole } from "../utils/roles";
 import { agentHubColumns, AgentHubData } from "./agent_hub_table_columns";
-import { mcpHubColumns, MCPServerData } from "./mcp_hub_table_columns";
-import PublicModelHub from "./public_model_hub";
-import MakeModelPublicForm from "./make_model_public_form";
 import MakeAgentPublicForm from "./make_agent_public_form";
 import MakeMCPPublicForm from "./make_mcp_public_form";
+import MakeModelPublicForm from "./make_model_public_form";
+import { mcpHubColumns, MCPServerData } from "./mcp_hub_table_columns";
+import { ModelDataTable } from "./model_dashboard/table";
 import ModelFilters from "./model_filters";
-import UsefulLinksManagement from "./useful_links_management";
-import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { Modal } from "antd";
-import { CopyOutlined } from "@ant-design/icons";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { Table as TableInstance } from "@tanstack/react-table";
-import { Copy } from "lucide-react";
-import { isAdminRole } from "../utils/roles";
+import { modelHubColumns } from "./model_hub_table_columns";
 import NotificationsManager from "./molecules/notifications_manager";
+import {
+  fetchMCPServers,
+  getAgentsList,
+  getConfigFieldSetting,
+  getProxyBaseUrl,
+  getUiConfig,
+  modelHubCall,
+  modelHubPublicModelsCall,
+} from "./networking";
+import PublicModelHub from "./public_model_hub";
+import UsefulLinksManagement from "./useful_links_management";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -101,6 +108,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     const fetchPublicData = async () => {
       try {
         setLoading(true);
+        await getUiConfig();
         const _modelHubData = await modelHubPublicModelsCall();
         console.log("ModelHubData:", _modelHubData);
         console.log("First model structure:", _modelHubData[0]);
@@ -384,12 +392,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* Header with Make Public Button */}
                   {publicPage == false && isAdminRole(userRole || "") && (
                     <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakePublicPage()}>
-                        Select Models to Make Public
-                      </Button>
+                      <Button onClick={() => handleMakePublicPage()}>Select Models to Make Public</Button>
                     </div>
                   )}
-                  
+
                   {/* Filters */}
                   <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
 
@@ -416,9 +422,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* Header with Make Public Button */}
                   {publicPage == false && isAdminRole(userRole || "") && (
                     <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakeAgentPublicPage()}>
-                        Select Agents to Make Public
-                      </Button>
+                      <Button onClick={() => handleMakeAgentPublicPage()}>Select Agents to Make Public</Button>
                     </div>
                   )}
 
@@ -445,9 +449,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* Header with Make Public Button */}
                   {publicPage == false && isAdminRole(userRole || "") && (
                     <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakeMcpPublicPage()}>
-                        Select MCP Servers to Make Public
-                      </Button>
+                      <Button onClick={() => handleMakeMcpPublicPage()}>Select MCP Servers to Make Public</Button>
                     </div>
                   )}
 
@@ -836,13 +838,13 @@ print(response.choices[0].message.content)`}
                 </div>
                 <div>
                   <Text className="font-medium">Status:</Text>
-                  <Badge 
+                  <Badge
                     color={
-                      selectedMcpServer.status === "active" || selectedMcpServer.status === "healthy" 
-                        ? "green" 
+                      selectedMcpServer.status === "active" || selectedMcpServer.status === "healthy"
+                        ? "green"
                         : selectedMcpServer.status === "inactive" || selectedMcpServer.status === "unhealthy"
-                        ? "red"
-                        : "gray"
+                          ? "red"
+                          : "gray"
                     }
                   >
                     {selectedMcpServer.status || "unknown"}
@@ -864,9 +866,7 @@ print(response.choices[0].message.content)`}
                 <div>
                   <Text className="font-medium">URL:</Text>
                   <div className="flex items-center space-x-2 mt-1">
-                    <Text className="text-sm break-all bg-gray-100 p-2 rounded flex-1">
-                      {selectedMcpServer.url}
-                    </Text>
+                    <Text className="text-sm break-all bg-gray-100 p-2 rounded flex-1">{selectedMcpServer.url}</Text>
                     <CopyOutlined
                       onClick={() => copyToClipboard(selectedMcpServer.url)}
                       className="cursor-pointer text-gray-500 hover:text-blue-500 flex-shrink-0"
@@ -876,9 +876,7 @@ print(response.choices[0].message.content)`}
                 {selectedMcpServer.command && (
                   <div>
                     <Text className="font-medium">Command:</Text>
-                    <Text className="text-sm bg-gray-100 p-2 rounded mt-1 font-mono">
-                      {selectedMcpServer.command}
-                    </Text>
+                    <Text className="text-sm bg-gray-100 p-2 rounded mt-1 font-mono">{selectedMcpServer.command}</Text>
                   </div>
                 )}
               </div>
@@ -940,31 +938,23 @@ print(response.choices[0].message.content)`}
                 </div>
                 <div>
                   <Text className="font-medium">Created At:</Text>
-                  <Text className="text-sm">
-                    {new Date(selectedMcpServer.created_at).toLocaleString()}
-                  </Text>
+                  <Text className="text-sm">{new Date(selectedMcpServer.created_at).toLocaleString()}</Text>
                 </div>
                 <div>
                   <Text className="font-medium">Updated At:</Text>
-                  <Text className="text-sm">
-                    {new Date(selectedMcpServer.updated_at).toLocaleString()}
-                  </Text>
+                  <Text className="text-sm">{new Date(selectedMcpServer.updated_at).toLocaleString()}</Text>
                 </div>
                 {selectedMcpServer.last_health_check && (
                   <div>
                     <Text className="font-medium">Last Health Check:</Text>
-                    <Text className="text-sm">
-                      {new Date(selectedMcpServer.last_health_check).toLocaleString()}
-                    </Text>
+                    <Text className="text-sm">{new Date(selectedMcpServer.last_health_check).toLocaleString()}</Text>
                   </div>
                 )}
               </div>
               {selectedMcpServer.health_check_error && (
                 <div className="mt-2 p-2 bg-red-50 rounded">
                   <Text className="font-medium text-red-700">Health Check Error:</Text>
-                  <Text className="text-sm text-red-600 mt-1">
-                    {selectedMcpServer.health_check_error}
-                  </Text>
+                  <Text className="text-sm text-red-600 mt-1">{selectedMcpServer.health_check_error}</Text>
                 </div>
               )}
             </div>

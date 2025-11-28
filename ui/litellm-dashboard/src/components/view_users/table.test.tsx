@@ -94,4 +94,88 @@ describe("UserDataTable", () => {
 
     expect(onSortChange).toHaveBeenCalledWith("user_email", "desc");
   });
+
+  it("should show skeleton loaders when isLoading is true", () => {
+    const filters = {
+      email: "",
+      user_id: "",
+      user_role: "",
+      sso_user_id: "",
+      team: "",
+      model: "",
+      min_spend: null,
+      max_spend: null,
+      sort_by: "",
+      sort_order: "asc" as const,
+    };
+
+    const updateFilters = vi.fn();
+
+    render(
+      <UserDataTable
+        data={[]}
+        columns={[]}
+        accessToken={null}
+        userRole={"Admin"}
+        possibleUIRoles={null}
+        filters={filters}
+        updateFilters={updateFilters}
+        initialFilters={filters}
+        teams={[]}
+        handleEdit={vi.fn()}
+        handleDelete={vi.fn()}
+        handleResetPassword={vi.fn()}
+        userListResponse={{ users: [], total: 0, page: 1, page_size: 25, total_pages: 1 }}
+        currentPage={1}
+        handlePageChange={vi.fn()}
+        isLoading={true}
+      />,
+    );
+
+    expect(screen.queryByText(/Showing/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Previous/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Next/i })).not.toBeInTheDocument();
+  });
+
+  it("should show actual content when isLoading is false", () => {
+    const filters = {
+      email: "",
+      user_id: "",
+      user_role: "",
+      sso_user_id: "",
+      team: "",
+      model: "",
+      min_spend: null,
+      max_spend: null,
+      sort_by: "",
+      sort_order: "asc" as const,
+    };
+
+    const updateFilters = vi.fn();
+
+    render(
+      <UserDataTable
+        data={[]}
+        columns={[]}
+        accessToken={null}
+        userRole={"Admin"}
+        possibleUIRoles={null}
+        filters={filters}
+        updateFilters={updateFilters}
+        initialFilters={filters}
+        teams={[]}
+        handleEdit={vi.fn()}
+        handleDelete={vi.fn()}
+        handleResetPassword={vi.fn()}
+        userListResponse={{ users: [], total: 0, page: 1, page_size: 25, total_pages: 1 }}
+        currentPage={1}
+        handlePageChange={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByText(/Showing/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Previous/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Next/i })).toBeInTheDocument();
+  });
 });
