@@ -98,7 +98,33 @@ class InMemoryCache(BaseCache):
     def _remove_key(self, key: str) -> None:
         """
         Remove a key from both cache_dict and ttl_dict
+
+        Also handles cleanup for httpx clients to prevent resource leaks.
         """
+        value = self.cache_dict.get(key)
+
+        if value is not None:
+            close_method = None
+            
+            if hasattr(value, 'aclose'):
+                close_method = value.aclose
+            elif hasattr(value, 'close'):
+                close_method = value.close
+            
+            if close_method is not None:
+                try:
+                    import asyncio
+                    if asyncio.iscoroutinefunction(close_method):
+                        try:
+                            loop = asyncio.get_running_loop()
+                            loop.create_task(close_method())
+                        except RuntimeError:
+                            pass
+                    else:
+                        close_method()
+                except Exception:
+                    pass
+
         self.cache_dict.pop(key, None)
         self.ttl_dict.pop(key, None)
 
