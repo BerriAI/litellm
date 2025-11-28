@@ -83,6 +83,8 @@ class AmazonNovaEmbeddingConfig:
         # Start with inference_params (user-provided params)
         embedding_params = inference_params.copy()
         
+        embedding_params.pop("output_s3_uri", None)
+        
         # Map OpenAI dimensions to embeddingDimension if provided
         if "dimensions" in embedding_params:
             embedding_params["embeddingDimension"] = embedding_params.pop("dimensions")
