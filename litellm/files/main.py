@@ -17,6 +17,7 @@ import litellm
 from litellm import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.files.handler import AnthropicFilesAPI
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -414,21 +415,10 @@ def file_retrieve(
                 file_id=file_id,
             )
         elif custom_llm_provider == "anthropic":
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or get_secret_str("ANTHROPIC_API_BASE")
-                or "https://api.anthropic.com"
+            api_base, api_key = AnthropicModelInfo.get_api_credentials(
+                optional_params.api_base or litellm.api_base,
+                optional_params.api_key or litellm.api_key,
             )
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or get_secret_str("ANTHROPIC_API_KEY")
-            )
-
-            if api_key is None:
-                raise ValueError("ANTHROPIC_API_KEY is required")
-
             response = anthropic_files_instance.retrieve_file(
                 _is_async=_is_async,
                 file_id=file_id,
@@ -606,21 +596,10 @@ def file_delete(
                 litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "anthropic":
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or get_secret_str("ANTHROPIC_API_BASE")
-                or "https://api.anthropic.com"
+            api_base, api_key = AnthropicModelInfo.get_api_credentials(
+                optional_params.api_base or litellm.api_base,
+                optional_params.api_key or litellm.api_key,
             )
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or get_secret_str("ANTHROPIC_API_KEY")
-            )
-
-            if api_key is None:
-                raise ValueError("ANTHROPIC_API_KEY is required")
-
             response = anthropic_files_instance.delete_file(
                 _is_async=_is_async,
                 file_id=file_id,
@@ -786,21 +765,10 @@ def file_list(
                 purpose=purpose,
             )
         elif custom_llm_provider == "anthropic":
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or get_secret_str("ANTHROPIC_API_BASE")
-                or "https://api.anthropic.com"
+            api_base, api_key = AnthropicModelInfo.get_api_credentials(
+                optional_params.api_base or litellm.api_base,
+                optional_params.api_key or litellm.api_key,
             )
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or get_secret_str("ANTHROPIC_API_KEY")
-            )
-
-            if api_key is None:
-                raise ValueError("ANTHROPIC_API_KEY is required")
-
             response = anthropic_files_instance.list_files(
                 _is_async=_is_async,
                 api_base=api_base,
@@ -1013,21 +981,10 @@ def file_content(
                 max_retries=optional_params.max_retries,
             )
         elif custom_llm_provider == "anthropic":
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or get_secret_str("ANTHROPIC_API_BASE")
-                or "https://api.anthropic.com"
+            api_base, api_key = AnthropicModelInfo.get_api_credentials(
+                optional_params.api_base or litellm.api_base,
+                optional_params.api_key or litellm.api_key,
             )
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or get_secret_str("ANTHROPIC_API_KEY")
-            )
-
-            if api_key is None:
-                raise ValueError("ANTHROPIC_API_KEY is required")
-
             response = anthropic_files_instance.file_content(
                 _is_async=_is_async,
                 file_content_request=_file_content_request,
