@@ -151,6 +151,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "mlflow",
     "langfuse",
     "langfuse_otel",
+    "weave_otel",
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
