@@ -2432,7 +2432,7 @@ export const tagsSpendLogsCall = async (
 
     // if tags, convert the list to a comma separated string
     if (tags) {
-      url += `${url}&tags=${tags.join(",")}`;
+      url = `${url}&tags=${tags.join(",")}`;
     }
 
     console.log("in tagsSpendLogsCall:", url);
