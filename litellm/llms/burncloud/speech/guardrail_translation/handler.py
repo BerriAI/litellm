@@ -1,28 +1,20 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class BurnCloudTextToSpeechHandler(BaseTranslation):
     async def process_input_messages(
-        self,
-        data: dict,
-        guardrail_to_apply: "CustomGuardrail",
+            self,
+            data: dict,
+            guardrail_to_apply: "CustomGuardrail",
+            litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> Any:
-        """
-        Process input text by applying guardrails.
-
-        Args:
-            data: Request data dictionary containing 'input' parameter
-            guardrail_to_apply: The guardrail instance to apply
-
-        Returns:
-            Modified data with guardrails applied to input text
-        """
         input_text = data.get("input")
         if input_text is None:
             verbose_proxy_logger.debug(
@@ -51,23 +43,11 @@ class BurnCloudTextToSpeechHandler(BaseTranslation):
         return data
 
     async def process_output_response(
-        self,
-        response: Any,
-        guardrail_to_apply: "CustomGuardrail",
+            self,
+            response: Any,
+            guardrail_to_apply: "CustomGuardrail",
+            litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> Any:
-        """
-        Process output - not applicable for text-to-speech.
-
-        The output is audio (binary data), not text, so there's nothing to apply
-        guardrails to. This method returns the response unchanged.
-
-        Args:
-            response: Binary audio response
-            guardrail_to_apply: The guardrail instance (unused)
-
-        Returns:
-            Unmodified response (audio data doesn't need text guardrails)
-        """
         verbose_proxy_logger.debug(
             "BurnCloud Text-to-Speech: Output processing not applicable "
             "(output is audio data, not text)"
