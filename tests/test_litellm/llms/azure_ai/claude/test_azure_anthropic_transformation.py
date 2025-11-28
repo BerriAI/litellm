@@ -9,15 +9,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from litellm.llms.azure.anthropic.transformation import AzureAnthropicConfig
+from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from litellm.types.router import GenericLiteLLMParams
 
 
 class TestAzureAnthropicConfig:
     def test_custom_llm_provider(self):
-        """Test that custom_llm_provider returns 'azure_anthropic'"""
+        """Test that custom_llm_provider returns 'azure_ai'"""
         config = AzureAnthropicConfig()
-        assert config.custom_llm_provider == "azure_anthropic"
+        assert config.custom_llm_provider == "azure_ai"
 
     def test_validate_environment_with_dict_litellm_params(self):
         """Test validate_environment with dict litellm_params"""

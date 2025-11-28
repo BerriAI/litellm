@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from litellm.llms.azure.anthropic.messages_transformation import (
+from litellm.llms.azure_ai.anthropic.messages_transformation import (
     AzureAnthropicMessagesConfig,
 )
 from litellm.types.router import GenericLiteLLMParams

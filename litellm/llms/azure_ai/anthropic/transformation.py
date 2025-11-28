@@ -21,7 +21,7 @@ class AzureAnthropicConfig(AnthropicConfig):
 
     @property
     def custom_llm_provider(self) -> Optional[str]:
-        return "azure_anthropic"
+        return "azure_ai"
 
     def validate_environment(
         self,
@@ -93,4 +93,30 @@ class AzureAnthropicConfig(AnthropicConfig):
             headers["anthropic-version"] = "2023-06-01"
 
         return headers
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform request using parent AnthropicConfig, then remove extra_body if present.
+        Azure Anthropic doesn't support extra_body parameter.
+        """
+        # Call parent transform_request
+        data = super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        
+        # Remove extra_body if present (Azure Anthropic doesn't support it)
+        data.pop("extra_body", None)
+        
+        return data
 

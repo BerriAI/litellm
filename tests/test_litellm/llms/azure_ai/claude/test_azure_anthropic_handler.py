@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from litellm.llms.azure.anthropic.handler import AzureAnthropicChatCompletion
+from litellm.llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from litellm.types.utils import ModelResponse
 
 
@@ -24,7 +24,7 @@ class TestAzureAnthropicChatCompletion:
         assert hasattr(handler, "acompletion_stream_function")
 
     @patch("litellm.utils.ProviderConfigManager")
-    @patch("litellm.llms.azure.anthropic.handler.AzureAnthropicConfig")
+    @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
     def test_completion_uses_azure_anthropic_config(self, mock_azure_config, mock_provider_manager):
         """Test that completion method uses AzureAnthropicConfig"""
         handler = AzureAnthropicChatCompletion()
@@ -33,6 +33,7 @@ class TestAzureAnthropicChatCompletion:
         mock_config.transform_response.return_value = ModelResponse()
         mock_config_instance = MagicMock()
         mock_config_instance.validate_environment.return_value = {"x-api-key": "test-api-key", "anthropic-version": "2023-06-01"}
+        mock_config_instance.transform_request.return_value = {"model": "claude-sonnet-4-5", "messages": []}
         mock_azure_config.return_value = mock_config_instance
         mock_provider_manager.get_provider_chat_config.return_value = mock_config
 
@@ -78,7 +79,7 @@ class TestAzureAnthropicChatCompletion:
 
     @patch("litellm.llms.anthropic.chat.handler.make_sync_call")
     @patch("litellm.utils.ProviderConfigManager")
-    @patch("litellm.llms.azure.anthropic.handler.AzureAnthropicConfig")
+    @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
     def test_completion_streaming(self, mock_azure_config, mock_provider_manager, mock_make_sync_call):
         # Note: decorators are applied in reverse order
         """Test completion with streaming"""
@@ -91,6 +92,11 @@ class TestAzureAnthropicChatCompletion:
         }
         mock_config_instance = MagicMock()
         mock_config_instance.validate_environment.return_value = {"x-api-key": "test-api-key", "anthropic-version": "2023-06-01"}
+        mock_config_instance.transform_request.return_value = {
+            "model": "claude-sonnet-4-5",
+            "messages": [],
+            "stream": True,
+        }
         mock_azure_config.return_value = mock_config_instance
         mock_provider_manager.get_provider_chat_config.return_value = mock_config
 
@@ -138,7 +144,7 @@ class TestAzureAnthropicChatCompletion:
 
     @patch("litellm.llms.custom_httpx.http_handler._get_httpx_client")
     @patch("litellm.utils.ProviderConfigManager")
-    @patch("litellm.llms.azure.anthropic.handler.AzureAnthropicConfig")
+    @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
     def test_completion_non_streaming(self, mock_azure_config, mock_provider_manager, mock_get_client):
         # Note: decorators are applied in reverse order
         """Test completion without streaming"""
@@ -152,6 +158,10 @@ class TestAzureAnthropicChatCompletion:
         mock_config.transform_response.return_value = mock_response
         mock_config_instance = MagicMock()
         mock_config_instance.validate_environment.return_value = {"x-api-key": "test-api-key", "anthropic-version": "2023-06-01"}
+        mock_config_instance.transform_request.return_value = {
+            "model": "claude-sonnet-4-5",
+            "messages": [],
+        }
         mock_azure_config.return_value = mock_config_instance
         mock_provider_manager.get_provider_chat_config.return_value = mock_config
 

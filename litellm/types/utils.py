@@ -2575,7 +2575,6 @@ class LlmProviders(str, Enum):
     AZURE = "azure"
     AZURE_TEXT = "azure_text"
     AZURE_AI = "azure_ai"
-    AZURE_ANTHROPIC = "azure_anthropic"
     SAGEMAKER = "sagemaker"
     SAGEMAKER_CHAT = "sagemaker_chat"
     BEDROCK = "bedrock"
