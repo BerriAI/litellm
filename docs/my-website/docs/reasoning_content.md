@@ -122,12 +122,7 @@ Anthropic extended thinking with tool calling is **not fully compatible** with O
 
 :::
 
-When using Anthropic models with `thinking` enabled and tool calling, you **must include `thinking_blocks`** from the previous assistant response when sending tool results back. Failure to do so will result in a `400 Bad Request` error:
-
-```
-Expected `thinking` or `redacted_thinking`, but found `tool_use`.
-When `thinking` is enabled, a final `assistant` message must start with a thinking block.
-```
+When using Anthropic models with `thinking` enabled and tool calling, you **must include `thinking_blocks`** from the previous assistant response when sending tool results back. Failure to do so will result in a `400 Bad Request` error.
 
 **OpenAI vs Anthropic Architecture:**
 
@@ -136,7 +131,6 @@ When `thinking` is enabled, a final `assistant` message must start with a thinki
 | **OpenAI** (o1, o3) | Responses API (Stateful) | Server-side | Server stores reasoning internally; client sends `previous_response_id` |
 | **Anthropic** (Claude) | Messages API (Stateless) | Client-side | Client must store and resend `thinking_blocks` with every request |
 
-**How it happens:**
 
 1. OpenAI's Chat Completions spec has **no field** for `thinking_blocks`
 2. OpenAI-compatible clients (LibreChat, Open WebUI, Vercel AI SDK, etc.) **ignore** the `thinking_blocks` field in responses
