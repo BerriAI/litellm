@@ -330,8 +330,13 @@ class ProxyBaseLLMRequestProcessing:
             "avideo_remix",
             "acreate_container",
             "alist_containers",
+            "aingest",
             "aretrieve_container",
             "adelete_container",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -340,6 +345,7 @@ class ProxyBaseLLMRequestProcessing:
         user_max_tokens: Optional[int] = None,
         user_api_base: Optional[str] = None,
         model: Optional[str] = None,
+        llm_router: Optional[Router] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
 
@@ -448,8 +454,13 @@ class ProxyBaseLLMRequestProcessing:
             "avideo_remix",
             "acreate_container",
             "alist_containers",
+            "aingest",
             "aretrieve_container",
             "adelete_container",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
@@ -490,6 +501,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_base=user_api_base,
             model=model,
             route_type=route_type,
+            llm_router=llm_router,
         )
 
         tasks = []
@@ -528,6 +540,13 @@ class ProxyBaseLLMRequestProcessing:
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
+
+        # Fallback: extract model_id from litellm_metadata if not in hidden_params
+        if not model_id:
+            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", "") or ""
+
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
         response_cost = hidden_params.get("response_cost", None) or ""
@@ -748,11 +767,19 @@ class ProxyBaseLLMRequestProcessing:
         _litellm_logging_obj: Optional[LiteLLMLoggingObj] = self.data.get(
             "litellm_logging_obj", None
         )
+
+        # Attempt to get model_id from logging object
+        #
+        # Note: We check the direct model_info path first (not nested in metadata) because that's where the router sets it.
+        # The nested metadata path is only a fallback for cases where model_info wasn't set at the top level.
+        model_id = self.maybe_get_model_id(_litellm_logging_obj)
+
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=(
                 _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else None
             ),
+            model_id=model_id,
             version=version,
             response_cost=0,
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
@@ -1065,3 +1092,50 @@ class ProxyBaseLLMRequestProcessing:
                 obj.setdefault("usage", {})["cost"] = cost_val
                 return obj
         return None
+
+    def maybe_get_model_id(self, _logging_obj: Optional[LiteLLMLoggingObj]) -> Optional[str]:
+        """
+        Get model_id from logging object or request metadata.
+
+        The router sets model_info.id when selecting a deployment. This tries multiple locations
+        where the ID might be stored depending on the request lifecycle stage.
+        """
+        model_id = None
+        if _logging_obj:
+            # 1. Try getting from litellm_params (updated during call)
+            if (
+                hasattr(_logging_obj, "litellm_params")
+                and _logging_obj.litellm_params
+            ):
+                # First check direct model_info path (set by router.py with selected deployment)
+                model_info = _logging_obj.litellm_params.get("model_info") or {}
+                model_id = model_info.get("id", None)
+
+                # Fallback to nested metadata path
+                if not model_id:
+                    metadata = _logging_obj.litellm_params.get("metadata") or {}
+                    model_info = metadata.get("model_info") or {}
+                    model_id = model_info.get("id", None)
+
+            # 2. Fallback to kwargs (initial)
+            if not model_id:
+                _kwargs = getattr(_logging_obj, "kwargs", None)
+                if _kwargs:
+                    litellm_params = _kwargs.get("litellm_params", {})
+                    # First check direct model_info path
+                    model_info = litellm_params.get("model_info") or {}
+                    model_id = model_info.get("id", None)
+
+                    # Fallback to nested metadata path
+                    if not model_id:
+                        metadata = litellm_params.get("metadata") or {}
+                        model_info = metadata.get("model_info") or {}
+                        model_id = model_info.get("id", None)
+
+        # 3. Final fallback to self.data["litellm_metadata"] (for routes like /v1/responses that populate data before error)
+        if not model_id:
+            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", None)
+
+        return model_id

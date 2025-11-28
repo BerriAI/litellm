@@ -14,6 +14,8 @@ import { MCPServerView } from "./mcp_server_view";
 import { MCPServer, MCPServerProps, Team } from "./types";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
+const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
+
 const { Option } = Select;
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
@@ -53,6 +55,25 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [isModalVisible, setModalVisible] = useState(false);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const isInternalUser = userRole === "Internal User";
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const stored = window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY);
+      if (!stored) {
+        return;
+      }
+      const parsed = JSON.parse(stored);
+      if (parsed?.serverId) {
+        setSelectedServerId(parsed.serverId);
+        setEditServer(true);
+      }
+    } catch (err) {
+      console.error("Failed to restore MCP edit view state", err);
+    }
+  }, []);
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
@@ -271,6 +292,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             getRowCanExpand={() => false}
             isLoading={isLoadingServers}
             noDataMessage="No MCP servers configured"
+            loadingMessage="🚅 Loading MCP servers..."
           />
         </div>
       </div>

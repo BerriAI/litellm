@@ -60,6 +60,8 @@ litellm_settings:
   set_verbose: true                          # Enable detailed logging
 ```
 
+**Note:** Virtual key context is **automatically passed** as headers - no additional configuration needed!
+
 ### 3. Start the Proxy
 
 ```bash
@@ -210,7 +212,7 @@ export PILLAR_API_KEY="your_api_key_here"
 export PILLAR_API_BASE="https://api.pillar.security"
 export PILLAR_ON_FLAGGED_ACTION="monitor"
 export PILLAR_FALLBACK_ON_ERROR="allow"
-export PILLAR_TIMEOUT="30.0"
+export PILLAR_TIMEOUT="5.0"
 ```
 
 ### Session Tracking

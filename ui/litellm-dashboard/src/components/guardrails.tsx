@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { Modal } from "antd";
 import { getGuardrailsList, deleteGuardrailCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import GuardrailTable from "./guardrails/guardrail_table";
@@ -9,6 +8,8 @@ import GuardrailInfoView from "./guardrails/guardrail_info";
 import GuardrailTestPlayground from "./guardrails/GuardrailTestPlayground";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Guardrail, GuardrailDefinitionLocation } from "./guardrails/types";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import { getGuardrailLogoAndName } from "./guardrails/guardrail_info_helpers";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
@@ -38,7 +39,8 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [guardrailToDelete, setGuardrailToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [guardrailToDelete, setGuardrailToDelete] = useState<Guardrail | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedGuardrailId, setSelectedGuardrailId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<number>(0);
 
@@ -81,7 +83,9 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   };
 
   const handleDeleteClick = (guardrailId: string, guardrailName: string) => {
-    setGuardrailToDelete({ id: guardrailId, name: guardrailName });
+    const guardrail = guardrailsList.find((g) => g.guardrail_id === guardrailId) || null;
+    setGuardrailToDelete(guardrail);
+    setIsDeleteModalOpen(true);
   };
 
   const handleDeleteConfirm = async () => {
@@ -90,21 +94,28 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     // Log removed to maintain clean production code
     setIsDeleting(true);
     try {
-      await deleteGuardrailCall(accessToken, guardrailToDelete.id);
-      NotificationsManager.success(`Guardrail "${guardrailToDelete.name}" deleted successfully`);
-      fetchGuardrails(); // Refresh the list
+      await deleteGuardrailCall(accessToken, guardrailToDelete.guardrail_id);
+      NotificationsManager.success(`Guardrail "${guardrailToDelete.guardrail_name}" deleted successfully`);
+      await fetchGuardrails(); // Refresh the list
     } catch (error) {
       console.error("Error deleting guardrail:", error);
       NotificationsManager.fromBackend("Failed to delete guardrail");
     } finally {
       setIsDeleting(false);
+      setIsDeleteModalOpen(false);
       setGuardrailToDelete(null);
     }
   };
 
   const handleDeleteCancel = () => {
+    setIsDeleteModalOpen(false);
     setGuardrailToDelete(null);
   };
+
+  const providerDisplayName =
+    guardrailToDelete && guardrailToDelete.litellm_params
+      ? getGuardrailLogoAndName(guardrailToDelete.litellm_params.guardrail).displayName
+      : undefined;
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
@@ -148,20 +159,25 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               onSuccess={handleSuccess}
             />
 
-            {guardrailToDelete && (
-              <Modal
-                title="Delete Guardrail"
-                open={guardrailToDelete !== null}
-                onOk={handleDeleteConfirm}
-                onCancel={handleDeleteCancel}
-                confirmLoading={isDeleting}
-                okText="Delete"
-                okButtonProps={{ danger: true }}
-              >
-                <p>Are you sure you want to delete guardrail: {guardrailToDelete.name} ?</p>
-                <p>This action cannot be undone.</p>
-              </Modal>
-            )}
+            <DeleteResourceModal
+              isOpen={isDeleteModalOpen}
+              title="Delete Guardrail"
+              message={`Are you sure you want to delete guardrail: ${guardrailToDelete?.guardrail_name}? This action cannot be undone.`}
+              resourceInformationTitle="Guardrail Information"
+              resourceInformation={[
+                { label: "Name", value: guardrailToDelete?.guardrail_name },
+                { label: "ID", value: guardrailToDelete?.guardrail_id, code: true },
+                { label: "Provider", value: providerDisplayName },
+                { label: "Mode", value: guardrailToDelete?.litellm_params.mode },
+                {
+                  label: "Default On",
+                  value: guardrailToDelete?.litellm_params.default_on ? "Yes" : "No",
+                },
+              ]}
+              onCancel={handleDeleteCancel}
+              onOk={handleDeleteConfirm}
+              confirmLoading={isDeleting}
+            />
           </TabPanel>
 
           <TabPanel>

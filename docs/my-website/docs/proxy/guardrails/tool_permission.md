@@ -2,9 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Tool Permission Guardrail
+# LiteLLM Tool Permission Guardrail
 
-LiteLLM provides a Tool Permission Guardrail that lets you control which **tool calls** a model is allowed to invoke, using configurable allow/deny rules. This offers fine-grained, provider-agnostic control over tool execution (e.g., OpenAI Chat Completions `tool_calls`, Anthropic Messages `tool_use`, MCP tools).
+LiteLLM provides the LiteLLM Tool Permission Guardrail that lets you control which **tool calls** a model is allowed to invoke, using configurable allow/deny rules. This offers fine-grained, provider-agnostic control over tool execution (e.g., OpenAI Chat Completions `tool_calls`, Anthropic Messages `tool_use`, MCP tools).
 
 ## Quick Start
 ### 1. Define Guardrails on your LiteLLM config.yaml 
@@ -29,6 +29,13 @@ guardrails:
         - id: "deny_read_commands"
           tool_name: "Read"
           decision: "Deny"
+        - id: "mail-domain"
+          tool_name: "send_email"
+          decision: "allow"
+          allowed_param_patterns:
+            "to[]": "^.+@berri\\.ai$"
+            "cc[]": "^.+@berri\\.ai$"
+            "subject": "^.{1,120}$"
       default_action: "deny"  # Fallback when no rule matches: "allow" or "deny"
       on_disallowed_action: "block"  # How to handle disallowed tools: "block" or "rewrite"
 ```
@@ -39,6 +46,8 @@ guardrails:
 - id: "unique_rule_id"           # Unique identifier for the rule
   tool_name: "pattern"           # Tool name or pattern to match
   decision: "allow"              # "allow" or "deny"
+  allowed_param_patterns:         # Optional - regex map for argument paths (dot + [] notation)
+    "path.to[].field": "^regex$"
 ```
 
 #### Supported values for `mode`
@@ -188,3 +197,27 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
 
 </TabItem>
 </Tabs>
+
+### Constrain Tool Arguments
+
+Sometimes you want to allow a tool but still restrict **how** it can be used. Add `allowed_param_patterns` to a rule to enforce regex patterns on specific argument paths (dot notation with `[]` for arrays).
+
+```yaml title="Only allow mail_mcp to mail @berri.ai addresses"
+guardrails:
+  - guardrail_name: "tool-permission-mail"
+    litellm_params:
+      guardrail: tool_permission
+      mode: "post_call"
+      rules:
+        - id: "mail-domain"
+          tool_name: "send_email"
+          decision: "allow"
+          allowed_param_patterns:
+            "to[]": "^.+@berri\\.ai$"
+            "cc[]": "^.+@berri\\.ai$"
+            "subject": "^.{1,120}$"
+      default_action: "deny"
+      on_disallowed_action: "block"
+```
+
+In this example the LLM can still call `send_email`, but the guardrail blocks the invocation (or rewrites it, depending on `on_disallowed_action`) if it tries to email anyone outside `@berri.ai` or produce a subject that fails the regex. Use this pattern for any tool where argument values matter—mail senders, escalation workflows, ticket creation, etc.
