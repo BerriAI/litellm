@@ -390,13 +390,13 @@ def test_streaming_chunk_includes_reasoning_content():
     )
 
 
-def test_streaming_chunk_with_tool_calls_includes_reasoning_content():
+def test_streaming_chunk_with_tool_calls_and_thought_includes_reasoning_content():
     """
-    Test for issue #16805: Ensure that when Gemini returns a streaming chunk with
-    tool calls AND thoughtSignature, the reasoning_content is included in the delta.
+    Test that when Gemini returns a streaming chunk with both thought: true parts
+    AND tool calls, the reasoning_content is correctly extracted from the thought parts.
 
-    Previously, thinking_blocks were only added to non-streaming responses, causing
-    reasoning_content to be missing in streaming mode when tools were enabled.
+    Per Google's docs: thought: true indicates reasoning content, NOT thoughtSignature.
+    thoughtSignature is just a token for multi-turn context preservation.
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
@@ -410,11 +410,15 @@ def test_streaming_chunk_with_tool_calls_includes_reasoning_content():
                 "content": {
                     "parts": [
                         {
+                            "text": "Let me think about how to get the time...",
+                            "thought": True,  # This indicates reasoning content
+                        },
+                        {
                             "functionCall": {
                                 "name": "get_current_time",
                                 "args": {"timezone": "America/New_York"},
                             },
-                            "thoughtSignature": "EsEDCr4DAdHtim...",  # Base64 signature
+                            "thoughtSignature": "EsEDCr4DAdHtim...",  # Just a token, not reasoning
                         }
                     ]
                 },
@@ -433,10 +437,63 @@ def test_streaming_chunk_with_tool_calls_includes_reasoning_content():
     )
     streaming_chunk = iterator.chunk_parser(chunk)
 
-    # Verify that reasoning_content is present in the streaming delta
-    assert streaming_chunk.choices[0].delta.reasoning_content is not None
+    # Verify reasoning_content comes from the thought: true part
+    assert streaming_chunk.choices[0].delta.reasoning_content == "Let me think about how to get the time..."
 
     # Verify tool calls are also present
+    assert streaming_chunk.choices[0].delta.tool_calls is not None
+    assert len(streaming_chunk.choices[0].delta.tool_calls) == 1
+    assert streaming_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_time"
+
+
+def test_streaming_chunk_with_tool_calls_no_thought_no_reasoning_content():
+    """
+    Test that when Gemini returns tool calls with thoughtSignature but WITHOUT
+    thought: true, there is NO reasoning_content.
+
+    This is a regression test for the bug where functionCall data was incorrectly
+    being placed into reasoning_content when thoughtSignature was present.
+    Per Google's docs: thoughtSignature is just a token for multi-turn, not reasoning.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    litellm_logging = MagicMock()
+
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_current_time",
+                                "args": {"timezone": "America/New_York"},
+                            },
+                            "thoughtSignature": "EsEDCr4DAdHtim...",  # Just a token, NOT thought: true
+                        }
+                    ]
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 68,
+            "candidatesTokenCount": 120,
+            "totalTokenCount": 188,
+        },
+    }
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    # reasoning_content should be None - thoughtSignature alone does NOT mean reasoning
+    assert getattr(streaming_chunk.choices[0].delta, 'reasoning_content', None) is None
+
+    # Tool calls should still work
     assert streaming_chunk.choices[0].delta.tool_calls is not None
     assert len(streaming_chunk.choices[0].delta.tool_calls) == 1
     assert streaming_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_time"
