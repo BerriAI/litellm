@@ -17,7 +17,7 @@ jobs:
           fetch-depth: 0
       - name: Add upstream remote
         run: |
-          git remote add upstream https://github.com/vivekvjnk/litellm
+          git remote add upstream https://github.com/BerriAI/litellm
           git fetch upstream --tags
       - name: Checkout branch
         run: |
