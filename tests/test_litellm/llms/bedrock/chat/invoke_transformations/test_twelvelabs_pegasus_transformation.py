@@ -38,7 +38,9 @@ def test_map_openai_params_translates_fields():
     assert optional_params["maxOutputTokens"] == 20
     assert optional_params["temperature"] == 0.6
     assert "responseFormat" in optional_params
-    assert optional_params["responseFormat"]["json_schema"]["name"] == "video_schema"
+    # TwelveLabs format: responseFormat contains jsonSchema directly (not json_schema)
+    assert "jsonSchema" in optional_params["responseFormat"]
+    assert optional_params["responseFormat"]["jsonSchema"]["type"] == "object"
 
 
 def test_transform_request_includes_base64_media():
