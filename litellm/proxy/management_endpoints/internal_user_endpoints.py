@@ -563,10 +563,15 @@ async def user_info(
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
 
+        user_info = None
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
-        else:
-            user_info = None
+        
+        if user_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"User {user_id} not found",
+            )
 
         ## GET ALL TEAMS ##
         team_list = []
