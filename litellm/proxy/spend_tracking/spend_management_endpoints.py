@@ -1427,7 +1427,7 @@ async def _get_spend_report_for_time_range(
         LEFT JOIN
             "LiteLLM_TeamTable" t ON s.team_id = t.team_id
         WHERE
-            s."startTime"::DATE >= $1::date AND s."startTime"::DATE <= $2::date
+            s."startTime" >= $1::date AND s."startTime" < ($2::date + INTERVAL '1 day')
         GROUP BY
             t.team_alias
         ORDER BY
@@ -1441,7 +1441,7 @@ async def _get_spend_report_for_time_range(
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
-        WHERE "startTime"::DATE >= $1::date AND "startTime"::DATE <= $2::date
+        WHERE "startTime" >= $1::date AND "startTime" < ($2::date + INTERVAL '1 day')
         GROUP BY individual_request_tag
         ORDER BY total_spend DESC;
         """
@@ -2968,10 +2968,30 @@ async def ui_view_session_spend_logs(
     session_id: str = fastapi.Query(
         description="Get all spend logs for a particular session",
     ),
+    page: int = fastapi.Query(
+        default=1,
+        ge=1,
+        description="Page number for pagination",
+    ),
+    page_size: int = fastapi.Query(
+        default=50,
+        ge=1,
+        le=100,
+        description="Number of items per page",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get all spend logs for a particular session
+    Get paginated spend logs for a particular session.
+
+    Returns:
+        {
+            "data": List[LiteLLM_SpendLogs],
+            "total": int,
+            "page": int,
+            "page_size": int,
+            "total_pages": int,
+        }
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -2984,11 +3004,32 @@ async def ui_view_session_spend_logs(
 
         # Build query conditions
         where_conditions = {"session_id": session_id}
-        # Query the database
-        result = await prisma_client.db.litellm_spendlogs.find_many(
-            where=where_conditions, order={"startTime": "asc"}
+
+        # Calculate pagination offsets
+        skip = (page - 1) * page_size
+
+        # Get total count for pagination metadata
+        total_records = await prisma_client.db.litellm_spendlogs.count(
+            where=where_conditions
         )
-        return result
+
+        # Query the database with pagination
+        result = await prisma_client.db.litellm_spendlogs.find_many(
+            where=where_conditions,
+            order={"startTime": "asc"},
+            skip=skip,
+            take=page_size,
+        )
+
+        total_pages = (total_records + page_size - 1) // page_size
+
+        return {
+            "data": result,
+            "total": total_records,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e

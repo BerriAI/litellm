@@ -32,13 +32,9 @@ Features:
     - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
     - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
     - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
-- **Prometheus Metrics**
-    - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](prometheus)
-    - ✅ [`x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens` for LLM APIs on Prometheus](prometheus#✨-enterprise-llm-remaining-requests-and-remaining-tokens)
-- **Control Guardrails per API Key**
+- **Control Guardrails per API Key/Team**
 - **Custom Branding**
     - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
-    - ✅ [Public Model Hub](#public-model-hub)
     - ✅ [Custom Email Branding](./email.md#customizing-email-branding)
 
 
@@ -905,9 +901,11 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 '
 ```
 
-## Public Model Hub 
+## Public AI Hub 
 
-Share a public page of available models for users
+Share a public page of available models and agents for users
+
+[Learn more](./ai_hub.md)
 
 <Image img={require('../../img/model_hub.png')} style={{ width: '900px', height: 'auto' }}/>
 

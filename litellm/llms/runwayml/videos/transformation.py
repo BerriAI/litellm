@@ -6,6 +6,8 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm.constants import RUNWAYML_DEFAULT_API_VERSION
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -23,16 +25,9 @@ from litellm.types.videos.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
-    from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
-
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    BaseVideoConfig = _BaseVideoConfig
-    BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    BaseVideoConfig = Any
-    BaseLLMException = Any
 
 
 class RunwayMLVideoConfig(BaseVideoConfig):
@@ -119,11 +114,16 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
         """
         Validate environment and set up authentication headers.
         RunwayML uses Bearer token authentication via RUNWAYML_API_SECRET.
         """
+        # Use api_key from litellm_params if available, otherwise fall back to other sources
+        if litellm_params and litellm_params.api_key:
+            api_key = api_key or litellm_params.api_key
+        
         api_key = (
             api_key
             or litellm.api_key

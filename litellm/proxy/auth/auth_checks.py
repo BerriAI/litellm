@@ -13,7 +13,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
 
 import litellm
@@ -185,6 +185,24 @@ async def common_checks(
         if RouteChecks.is_llm_api_route(route=route) and "user" not in request_body:
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
+            )
+    
+    # 6.1 [OPTIONAL] If 'reject_clientside_metadata_tags' enabled - reject request if it has client-side 'metadata.tags'
+    if (
+        general_settings.get("reject_clientside_metadata_tags", None) is not None
+        and general_settings["reject_clientside_metadata_tags"] is True
+    ):
+        if (
+            RouteChecks.is_llm_api_route(route=route)
+            and "metadata" in request_body
+            and isinstance(request_body["metadata"], dict)
+            and "tags" in request_body["metadata"]
+        ):
+            raise ProxyException(
+                message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via API key metadata.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="metadata.tags",
+                code=status.HTTP_400_BAD_REQUEST,
             )
     # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     if (
@@ -1274,7 +1292,7 @@ async def get_team_object(
     - if not, then raise an error
 
     Raises:
-        - Exception: If team doesn't exist in db or cache
+        - HTTPException: If team doesn't exist in db or cache (status_code=404)
     """
     if prisma_client is None:
         raise Exception(
@@ -1296,8 +1314,11 @@ async def get_team_object(
             return cached_team_obj
 
         if check_cache_only:
-            raise Exception(
-                f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+                },
             )
 
     # else, check db
@@ -1313,8 +1334,11 @@ async def get_team_object(
             team_id_upsert=team_id_upsert,
         )
     except Exception:
-        raise Exception(
-            f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+            },
         )
 
 
@@ -1345,6 +1369,57 @@ class ExperimentalUIJWTToken:
             expires=expires,
             user_id=user_info.user_id,
             team_id="litellm-dashboard",
+            models=user_info.models,
+            max_parallel_requests=None,
+            user_role=LitellmUserRoles(user_info.user_role),
+        )
+
+        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
+
+    @staticmethod
+    def get_cli_jwt_auth_token(
+        user_info: LiteLLM_UserTable, team_id: Optional[str] = None
+    ) -> str:
+        """
+        Generate a JWT token for CLI authentication with 24-hour expiration.
+        
+        Args:
+            user_info: User information from the database
+            team_id: Team ID for the user (optional, uses user's team if available)
+            
+        Returns:
+            Encrypted JWT token string
+        """
+        from datetime import timedelta
+
+        from litellm.constants import CLI_JWT_TOKEN_NAME
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
+
+        if user_info.user_role is None:
+            raise Exception("User role is required for CLI JWT login")
+
+        # Calculate expiration time (24 hours from now - matching old CLI key behavior)
+        expiration_time = get_utc_datetime() + timedelta(hours=24)
+
+        # Format the expiration time as ISO 8601 string
+        expires = expiration_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
+
+        # Use provided team_id, or fall back to user's teams if available
+        _team_id = team_id
+        if _team_id is None and hasattr(user_info, "teams") and user_info.teams:
+            # Use first team if user has teams
+            _team_id = user_info.teams[0] if len(user_info.teams) > 0 else None
+
+        valid_token = UserAPIKeyAuth(
+            token=CLI_JWT_TOKEN_NAME,
+            key_name=CLI_JWT_TOKEN_NAME,
+            key_alias=CLI_JWT_TOKEN_NAME,
+            max_budget=litellm.max_ui_session_budget,
+            expires=expires,
+            user_id=user_info.user_id,
+            team_id=_team_id,
             models=user_info.models,
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),

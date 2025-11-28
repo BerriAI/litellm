@@ -159,7 +159,7 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
     },
     {
       id: "actions",
-      header: "",
+      header: "Actions",
       cell: ({ row }) => {
         const guardrail = row.original;
         const isConfigGuardrail = guardrail.guardrail_definition_location === GuardrailDefinitionLocation.CONFIG;
@@ -177,16 +177,17 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
                 />
               </Tooltip>
             ) : (
-              <Icon
-                icon={TrashIcon}
-                size="sm"
-                onClick={() =>
-                  guardrail.guardrail_id &&
-                  onDeleteClick(guardrail.guardrail_id, guardrail.guardrail_name || "Unnamed Guardrail")
-                }
-                className="cursor-pointer hover:text-red-500"
-                tooltip="Delete guardrail"
-              />
+              <Tooltip title="Delete guardrail">
+                <Icon
+                  icon={TrashIcon}
+                  size="sm"
+                  onClick={() =>
+                    guardrail.guardrail_id &&
+                    onDeleteClick(guardrail.guardrail_id, guardrail.guardrail_name || "Unnamed Guardrail")
+                  }
+                  className="cursor-pointer hover:text-red-500"
+                />
+              </Tooltip>
             )}
           </div>
         );
