@@ -251,6 +251,15 @@ Logs the violation but allows the request to proceed:
 on_flagged_action: "monitor"
 ```
 
+#### Mask
+Automatically sanitizes sensitive content (PII, secrets, etc.) in your messages before sending them to the LLM:
+
+```yaml
+on_flagged_action: "mask"
+```
+
+When masking is enabled, sensitive information is automatically replaced with masked versions, allowing requests to proceed safely without exposing sensitive data to the LLM.
+
 ### Resilience and Error Handling
 
 #### Graceful Degradation (`fallback_on_error`)
@@ -316,7 +325,7 @@ export PILLAR_TIMEOUT="5.0"
 **Quick takeaways**
 - Every request still runs *all* Pillar scanners; these options only change what comes back.
 - Choose richer responses when you need audit trails, lighter responses when latency or cost matters.
-- Blocking is controlled by LiteLLM’s `on_flagged_action` configuration—Pillar headers do not change block/monitor behaviour.
+- Actions (block/monitor/mask) are controlled by LiteLLM's `on_flagged_action` configuration—Pillar headers are automatically set based on your config.
 
 Pillar Security executes the full scanner suite on each call. The settings below tune the Protect response headers LiteLLM sends, letting you balance fidelity, retention, and latency.
 
@@ -348,9 +357,10 @@ include_evidence: true    # → plr_evidence (default true in LiteLLM)
   ```
   Use when you only care about whether Pillar detected a threat.
 
-  > **📝 Note:** `flagged: true` means Pillar’s scanners recommend blocking. Pillar only reports this verdict—LiteLLM enforces your policy via the `on_flagged_action` configuration (no Pillar header controls it):
+  > **📝 Note:** `flagged: true` means Pillar's scanners recommend blocking. Pillar only reports this verdict—LiteLLM enforces your policy via the `on_flagged_action` configuration:
   > - `on_flagged_action: "block"` → LiteLLM raises a 400 guardrail error
   > - `on_flagged_action: "monitor"` → LiteLLM logs the threat but still returns the LLM response
+  > - `on_flagged_action: "mask"` → LiteLLM replaces messages with masked versions from `masked_session_messages`
 
 - **Scanner breakdown** (`include_scanners=true`)
   ```json
@@ -386,6 +396,17 @@ include_evidence: true    # → plr_evidence (default true in LiteLLM)
   }
   ```
   Ideal for debugging, audit logs, or compliance exports.
+
+#### Content Masking
+When `on_flagged_action: "mask"` is configured, sensitive content in your messages is automatically sanitized before being sent to the LLM:
+
+```yaml
+on_flagged_action: "mask"
+```
+
+- **What it does**: Automatically masks PII, secrets, and other sensitive data detected by Pillar
+- **Use case**: Sanitize input automatically while allowing requests to proceed
+- **Configuration**: Simply set `on_flagged_action: "mask"`—no additional header configuration needed
 
 ### Processing Mode (`async_mode`)
 ```yaml
@@ -427,6 +448,15 @@ guardrails:
       include_scanners: false
       include_evidence: false
       on_flagged_action: "monitor"
+
+  # Masking: automatically sanitize sensitive content
+  - guardrail_name: "pillar-masking"
+    litellm_params:
+      guardrail: pillar
+      mode: pre_call
+      on_flagged_action: "mask"  # Automatically masks PII/secrets and sends plr_mask: "true"
+      persist_session: true
+      include_scanners: true
 ```
 
 Keep in mind that LiteLLM forwards these values as the documented `plr_*` headers, so any direct HTTP integrations outside the proxy can reuse the same guidance.
