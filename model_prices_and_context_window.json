@@ -7835,7 +7835,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 1.7857e-05,
-        "output_db_cost_per_token": 0.000214286,
+        "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -7901,7 +7901,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 1.500002e-05,
-        "output_db_cost_per_token": 0.000214286,
+        "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
