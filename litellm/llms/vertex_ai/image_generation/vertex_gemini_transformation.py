@@ -140,7 +140,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
-        base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+        # Handle global location differently (no region prefix in URL)
+        if vertex_location == "global":
+            base_url = "https://aiplatform.googleapis.com"
+        else:
+            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:generateContent"
 
