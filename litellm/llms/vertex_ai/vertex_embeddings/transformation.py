@@ -72,7 +72,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
         }
 
     def get_supported_openai_params(self):
-        return ["dimensions"]
+        return ["dimensions", "encoding_format"]
 
     def map_openai_params(
         self, non_default_params: dict, optional_params: dict, kwargs: dict
