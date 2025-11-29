@@ -2015,3 +2015,386 @@ async def test_new_team_max_budget_within_user_limit():
         assert result is not None
         assert result["team_id"] == "team-within-budget-789"
         assert result["max_budget"] == 50.0
+
+
+@pytest.mark.asyncio
+async def test_new_team_org_scoped_budget_bypasses_user_limit():
+    """
+    Test that /team/new with organization_id does NOT validate budget against user's personal max_budget.
+
+    This is the bug fix for: When an org admin creates an org-scoped team, the team's budget should
+    be validated against the organization's limits, not the user's personal limits.
+
+    Scenario:
+    - Organization has max_budget=$100
+    - User (org admin) has personal max_budget=$3
+    - Team is created with organization_id and max_budget=$50
+    - Expected: Should succeed (within org's $100 limit)
+    - Bug behavior: Would fail with "max budget higher than user max. User max budget=3.0"
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LiteLLM_UserTable, LiteLLM_OrganizationTable
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create non-admin user with very restrictive personal budget ($3)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-user-123",
+        user_max_budget=3.0,  # Restrictive personal budget
+        models=[],  # Empty models list to bypass model validation
+    )
+
+    # Create team request with budget ($50) that's within org's limit but exceeds user's personal limit
+    team_request = NewTeamRequest(
+        team_alias="org-scoped-team",
+        max_budget=50.0,  # Within org's $100 limit, but exceeds user's $3 limit
+        organization_id="test-org-123",  # This makes it an org-scoped team
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server._license_check"
+    ) as mock_license, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
+    ) as mock_get_org:
+
+        # Setup mocks
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+        mock_prisma.get_data = AsyncMock(return_value=None)
+        mock_prisma.update_data = AsyncMock()
+
+        # Mock organization with $100 budget
+        mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+        mock_org.organization_id = "test-org-123"
+        mock_org.max_budget = 100.0
+        mock_org.models = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+        mock_org.litellm_budget_table = None  # No budget table for this test
+        mock_get_org.return_value = mock_org
+
+        # Mock user cache to return user with restrictive personal budget
+        mock_user_obj = LiteLLM_UserTable(
+            user_id="org-admin-user-123",
+            max_budget=3.0,  # Restrictive personal budget
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
+
+        # Mock team creation
+        mock_created_team = MagicMock()
+        mock_created_team.team_id = "team-org-scoped-789"
+        mock_created_team.team_alias = "org-scoped-team"
+        mock_created_team.max_budget = 50.0
+        mock_created_team.organization_id = "test-org-123"
+        mock_created_team.members_with_roles = []
+        mock_created_team.metadata = None
+        mock_created_team.model_dump.return_value = {
+            "team_id": "team-org-scoped-789",
+            "team_alias": "org-scoped-team",
+            "max_budget": 50.0,
+            "organization_id": "test-org-123",
+            "members_with_roles": [],
+        }
+        mock_prisma.db.litellm_teamtable.create = AsyncMock(return_value=mock_created_team)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_created_team)
+
+        # Mock model table
+        mock_prisma.db.litellm_modeltable = MagicMock()
+        mock_prisma.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
+
+        # Mock user table operations
+        mock_user = MagicMock()
+        mock_user.user_id = "org-admin-user-123"
+        mock_user.model_dump.return_value = {"user_id": "org-admin-user-123", "teams": ["team-org-scoped-789"]}
+        mock_prisma.db.litellm_usertable = MagicMock()
+        mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
+
+        # Mock team membership table
+        mock_membership = MagicMock()
+        mock_membership.model_dump.return_value = {
+            "team_id": "team-org-scoped-789",
+            "user_id": "org-admin-user-123",
+            "budget_id": None,
+        }
+        mock_prisma.db.litellm_teammembership = MagicMock()
+        mock_prisma.db.litellm_teammembership.create = AsyncMock(return_value=mock_membership)
+
+        # Should NOT raise an exception - the fix should bypass user budget validation for org-scoped teams
+        result = await new_team(
+            data=team_request,
+            http_request=dummy_request,
+            user_api_key_dict=org_admin_user,
+        )
+
+        # Verify the team was created successfully with the higher budget
+        assert result is not None
+        assert result["team_id"] == "team-org-scoped-789"
+        assert result["max_budget"] == 50.0
+        assert result["organization_id"] == "test-org-123"
+
+
+@pytest.mark.asyncio
+async def test_new_team_org_scoped_models_bypasses_user_limit():
+    """
+    Test that /team/new with organization_id does NOT validate models against user's personal models.
+
+    This is the bug fix for: When an org admin creates an org-scoped team, the team's models should
+    be validated against the organization's models, not the user's personal models.
+
+    Scenario:
+    - Organization has models=['gpt-4', 'gpt-3.5-turbo', 'claude-3-opus']
+    - User (org admin) has personal models=['no-default-models']
+    - Team is created with organization_id and models=['gpt-4']
+    - Expected: Should succeed (within org's allowed models)
+    - Bug behavior: Would fail with "Model not in allowed user models"
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LiteLLM_UserTable, LiteLLM_OrganizationTable
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create non-admin user with restrictive personal models
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-user-456",
+        user_max_budget=None,  # No budget restriction for this test
+        models=["no-default-models"],  # Restrictive personal models
+    )
+
+    # Create team request with models that are within org's allowed models but not user's
+    team_request = NewTeamRequest(
+        team_alias="org-scoped-models-team",
+        models=["gpt-4"],  # Within org's allowed models, but not in user's personal models
+        organization_id="test-org-456",  # This makes it an org-scoped team
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server._license_check"
+    ) as mock_license, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
+    ) as mock_get_org:
+
+        # Setup mocks
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+        mock_prisma.get_data = AsyncMock(return_value=None)
+        mock_prisma.update_data = AsyncMock()
+
+        # Mock organization with allowed models
+        mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+        mock_org.organization_id = "test-org-456"
+        mock_org.max_budget = 100.0
+        mock_org.models = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+        mock_org.litellm_budget_table = None
+        mock_get_org.return_value = mock_org
+
+        # Mock user cache
+        mock_user_obj = LiteLLM_UserTable(
+            user_id="org-admin-user-456",
+            max_budget=None,
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
+
+        # Mock team creation
+        mock_created_team = MagicMock()
+        mock_created_team.team_id = "team-org-scoped-models-789"
+        mock_created_team.team_alias = "org-scoped-models-team"
+        mock_created_team.max_budget = None
+        mock_created_team.organization_id = "test-org-456"
+        mock_created_team.models = ["gpt-4"]
+        mock_created_team.members_with_roles = []
+        mock_created_team.metadata = None
+        mock_created_team.model_dump.return_value = {
+            "team_id": "team-org-scoped-models-789",
+            "team_alias": "org-scoped-models-team",
+            "max_budget": None,
+            "organization_id": "test-org-456",
+            "models": ["gpt-4"],
+            "members_with_roles": [],
+        }
+        mock_prisma.db.litellm_teamtable.create = AsyncMock(return_value=mock_created_team)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_created_team)
+
+        # Mock model table
+        mock_prisma.db.litellm_modeltable = MagicMock()
+        mock_prisma.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
+
+        # Mock user table operations
+        mock_user = MagicMock()
+        mock_user.user_id = "org-admin-user-456"
+        mock_user.model_dump.return_value = {"user_id": "org-admin-user-456", "teams": ["team-org-scoped-models-789"]}
+        mock_prisma.db.litellm_usertable = MagicMock()
+        mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
+
+        # Mock team membership table
+        mock_membership = MagicMock()
+        mock_membership.model_dump.return_value = {
+            "team_id": "team-org-scoped-models-789",
+            "user_id": "org-admin-user-456",
+            "budget_id": None,
+        }
+        mock_prisma.db.litellm_teammembership = MagicMock()
+        mock_prisma.db.litellm_teammembership.create = AsyncMock(return_value=mock_membership)
+
+        # Should NOT raise an exception - the fix should bypass user model validation for org-scoped teams
+        result = await new_team(
+            data=team_request,
+            http_request=dummy_request,
+            user_api_key_dict=org_admin_user,
+        )
+
+        # Verify the team was created successfully with the org's models
+        assert result is not None
+        assert result["team_id"] == "team-org-scoped-models-789"
+        assert result["models"] == ["gpt-4"]
+        assert result["organization_id"] == "test-org-456"
+
+
+@pytest.mark.asyncio
+async def test_new_team_standalone_validates_against_user_models():
+    """
+    Test that /team/new WITHOUT organization_id still validates models against user's personal models.
+
+    This ensures that standalone teams (not org-scoped) still use user-level validation.
+
+    Scenario:
+    - User has personal models=['no-default-models']
+    - Team is created WITHOUT organization_id and models=['gpt-4']
+    - Expected: Should fail with "Model not in allowed user models"
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create non-admin user with restrictive personal models
+    non_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="non-admin-user-789",
+        user_max_budget=None,
+        models=["no-default-models"],  # Restrictive personal models
+    )
+
+    # Create standalone team request (no organization_id) with models not in user's list
+    team_request = NewTeamRequest(
+        team_alias="standalone-team",
+        models=["gpt-4"],  # Not in user's allowed models
+        # Note: No organization_id - this is a standalone team
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server._license_check"
+    ) as mock_license, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit:
+        # Setup basic mocks
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.get_data = AsyncMock(return_value=None)
+
+        # Should raise ProxyException because gpt-4 is not in user's allowed models
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=team_request,
+                http_request=dummy_request,
+                user_api_key_dict=non_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "Model not in allowed user models" in str(exc_info.value.message)
+        assert "no-default-models" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_new_team_standalone_validates_against_user_budget():
+    """
+    Test that /team/new WITHOUT organization_id still validates budget against user's personal max_budget.
+
+    This ensures that standalone teams (not org-scoped) still use user-level validation.
+    This is essentially the same as test_new_team_max_budget_exceeds_user_max_budget but
+    explicitly showing the contrast with org-scoped teams.
+
+    Scenario:
+    - User has personal max_budget=$3
+    - Team is created WITHOUT organization_id and max_budget=$50
+    - Expected: Should fail with "max budget higher than user max"
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create non-admin user with restrictive personal budget
+    non_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="non-admin-user-budget-789",
+        user_max_budget=100.0,  # This is for key auth, actual budget is from user object
+        models=[],  # Empty models list to bypass model validation
+    )
+
+    # Create standalone team request (no organization_id) with budget exceeding user's limit
+    team_request = NewTeamRequest(
+        team_alias="standalone-budget-team",
+        max_budget=50.0,  # Exceeds user's personal budget
+        # Note: No organization_id - this is a standalone team
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server._license_check"
+    ) as mock_license, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit:
+        # Setup basic mocks
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.get_data = AsyncMock(return_value=None)
+
+        # Mock user cache to return user with restrictive personal budget ($3)
+        mock_user_obj = LiteLLM_UserTable(
+            user_id="non-admin-user-budget-789",
+            max_budget=3.0,  # Restrictive personal budget
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
+
+        # Should raise ProxyException because budget exceeds user's max_budget
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=team_request,
+                http_request=dummy_request,
+                user_api_key_dict=non_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "max budget higher than user max" in str(exc_info.value.message)
+        assert "3.0" in str(exc_info.value.message)  # User's max_budget should be mentioned

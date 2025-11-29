@@ -689,36 +689,39 @@ async def new_team(  # noqa: PLR0915
                     },
                 )
 
-            if data.max_budget is not None and user_api_key_dict.user_id is not None:
-                # Fetch user object to get max_budget
-                user_obj = await get_user_object(
-                    user_id=user_api_key_dict.user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    user_id_upsert=False,
-                )
-
-                if (
-                    user_obj is not None
-                    and user_obj.max_budget is not None
-                    and data.max_budget > user_obj.max_budget
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
-                        },
+            # Only validate user budget/models for standalone teams (not org-scoped)
+            # For org-scoped teams, validation is done by _check_org_team_limits()
+            if data.organization_id is None:
+                if data.max_budget is not None and user_api_key_dict.user_id is not None:
+                    # Fetch user object to get max_budget
+                    user_obj = await get_user_object(
+                        user_id=user_api_key_dict.user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        user_id_upsert=False,
                     )
 
-            if data.models is not None and len(user_api_key_dict.models) > 0:
-                for m in data.models:
-                    if m not in user_api_key_dict.models:
+                    if (
+                        user_obj is not None
+                        and user_obj.max_budget is not None
+                        and data.max_budget > user_obj.max_budget
+                    ):
                         raise HTTPException(
                             status_code=400,
                             detail={
-                                "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
+                                "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
                             },
                         )
+
+                if data.models is not None and len(user_api_key_dict.models) > 0:
+                    for m in data.models:
+                        if m not in user_api_key_dict.models:
+                            raise HTTPException(
+                                status_code=400,
+                                detail={
+                                    "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
+                                },
+                            )
 
         if user_api_key_dict.user_id is not None:
             creating_user_in_list = False
