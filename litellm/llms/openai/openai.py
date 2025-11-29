@@ -554,9 +554,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     model=model, custom_llm_provider=custom_llm_provider, stream=stream
                 )
 
-            # Validate environment and update headers for providers that require it
+            # Always call validate_environment to allow providers to add custom headers
             # (e.g., GitHub Copilot needs Copilot-Vision-Request for vision requests)
-            if provider_config and provider_config.requires_custom_headers_validation():
+            if provider_config:
                 validated_headers = provider_config.validate_environment(
                     headers=headers or {},
                     model=model or "",
