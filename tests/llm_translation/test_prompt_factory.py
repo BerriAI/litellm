@@ -567,7 +567,7 @@ def test_vertex_only_image_user_message():
         },
     ]
 
-    response = _gemini_convert_messages_with_history(messages=messages)
+    response = _gemini_convert_messages_with_history(messages=messages, model="gemini-1.5-pro")
 
     expected_response = [
         {
@@ -576,7 +576,7 @@ def test_vertex_only_image_user_message():
                 {
                     "inline_data": {
                         "data": "/9j/2wCEAAgGBgcGBQ",
-                        "mimeType": "image/jpeg",
+                        "mime_type": "image/jpeg",
                     }
                 },
                 {"text": " "},
