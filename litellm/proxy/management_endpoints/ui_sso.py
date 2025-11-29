@@ -435,9 +435,9 @@ async def add_missing_team_member(
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Add missing user to missing teams
     """
-    if user_info.teams is None:
-        return
-    missing_teams = set(sso_teams) - set(user_info.teams)
+    # Handle None as empty list for new users
+    user_teams = user_info.teams if user_info.teams is not None else []
+    missing_teams = set(sso_teams) - set(user_teams)
     missing_teams_list = list(missing_teams)
     tasks = []
     tasks = [
