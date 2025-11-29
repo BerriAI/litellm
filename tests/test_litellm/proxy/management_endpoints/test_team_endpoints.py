@@ -2398,3 +2398,614 @@ async def test_new_team_standalone_validates_against_user_budget():
         assert exc_info.value.code == '400'
         assert "max budget higher than user max" in str(exc_info.value.message)
         assert "3.0" in str(exc_info.value.message)  # User's max_budget should be mentioned
+
+
+@pytest.mark.asyncio
+async def test_new_team_org_scoped_budget_exceeds_org_limit():
+    """
+    Test that /team/new with organization_id fails when team budget exceeds organization's max_budget.
+
+    Scenario:
+    - Organization has max_budget=$100
+    - Team is created with organization_id and max_budget=$150
+    - Expected: Should fail with error about exceeding org budget
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create user (org admin)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-user-budget-test",
+        models=[],
+    )
+
+    # Create team request with budget ($150) that exceeds org's limit ($100)
+    team_request = NewTeamRequest(
+        team_alias="org-team-exceeds-budget",
+        max_budget=150.0,  # Exceeds org's $100 limit
+        organization_id="test-org-budget-limit",
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server._license_check"
+    ) as mock_license, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
+    ) as mock_get_org:
+
+        # Setup mocks
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.get_data = AsyncMock(return_value=None)
+
+        # Mock organization with $100 budget limit
+        mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+        mock_budget_table.max_budget = 100.0
+
+        mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+        mock_org.organization_id = "test-org-budget-limit"
+        mock_org.models = ["gpt-4", "gpt-3.5-turbo"]
+        mock_org.litellm_budget_table = mock_budget_table
+        mock_get_org.return_value = mock_org
+
+        # Should raise ProxyException because team budget exceeds org budget
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=team_request,
+                http_request=dummy_request,
+                user_api_key_dict=org_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "exceeds organization" in str(exc_info.value.message).lower() or "organization" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_new_team_org_scoped_models_not_in_org_models():
+    """
+    Test that /team/new with organization_id fails when team models are not in organization's allowed models.
+
+    Scenario:
+    - Organization has models=['gpt-4', 'gpt-3.5-turbo']
+    - Team is created with organization_id and models=['claude-3-opus']
+    - Expected: Should fail with error about model not in org's allowed models
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create user (org admin)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-user-models-test",
+        models=[],
+    )
+
+    # Create team request with model not in org's allowed list
+    team_request = NewTeamRequest(
+        team_alias="org-team-invalid-model",
+        models=["claude-3-opus"],  # Not in org's allowed models
+        organization_id="test-org-models-limit",
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server._license_check"
+    ) as mock_license, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
+    ) as mock_get_org:
+
+        # Setup mocks
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.get_data = AsyncMock(return_value=None)
+
+        # Mock organization with specific allowed models (not including claude-3-opus)
+        mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+        mock_org.organization_id = "test-org-models-limit"
+        mock_org.models = ["gpt-4", "gpt-3.5-turbo"]  # claude-3-opus is NOT allowed
+        mock_org.litellm_budget_table = None
+        mock_get_org.return_value = mock_org
+
+        # Should raise ProxyException because claude-3-opus is not in org's allowed models
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=team_request,
+                http_request=dummy_request,
+                user_api_key_dict=org_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "claude-3-opus" in str(exc_info.value.message) or "organization" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_standalone_budget_exceeds_user_limit():
+    """
+    Test that /team/update for a standalone team fails when new budget exceeds user's max_budget.
+
+    Scenario:
+    - User has personal max_budget=$50
+    - Standalone team exists (no organization_id)
+    - User tries to update team budget to $100
+    - Expected: Should fail with error about exceeding user budget
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create non-admin user with restrictive personal budget
+    non_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="non-admin-update-test",
+        models=[],
+    )
+
+    # Create update request with budget exceeding user's limit
+    update_request = UpdateTeamRequest(
+        team_id="standalone-team-123",
+        max_budget=100.0,  # Exceeds user's $50 limit
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit:
+
+        # Mock existing standalone team (no organization_id)
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "standalone-team-123"
+        mock_existing_team.organization_id = None  # Standalone team
+        mock_existing_team.max_budget = 30.0
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "standalone-team-123",
+            "organization_id": None,
+            "max_budget": 30.0,
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+
+        # Mock user cache to return user with restrictive budget
+        mock_user_obj = LiteLLM_UserTable(
+            user_id="non-admin-update-test",
+            max_budget=50.0,  # User's budget limit
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
+
+        # Should raise ProxyException because new budget exceeds user's max_budget
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=non_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "budget" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_scoped_budget_exceeds_org_limit():
+    """
+    Test that /team/update for an org-scoped team fails when new budget exceeds organization's max_budget.
+
+    Scenario:
+    - Organization has max_budget=$100
+    - Org-scoped team exists
+    - User tries to update team budget to $150
+    - Expected: Should fail with error about exceeding org budget
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create user (org admin)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-update-test",
+        models=[],
+    )
+
+    # Create update request with budget exceeding org's limit
+    update_request = UpdateTeamRequest(
+        team_id="org-team-456",
+        max_budget=150.0,  # Exceeds org's $100 limit
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with $100 budget limit
+    mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_budget_table.max_budget = 100.0
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-update"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = mock_budget_table
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new=AsyncMock(return_value=mock_org)
+    ) as mock_get_org:
+
+        # Mock existing org-scoped team
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "org-team-456"
+        mock_existing_team.organization_id = "test-org-update"
+        mock_existing_team.max_budget = 80.0
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "org-team-456",
+            "organization_id": "test-org-update",
+            "max_budget": 80.0,
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+
+        # Should raise ProxyException because new budget exceeds org's max_budget
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=org_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "organization" in str(exc_info.value.message).lower() or "budget" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_standalone_models_exceeds_user_limit():
+    """
+    Test that /team/update for a standalone team fails when models are not in user's allowed models.
+
+    Scenario:
+    - User has personal models=['gpt-3.5-turbo']
+    - Standalone team exists (no organization_id)
+    - User tries to update team models to ['gpt-4'] (not in user's allowed models)
+    - Expected: Should fail with error about model not in user's allowed models
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create non-admin user with restrictive personal models
+    non_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="non-admin-update-models-test",
+        models=["gpt-3.5-turbo"],  # Restrictive model list
+    )
+
+    # Create update request with model not in user's allowed list
+    update_request = UpdateTeamRequest(
+        team_id="standalone-team-models-123",
+        models=["gpt-4"],  # Not in user's allowed models
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit:
+
+        # Mock existing standalone team (no organization_id)
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "standalone-team-models-123"
+        mock_existing_team.organization_id = None  # Standalone team
+        mock_existing_team.models = ["gpt-3.5-turbo"]
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "standalone-team-models-123",
+            "organization_id": None,
+            "models": ["gpt-3.5-turbo"],
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+
+        # Should raise ProxyException because model not in user's allowed models
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=non_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "model" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_scoped_budget_bypasses_user_limit():
+    """
+    Test that /team/update for an org-scoped team does NOT validate budget against user's personal max_budget.
+
+    Scenario:
+    - Organization has max_budget=$100
+    - User (org admin) has personal max_budget=$3
+    - Org-scoped team exists with current budget=$30
+    - User tries to update team budget to $50 (within org limit, exceeds user limit)
+    - Expected: Should succeed (validated against org, not user)
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth, LiteLLM_UserTable, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create user with very restrictive personal budget ($3)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-update-budget-test",
+        models=[],
+    )
+
+    # Create update request with budget within org limit but exceeding user limit
+    update_request = UpdateTeamRequest(
+        team_id="org-team-update-budget-123",
+        max_budget=50.0,  # Within org's $100 limit, exceeds user's $3 limit
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with $100 budget limit
+    mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_budget_table.max_budget = 100.0
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-update-budget"
+    mock_org.models = ["gpt-4", "gpt-3.5-turbo"]
+    mock_org.litellm_budget_table = mock_budget_table
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new=AsyncMock(return_value=mock_org)
+    ) as mock_get_org:
+
+        # Mock existing org-scoped team
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "org-team-update-budget-123"
+        mock_existing_team.organization_id = "test-org-update-budget"
+        mock_existing_team.max_budget = 30.0
+        mock_existing_team.model_id = None
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "org-team-update-budget-123",
+            "organization_id": "test-org-update-budget",
+            "max_budget": 30.0,
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+
+        # Mock user cache to return user with restrictive budget
+        mock_user_obj = LiteLLM_UserTable(
+            user_id="org-admin-update-budget-test",
+            max_budget=3.0,  # Restrictive personal budget
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
+        mock_cache.async_set_cache = AsyncMock()  # Mock cache set for _cache_team_object
+
+        # Mock team update
+        mock_updated_team = MagicMock()
+        mock_updated_team.team_id = "org-team-update-budget-123"
+        mock_updated_team.organization_id = "test-org-update-budget"
+        mock_updated_team.max_budget = 50.0
+        mock_updated_team.litellm_model_table = None
+        mock_updated_team.model_dump.return_value = {
+            "team_id": "org-team-update-budget-123",
+            "organization_id": "test-org-update-budget",
+            "max_budget": 50.0,
+        }
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+
+        # Should NOT raise an exception - bypass user budget validation for org-scoped teams
+        result = await update_team(
+            data=update_request,
+            http_request=dummy_request,
+            user_api_key_dict=org_admin_user,
+        )
+
+        # Verify the team was updated successfully with the higher budget
+        assert result is not None
+        assert result["data"].max_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_scoped_models_bypasses_user_limit():
+    """
+    Test that /team/update for an org-scoped team does NOT validate models against user's personal models.
+
+    Scenario:
+    - Organization has models=['gpt-4', 'gpt-3.5-turbo', 'claude-3-opus']
+    - User (org admin) has personal models=['no-default-models']
+    - Org-scoped team exists
+    - User tries to update team models to ['gpt-4'] (in org's allowed, not in user's)
+    - Expected: Should succeed (validated against org, not user)
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth, LiteLLM_OrganizationTable
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create user with very restrictive personal models
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-update-models-test",
+        models=["no-default-models"],  # Restrictive model list
+    )
+
+    # Create update request with models in org's allowed but not in user's
+    update_request = UpdateTeamRequest(
+        team_id="org-team-update-models-123",
+        models=["gpt-4"],  # In org's allowed, not in user's
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with generous model list
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-update-models"
+    mock_org.models = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+    mock_org.litellm_budget_table = None
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new=AsyncMock(return_value=mock_org)
+    ) as mock_get_org:
+
+        # Mock existing org-scoped team
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "org-team-update-models-123"
+        mock_existing_team.organization_id = "test-org-update-models"
+        mock_existing_team.models = ["gpt-3.5-turbo"]
+        mock_existing_team.model_id = None
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "org-team-update-models-123",
+            "organization_id": "test-org-update-models",
+            "models": ["gpt-3.5-turbo"],
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+        mock_cache.async_set_cache = AsyncMock()  # Mock cache set for _cache_team_object
+
+        # Mock team update
+        mock_updated_team = MagicMock()
+        mock_updated_team.team_id = "org-team-update-models-123"
+        mock_updated_team.organization_id = "test-org-update-models"
+        mock_updated_team.models = ["gpt-4"]
+        mock_updated_team.litellm_model_table = None
+        mock_updated_team.model_dump.return_value = {
+            "team_id": "org-team-update-models-123",
+            "organization_id": "test-org-update-models",
+            "models": ["gpt-4"],
+        }
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+
+        # Should NOT raise an exception - bypass user models validation for org-scoped teams
+        result = await update_team(
+            data=update_request,
+            http_request=dummy_request,
+            user_api_key_dict=org_admin_user,
+        )
+
+        # Verify the team was updated successfully with the new models
+        assert result is not None
+        assert result["data"].models == ["gpt-4"]
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_scoped_models_not_in_org_models():
+    """
+    Test that /team/update for an org-scoped team fails when models are not in organization's allowed models.
+
+    Scenario:
+    - Organization has models=['gpt-4', 'gpt-3.5-turbo']
+    - Org-scoped team exists
+    - User tries to update team models to ['claude-3-opus'] (not in org's allowed models)
+    - Expected: Should fail with error about model not in org's allowed models
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create user (org admin)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-update-models-fail-test",
+        models=[],
+    )
+
+    # Create update request with model not in org's allowed list
+    update_request = UpdateTeamRequest(
+        team_id="org-team-update-models-fail-123",
+        models=["claude-3-opus"],  # Not in org's allowed models
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with restricted model list (no claude-3-opus)
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-update-models-fail"
+    mock_org.models = ["gpt-4", "gpt-3.5-turbo"]  # claude-3-opus is NOT allowed
+    mock_org.litellm_budget_table = None
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ) as mock_audit, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new=AsyncMock(return_value=mock_org)
+    ) as mock_get_org:
+
+        # Mock existing org-scoped team
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "org-team-update-models-fail-123"
+        mock_existing_team.organization_id = "test-org-update-models-fail"
+        mock_existing_team.models = ["gpt-4"]
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "org-team-update-models-fail-123",
+            "organization_id": "test-org-update-models-fail",
+            "models": ["gpt-4"],
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+
+        # Should raise ProxyException because claude-3-opus is not in org's allowed models
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=org_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "claude-3-opus" in str(exc_info.value.message) or "organization" in str(exc_info.value.message).lower()
