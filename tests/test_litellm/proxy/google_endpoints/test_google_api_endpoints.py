@@ -234,3 +234,66 @@ def test_google_stream_generate_content_with_cost_tracking_metadata():
         assert called_data["litellm_metadata"]["user_api_key_team_id"] == "test-team-id"
         # Verify stream is set to True
         assert called_data["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_google_stream_generate_content_no_duplicate_stream_kwarg():
+    """
+    Test that the streamGenerateContent endpoint does not cause 'got multiple values
+    for keyword argument stream' error.
+
+    This test verifies the fix for the bug where:
+    1. Proxy endpoint sets data["stream"] = True
+    2. agenerate_content_stream receives stream=True in kwargs
+    3. agenerate_content_stream explicitly passes stream=True to async_generate_content_handler
+    4. This caused: TypeError: got multiple values for keyword argument 'stream'
+
+    The test calls the actual agenerate_content_stream function (not mocked) to ensure
+    the stream parameter is properly handled without duplication.
+    """
+    
+    from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
+    from litellm.google_genai.main import GenerateContentHelper, agenerate_content_stream
+
+    # Mock the adapter handler to avoid actual API calls
+    mock_response = {"candidates": [{"content": {"parts": [{"text": "test response"}]}}]}
+
+    # Create a mock setup result with generate_content_provider_config = None
+    # This triggers the code path that had the duplicate stream bug
+    mock_setup_result = MagicMock()
+    mock_setup_result.generate_content_provider_config = None
+    mock_setup_result.generate_content_config_dict = {}
+    mock_setup_result.litellm_params = MagicMock()
+
+    with patch.object(
+        GenerateContentHelper,
+        "setup_generate_content_call",
+        return_value=mock_setup_result
+    ), patch.object(
+        GenerateContentToCompletionHandler,
+        "async_generate_content_handler",
+        new=AsyncMock(return_value=mock_response)
+    ) as mock_handler:
+        # Simulate exactly what the proxy endpoint does:
+        # 1. Set stream=True in data dict
+        # 2. Call agenerate_content_stream(**data)
+        data = {
+            "model": "gemini/gemini-2.0-flash-001",
+            "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+            "stream": True,  # This is what proxy endpoint sets: data["stream"] = True
+        }
+
+        # This should NOT raise: TypeError: got multiple values for keyword argument 'stream'
+        try:
+            result = await agenerate_content_stream(**data)
+        except TypeError as e:
+            if "got multiple values for keyword argument" in str(e):
+                pytest.fail(f"Duplicate stream keyword argument error: {e}")
+            raise
+
+        # Verify the handler was called successfully
+        mock_handler.assert_called_once()
+
+        # Verify stream=True was passed correctly to the handler
+        call_kwargs = mock_handler.call_args.kwargs
+        assert call_kwargs.get("stream") is True
