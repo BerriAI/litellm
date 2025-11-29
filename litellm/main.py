@@ -4253,6 +4253,22 @@ def embedding(  # noqa: PLR0915
                 headers=headers or extra_headers,
                 litellm_params=litellm_params_dict,
             )
+        elif custom_llm_provider == "github_copilot":
+            api_key = (api_key or litellm.api_key)
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+            )
         elif (
             model in litellm.open_ai_embedding_models
             or custom_llm_provider == "openai"

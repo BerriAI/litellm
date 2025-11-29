@@ -8,7 +8,6 @@ Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
-from uuid import uuid4
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -22,7 +21,11 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 from ..authenticator import Authenticator
-from ..common_utils import GetAPIKeyError
+from ..common_utils import (
+    GetAPIKeyError,
+    GITHUB_COPILOT_API_BASE,
+    get_copilot_default_headers,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -30,12 +33,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-# GitHub Copilot API Constants (from copilot-api)
-COPILOT_VERSION = "0.26.7"
-EDITOR_PLUGIN_VERSION = f"copilot-chat/{COPILOT_VERSION}"
-USER_AGENT = f"GitHubCopilotChat/{COPILOT_VERSION}"
-API_VERSION = "2025-04-01"
 
 
 class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -54,8 +51,6 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     Reference: https://api.githubcopilot.com/
     """
-
-    GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
 
     def __init__(self) -> None:
         super().__init__()
@@ -119,7 +114,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
 
             # Get default headers (from copilot-api configuration)
-            default_headers = self._get_default_headers(api_key)
+            default_headers = get_copilot_default_headers(api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
@@ -173,7 +168,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base = (
             api_base
             or self.authenticator.get_api_base()
-            or self.GITHUB_COPILOT_API_BASE
+            or GITHUB_COPILOT_API_BASE
         )
 
         # Remove trailing slashes
@@ -183,25 +178,6 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return f"{api_base}/responses"
 
     # ==================== Helper Methods ====================
-
-    def _get_default_headers(self, api_key: str) -> Dict[str, str]:
-        """
-        Get default headers for GitHub Copilot Responses API.
-
-        Based on copilot-api's header configuration.
-        """
-        return {
-            "Authorization": f"Bearer {api_key}",
-            "content-type": "application/json",
-            "copilot-integration-id": "vscode-chat",
-            "editor-version": "vscode/1.95.0",  # Fixed version for stability
-            "editor-plugin-version": EDITOR_PLUGIN_VERSION,
-            "user-agent": USER_AGENT,
-            "openai-intent": "conversation-panel",
-            "x-github-api-version": API_VERSION,
-            "x-request-id": str(uuid4()),
-            "x-vscode-user-agent-library-version": "electron-fetch",
-        }
 
     def _get_input_from_params(
         self, litellm_params: Optional[GenericLiteLLMParams]
