@@ -492,6 +492,33 @@ async def _check_org_team_limits(
                     },
                 )
 
+    # Validate team TPM/RPM against organization's TPM/RPM limits (direct comparison)
+    if (
+        data.tpm_limit is not None
+        and org_table.litellm_budget_table is not None
+        and org_table.litellm_budget_table.tpm_limit is not None
+        and data.tpm_limit > org_table.litellm_budget_table.tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Team tpm_limit ({data.tpm_limit}) exceeds organization's tpm_limit ({org_table.litellm_budget_table.tpm_limit}). Organization: {org_table.organization_id}"
+            },
+        )
+
+    if (
+        data.rpm_limit is not None
+        and org_table.litellm_budget_table is not None
+        and org_table.litellm_budget_table.rpm_limit is not None
+        and data.rpm_limit > org_table.litellm_budget_table.rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Team rpm_limit ({data.rpm_limit}) exceeds organization's rpm_limit ({org_table.litellm_budget_table.rpm_limit}). Organization: {org_table.organization_id}"
+            },
+        )
+
     # Check guaranteed throughput limits (only if applicable)
     rpm_limit_type = getattr(data, "rpm_limit_type", None) or (
         data.metadata.get("rpm_limit_type", None) if data.metadata else None
@@ -528,6 +555,80 @@ async def _check_org_team_limits(
         org_table=org_table,
         data=data,
     )
+
+
+async def _check_user_team_limits(
+    data: Union[NewTeamRequest, UpdateTeamRequest],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: Any,
+) -> None:
+    """
+    Check user team limits for standalone teams (not org-scoped).
+
+    This validates:
+    - Team budget vs user's max_budget
+    - Team models vs user's allowed models
+
+    Should only be called for standalone teams (when organization_id is None).
+    For org-scoped teams, use _check_org_team_limits() instead.
+    """
+    # Validate team budget against user's max_budget
+    if data.max_budget is not None and user_api_key_dict.user_id is not None:
+        user_obj = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+        )
+
+        if (
+            user_obj is not None
+            and user_obj.max_budget is not None
+            and data.max_budget > user_obj.max_budget
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
+                },
+            )
+
+    # Validate team models against user's allowed models
+    if data.models is not None and len(user_api_key_dict.models) > 0:
+        for m in data.models:
+            if m not in user_api_key_dict.models:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
+                    },
+                )
+
+    # Validate team TPM/RPM against user's TPM/RPM limits
+    if (
+        data.tpm_limit is not None
+        and user_api_key_dict.tpm_limit is not None
+        and data.tpm_limit > user_api_key_dict.tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}. User role={user_api_key_dict.user_role}"
+            },
+        )
+
+    if (
+        data.rpm_limit is not None
+        and user_api_key_dict.rpm_limit is not None
+        and data.rpm_limit > user_api_key_dict.rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}. User role={user_api_key_dict.user_role}"
+            },
+        )
 
 
 #### TEAM MANAGEMENT ####
@@ -692,63 +793,15 @@ async def new_team(  # noqa: PLR0915
             user_api_key_dict.user_role is None
             or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
         ):  # don't restrict proxy admin
-            if (
-                data.tpm_limit is not None
-                and user_api_key_dict.tpm_limit is not None
-                and data.tpm_limit > user_api_key_dict.tpm_limit
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}. User role={user_api_key_dict.user_role}"
-                    },
-                )
-
-            if (
-                data.rpm_limit is not None
-                and user_api_key_dict.rpm_limit is not None
-                and data.rpm_limit > user_api_key_dict.rpm_limit
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}. User role={user_api_key_dict.user_role}"
-                    },
-                )
-
-            # Only validate user budget/models for standalone teams (not org-scoped)
+            # Only validate user budget/models/tpm/rpm for standalone teams (not org-scoped)
             # For org-scoped teams, validation is done by _check_org_team_limits()
             if data.organization_id is None:
-                if data.max_budget is not None and user_api_key_dict.user_id is not None:
-                    # Fetch user object to get max_budget
-                    user_obj = await get_user_object(
-                        user_id=user_api_key_dict.user_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        user_id_upsert=False,
-                    )
-
-                    if (
-                        user_obj is not None
-                        and user_obj.max_budget is not None
-                        and data.max_budget > user_obj.max_budget
-                    ):
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
-                            },
-                        )
-
-                if data.models is not None and len(user_api_key_dict.models) > 0:
-                    for m in data.models:
-                        if m not in user_api_key_dict.models:
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
-                                },
-                            )
+                await _check_user_team_limits(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
 
         if user_api_key_dict.user_id is not None:
             creating_user_in_list = False
@@ -1256,36 +1309,12 @@ async def update_team(
             # Only validate user budget/models for standalone teams
             # For org-scoped teams, validation is done by _check_org_team_limits() above
             if org_id_to_check is None:
-                if data.max_budget is not None and user_api_key_dict.user_id is not None:
-                    # Fetch user object to get max_budget
-                    user_obj = await get_user_object(
-                        user_id=user_api_key_dict.user_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        user_id_upsert=False,
-                    )
-
-                    if (
-                        user_obj is not None
-                        and user_obj.max_budget is not None
-                        and data.max_budget > user_obj.max_budget
-                    ):
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
-                            },
-                        )
-
-                if data.models is not None and len(user_api_key_dict.models) > 0:
-                    for m in data.models:
-                        if m not in user_api_key_dict.models:
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
-                                },
-                            )
+                await _check_user_team_limits(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
 
         updated_kv = data.json(exclude_unset=True)
 

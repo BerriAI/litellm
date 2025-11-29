@@ -3009,3 +3009,611 @@ async def test_update_team_org_scoped_models_not_in_org_models():
         # Verify exception details
         assert exc_info.value.code == '400'
         assert "claude-3-opus" in str(exc_info.value.message) or "organization" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_tpm_limit_exceeds_user_limit():
+    """
+    Test that /team/update fails when TPM limit exceeds user's TPM limit.
+
+    Scenario:
+    - User has tpm_limit=1000
+    - User tries to update team with tpm_limit=5000
+    - Expected: Should fail with error about exceeding user TPM limit
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create non-admin user with TPM limit
+    non_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="tpm-limit-user",
+        models=[],
+        tpm_limit=1000,  # User's TPM limit
+    )
+
+    # Create update request with TPM exceeding user's limit
+    update_request = UpdateTeamRequest(
+        team_id="team-tpm-test-123",
+        tpm_limit=5000,  # Exceeds user's 1000 limit
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ):
+
+        # Mock existing standalone team
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "team-tpm-test-123"
+        mock_existing_team.organization_id = None
+        mock_existing_team.tpm_limit = 500
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "team-tpm-test-123",
+            "organization_id": None,
+            "tpm_limit": 500,
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+
+        # Should raise ProxyException because new TPM exceeds user's limit
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=non_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "tpm" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_rpm_limit_exceeds_user_limit():
+    """
+    Test that /team/update fails when RPM limit exceeds user's RPM limit.
+
+    Scenario:
+    - User has rpm_limit=100
+    - User tries to update team with rpm_limit=500
+    - Expected: Should fail with error about exceeding user RPM limit
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create non-admin user with RPM limit
+    non_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="rpm-limit-user",
+        models=[],
+        rpm_limit=100,  # User's RPM limit
+    )
+
+    # Create update request with RPM exceeding user's limit
+    update_request = UpdateTeamRequest(
+        team_id="team-rpm-test-123",
+        rpm_limit=500,  # Exceeds user's 100 limit
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ):
+
+        # Mock existing standalone team
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "team-rpm-test-123"
+        mock_existing_team.organization_id = None
+        mock_existing_team.rpm_limit = 50
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "team-rpm-test-123",
+            "organization_id": None,
+            "rpm_limit": 50,
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+
+        # Should raise ProxyException because new RPM exceeds user's limit
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=non_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "rpm" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_new_team_org_scoped_tpm_exceeds_org_limit():
+    """
+    Test that /team/new for an org-scoped team fails when TPM exceeds organization's TPM limit.
+
+    Scenario:
+    - Organization has tpm_limit=10000
+    - User tries to create org-scoped team with tpm_limit=20000
+    - Expected: Should fail with error about exceeding org TPM limit
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create user (with restrictive personal TPM limit that should be bypassed)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-tpm-test",
+        models=[],
+        tpm_limit=1000,  # User's personal limit (should be bypassed for org teams)
+    )
+
+    # Create team request with TPM exceeding org's limit
+    team_request = NewTeamRequest(
+        team_alias="org-tpm-test-team",
+        organization_id="test-org-tpm",
+        tpm_limit=20000,  # Exceeds org's 10000 limit
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with TPM limit
+    mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_budget_table.tpm_limit = 10000  # Org's TPM limit
+    mock_budget_table.rpm_limit = None
+    mock_budget_table.max_budget = None
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-tpm"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = mock_budget_table
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server._license_check"
+    ) as mock_license, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new=AsyncMock(return_value=mock_org)
+    ):
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_prisma.get_data = AsyncMock(return_value=None)
+
+        # Should raise ProxyException because TPM exceeds org limit
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=team_request,
+                http_request=dummy_request,
+                user_api_key_dict=org_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "tpm" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_new_team_org_scoped_rpm_exceeds_org_limit():
+    """
+    Test that /team/new for an org-scoped team fails when RPM exceeds organization's RPM limit.
+
+    Scenario:
+    - Organization has rpm_limit=1000
+    - User tries to create org-scoped team with rpm_limit=2000
+    - Expected: Should fail with error about exceeding org RPM limit
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create user (with restrictive personal RPM limit that should be bypassed)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-rpm-test",
+        models=[],
+        rpm_limit=100,  # User's personal limit (should be bypassed for org teams)
+    )
+
+    # Create team request with RPM exceeding org's limit
+    team_request = NewTeamRequest(
+        team_alias="org-rpm-test-team",
+        organization_id="test-org-rpm",
+        rpm_limit=2000,  # Exceeds org's 1000 limit
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with RPM limit
+    mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_budget_table.tpm_limit = None
+    mock_budget_table.rpm_limit = 1000  # Org's RPM limit
+    mock_budget_table.max_budget = None
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-rpm"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = mock_budget_table
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server._license_check"
+    ) as mock_license, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new=AsyncMock(return_value=mock_org)
+    ):
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_prisma.get_data = AsyncMock(return_value=None)
+
+        # Should raise ProxyException because RPM exceeds org limit
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=team_request,
+                http_request=dummy_request,
+                user_api_key_dict=org_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "rpm" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
+    """
+    Test that /team/new for an org-scoped team bypasses user's TPM/RPM limits.
+
+    Scenario:
+    - User has tpm_limit=1000, rpm_limit=100
+    - Organization has tpm_limit=50000, rpm_limit=5000
+    - User creates org-scoped team with tpm_limit=10000, rpm_limit=1000
+    - Expected: Should succeed (bypasses user limits, within org limits)
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable, LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create user with restrictive personal limits
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-bypass-test",
+        models=[],
+        tpm_limit=1000,  # Restrictive user TPM limit
+        rpm_limit=100,   # Restrictive user RPM limit
+    )
+
+    # Create team request exceeding user limits but within org limits
+    team_request = NewTeamRequest(
+        team_alias="org-bypass-test-team",
+        organization_id="test-org-bypass",
+        tpm_limit=10000,  # Exceeds user's 1000 but within org's 50000
+        rpm_limit=1000,   # Exceeds user's 100 but within org's 5000
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with generous limits
+    mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_budget_table.tpm_limit = 50000  # Generous org TPM limit
+    mock_budget_table.rpm_limit = 5000   # Generous org RPM limit
+    mock_budget_table.max_budget = None
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-bypass"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = mock_budget_table
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server._license_check"
+    ) as mock_license, patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new=AsyncMock(return_value=mock_org)
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+        new=AsyncMock()
+    ):
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_prisma.get_data = AsyncMock(return_value=None)
+
+        # Mock team creation
+        mock_created_team = MagicMock(spec=LiteLLM_TeamTable)
+        mock_created_team.team_id = "new-bypass-team-id"
+        mock_created_team.team_alias = "org-bypass-test-team"
+        mock_created_team.tpm_limit = 10000
+        mock_created_team.rpm_limit = 1000
+        mock_created_team.metadata = None
+        mock_created_team.members_with_roles = []
+        mock_created_team.model_dump.return_value = {
+            "team_id": "new-bypass-team-id",
+            "team_alias": "org-bypass-test-team",
+            "tpm_limit": 10000,
+            "rpm_limit": 1000,
+            "metadata": None,
+            "members_with_roles": [],
+        }
+        mock_prisma.db.litellm_teamtable.create = AsyncMock(return_value=mock_created_team)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_created_team)
+        mock_prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+
+        # Should succeed - bypasses user limits since org-scoped
+        result = await new_team(
+            data=team_request,
+            http_request=dummy_request,
+            user_api_key_dict=org_admin_user,
+        )
+
+        # Verify team was created
+        assert result["team_id"] == "new-bypass-team-id"
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_scoped_tpm_exceeds_org_limit():
+    """
+    Test that /team/update for an org-scoped team fails when TPM exceeds organization's TPM limit.
+
+    Scenario:
+    - Organization has tpm_limit=10000
+    - User tries to update org-scoped team with tpm_limit=20000
+    - Expected: Should fail with error about exceeding org TPM limit
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create user (with restrictive personal TPM limit that should be bypassed)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-update-tpm-test",
+        models=[],
+        tpm_limit=1000,  # User's personal limit (should be bypassed for org teams)
+    )
+
+    # Create update request with TPM exceeding org's limit
+    update_request = UpdateTeamRequest(
+        team_id="org-team-update-tpm-123",
+        tpm_limit=20000,  # Exceeds org's 10000 limit
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with TPM limit
+    mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_budget_table.tpm_limit = 10000  # Org's TPM limit
+    mock_budget_table.rpm_limit = None
+    mock_budget_table.max_budget = None
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-update-tpm"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = mock_budget_table
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new=AsyncMock(return_value=mock_org)
+    ):
+
+        # Mock existing org-scoped team
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "org-team-update-tpm-123"
+        mock_existing_team.organization_id = "test-org-update-tpm"
+        mock_existing_team.tpm_limit = 5000
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "org-team-update-tpm-123",
+            "organization_id": "test-org-update-tpm",
+            "tpm_limit": 5000,
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+
+        # Should raise ProxyException because TPM exceeds org limit
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=org_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "tpm" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_scoped_rpm_exceeds_org_limit():
+    """
+    Test that /team/update for an org-scoped team fails when RPM exceeds organization's RPM limit.
+
+    Scenario:
+    - Organization has rpm_limit=1000
+    - User tries to update org-scoped team with rpm_limit=2000
+    - Expected: Should fail with error about exceeding org RPM limit
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create user (with restrictive personal RPM limit that should be bypassed)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-update-rpm-test",
+        models=[],
+        rpm_limit=100,  # User's personal limit (should be bypassed for org teams)
+    )
+
+    # Create update request with RPM exceeding org's limit
+    update_request = UpdateTeamRequest(
+        team_id="org-team-update-rpm-123",
+        rpm_limit=2000,  # Exceeds org's 1000 limit
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with RPM limit
+    mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_budget_table.tpm_limit = None
+    mock_budget_table.rpm_limit = 1000  # Org's RPM limit
+    mock_budget_table.max_budget = None
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-update-rpm"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = mock_budget_table
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new=AsyncMock(return_value=mock_org)
+    ):
+
+        # Mock existing org-scoped team
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "org-team-update-rpm-123"
+        mock_existing_team.organization_id = "test-org-update-rpm"
+        mock_existing_team.rpm_limit = 500
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "org-team-update-rpm-123",
+            "organization_id": "test-org-update-rpm",
+            "rpm_limit": 500,
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+
+        # Should raise ProxyException because RPM exceeds org limit
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=org_admin_user,
+            )
+
+        # Verify exception details
+        assert exc_info.value.code == '400'
+        assert "rpm" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
+    """
+    Test that /team/update for an org-scoped team bypasses user's TPM/RPM limits.
+
+    Scenario:
+    - User has tpm_limit=1000, rpm_limit=100
+    - Organization has tpm_limit=50000, rpm_limit=5000
+    - User updates org-scoped team with tpm_limit=10000, rpm_limit=1000
+    - Expected: Should succeed (bypasses user limits, within org limits)
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable, LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create user with restrictive personal limits
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-update-bypass-test",
+        models=[],
+        tpm_limit=1000,  # Restrictive user TPM limit
+        rpm_limit=100,   # Restrictive user RPM limit
+    )
+
+    # Create update request exceeding user limits but within org limits
+    update_request = UpdateTeamRequest(
+        team_id="org-team-update-bypass-123",
+        tpm_limit=10000,  # Exceeds user's 1000 but within org's 50000
+        rpm_limit=1000,   # Exceeds user's 100 but within org's 5000
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with generous limits
+    mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
+    mock_budget_table.tpm_limit = 50000  # Generous org TPM limit
+    mock_budget_table.rpm_limit = 5000   # Generous org RPM limit
+    mock_budget_table.max_budget = None
+
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-update-bypass"
+    mock_org.models = ["gpt-4"]
+    mock_org.litellm_budget_table = mock_budget_table
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj"
+    ) as mock_logging, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new=AsyncMock(return_value=mock_org)
+    ):
+
+        # Mock existing org-scoped team
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "org-team-update-bypass-123"
+        mock_existing_team.organization_id = "test-org-update-bypass"
+        mock_existing_team.tpm_limit = 5000
+        mock_existing_team.rpm_limit = 500
+        mock_existing_team.model_id = None
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "org-team-update-bypass-123",
+            "organization_id": "test-org-update-bypass",
+            "tpm_limit": 5000,
+            "rpm_limit": 500,
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_cache.async_set_cache = AsyncMock()
+
+        # Mock team update
+        mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
+        mock_updated_team.team_id = "org-team-update-bypass-123"
+        mock_updated_team.tpm_limit = 10000
+        mock_updated_team.rpm_limit = 1000
+        mock_updated_team.model_dump.return_value = {
+            "team_id": "org-team-update-bypass-123",
+            "tpm_limit": 10000,
+            "rpm_limit": 1000,
+        }
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+        mock_prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+
+        # Should succeed - bypasses user limits since org-scoped
+        result = await update_team(
+            data=update_request,
+            http_request=dummy_request,
+            user_api_key_dict=org_admin_user,
+        )
+
+        # Verify team was updated
+        assert result["team_id"] == "org-team-update-bypass-123"
