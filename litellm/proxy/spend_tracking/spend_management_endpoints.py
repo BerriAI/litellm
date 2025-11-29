@@ -1,12 +1,13 @@
 #### SPEND MANAGEMENT #####
 import collections
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -1610,6 +1611,14 @@ async def calculate_spend(request: SpendCalculateRequest):
 
 
 @router.get(
+    "/spend/logs/v2",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={
+        200: {"model": Dict[str, Any]},
+    },
+)
+@router.get(
     "/spend/logs/ui",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
@@ -1619,6 +1628,7 @@ async def calculate_spend(request: SpendCalculateRequest):
     },
 )
 async def ui_view_spend_logs(  # noqa: PLR0915
+    request: Request,
     api_key: Optional[str] = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
@@ -1672,16 +1682,16 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     ),
 ):
     """
-    View spend logs for UI with pagination support
+    View spend logs with pagination support.
+    Available at both `/spend/logs/v2` (public API) and `/spend/logs/ui` (internal UI).
 
-    Returns:
-        {
-            "data": List[LiteLLM_SpendLogs],  # Paginated spend logs
-            "total": int,                      # Total number of records
-            "page": int,                       # Current page number
-            "page_size": int,                  # Number of items per page
-            "total_pages": int                 # Total number of pages
-        }
+    Returns paginated response with data, total, page, page_size, and total_pages.
+
+    Example:
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" \
+-H "Authorization: Bearer sk-1234"
+    ```
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -1702,13 +1712,24 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
-        # Convert the date strings to datetime objects
-        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc
-        )
-        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc
-        )
+        is_v2 = "/spend/logs/v2" in request.url.path
+        formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
+
+        def parse_date(date_str: str) -> datetime:
+            date_str = date_str.strip()
+            for fmt in formats:
+                try:
+                    return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+            expected = "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'" if is_v2 else "'YYYY-MM-DD HH:MM:SS'"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid date format: {date_str}. Expected: {expected}",
+            )
+
+        start_date_obj = parse_date(start_date)
+        end_date_obj = parse_date(end_date)
 
         # Convert to ISO format strings for Prisma
         start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
@@ -1896,6 +1917,9 @@ async def view_spend_logs(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
+    [DEPRECATED] This endpoint is not paginated and can cause performance issues.
+    Please use `/spend/logs/v2` instead for paginated access to spend logs.
+
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
 
     When start_date and end_date are provided:
