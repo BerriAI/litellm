@@ -606,3 +606,30 @@ async def test_image_generation_health_check_prompt(monkeypatch):
 
     assert len(health_check_calls) == 1
     assert health_check_calls[0]["prompt"] == override_prompt
+
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_with_custom_llm_provider():
+    """
+    Test if ahealth_check correctly handles custom_llm_provider in model_params.
+    
+    This test verifies that when model_params contains custom_llm_provider,
+    the health check can correctly identify the provider and not throw
+    "LLM Provider NOT provided" error.
+    """
+        
+    # Call ahealth_check with model_params that includes custom_llm_provider
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "deepseek-chat",
+            "custom_llm_provider": "deepseek",
+            "api_key": os.getenv("DEEPSEEK_API_KEY"),
+            "messages": [{"role": "user", "content": "1+1=?"}]
+        }
+    )
+
+    assert "error" not in response
+    
+    print(f"response: {response}")
+    return response
