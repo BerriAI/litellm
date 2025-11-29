@@ -4,7 +4,13 @@ import time
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 
 import httpx  # type: ignore
-from openai import APITimeoutError, AsyncAzureOpenAI, AzureOpenAI
+from openai import (
+    APITimeoutError,
+    AsyncAzureOpenAI,
+    AsyncOpenAI,
+    AzureOpenAI,
+    OpenAI,
+)
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
@@ -128,7 +134,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     def make_sync_azure_openai_chat_completion_request(
         self,
-        azure_client: AzureOpenAI,
+        azure_client: Union[AzureOpenAI, OpenAI],
         data: dict,
         timeout: Union[float, httpx.Timeout],
     ):
@@ -151,7 +157,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     @track_llm_api_timing()
     async def make_azure_openai_chat_completion_request(
         self,
-        azure_client: AsyncAzureOpenAI,
+        azure_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
         data: dict,
         timeout: Union[float, httpx.Timeout],
         logging_obj: LiteLLMLoggingObj,
@@ -328,10 +334,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     _is_async=False,
                     litellm_params=litellm_params,
                 )
-                if not isinstance(azure_client, AzureOpenAI):
+                # For v1 API, client is OpenAI; for traditional API, it's AzureOpenAI
+                if not isinstance(azure_client, (AzureOpenAI, OpenAI)):
                     raise AzureOpenAIError(
                         status_code=500,
-                        message="azure_client is not an instance of AzureOpenAI",
+                        message="azure_client is not an instance of AzureOpenAI or OpenAI",
                     )
 
                 headers, response = self.make_sync_azure_openai_chat_completion_request(
@@ -520,10 +527,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             _is_async=False,
             litellm_params=litellm_params,
         )
-        if not isinstance(azure_client, AzureOpenAI):
+        # For v1 API, client is OpenAI; for traditional API, it's AzureOpenAI
+        if not isinstance(azure_client, (AzureOpenAI, OpenAI)):
             raise AzureOpenAIError(
                 status_code=500,
-                message="azure_client is not an instance of AzureOpenAI",
+                message="azure_client is not an instance of AzureOpenAI or OpenAI",
             )
         ## LOGGING
         logging_obj.pre_call(
@@ -755,10 +763,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 client=client,
                 litellm_params=litellm_params,
             )
-            if not isinstance(azure_client, AzureOpenAI):
+            # For v1 API, client is OpenAI; for traditional API, it's AzureOpenAI
+            if not isinstance(azure_client, (AzureOpenAI, OpenAI)):
                 raise AzureOpenAIError(
                     status_code=500,
-                    message="azure_client is not an instance of AzureOpenAI",
+                    message="azure_client is not an instance of AzureOpenAI or OpenAI",
                 )
 
             ## COMPLETION CALL
