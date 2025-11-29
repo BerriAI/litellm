@@ -528,6 +528,7 @@ class SlackAlerting(CustomBatchLogger):
             "soft_budget",
             "user_budget",
             "team_budget",
+            "organization_budget",
             "proxy_budget",
             "projected_limit_exceeded",
         ],

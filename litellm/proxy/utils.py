@@ -1072,6 +1072,7 @@ class ProxyLogging:
             "user_budget",
             "soft_budget",
             "team_budget",
+            "organization_budget",
             "proxy_budget",
             "projected_limit_exceeded",
         ],
