@@ -175,8 +175,14 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
     assert "Failed to get API key" in str(excinfo.value)
 
 
-def test_completion_github_copilot_mock_response():
+@patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_key")
+@patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_base")
+def test_completion_github_copilot_mock_response(mock_get_api_base, mock_get_api_key):
     """Test the completion function with GitHub Copilot provider using mock_response."""
+    
+    # Mock the authenticator methods
+    mock_get_api_key.return_value = "gh.mock-key-for-testing"
+    mock_get_api_base.return_value = None
 
     # Test non-streaming completion with mock_response
     messages = [
