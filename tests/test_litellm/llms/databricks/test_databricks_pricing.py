@@ -2,10 +2,6 @@ import json
 import os
 import sys
 
-# Add the project root to sys.path so we can import if needed,
-# though for this specific test we are just reading a JSON file.
-sys.path.insert(0, os.path.abspath("../../../../../../ সন"))
-
 
 def test_databricks_pricing_integrity():
     """
@@ -35,7 +31,7 @@ def test_databricks_pricing_integrity():
 
             if input_usd is not None and input_dbu is not None:
                 expected = input_dbu * conversion_rate
-                # Allow small floating point difference (e.g. 1e-9)
+                # Allow small floating point difference
                 if abs(input_usd - expected) > 1e-9:
                     errors.append(
                         f"{model} input mismatch: USD={input_usd}, DBU={input_dbu}, Expected={expected}"
