@@ -134,6 +134,13 @@ class SlackAlerting(CustomBatchLogger):
         if llm_router is not None:
             self.llm_router = llm_router
 
+    def _has_redis_cache(self) -> bool:
+        """Check if Redis cache is available in the internal usage cache."""
+        return (
+            self.internal_usage_cache is not None
+            and self.internal_usage_cache.redis_cache is not None
+        )
+
     def _prepare_outage_value_for_cache(self, outage_value: Union[dict, ProviderRegionOutageModel, OutageModel]) -> dict:
         """
         Helper method to prepare outage value for Redis caching.
@@ -521,6 +528,73 @@ class SlackAlerting(CustomBatchLogger):
                 ttl=self.alerting_args.budget_alert_ttl,
             )
 
+    async def _send_budget_alert_with_lock(
+        self,
+        cache_key: str,
+        event: str,
+        event_message: str,
+        user_info_json: dict,
+        user_info_str: str,
+    ) -> None:
+        """
+        Send a budget alert using distributed locking to prevent duplicates.
+        Uses Redis atomic operations if available, falls back to simple cache check.
+        """
+        _cache: DualCache = self.internal_usage_cache
+        lock_ttl_seconds = 20
+        status_sending = "SENDING"
+        status_sent = "SENT"
+
+        if self._has_redis_cache():
+            # Try to acquire lock atomically using Redis SET NX
+            # This prevents race conditions where multiple threads send the same alert
+            lock_acquired = await _cache.redis_cache.async_set_cache(
+                key=cache_key,
+                value=status_sending,
+                ttl=lock_ttl_seconds,  # Lock TTL - enough for webhook delivery
+                nx=True,  # Only set if key doesn't exist (atomic operation)
+            )
+
+            if lock_acquired:
+                await self._send_budget_alert(event, event_message, user_info_json, user_info_str)
+                # Mark as sent with full TTL
+                await _cache.redis_cache.async_set_cache(
+                    key=cache_key,
+                    value=status_sent,
+                    ttl=self.alerting_args.budget_alert_ttl,
+                )
+        else:
+            # No Redis - fall back to simple check
+            result = await _cache.async_get_cache(key=cache_key)
+            if result is None:
+                await self._send_budget_alert(event, event_message, user_info_json, user_info_str)
+                await _cache.async_set_cache(
+                    key=cache_key,
+                    value=status_sent,
+                    ttl=self.alerting_args.budget_alert_ttl,
+                )
+
+    async def _send_budget_alert(
+        self,
+        event: str,
+        event_message: str,
+        user_info_json: dict,
+        user_info_str: str,
+    ) -> None:
+        """Send a budget alert webhook."""
+        webhook_event = WebhookEvent(
+            event=event,
+            event_message=event_message,
+            **user_info_json,
+        )
+        await self.send_alert(
+            message=f"{event_message}\n\n{user_info_str}",
+            level="High",
+            alert_type=AlertType.budget_alerts,
+            user_info=webhook_event,
+            alerting_metadata={},
+        )
+
     async def budget_alerts(
         self,
         type: Literal[
@@ -544,12 +618,15 @@ class SlackAlerting(CustomBatchLogger):
         # - Alert once within 24hr period
         # - Cache this information
         # - Don't re-alert, if alert already sent
-        _cache: DualCache = self.internal_usage_cache
 
         if self.alerting is None or self.alert_types is None:
             # do nothing if alerting is not switched on
             return
         if "budget_alerts" not in self.alert_types:
+            return
+
+        # percent of max_budget left to spend
+        if user_info.max_budget is None and user_info.soft_budget is None:
             return
 
         # Get the appropriate budget alert type handler
@@ -571,12 +648,6 @@ class SlackAlerting(CustomBatchLogger):
             "projected_limit_exceeded" if type == "projected_limit_exceeded" else None
         )
 
-        webhook_event: Optional[WebhookEvent] = None
-
-        # percent of max_budget left to spend
-        if user_info.max_budget is None and user_info.soft_budget is None:
-            return
-
         # check if crossed budget
         event, event_message = self._get_event_and_event_message(
             event=event,
@@ -586,29 +657,14 @@ class SlackAlerting(CustomBatchLogger):
 
         # send alert
         if event is not None and user_info.event_group is not None:
-            _cache_key = "budget_alerts:{}:{}".format(event, _id)
-            result = await _cache.async_get_cache(key=_cache_key)
-            if result is None:
-                webhook_event = WebhookEvent(
-                    event=event,
-                    event_message=event_message,
-                    **user_info_json,
-                )
-                await self.send_alert(
-                    message=event_message + "\n\n" + user_info_str,
-                    level="High",
-                    alert_type=AlertType.budget_alerts,
-                    user_info=webhook_event,
-                    alerting_metadata={},
-                )
-                await _cache.async_set_cache(
-                    key=_cache_key,
-                    value="SENT",
-                    ttl=self.alerting_args.budget_alert_ttl,
-                )
-
-            return
-        return
+            cache_key = f"budget_alerts:{event}:{_id}"
+            await self._send_budget_alert_with_lock(
+                cache_key=cache_key,
+                event=event,
+                event_message=event_message,
+                user_info_json=user_info_json,
+                user_info_str=user_info_str,
+            )
 
     def _get_event_and_event_message(
         self,
