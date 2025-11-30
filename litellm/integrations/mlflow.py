@@ -129,8 +129,11 @@ class MlflowLogger(CustomLogger):
         self._add_chunk_events(span, response_obj)
 
         # If this is the final chunk, end the span. The final chunk
-        # has complete_streaming_response that gathers the full response.
-        if final_response := kwargs.get("complete_streaming_response"):
+        # has the assembled streaming response (key differs between sync/async paths).
+        final_response = kwargs.get("complete_streaming_response") or kwargs.get(
+            "async_complete_streaming_response"
+        )
+        if final_response:
             end_time_ns = int(end_time.timestamp() * 1e9)
 
             self._extract_and_set_chat_attributes(span, kwargs, final_response)
@@ -150,10 +153,23 @@ class MlflowLogger(CustomLogger):
 
         try:
             for choice in response_obj.choices:
+                payload = None
+                delta = getattr(choice, "delta", None)
+                if delta is not None:
+                    payload = delta.model_dump(exclude_none=True)
+                else:
+                    message = getattr(choice, "message", None)
+                    if message is not None and hasattr(message, "model_dump"):
+                        payload = message.model_dump(exclude_none=True)
+                    elif hasattr(choice, "model_dump"):
+                        payload = choice.model_dump(exclude_none=True)
+                    else:
+                        payload = choice
+
                 span.add_event(
                     SpanEvent(
                         name="streaming_chunk",
-                        attributes={"delta": json.dumps(choice.delta.model_dump())},
+                        attributes={"delta": json.dumps(payload, default=str)},
                     )
                 )
         except Exception:
