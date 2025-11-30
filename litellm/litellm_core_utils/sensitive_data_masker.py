@@ -42,7 +42,11 @@ class SensitiveDataMasker:
         else:
             return f"{value_str[:self.visible_prefix]}{self.mask_char * masked_length}{value_str[-self.visible_suffix:]}"
 
-    def is_sensitive_key(self, key: str) -> bool:
+    def is_sensitive_key(self, key: str, excluded_keys: Optional[Set[str]] = None) -> bool:
+        # Check if key is in excluded_keys first (exact match)
+        if excluded_keys and key in excluded_keys:
+            return False
+        
         key_lower = str(key).lower()
         # Split on underscores and check if any segment matches the pattern
         # This avoids false positives like "max_tokens" matching "token"
@@ -59,6 +63,7 @@ class SensitiveDataMasker:
         data: Dict[str, Any],
         depth: int = 0,
         max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+        excluded_keys: Optional[Set[str]] = None,
     ) -> Dict[str, Any]:
         if depth >= max_depth:
             return data
@@ -67,10 +72,10 @@ class SensitiveDataMasker:
         for k, v in data.items():
             try:
                 if isinstance(v, dict):
-                    masked_data[k] = self.mask_dict(v, depth + 1)
+                    masked_data[k] = self.mask_dict(v, depth + 1, max_depth, excluded_keys)
                 elif hasattr(v, "__dict__") and not isinstance(v, type):
-                    masked_data[k] = self.mask_dict(vars(v), depth + 1)
-                elif self.is_sensitive_key(k):
+                    masked_data[k] = self.mask_dict(vars(v), depth + 1, max_depth, excluded_keys)
+                elif self.is_sensitive_key(k, excluded_keys):
                     str_value = str(v) if v is not None else ""
                     masked_data[k] = self._mask_value(str_value)
                 else:

@@ -765,9 +765,10 @@ class OCIChatConfig(BaseConfig):
             )
 
         if oci_serving_mode == "DEDICATED":
+            oci_endpoint_id = optional_params.get("oci_endpoint_id", model)
             servingMode = OCIServingMode(
                 servingType="DEDICATED",
-                endpointId=model,
+                endpointId=oci_endpoint_id,
             )
         else:
             servingMode = OCIServingMode(
@@ -1328,6 +1329,17 @@ class OCIStreamWrapper(CustomStreamWrapper):
 
     def _handle_generic_stream_chunk(self, dict_chunk: dict):
         """Handle generic OCI streaming chunks."""
+        # Fix missing required fields in tool calls before Pydantic validation
+        # OCI streams tool calls progressively, so early chunks may be missing required fields
+        if dict_chunk.get("message") and dict_chunk["message"].get("toolCalls"):
+            for tool_call in dict_chunk["message"]["toolCalls"]:
+                if "arguments" not in tool_call:
+                    tool_call["arguments"] = ""
+                if "id" not in tool_call:
+                    tool_call["id"] = ""
+                if "name" not in tool_call:
+                    tool_call["name"] = ""
+
         try:
             typed_chunk = OCIStreamChunk(**dict_chunk)
         except TypeError as e:

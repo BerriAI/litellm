@@ -86,6 +86,73 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.function_call is None
 
 
+def test_chunk_parser_string_output_text_delta_produces_text():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {"type": "response.output_text.delta", "delta": "literal text"}
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result["text"] == "literal text"
+    assert result.get("tool_use") is None
+    assert result.get("finish_reason") == ""
+    assert not result.get("is_finished")
+
+
+def test_chunk_parser_enum_output_text_delta_produces_text():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {"type": ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, "delta": "enum text"}
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result["text"] == "enum text"
+    assert result.get("tool_use") is None
+    assert result.get("finish_reason") == ""
+    assert not result.get("is_finished")
+
+
+def test_chunk_parser_function_call_added_produces_tool_use():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        "arguments": '{"key": "value"}',
+        "item": {"type": "function_call", "name": "fn", "call_id": "call-42"},
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    tool_use = result["tool_use"]
+    assert tool_use is not None
+    assert tool_use["id"] == "call-42"
+    assert tool_use["type"] == "function"
+    assert tool_use["function"]["name"] == "fn"
+    assert tool_use["function"]["arguments"] == '{"key": "value"}'
+    assert result.get("finish_reason") == ""
+    assert not result.get("is_finished")
+
+
 def test_transform_response_with_reasoning_and_output():
     """Test transform_response handles ResponsesAPIResponse with reasoning items and output messages."""
     from unittest.mock import Mock
@@ -273,3 +340,107 @@ def test_convert_tools_to_responses_format():
     result = handler._convert_tools_to_responses_format(tools)
 
     assert result[0]["name"] == "test"
+
+
+def test_extract_extra_body_params_reasoning_effort_override():
+    """Test that reasoning_effort from extra_body overrides top-level reasoning_effort"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Test case: reasoning_effort in extra_body (with summary) should override top-level string
+    optional_params = {
+        "reasoning_effort": "high",  # Top-level string
+        "extra_body": {
+            "reasoning_effort": {
+                "effort": "high",
+                "summary": {"type": "summary_text"},
+            },  # More complete dict in extra_body
+            "previous_response_id": "resp_123",  # Supported param
+            "custom_param": "will_stay_in_extra_body",  # Unsupported param
+        },
+    }
+
+    result = handler._extract_extra_body_params(optional_params)
+
+    # reasoning_effort from extra_body should override top-level
+    assert result["reasoning_effort"] == {
+        "effort": "high",
+        "summary": {"type": "summary_text"},
+    }
+
+    # previous_response_id should be extracted to top-level
+    assert result["previous_response_id"] == "resp_123"
+
+    # extra_body should no longer be in optional_params (it was popped)
+    assert "extra_body" not in result
+
+
+def test_transform_request_single_char_keys_not_matched():
+    """Test that single-character keys are not incorrectly matched to 'metadata' or 'previous_response_id'
+
+    This is a regression test for a bug where:
+    - key in ("metadata") was used instead of key == "metadata"
+    - In Python, ("metadata") is a string, not a tuple
+    - So "m" in ("metadata") returns True (character in string)
+    - This caused single-char keys like "m", "e", "t", etc. to incorrectly match
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create mock objects
+    logging_obj = Mock()
+
+    messages = [{"role": "user", "content": "test"}]
+
+    # Test with single-character keys that are in "metadata" string
+    # These should NOT be treated as metadata
+    optional_params = {
+        "m": "should_not_be_metadata",  # "m" is in "metadata"
+        "e": "should_not_be_metadata",  # "e" is in "metadata"
+        "t": "should_not_be_metadata",  # "t" is in "metadata"
+        "p": "should_not_be_previous_response_id",  # "p" is in "previous_response_id"
+        "r": "should_not_be_previous_response_id",  # "r" is in "previous_response_id"
+    }
+
+    litellm_params = {}
+    headers = {}
+
+    result = handler.transform_request(
+        model="gpt-4",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=logging_obj,
+    )
+
+    # Verify that single-char keys were NOT mapped to metadata or previous_response_id
+    assert result.get("metadata") != "should_not_be_metadata"
+    assert result.get("previous_response_id") != "should_not_be_previous_response_id"
+
+    # Now test that the actual keys DO work correctly
+    optional_params_correct = {
+        "metadata": {"user_id": "123"},
+        "previous_response_id": "resp_abc",
+    }
+
+    result_correct = handler.transform_request(
+        model="gpt-4",
+        messages=messages,
+        optional_params=optional_params_correct,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=logging_obj,
+    )
+
+    # Verify that the correct keys ARE mapped properly
+    assert result_correct.get("metadata") == {"user_id": "123"}
+    assert result_correct.get("previous_response_id") == "resp_abc"
+
+    print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")

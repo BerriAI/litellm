@@ -139,6 +139,7 @@ DEFAULT_SSL_CIPHERS = os.getenv(
 REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_team_spend_update_buffer"
+REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_org_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 10000))
@@ -206,6 +207,7 @@ REPEATED_STREAMING_CHUNK_LIMIT = int(
     os.getenv("REPEATED_STREAMING_CHUNK_LIMIT", 100)
 )  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 DEFAULT_MAX_LRU_CACHE_SIZE = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 16))
+_REALTIME_BODY_CACHE_SIZE = 1000  # Keep realtime helper caches bounded; workloads rarely exceed 1k models/intents
 INITIAL_RETRY_DELAY = float(os.getenv("INITIAL_RETRY_DELAY", 0.5))
 MAX_RETRY_DELAY = float(os.getenv("MAX_RETRY_DELAY", 8.0))
 JITTER = float(os.getenv("JITTER", 0.75))
@@ -275,12 +277,22 @@ REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
     os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
 )
+LOGGING_WORKER_CONCURRENCY = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100)) # Must be above 0
+LOGGING_WORKER_MAX_QUEUE_SIZE = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
+LOGGING_WORKER_MAX_TIME_PER_COROUTINE = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
+LOGGING_WORKER_CLEAR_PERCENTAGE = int(os.getenv("LOGGING_WORKER_CLEAR_PERCENTAGE", 50))  # Percentage of queue to clear (default: 50%)
+MAX_ITERATIONS_TO_CLEAR_QUEUE = int(os.getenv("MAX_ITERATIONS_TO_CLEAR_QUEUE", 200))
+MAX_TIME_TO_CLEAR_QUEUE = float(os.getenv("MAX_TIME_TO_CLEAR_QUEUE", 5.0))
+LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS = float(
+    os.getenv("LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS", 0.5)
+)  # Cooldown time in seconds before allowing another aggressive clear (default: 0.5s)
 DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
 
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
+ANTHROPIC_SKILLS_API_BETA_VERSION = "skills-2025-10-02"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "low": 1,
     "medium": 5,
@@ -372,6 +384,7 @@ LITELLM_CHAT_PROVIDERS = [
     "nebius",
     "dashscope",
     "moonshot",
+    "publicai",
     "v0",
     "heroku",
     "oci",
@@ -381,6 +394,7 @@ LITELLM_CHAT_PROVIDERS = [
     "wandb",
     "ovhcloud",
     "lemonade",
+    "docker_model_runner",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -513,6 +527,7 @@ openai_compatible_endpoints: List = [
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
+    "https://platform.publicai.co/v1",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
@@ -558,6 +573,7 @@ openai_compatible_providers: List = [
     "nebius",
     "dashscope",
     "moonshot",
+    "publicai",
     "v0",
     "morph",
     "lambda_ai",
@@ -567,6 +583,7 @@ openai_compatible_providers: List = [
     "wandb",
     "cometapi",
     "clarifai",
+    "docker_model_runner",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -579,6 +596,7 @@ openai_text_completion_compatible_providers: List = (
         "nebius",
         "dashscope",
         "moonshot",
+        "publicai",
         "v0",
         "lambda_ai",
         "hyperbolic",
@@ -838,12 +856,14 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "nova",
     "deepseek_r1",
     "qwen3",
+    "twelvelabs",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
     "cohere",
     "amazon",
     "twelvelabs",
+    "nova",
 ]
 
 BEDROCK_CONVERSE_MODELS = [
@@ -904,6 +924,7 @@ cohere_embedding_models: set = set(
 bedrock_embedding_models: set = set(
     [
         "amazon.titan-embed-text-v1",
+        "amazon.nova-2-multimodal-embeddings-v1:0",
         "cohere.embed-english-v3",
         "cohere.embed-multilingual-v3",
         "cohere.embed-v4:0",
@@ -1044,6 +1065,8 @@ LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
+CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
+CLI_JWT_TOKEN_NAME = "cli-jwt-token"
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
@@ -1116,6 +1139,7 @@ SECRET_MANAGER_REFRESH_INTERVAL = int(
 )
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
+    "public_mcp_servers",
     "public_agent_groups",
     "public_model_groups",
     "public_model_groups_links",
@@ -1195,3 +1219,7 @@ SENTRY_PII_DENYLIST = [
 COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
     os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
 )
+
+########################### RAG Text Splitter Constants ###########################
+DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
+DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))

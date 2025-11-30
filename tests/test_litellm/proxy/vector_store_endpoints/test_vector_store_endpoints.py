@@ -762,3 +762,43 @@ class TestIsAllowedToCallVectorStoreFilesEndpoint:
             )
 
         assert result is None
+
+
+class TestVectorStoreManagementEndpointsExist:
+    def test_vector_store_management_endpoints_exist_on_proxy_startup(self):
+        """
+        Test that all vector store management endpoints are registered on proxy app startup.
+        
+        Verifies the following endpoints exist in the proxy_server app:
+        - POST /vector_store/new
+        - GET /vector_store/list
+        - POST /vector_store/delete
+        - POST /vector_store/info
+        - POST /vector_store/update
+        """
+        from litellm.proxy.proxy_server import app
+
+        # Define expected endpoints
+        expected_endpoints = [
+            ("POST", "/vector_store/new"),
+            ("GET", "/vector_store/list"),
+            ("POST", "/vector_store/delete"),
+            ("POST", "/vector_store/info"),
+            ("POST", "/vector_store/update"),
+        ]
+        
+        # Get all routes from the app
+        app_routes = []
+        for route in app.routes:
+            methods = getattr(route, "methods", None)
+            path = getattr(route, "path", None)
+            if methods is not None and path is not None:
+                for method in methods:
+                    app_routes.append((method, path))
+        
+        # Verify each expected endpoint exists
+        for method, path in expected_endpoints:
+            assert (method, path) in app_routes, (
+                f"Expected endpoint {method} {path} not found in registered routes. "
+                f"Available routes: {app_routes}"
+            )
