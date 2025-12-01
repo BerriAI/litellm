@@ -569,7 +569,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                   <li>Download our CSV template</li>
                   <li>Add your users&apos; information to the spreadsheet</li>
                   <li>Save the file and upload it here</li>
-                  <li>After creation, download the results file containing the API keys for each user</li>
+                  <li>After creation, download the results file containing the Virtual Keys for each user</li>
                 </ol>
 
                 <div className="bg-gray-50 p-4 rounded-md border border-gray-200 mb-4">
@@ -809,9 +809,9 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       <div>
                         <Text className="font-medium text-blue-800">User creation complete</Text>
                         <Text className="block text-sm text-blue-700 mt-1">
-                          <span className="font-medium">Next step:</span> Download the credentials file containing API
-                          keys and invitation links. Users will need these API keys to make LLM requests through
-                          LiteLLM.
+                          <span className="font-medium">Next step:</span> Download the credentials file containing
+                          Virtual Keys and invitation links. Users will need these Virtual Keys to make LLM requests
+                          through LiteLLM.
                         </Text>
                       </div>
                     </div>

@@ -580,7 +580,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                         {/* Top API Keys */}
                         <Col numColSpan={1}>
                           <Card className="h-full">
-                            <Title>Top API Keys</Title>
+                            <Title>Top Virtual Keys</Title>
                             <TopKeyView
                               topKeys={getTopKeys()}
                               accessToken={accessToken}
