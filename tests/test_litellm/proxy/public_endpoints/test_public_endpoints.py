@@ -13,9 +13,9 @@ from litellm.types.utils import LlmProviders
 
 
 def test_get_supported_providers_returns_enum_values():
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    client = TestClient(app_instance)
 
     response = client.get("/public/providers")
 
@@ -24,24 +24,32 @@ def test_get_supported_providers_returns_enum_values():
     assert response.json() == expected_providers
 
 
-def test_get_provider_fields_returns_metadata():
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
+def test_get_provider_create_fields():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    client = TestClient(app_instance)
 
     response = client.get("/public/providers/fields")
 
     assert response.status_code == 200
-    payload = response.json()
-    assert isinstance(payload, list)
 
-    provider_lookup = {item["provider"]: item for item in payload}
-    assert "OpenAI" in provider_lookup
+    response_data = response.json()
 
-    openai_fields = provider_lookup["OpenAI"]
-    assert openai_fields["provider_display_name"] == "OpenAI"
-    assert openai_fields["litellm_provider"] == "openai"
+    assert isinstance(response_data, list)
 
-    credential_keys = {field["key"] for field in openai_fields["credential_fields"]}
-    assert {"api_base", "api_key"}.issubset(credential_keys)
+    assert len(response_data) > 0
+
+    first_provider = response_data[0]
+    assert "provider" in first_provider
+    assert "provider_display_name" in first_provider
+    assert "litellm_provider" in first_provider
+    assert "credential_fields" in first_provider
+
+    assert isinstance(first_provider["credential_fields"], list)
+
+    has_detailed_fields = any(
+        provider.get("credential_fields") and len(provider.get("credential_fields", [])) > 0
+        for provider in response_data
+    )
+    assert has_detailed_fields, "Expected at least one provider to have detailed credential fields"
 

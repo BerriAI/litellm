@@ -33,7 +33,7 @@ describe("Sidebar (leftnav)", () => {
 
     const topLevelLabels = [
       "Virtual Keys",
-      "Test Key",
+      "Playground",
       "Models + Endpoints",
       "Usage",
       "Teams",
@@ -41,9 +41,10 @@ describe("Sidebar (leftnav)", () => {
       "Internal Users",
       "Budgets",
       "API Reference",
-      "Model Hub",
+      "AI Hub",
       "Logs",
       "Guardrails",
+      "MCP Servers",
       "Tools",
       "Experimental",
       "Settings",
@@ -54,15 +55,44 @@ describe("Sidebar (leftnav)", () => {
     });
   });
 
-  it("expands a nested tab to reveal its children (Tools > MCP Servers)", async () => {
+  it("expands a nested tab to reveal its children (Tools > Search Tools)", async () => {
     const { getByText, queryByText } = render(<Sidebar {...defaultProps} />);
 
-    expect(queryByText("MCP Servers")).not.toBeInTheDocument();
+    expect(queryByText("Search Tools")).not.toBeInTheDocument();
     act(() => {
       fireEvent.click(getByText("Tools"));
     });
     await waitFor(() => {
-      expect(getByText("MCP Servers")).toBeInTheDocument();
+      expect(getByText("Search Tools")).toBeInTheDocument();
     });
+  });
+  it("has no duplicate keys among all menu items and their children", () => {
+    // Helper to recursively extract all keys from Ant Design Menu items
+    function getAllKeysFromMenu(wrapper: HTMLElement): string[] {
+      const allKeys: string[] = [];
+      // Ant Design renders key as data-menu-id or inside attributes, but for this case, we look for text as fallback.
+      // For a generic check, here we fetch ids from rendered list items, and also descend into submenus
+      const items = wrapper.querySelectorAll("[data-menu-id]");
+      items.forEach((item) => {
+        const dataMenuId = item.getAttribute("data-menu-id");
+        if (dataMenuId) {
+          allKeys.push(dataMenuId);
+        }
+      });
+      return allKeys;
+    }
+
+    const { container } = render(<Sidebar {...defaultProps} />);
+    const allRenderedKeys = getAllKeysFromMenu(container);
+
+    const keySet = new Set<string>();
+    const duplicates: string[] = [];
+    for (const key of allRenderedKeys) {
+      if (keySet.has(key)) {
+        duplicates.push(key);
+      }
+      keySet.add(key);
+    }
+    expect(duplicates).toHaveLength(0);
   });
 });

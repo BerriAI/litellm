@@ -1,0 +1,404 @@
+[
+  {
+    "id": "arize",
+    "displayName": "Arize",
+    "logo": "arize.png",
+    "supports_key_team_logging": true,
+    "dynamic_params": {
+      "arize_api_key": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "Arize API key for authentication",
+        "required": true
+      },
+      "arize_space_id": {
+        "type": "password",
+        "ui_name": "Space ID",
+        "description": "Arize Space ID to identify your workspace",
+        "required": true
+      }
+    },
+    "description": "Arize Logging Integration"
+  },
+  {
+    "id": "braintrust",
+    "displayName": "Braintrust",
+    "logo": "braintrust.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "braintrust_api_key": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "Braintrust API key for authentication",
+        "required": true
+      },
+      "braintrust_project_name": {
+        "type": "text",
+        "ui_name": "Project Name",
+        "description": "Name of the Braintrust project to log to",
+        "required": true
+      }
+    },
+    "description": "Braintrust Logging Integration"
+  },
+  {
+    "id": "custom_callback_api",
+    "displayName": "Custom Callback API",
+    "logo": "custom.svg",
+    "supports_key_team_logging": true,
+    "dynamic_params": {
+      "custom_callback_api_url": {
+        "type": "text",
+        "ui_name": "Callback URL",
+        "description": "Your custom webhook/API endpoint URL to receive logs",
+        "required": true
+      },
+      "custom_callback_api_headers": {
+        "type": "text",
+        "ui_name": "Headers (JSON)",
+        "description": "Custom HTTP headers as JSON string (e.g., {\"Authorization\": \"Bearer token\"})",
+        "required": false
+      }
+    },
+    "description": "Custom Callback API Logging Integration"
+  },
+  {
+    "id": "datadog",
+    "displayName": "Datadog",
+    "logo": "datadog.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "dd_api_key": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "Datadog API key for authentication",
+        "required": true
+      },
+      "dd_site": {
+        "type": "text",
+        "ui_name": "Site",
+        "description": "Datadog site URL (e.g., us5.datadoghq.com)",
+        "required": true
+      }
+    },
+    "description": "Datadog Logging Integration"
+  },
+  {
+    "id": "lago",
+    "displayName": "Lago",
+    "logo": "lago.svg",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "lago_api_url": {
+        "type": "text",
+        "ui_name": "API URL",
+        "description": "Lago API base URL",
+        "required": true
+      },
+      "lago_api_key": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "Lago API key for authentication",
+        "required": true
+      }
+    },
+    "description": "Lago Billing Logging Integration"
+  },
+  {
+    "id": "langfuse",
+    "displayName": "Langfuse",
+    "logo": "langfuse.png",
+    "supports_key_team_logging": true,
+    "dynamic_params": {
+      "langfuse_public_key": {
+        "type": "text",
+        "ui_name": "Public Key",
+        "description": "Langfuse public key",
+        "required": true
+      },
+      "langfuse_secret_key": {
+        "type": "password",
+        "ui_name": "Secret Key",
+        "description": "Langfuse secret key for authentication",
+        "required": true
+      },
+      "langfuse_host": {
+        "type": "text",
+        "ui_name": "Host URL",
+        "description": "Langfuse host URL (default: https://cloud.langfuse.com)",
+        "required": false
+      }
+    },
+    "description": "Langfuse v2 Logging Integration"
+  },
+  {
+    "id": "langfuse_otel",
+    "displayName": "Langfuse OTEL",
+    "logo": "langfuse.png",
+    "supports_key_team_logging": true,
+    "dynamic_params": {
+      "langfuse_public_key": {
+        "type": "text",
+        "ui_name": "Public Key",
+        "description": "Langfuse public key",
+        "required": true
+      },
+      "langfuse_secret_key": {
+        "type": "password",
+        "ui_name": "Secret Key",
+        "description": "Langfuse secret key for authentication",
+        "required": true
+      },
+      "langfuse_host": {
+        "type": "text",
+        "ui_name": "Host URL",
+        "description": "Langfuse host URL (default: https://cloud.langfuse.com)",
+        "required": false
+      }
+    },
+    "description": "Langfuse v3 OTEL Logging Integration"
+  },
+  {
+    "id": "langsmith",
+    "displayName": "LangSmith",
+    "logo": "langsmith.png",
+    "supports_key_team_logging": true,
+    "dynamic_params": {
+      "langsmith_api_key": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "LangSmith API key for authentication",
+        "required": true
+      },
+      "langsmith_project": {
+        "type": "text",
+        "ui_name": "Project Name",
+        "description": "LangSmith project name (default: litellm-completion)",
+        "required": false
+      },
+      "langsmith_base_url": {
+        "type": "text",
+        "ui_name": "Base URL",
+        "description": "LangSmith base URL (default: https://api.smith.langchain.com)",
+        "required": false
+      },
+      "langsmith_sampling_rate": {
+        "type": "number",
+        "ui_name": "Sampling Rate",
+        "description": "Sampling rate for logging (0.0 to 1.0, default: 1.0)",
+        "required": false
+      }
+    },
+    "description": "Langsmith Logging Integration"
+  },
+  {
+    "id": "openmeter",
+    "displayName": "OpenMeter",
+    "logo": "openmeter.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "openmeter_api_key": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "OpenMeter API key for authentication",
+        "required": true
+      },
+      "openmeter_base_url": {
+        "type": "text",
+        "ui_name": "Base URL",
+        "description": "OpenMeter base URL (default: https://openmeter.cloud)",
+        "required": false
+      }
+    },
+    "description": "OpenMeter Logging Integration"
+  },
+  {
+    "id": "otel",
+    "displayName": "Open Telemetry",
+    "logo": "otel.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "otel_endpoint": {
+        "type": "text",
+        "ui_name": "Endpoint URL",
+        "description": "OpenTelemetry collector endpoint URL",
+        "required": true
+      },
+      "otel_headers": {
+        "type": "text",
+        "ui_name": "Headers",
+        "description": "Headers for OTEL exporter (e.g., x-honeycomb-team=YOUR_API_KEY)",
+        "required": false
+      }
+    },
+    "description": "OpenTelemetry Logging Integration"
+  },
+  {
+    "id": "s3",
+    "displayName": "S3",
+    "logo": "aws.svg",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "s3_bucket_name": {
+        "type": "text",
+        "ui_name": "Bucket Name",
+        "description": "AWS S3 bucket name to store logs",
+        "required": true
+      },
+      "s3_region_name": {
+        "type": "text",
+        "ui_name": "AWS Region",
+        "description": "AWS region name (e.g., us-east-1)",
+        "required": false
+      },
+      "s3_aws_access_key_id": {
+        "type": "password",
+        "ui_name": "AWS Access Key ID",
+        "description": "AWS access key ID for authentication",
+        "required": false
+      },
+      "s3_aws_secret_access_key": {
+        "type": "password",
+        "ui_name": "AWS Secret Access Key",
+        "description": "AWS secret access key for authentication",
+        "required": false
+      },
+      "s3_aws_session_token": {
+        "type": "password",
+        "ui_name": "AWS Session Token",
+        "description": "AWS session token for temporary credentials",
+        "required": false
+      },
+      "s3_endpoint_url": {
+        "type": "text",
+        "ui_name": "S3 Endpoint URL",
+        "description": "Custom S3 endpoint URL (for MinIO or custom S3-compatible services)",
+        "required": false
+      },
+      "s3_path": {
+        "type": "text",
+        "ui_name": "S3 Path Prefix",
+        "description": "Path prefix within the bucket for organizing logs",
+        "required": false
+      }
+    },
+    "description": "S3 Bucket (AWS) Logging Integration"
+  },
+  {
+    "id": "sqs",
+    "displayName": "SQS",
+    "logo": "aws.svg",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "sqs_queue_url": {
+        "type": "text",
+        "ui_name": "Queue URL",
+        "description": "AWS SQS Queue URL",
+        "required": true
+      },
+      "sqs_region_name": {
+        "type": "text",
+        "ui_name": "AWS Region",
+        "description": "AWS region name (e.g., us-east-1)",
+        "required": false
+      },
+      "sqs_aws_access_key_id": {
+        "type": "password",
+        "ui_name": "AWS Access Key ID",
+        "description": "AWS access key ID for authentication",
+        "required": false
+      },
+      "sqs_aws_secret_access_key": {
+        "type": "password",
+        "ui_name": "AWS Secret Access Key",
+        "description": "AWS secret access key for authentication",
+        "required": false
+      },
+      "sqs_aws_session_token": {
+        "type": "password",
+        "ui_name": "AWS Session Token",
+        "description": "AWS session token for temporary credentials",
+        "required": false
+      },
+      "sqs_aws_session_name": {
+        "type": "text",
+        "ui_name": "AWS Session Name",
+        "description": "Name for AWS session",
+        "required": false
+      },
+      "sqs_aws_profile_name": {
+        "type": "text",
+        "ui_name": "AWS Profile Name",
+        "description": "AWS profile name from credentials file",
+        "required": false
+      },
+      "sqs_aws_role_name": {
+        "type": "text",
+        "ui_name": "AWS Role Name",
+        "description": "AWS IAM role name to assume",
+        "required": false
+      },
+      "sqs_aws_web_identity_token": {
+        "type": "password",
+        "ui_name": "AWS Web Identity Token",
+        "description": "AWS web identity token for authentication",
+        "required": false
+      },
+      "sqs_aws_sts_endpoint": {
+        "type": "text",
+        "ui_name": "AWS STS Endpoint",
+        "description": "AWS STS endpoint URL",
+        "required": false
+      },
+      "sqs_endpoint_url": {
+        "type": "text",
+        "ui_name": "SQS Endpoint URL",
+        "description": "Custom SQS endpoint URL (for LocalStack or custom endpoints)",
+        "required": false
+      },
+      "sqs_api_version": {
+        "type": "text",
+        "ui_name": "API Version",
+        "description": "SQS API version",
+        "required": false
+      },
+      "sqs_use_ssl": {
+        "type": "boolean",
+        "ui_name": "Use SSL",
+        "description": "Whether to use SSL for SQS connections",
+        "required": false
+      },
+      "sqs_verify": {
+        "type": "boolean",
+        "ui_name": "Verify SSL",
+        "description": "Whether to verify SSL certificates",
+        "required": false
+      },
+      "sqs_strip_base64_files": {
+        "type": "boolean",
+        "ui_name": "Strip Base64 Files",
+        "description": "Remove base64-encoded files from logs to reduce payload size",
+        "required": false
+      },
+      "sqs_aws_use_application_level_encryption": {
+        "type": "boolean",
+        "ui_name": "Use Application-Level Encryption",
+        "description": "Enable application-level encryption for SQS messages",
+        "required": false
+      },
+      "sqs_app_encryption_key_b64": {
+        "type": "password",
+        "ui_name": "Encryption Key (Base64)",
+        "description": "Base64-encoded encryption key for application-level encryption",
+        "required": false
+      },
+      "sqs_app_encryption_aad": {
+        "type": "text",
+        "ui_name": "Encryption AAD",
+        "description": "Additional authenticated data for encryption",
+        "required": false
+      }
+    },
+    "description": "SQS Queue (AWS) Logging Integration"
+  }
+]

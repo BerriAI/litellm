@@ -2,7 +2,6 @@ import os
 import sys
 import pytest
 import asyncio
-import json
 from typing import Optional
 from unittest.mock import AsyncMock, patch
 
@@ -54,8 +53,6 @@ async def test_mcp_cost_tracking():
             inputSchema={"type": "object", "properties": {"test": {"type": "string"}}}
         )
     ])
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
     
     # Mock the MCPClient constructor
     def mock_client_constructor(*args, **kwargs):
@@ -66,7 +63,7 @@ async def test_mcp_cost_tracking():
     
     with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
         # Load the server config
-        local_mcp_server_manager.load_servers_from_config(
+        await local_mcp_server_manager.load_servers_from_config(
             mcp_servers_config={
                 "zapier_gmail_server": {
                     "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
@@ -108,7 +105,7 @@ async def test_mcp_cost_tracking():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload = test_logger.standard_logging_payload
-            print("logged_standard_logging_payload", json.dumps(logged_standard_logging_payload, indent=4))
+            print("logged_standard_logging_payload", logged_standard_logging_payload)
             
             # Add assertions
             assert response is not None
@@ -118,7 +115,6 @@ async def test_mcp_cost_tracking():
             assert response_list[0].text == "Test response"
             
             # Verify client methods were called
-            mock_client.__aenter__.assert_called()
             mock_client.call_tool.assert_called_once()
 
             ######
@@ -153,9 +149,6 @@ async def test_mcp_cost_tracking_per_tool():
             inputSchema={"type": "object", "properties": {"data": {"type": "string"}}}
         )
     ])
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.disconnect = AsyncMock(return_value=None)
     
     # Mock the MCPClient constructor
     def mock_client_constructor(*args, **kwargs):
@@ -166,7 +159,7 @@ async def test_mcp_cost_tracking_per_tool():
     
     with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
         # Load the server config with per-tool costs
-        local_mcp_server_manager.load_servers_from_config(
+        await local_mcp_server_manager.load_servers_from_config(
             mcp_servers_config={
                 "test_server": {
                     "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
@@ -214,7 +207,7 @@ async def test_mcp_cost_tracking_per_tool():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload_1 = test_logger.standard_logging_payload
-            print("logged_standard_logging_payload_1", json.dumps(logged_standard_logging_payload_1, indent=4))
+            print("logged_standard_logging_payload_1", logged_standard_logging_payload_1)
             
             # Verify expensive tool cost
             assert logged_standard_logging_payload_1 is not None, "Standard logging payload 1 should not be None"
@@ -235,7 +228,7 @@ async def test_mcp_cost_tracking_per_tool():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload_2 = test_logger.standard_logging_payload
-            print("logged_standard_logging_payload_2", json.dumps(logged_standard_logging_payload_2, indent=4))
+            print("logged_standard_logging_payload_2", logged_standard_logging_payload_2)
             
             # Verify cheap tool cost
             assert logged_standard_logging_payload_2 is not None, "Standard logging payload 2 should not be None"
@@ -297,9 +290,6 @@ async def test_mcp_tool_call_hook():
             inputSchema={"type": "object", "properties": {"test": {"type": "string"}}}
         )
     ])
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.disconnect = AsyncMock(return_value=None)
     
     # Mock the MCPClient constructor
     def mock_client_constructor(*args, **kwargs):
@@ -310,7 +300,7 @@ async def test_mcp_tool_call_hook():
     
     with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
         # Load the server config
-        local_mcp_server_manager.load_servers_from_config(
+        await local_mcp_server_manager.load_servers_from_config(
             mcp_servers_config={
                 "zapier_gmail_server": {
                     "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
@@ -349,6 +339,6 @@ async def test_mcp_tool_call_hook():
 
             # check logged standard logging payload
             logged_standard_logging_payload = test_logger.standard_logging_payload
-            print("logged_standard_logging_payload", json.dumps(logged_standard_logging_payload, indent=4))
+            print("logged_standard_logging_payload", logged_standard_logging_payload)
             assert logged_standard_logging_payload is not None, "Standard logging payload should not be None"
             assert logged_standard_logging_payload["response_cost"] == 1.42
