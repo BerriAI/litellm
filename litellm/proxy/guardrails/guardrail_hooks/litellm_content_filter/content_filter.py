@@ -6,7 +6,17 @@ to detect and block/mask sensitive content.
 """
 
 import re
-from typing import Any, AsyncGenerator, Dict, List, Optional, Pattern, Tuple, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Pattern,
+    Tuple,
+    Union,
+)
 
 import yaml
 from fastapi import HTTPException
@@ -20,7 +30,6 @@ from litellm.types.guardrails import (
     ContentFilterPattern,
     GuardrailEventHooks,
     Mode,
-    PiiEntityType,
 )
 from litellm.types.utils import ModelResponseStream
 
@@ -49,7 +58,9 @@ class ContentFilterGuardrail(CustomGuardrail):
         patterns: Optional[List[ContentFilterPattern]] = None,
         blocked_words: Optional[List[BlockedWord]] = None,
         blocked_words_file: Optional[str] = None,
-        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
+        event_hook: Optional[
+            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
+        ] = None,
         default_on: bool = False,
         pattern_redaction_format: Optional[str] = None,
         keyword_redaction_tag: Optional[str] = None,
@@ -57,7 +68,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     ):
         """
         Initialize the Content Filter Guardrail.
-        
+
         Args:
             guardrail_name: Name of this guardrail instance
             patterns: List of ContentFilterPattern objects to detect
@@ -79,11 +90,13 @@ class ContentFilterGuardrail(CustomGuardrail):
             default_on=default_on,
             **kwargs,
         )
-        
+
         self.guardrail_provider = "litellm_content_filter"
-        self.pattern_redaction_format = pattern_redaction_format or self.PATTERN_REDACTION_FORMAT
+        self.pattern_redaction_format = (
+            pattern_redaction_format or self.PATTERN_REDACTION_FORMAT
+        )
         self.keyword_redaction_tag = keyword_redaction_tag or self.KEYWORD_REDACTION_STR
-        
+
         # Normalize inputs: convert dicts to Pydantic models for consistent handling
         normalized_patterns: List[ContentFilterPattern] = []
         if patterns:
@@ -92,7 +105,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     normalized_patterns.append(ContentFilterPattern(**pattern_config))
                 else:
                     normalized_patterns.append(pattern_config)
-        
+
         normalized_blocked_words: List[BlockedWord] = []
         if blocked_words:
             for word in blocked_words:
@@ -100,28 +113,28 @@ class ContentFilterGuardrail(CustomGuardrail):
                     normalized_blocked_words.append(BlockedWord(**word))
                 else:
                     normalized_blocked_words.append(word)
-        
+
         # Compile regex patterns
         self.compiled_patterns: List[Tuple[Pattern, str, ContentFilterAction]] = []
         for pattern_config in normalized_patterns:
             self._add_pattern(pattern_config)
-        
+
         # Load blocked words - always initialize as dict
         self.blocked_words: Dict[str, Tuple[ContentFilterAction, Optional[str]]] = {}
         for word in normalized_blocked_words:
             self.blocked_words[word.keyword.lower()] = (word.action, word.description)
-        
+
         # Defensive check: ensure blocked_words is a dict (not a list)
         if not isinstance(self.blocked_words, dict):
             verbose_proxy_logger.error(
                 f"blocked_words is not a dict, got {type(self.blocked_words)}. Resetting to empty dict."
             )
             self.blocked_words = {}
-        
+
         # Load blocked words from file if provided
         if blocked_words_file:
             self._load_blocked_words_file(blocked_words_file)
-        
+
         verbose_proxy_logger.debug(
             f"ContentFilterGuardrail initialized with {len(self.compiled_patterns)} patterns "
             f"and {len(self.blocked_words)} blocked words"
@@ -130,7 +143,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _add_pattern(self, pattern_config: ContentFilterPattern) -> None:
         """
         Add a pattern to the compiled patterns list.
-        
+
         Args:
             pattern_config: ContentFilterPattern configuration
         """
@@ -147,9 +160,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                 pattern_name = pattern_config.name or "custom_regex"
             else:
                 raise ValueError(f"Unknown pattern_type: {pattern_config.pattern_type}")
-            
-            self.compiled_patterns.append((compiled, pattern_name, pattern_config.action))
-            verbose_proxy_logger.debug(f"Added pattern: {pattern_name} with action {pattern_config.action}")
+
+            self.compiled_patterns.append(
+                (compiled, pattern_name, pattern_config.action)
+            )
+            verbose_proxy_logger.debug(
+                f"Added pattern: {pattern_name} with action {pattern_config.action}"
+            )
         except Exception as e:
             verbose_proxy_logger.error(f"Error adding pattern {pattern_config}: {e}")
             raise
@@ -157,10 +174,10 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _load_blocked_words_file(self, file_path: str) -> None:
         """
         Load blocked words from a YAML file.
-        
+
         Args:
             file_path: Path to YAML file containing blocked_words list
-            
+
         Expected format:
         ```yaml
         blocked_words:
@@ -172,23 +189,29 @@ class ContentFilterGuardrail(CustomGuardrail):
         try:
             with open(file_path, "r") as f:
                 data = yaml.safe_load(f)
-            
+
             if not isinstance(data, dict) or "blocked_words" not in data:
                 raise ValueError(
                     "Invalid format: file must contain 'blocked_words' key with list of words"
                 )
-            
+
             for word_data in data["blocked_words"]:
-                if not isinstance(word_data, dict) or "keyword" not in word_data or "action" not in word_data:
-                    verbose_proxy_logger.warning(f"Skipping invalid word entry: {word_data}")
+                if (
+                    not isinstance(word_data, dict)
+                    or "keyword" not in word_data
+                    or "action" not in word_data
+                ):
+                    verbose_proxy_logger.warning(
+                        f"Skipping invalid word entry: {word_data}"
+                    )
                     continue
-                
+
                 keyword = word_data["keyword"].lower()
                 action = ContentFilterAction(word_data["action"])
                 description = word_data.get("description")
-                
+
                 self.blocked_words[keyword] = (action, description)
-            
+
             verbose_proxy_logger.info(
                 f"Loaded {len(data['blocked_words'])} blocked words from {file_path}"
             )
@@ -197,13 +220,15 @@ class ContentFilterGuardrail(CustomGuardrail):
         except Exception as e:
             raise Exception(f"Error loading blocked words file {file_path}: {str(e)}")
 
-    def _check_patterns(self, text: str) -> Optional[Tuple[str, str, ContentFilterAction]]:
+    def _check_patterns(
+        self, text: str
+    ) -> Optional[Tuple[str, str, ContentFilterAction]]:
         """
         Check text against all compiled regex patterns.
-        
+
         Args:
             text: Text to check
-            
+
         Returns:
             Tuple of (matched_text, pattern_name, action) if match found, None otherwise
         """
@@ -217,13 +242,15 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (matched_text, pattern_name, action)
         return None
 
-    def _check_blocked_words(self, text: str) -> Optional[Tuple[str, ContentFilterAction, Optional[str]]]:
+    def _check_blocked_words(
+        self, text: str
+    ) -> Optional[Tuple[str, ContentFilterAction, Optional[str]]]:
         """
         Check text for blocked keywords.
-        
+
         Args:
             text: Text to check
-            
+
         Returns:
             Tuple of (keyword, action, description) if match found, None otherwise
         """
@@ -239,13 +266,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                 if isinstance(word, dict):
                     temp_dict[word.get("keyword", "").lower()] = (
                         word.get("action", ContentFilterAction.BLOCK),
-                        word.get("description")
+                        word.get("description"),
                     )
             self.blocked_words = temp_dict
-        
+
         if not self.blocked_words:
             return None
-            
+
         text_lower = text.lower()
         for keyword, (action, description) in self.blocked_words.items():
             if keyword in text_lower:
@@ -258,11 +285,11 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _mask_content(self, text: str, pattern_name: str) -> str:
         """
         Mask sensitive content in text.
-        
+
         Args:
             text: Text containing sensitive content
             pattern_name: Name of the pattern that matched
-            
+
         Returns:
             Text with sensitive content masked
         """
@@ -273,79 +300,88 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        text: str,
-        language: Optional[str] = None,
-        entities: Optional[List[PiiEntityType]] = None,
-        request_data: Optional[dict] = None,
-    ) -> str:
+        texts: List[str],
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        images: Optional[List[str]] = None,
+    ) -> Tuple[List[str], Optional[List[str]]]:
         """
-        Apply content filtering guardrail to the given text.
-        
+        Apply content filtering guardrail to a batch of texts.
+
         This method checks for sensitive patterns and blocked keywords,
         either blocking the request or masking the sensitive content.
-        
+
         Args:
-            text: The text to apply the guardrail to
-            language: Optional language parameter (not used)
-            entities: Optional entities parameter (not used)
-            request_data: Optional request data dictionary for logging metadata
-            
+            texts: List of texts to apply the guardrail to
+            request_data: Request data dictionary for logging metadata
+            input_type: Whether this is a "request" or "response"
+            images: Optional list of images (not processed)
+
         Returns:
-            Text with sensitive content masked (if action is MASK)
-            
+            Tuple of (processed_texts, images) - texts may be masked, images unchanged
+
         Raises:
             HTTPException: If sensitive content is detected and action is BLOCK
         """
-        verbose_proxy_logger.debug("ContentFilterGuardrail: Applying guardrail to text")
-        
-        # Check regex patterns
-        pattern_match = self._check_patterns(text)
-        if pattern_match:
-            matched_text, pattern_name, action = pattern_match
-            
-            if action == ContentFilterAction.BLOCK:
-                error_msg = f"Content blocked: {pattern_name} pattern detected"
-                verbose_proxy_logger.warning(error_msg)
-                raise HTTPException(
-                    status_code=400,
-                    detail={"error": error_msg, "pattern": pattern_name},
-                )
-            elif action == ContentFilterAction.MASK:
-                # Replace the matched text with redaction tag
-                redaction_tag = self._mask_content(matched_text, pattern_name)
-                text = text.replace(matched_text, redaction_tag)
-                verbose_proxy_logger.info(f"Masked {pattern_name} in content")
-        
-        # Check blocked words
-        word_match = self._check_blocked_words(text)
-        if word_match:
-            keyword, action, description = word_match
-            
-            if action == ContentFilterAction.BLOCK:
-                error_msg = f"Content blocked: keyword '{keyword}' detected"
-                if description:
-                    error_msg += f" ({description})"
-                verbose_proxy_logger.warning(error_msg)
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": error_msg,
-                        "keyword": keyword,
-                        "description": description,
-                    },
-                )
-            elif action == ContentFilterAction.MASK:
-                # Replace keyword with redaction tag (case-insensitive)
-                text = re.sub(
-                    re.escape(keyword),
-                    self.keyword_redaction_tag,
-                    text,
-                    flags=re.IGNORECASE,
-                )
-                verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
-        
-        verbose_proxy_logger.debug("ContentFilterGuardrail: Guardrail applied successfully")
-        return text
+        verbose_proxy_logger.debug(
+            f"ContentFilterGuardrail: Applying guardrail to {len(texts)} text(s)"
+        )
+
+        processed_texts = []
+
+        for text in texts:
+            # Check regex patterns
+            pattern_match = self._check_patterns(text)
+            if pattern_match:
+                matched_text, pattern_name, action = pattern_match
+
+                if action == ContentFilterAction.BLOCK:
+                    error_msg = f"Content blocked: {pattern_name} pattern detected"
+                    verbose_proxy_logger.warning(error_msg)
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"error": error_msg, "pattern": pattern_name},
+                    )
+                elif action == ContentFilterAction.MASK:
+                    # Replace the matched text with redaction tag
+                    redaction_tag = self._mask_content(matched_text, pattern_name)
+                    text = text.replace(matched_text, redaction_tag)
+                    verbose_proxy_logger.info(f"Masked {pattern_name} in content")
+
+            # Check blocked words
+            word_match = self._check_blocked_words(text)
+            if word_match:
+                keyword, action, description = word_match
+
+                if action == ContentFilterAction.BLOCK:
+                    error_msg = f"Content blocked: keyword '{keyword}' detected"
+                    if description:
+                        error_msg += f" ({description})"
+                    verbose_proxy_logger.warning(error_msg)
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": error_msg,
+                            "keyword": keyword,
+                            "description": description,
+                        },
+                    )
+                elif action == ContentFilterAction.MASK:
+                    # Replace keyword with redaction tag (case-insensitive)
+                    text = re.sub(
+                        re.escape(keyword),
+                        self.keyword_redaction_tag,
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+                    verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
+
+            processed_texts.append(text)
+
+        verbose_proxy_logger.debug(
+            "ContentFilterGuardrail: Guardrail applied successfully"
+        )
+        return processed_texts, images
 
     async def async_post_call_streaming_iterator_hook(
         self,
@@ -355,25 +391,25 @@ class ContentFilterGuardrail(CustomGuardrail):
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Streaming hook to check each chunk as it's yielded.
-        
+
         This implementation checks each chunk individually and yields it immediately,
         allowing for low-latency streaming with content filtering.
-        
+
         Args:
             user_api_key_dict: User API key authentication
             response: Async generator of response chunks
             request_data: Original request data
-            
+
         Yields:
             Checked and potentially masked chunks
-            
+
         Raises:
             HTTPException: If chunk content should be blocked
         """
         verbose_proxy_logger.debug(
             "ContentFilterGuardrail: Running streaming check (per-chunk mode)"
         )
-                
+
         # Process each chunk individually
         async for chunk in response:
             if isinstance(chunk, ModelResponseStream):
@@ -383,7 +419,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                             # Check the chunk content using apply_guardrail
                             try:
                                 processed_content = await self.apply_guardrail(
-                                    text=choice.delta.content,
+                                    texts=[choice.delta.content],
+                                    input_type="response",
+                                    images=None,
                                     request_data=request_data,
                                 )
                                 if processed_content != choice.delta.content:
@@ -397,13 +435,11 @@ class ContentFilterGuardrail(CustomGuardrail):
                                     f"ContentFilterGuardrail: Blocked streaming chunk: {e.detail}"
                                 )
                                 raise
-            
+
             yield chunk
-        
-        verbose_proxy_logger.debug(
-            "ContentFilterGuardrail: Streaming check completed"
-        )
-    
+
+        verbose_proxy_logger.debug("ContentFilterGuardrail: Streaming check completed")
+
     @staticmethod
     def get_config_model():
         from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
@@ -411,4 +447,3 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
         return LitellmContentFilterGuardrailConfigModel
-
