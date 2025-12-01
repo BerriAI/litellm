@@ -27,6 +27,8 @@ from typing import (
     Union,
 )
 
+import httpx
+
 from litellm._logging import verbose_logger
 from litellm.types.utils import (
     Choices,
@@ -88,7 +90,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
         logger_fn: Optional[Callable] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        timeout: Optional[Union[float, int]] = None,
+        timeout: Optional[Union[float, int, httpx.Timeout]] = None,
         headers: Optional[dict] = None,
     ) -> Union[
         ModelResponse,
@@ -110,7 +112,14 @@ class ClaudeCodeChatCompletion(BaseLLM):
         thinking_budget_tokens = optional_params.get("thinking_budget_tokens", 0)
 
         # Convert timeout to float
-        effective_timeout: float = float(timeout) if timeout is not None else CLAUDE_CODE_TIMEOUT
+        effective_timeout: float
+        if timeout is None:
+            effective_timeout = CLAUDE_CODE_TIMEOUT
+        elif isinstance(timeout, httpx.Timeout):
+            # Extract connect timeout or use default
+            effective_timeout = float(timeout.connect) if timeout.connect is not None else CLAUDE_CODE_TIMEOUT
+        else:
+            effective_timeout = float(timeout)
 
         if acompletion:
             return self.acompletion(
