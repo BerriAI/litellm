@@ -407,6 +407,78 @@ general_settings:
     user_id_upsert: true # 👈 upserts the user to db, if valid email but not in db
 ```
 
+## OIDC UserInfo Endpoint
+
+Use this when your JWT/access token doesn't contain user-identifying information. LiteLLM will call your identity provider's UserInfo endpoint to fetch user details.
+
+### When to Use
+
+- Your JWT is opaque (not self-contained) or lacks user claims
+- You need to fetch fresh user information from your identity provider
+- Your access tokens don't include email, roles, or other identifying data
+
+### Configuration
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    # Enable OIDC UserInfo endpoint
+    oidc_userinfo_enabled: true
+    oidc_userinfo_endpoint: "https://your-idp.com/oauth2/userinfo"
+    oidc_userinfo_cache_ttl: 300  # Cache for 5 minutes
+    
+    # Map fields from UserInfo response
+    user_id_jwt_field: "sub"
+    user_email_jwt_field: "email"
+    user_roles_jwt_field: "roles"
+```
+
+### Flow Diagram
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant LiteLLM
+    participant IdP as Identity Provider
+    participant Cache
+
+    Client->>LiteLLM: Request with Bearer token
+    LiteLLM->>Cache: Check cached UserInfo
+    
+    alt Cache Hit
+        Cache-->>LiteLLM: Return cached user data
+    else Cache Miss
+        LiteLLM->>IdP: GET /userinfo<br/>Authorization: Bearer {token}
+        IdP-->>LiteLLM: User data (sub, email, roles)
+        LiteLLM->>Cache: Store user data (TTL: 5min)
+    end
+    
+    LiteLLM->>LiteLLM: Extract user_id, email, roles
+    LiteLLM->>LiteLLM: Perform RBAC checks
+    LiteLLM-->>Client: Authorized/Denied
+```
+
+### Example: Azure AD
+
+```yaml
+litellm_jwtauth:
+  oidc_userinfo_enabled: true
+  oidc_userinfo_endpoint: "https://graph.microsoft.com/oidc/userinfo"
+  user_id_jwt_field: "sub"
+  user_email_jwt_field: "email"
+```
+
+### Example: Keycloak
+
+```yaml
+litellm_jwtauth:
+  oidc_userinfo_enabled: true
+  oidc_userinfo_endpoint: "https://keycloak.example.com/realms/your-realm/protocol/openid-connect/userinfo"
+  user_id_jwt_field: "sub"
+  user_roles_jwt_field: "resource_access.your-client.roles"
+```
+
 ## [BETA] Control Access with OIDC Roles
 
 Allow JWT tokens with supported roles to access the proxy.
