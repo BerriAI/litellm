@@ -160,18 +160,20 @@ class GenericGuardrailAPI(CustomGuardrail):
         if request_data is None:
             request_data = {}
 
+        request_body = request_data.get("body") or {}
+
         # Merge additional provider specific params from config and dynamic params
         additional_params = {**self.additional_provider_specific_params}
 
         # Get dynamic params from request if available
-        dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data)
+        dynamic_params = self.get_guardrail_dynamic_request_body_params(request_body)
         if dynamic_params:
             additional_params.update(dynamic_params)
 
         # Create request payload
         guardrail_request = GenericGuardrailAPIRequest(
             text=text,
-            request_body=request_data,
+            request_body=request_body,
             additional_provider_specific_params=additional_params,
         )
 
