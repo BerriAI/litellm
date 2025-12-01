@@ -187,13 +187,10 @@ async def gemini_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/google_ai_studio)
     """
-    ## CHECK FOR LITELLM API KEY IN THE QUERY PARAMS - ?..key=LITELLM_API_KEY
-    google_ai_studio_api_key = request.query_params.get("key") or request.headers.get(
-        "x-goog-api-key"
-    )
-
+    # Get LiteLLM API key from Authorization header for authentication
+    api_key_to_use = get_litellm_virtual_key(request=request)
     user_api_key_dict = await user_api_key_auth(
-        request=request, api_key=f"Bearer {google_ai_studio_api_key}"
+        request=request, api_key=api_key_to_use
     )
 
     base_target_url = (
