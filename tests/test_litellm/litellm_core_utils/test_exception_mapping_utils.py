@@ -205,7 +205,10 @@ oci_exception_test_cases = [
 ]
 
 
-@pytest.mark.parametrize("status_code, error_message, expected_exception", oci_exception_test_cases)
+@pytest.mark.parametrize(
+    "status_code, error_message, expected_exception", 
+    oci_exception_test_cases
+)
 def test_oci_exception_mapping(status_code, error_message, expected_exception):
     """Tests that OCI exceptions are correctly mapped to 
     litellm exception types based on HTTP status codes."""
