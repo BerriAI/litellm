@@ -136,6 +136,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             request_data=GenericGuardrailAPIMetadata(),
             images=images,
             additional_provider_specific_params=additional_params,
+            input_type=input_type,
         )
 
         # Prepare headers

@@ -428,6 +428,7 @@ class LitellmBasicGuardrailRequest(BaseModel):
     images: Optional[List[str]] = None
     request_data: Dict[str, Any] = Field(default_factory=dict)
     additional_provider_specific_params: Dict[str, Any] = Field(default_factory=dict)
+    input_type: Literal["request", "response"]
 
 
 class LitellmBasicGuardrailResponse(BaseModel):

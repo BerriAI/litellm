@@ -44,10 +44,13 @@ class GenericGuardrailAPIConfigModel(
 class GenericGuardrailAPIRequest:
     """Request model for the Generic Guardrail API"""
 
+    input_type: Literal["request", "response"]
+
     def __init__(
         self,
         texts: List[str],
         request_data: GenericGuardrailAPIMetadata,
+        input_type: Literal["request", "response"],
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         images: Optional[List[str]] = None,
     ):
@@ -57,6 +60,7 @@ class GenericGuardrailAPIRequest:
             additional_provider_specific_params or {}
         )
         self.images = images
+        self.input_type = input_type
 
     def to_dict(self) -> dict:
         return {
@@ -64,6 +68,7 @@ class GenericGuardrailAPIRequest:
             "request_data": self.request_data,
             "images": self.images,
             "additional_provider_specific_params": self.additional_provider_specific_params,
+            "input_type": self.input_type,
         }
 
 

@@ -179,6 +179,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             - String content: choice.message.content = "text here"
             - List content: choice.message.content = [{"type": "text", "text": "text here"}, ...]
         """
+
         # Step 0: Check if response has any text content to process
         if not self._has_text_content(response):
             verbose_proxy_logger.warning(

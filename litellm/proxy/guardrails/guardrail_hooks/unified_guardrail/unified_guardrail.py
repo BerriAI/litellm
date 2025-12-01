@@ -115,6 +115,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         from litellm.types.guardrails import GuardrailEventHooks
 
         guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
+
         if guardrail_to_apply is None:
             return
 
@@ -124,6 +125,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             is not True
         ):
+
             return
 
         verbose_proxy_logger.debug(
@@ -132,6 +134,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         call_type = _infer_call_type(call_type=None, completion_response=response)
         if call_type is None:
+
             return response
 
         if endpoint_guardrail_translation_mappings is None:
@@ -155,6 +158,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
         )
+
         return response
 
     async def async_post_call_streaming_iterator_hook(

@@ -536,11 +536,9 @@ class ProxyBaseLLMRequestProcessing:
 
         responses = await llm_responses
 
-        # Guardrails (pre/during-call) can inject a mock response to short-circuit the LLM call.
-        # Prefer it when present so blocked/filtered output is returned instead of the model response.
-        response = self.data.get("mock_response")
-        if response is None:
-            response = responses[1]
+        # # Guardrails (pre/during-call) can inject a mock response to short-circuit the LLM call.
+        # # Prefer it when present so blocked/filtered output is returned instead of the model response.
+        response = responses[1]
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
@@ -1076,9 +1074,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs[
-                    "cache_creation_input_tokens"
-                ] = cache_creation_input_tokens
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
