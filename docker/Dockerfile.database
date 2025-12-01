@@ -1,5 +1,5 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:3.14.0-dev
 
 # Runtime image
 ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
@@ -12,12 +12,7 @@ WORKDIR /app
 USER root
 
 # Install build dependencies
-RUN apk add --no-cache \
-    build-base \
-    python3-dev \
-    python3 \
-    openssl-dev
-
+RUN apk add --no-cache build-base openssl-dev
 
 RUN pip install --upgrade pip && \
     pip install build
