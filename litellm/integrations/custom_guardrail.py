@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Type, Union, get_args
+from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union, get_args
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -437,30 +437,30 @@ class CustomGuardrail(CustomLogger):
 
     async def apply_guardrail(
         self,
-        text: str,
-        language: Optional[str] = None,
-        entities: Optional[List[PiiEntityType]] = None,
-        request_data: Optional[dict] = None,
-    ) -> str:
+        texts: List[str],
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        images: Optional[List[str]] = None,
+    ) -> Tuple[List[str], Optional[List[str]]]:
         """
         Apply your guardrail logic to the given text
 
         Args:
-            text: The text to apply the guardrail to
-            language: The language of the text
-            entities: The entities to mask, optional
-            request_data: The request data dictionary to store guardrail metadata
+            texts: The texts to apply the guardrail to
+            images: The images to apply the guardrail to
+            request_data: The request data dictionary - containing user api key metadata (e.g. user_id, team_id, etc.)
+            input_type: The type of input to apply the guardrail to - "request" or "response"
 
         Any of the custom guardrails can override this method to provide custom guardrail logic
 
-        Returns the text with the guardrail applied
+        Returns the texts with the guardrail applied and the images with the guardrail applied (if any)
 
         Raises:
             Exception:
                 - If the guardrail raises an exception
 
         """
-        return text
+        return texts, images
 
     def _process_response(
         self,

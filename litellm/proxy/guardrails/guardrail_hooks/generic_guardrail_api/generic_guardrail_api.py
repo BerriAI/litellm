@@ -6,7 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -15,53 +15,13 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+    GenericGuardrailAPIMetadata,
+    GenericGuardrailAPIRequest,
+    GenericGuardrailAPIResponse,
+)
 
 GUARDRAIL_NAME = "generic_guardrail_api"
-
-
-class GenericGuardrailAPIRequest:
-    """Request model for the Generic Guardrail API"""
-
-    def __init__(
-        self,
-        text: str,
-        request_body: Dict[str, Any],
-        additional_provider_specific_params: Optional[Dict[str, Any]] = None,
-    ):
-        self.text = text
-        self.request_body = request_body
-        self.additional_provider_specific_params = (
-            additional_provider_specific_params or {}
-        )
-
-    def to_dict(self) -> dict:
-        return {
-            "text": self.text,
-            "request_body": self.request_body,
-            "additional_provider_specific_params": self.additional_provider_specific_params,
-        }
-
-
-class GenericGuardrailAPIResponse:
-    """Response model for the Generic Guardrail API"""
-
-    def __init__(
-        self,
-        action: str,
-        blocked_reason: Optional[str] = None,
-        text: Optional[str] = None,
-    ):
-        self.action = action
-        self.blocked_reason = blocked_reason
-        self.text = text
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
-        return cls(
-            action=data.get("action", "NONE"),
-            blocked_reason=data.get("blocked_reason"),
-            text=data.get("text"),
-        )
 
 
 class GenericGuardrailAPI(CustomGuardrail):
@@ -132,11 +92,11 @@ class GenericGuardrailAPI(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        text: str,
-        language: Optional[str] = None,
-        entities: Optional[List] = None,
-        request_data: Optional[dict] = None,
-    ) -> str:
+        texts: List[str],
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        images: Optional[List[str]] = None,
+    ) -> Tuple[List[str], Optional[List[str]]]:
         """
         Apply the Generic Guardrail API to the given text.
 
@@ -172,8 +132,9 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         # Create request payload
         guardrail_request = GenericGuardrailAPIRequest(
-            text=text,
-            request_body=request_body,
+            texts=texts,
+            request_data=GenericGuardrailAPIMetadata(),
+            images=images,
             additional_provider_specific_params=additional_params,
         )
 
@@ -181,12 +142,6 @@ class GenericGuardrailAPI(CustomGuardrail):
         headers = {"Content-Type": "application/json"}
         if self.headers:
             headers.update(self.headers)
-
-        verbose_proxy_logger.debug(
-            "Generic Guardrail API request to %s: %s",
-            self.api_base,
-            {"text_length": len(text), "has_request_body": bool(request_data)},
-        )
 
         try:
             # Make the API request
@@ -218,12 +173,12 @@ class GenericGuardrailAPI(CustomGuardrail):
 
             elif guardrail_response.action == "GUARDRAIL_INTERVENED":
                 # Content was modified by the guardrail
-                if guardrail_response.text:
+                if guardrail_response.texts:
                     verbose_proxy_logger.debug("Generic Guardrail API modified text")
-                    return guardrail_response.text
+                    return guardrail_response.texts, guardrail_response.images
 
             # Action is NONE or no modifications needed
-            return text
+            return guardrail_response.texts, guardrail_response.images or None
 
         except Exception as e:
             # Check if it's already an exception we raised

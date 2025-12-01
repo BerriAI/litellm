@@ -1,8 +1,20 @@
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+
+class GenericGuardrailAPIMetadata(TypedDict, total=False):
+    user_api_key_hash: Optional[str]
+    user_api_key_alias: Optional[str]
+    user_api_key_user_id: Optional[str]
+    user_api_key_user_email: Optional[str]
+    user_api_key_team_id: Optional[str]
+    user_api_key_team_alias: Optional[str]
+    user_api_key_end_user_id: Optional[str]
+    user_api_key_org_id: Optional[str]
 
 
 class GenericGuardrailAPIOptionalParams(BaseModel):
@@ -27,3 +39,59 @@ class GenericGuardrailAPIConfigModel(
     @staticmethod
     def ui_friendly_name() -> str:
         return "Generic Guardrail API"
+
+
+class GenericGuardrailAPIRequest:
+    """Request model for the Generic Guardrail API"""
+
+    def __init__(
+        self,
+        texts: List[str],
+        request_data: GenericGuardrailAPIMetadata,
+        additional_provider_specific_params: Optional[Dict[str, Any]] = None,
+        images: Optional[List[str]] = None,
+    ):
+        self.texts = texts
+        self.request_data = request_data
+        self.additional_provider_specific_params = (
+            additional_provider_specific_params or {}
+        )
+        self.images = images
+
+    def to_dict(self) -> dict:
+        return {
+            "texts": self.texts,
+            "request_data": self.request_data,
+            "images": self.images,
+            "additional_provider_specific_params": self.additional_provider_specific_params,
+        }
+
+
+class GenericGuardrailAPIResponse:
+    """Response model for the Generic Guardrail API"""
+
+    texts: List[str]
+    images: Optional[List[str]]
+    action: str
+    blocked_reason: Optional[str]
+
+    def __init__(
+        self,
+        texts: List[str],
+        action: str,
+        blocked_reason: Optional[str] = None,
+        images: Optional[List[str]] = None,
+    ):
+        self.action = action
+        self.blocked_reason = blocked_reason
+        self.texts = texts
+        self.images = images
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
+        return cls(
+            action=data.get("action", "NONE"),
+            blocked_reason=data.get("blocked_reason"),
+            texts=data.get("texts", []),
+            images=data.get("images"),
+        )

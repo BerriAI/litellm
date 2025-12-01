@@ -39,6 +39,16 @@ Implement `POST /beta/litellm_basic_guardrail_api`
 {
   "text": "extracted text from the request",
   "request_body": {},  // full original request for context
+  "metadata": {
+    "user_api_key_hash": "hash of the litellm virtual key used",
+    "user_api_key_alias": "alias of the litellm virtual key used",
+    "user_api_key_user_id": "user id associated with the litellm virtual key used",
+    "user_api_key_user_email": "user email associated with the litellm virtual key used",
+    "user_api_key_team_id": "team id associated with the litellm virtual key used",
+    "user_api_key_team_alias": "team alias associated with the litellm virtual key used",
+    "user_api_key_end_user_id": "end user id associated with the litellm virtual key used",
+    "user_api_key_org_id": "org id associated with the litellm virtual key used",
+  },
   "additional_provider_specific_params": {
     // your custom params from config
   }

@@ -11,7 +11,17 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import aiohttp
 
@@ -699,23 +709,26 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        text: str,
-        language: Optional[str] = None,
-        entities: Optional[List[PiiEntityType]] = None,
-        request_data: Optional[dict] = None,
-    ) -> str:
+        texts: List[str],
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        images: Optional[List[str]] = None,
+    ) -> Tuple[List[str], Optional[List[str]]]:
         """
         UI will call this function to check:
             1. If the connection to the guardrail is working
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
-        text = await self.check_pii(
-            text=text,
-            output_parse_pii=self.output_parse_pii,
-            presidio_config=None,
-            request_data=request_data or {},
-        )
-        return text
+        new_texts = []
+        for text in texts:
+            modified_text = await self.check_pii(
+                text=text,
+                output_parse_pii=self.output_parse_pii,
+                presidio_config=None,
+                request_data=request_data or {},
+            )
+            new_texts.append(modified_text)
+        return new_texts, images
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """
