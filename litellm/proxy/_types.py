@@ -47,6 +47,7 @@ from litellm.types.utils import (
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
+from litellm.types.videos.main import VideoObject
 
 from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
 
@@ -3275,6 +3276,7 @@ PassThroughEndpointLoggingResultValues = Union[
     TextCompletionResponse,
     ImageResponse,
     EmbeddingResponse,
+    VideoObject,
     StandardPassThroughResponseObject,
 ]
 

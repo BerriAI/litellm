@@ -14,6 +14,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
     VertexSearchAPIVectorStoreConfig,
 )
+from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import (
     Choices,
@@ -49,9 +50,49 @@ class VertexPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
+        request_body: Optional[dict] = None,
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
-        if "generateContent" in url_route:
+        if "predictLongRunning" in url_route:
+            model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+            
+            vertex_video_config = VertexAIVideoConfig()
+            litellm_video_response = vertex_video_config.transform_video_create_response(
+                model=model,
+                raw_response=httpx_response,
+                logging_obj=logging_obj,
+                custom_llm_provider="vertex_ai",
+                request_data=request_body,
+            )
+            
+            logging_obj.model = model
+            logging_obj.model_call_details["model"] = model
+            logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+            logging_obj.custom_llm_provider = "vertex_ai"
+            
+            response_cost = litellm.completion_cost(
+                completion_response=litellm_video_response,
+                model=model,
+                custom_llm_provider="vertex_ai",
+                call_type="create_video",
+            )
+            
+            # Set response_cost in _hidden_params to prevent recalculation
+            if not hasattr(litellm_video_response, "_hidden_params"):
+                litellm_video_response._hidden_params = {}
+            litellm_video_response._hidden_params["response_cost"] = response_cost
+            
+            kwargs["response_cost"] = response_cost
+            kwargs["model"] = model
+            kwargs["custom_llm_provider"] = "vertex_ai"
+            logging_obj.model_call_details["response_cost"] = response_cost
+            
+            return {
+                "result": litellm_video_response,
+                "kwargs": kwargs,
+            }
+        
+        elif "generateContent" in url_route:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
             instance_of_vertex_llm = litellm.VertexGeminiConfig()

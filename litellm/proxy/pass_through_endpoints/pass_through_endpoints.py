@@ -737,7 +737,6 @@ async def pass_through_request(  # noqa: PLR0915
 
         # Store custom_llm_provider in kwargs and logging object if provided
         if custom_llm_provider:
-            kwargs["custom_llm_provider"] = custom_llm_provider
             logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
             logging_obj.model_call_details["litellm_params"] = kwargs.get("litellm_params", {})
 
