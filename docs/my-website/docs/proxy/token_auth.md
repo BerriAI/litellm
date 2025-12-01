@@ -419,14 +419,14 @@ Use this when your JWT/access token doesn't contain user-identifying information
 
 ### Configuration
 
-```yaml
+```yaml title="config.yaml" showLineNumbers
 general_settings:
   enable_jwt_auth: True
   litellm_jwtauth:
     # Enable OIDC UserInfo endpoint
     oidc_userinfo_enabled: true
     oidc_userinfo_endpoint: "https://your-idp.com/oauth2/userinfo"
-    oidc_userinfo_cache_ttl: 300  # Cache for 5 minutes
+    oidc_userinfo_cache_ttl: 300  # Cache for 5 minutes (default: 300)
     
     # Map fields from UserInfo response
     user_id_jwt_field: "sub"
@@ -441,27 +441,21 @@ sequenceDiagram
     participant Client
     participant LiteLLM
     participant IdP as Identity Provider
-    participant Cache
 
     Client->>LiteLLM: Request with Bearer token
-    LiteLLM->>Cache: Check cached UserInfo
+    Note over LiteLLM: Check cache for UserInfo
     
-    alt Cache Hit
-        Cache-->>LiteLLM: Return cached user data
-    else Cache Miss
-        LiteLLM->>IdP: GET /userinfo<br/>Authorization: Bearer {token}
-        IdP-->>LiteLLM: User data (sub, email, roles)
-        LiteLLM->>Cache: Store user data (TTL: 5min)
-    end
+    LiteLLM->>IdP: GET /userinfo (if not cached)<br/>Authorization: Bearer {token}
+    IdP-->>LiteLLM: User data (sub, email, roles)
     
-    LiteLLM->>LiteLLM: Extract user_id, email, roles
-    LiteLLM->>LiteLLM: Perform RBAC checks
+    Note over LiteLLM: Cache response (TTL: 5min)<br/>Extract user_id, email, roles<br/>Perform RBAC checks
+    
     LiteLLM-->>Client: Authorized/Denied
 ```
 
 ### Example: Azure AD
 
-```yaml
+```yaml title="config.yaml" showLineNumbers
 litellm_jwtauth:
   oidc_userinfo_enabled: true
   oidc_userinfo_endpoint: "https://graph.microsoft.com/oidc/userinfo"
@@ -471,7 +465,7 @@ litellm_jwtauth:
 
 ### Example: Keycloak
 
-```yaml
+```yaml title="config.yaml" showLineNumbers
 litellm_jwtauth:
   oidc_userinfo_enabled: true
   oidc_userinfo_endpoint: "https://keycloak.example.com/realms/your-realm/protocol/openid-connect/userinfo"
