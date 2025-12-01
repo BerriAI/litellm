@@ -1,0 +1,57 @@
+# Example LiteLLM Proxy configuration with MCP server setup
+# This is a template for testing MCP functionality
+
+general_settings:
+  master_key: sk-1234
+  store_model_in_db: true # Required for storing MCP servers in database
+
+# Model configuration (required for Responses API testing)
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+# MCP Server Configuration
+# Add your MCP servers here. Examples below show different transport types:
+
+mcp_servers:
+  # Example 1: HTTP-based MCP server (like DeepWiki)
+  # Uncomment and configure with your actual URL:
+  # deepwiki_mcp:
+  #   url: "https://mcp.deepwiki.com/mcp"
+  #   transport: "http"
+  #   description: "DeepWiki MCP server for documentation search"
+
+  # Example 2: SSE-based MCP server
+  # zapier_mcp:
+  #   url: "https://actions.zapier.com/mcp/sk-xxxxx/sse"
+  #   transport: "sse"
+  #   auth_type: "api_key"
+  #   auth_value: "your-zapier-api-key"
+
+  # Example 3: STDIO-based MCP server (local server)
+  # local_test_mcp:
+  #   transport: "stdio"
+  #   command: "python3"
+  #   args: ["./local_mcp_server.py"]
+  #   env:
+  #     API_KEY: "your-api-key"
+
+  # Example 4: HTTP server with bearer token authentication
+  # github_mcp:
+  #   url: "https://api.githubcopilot.com/mcp"
+  #   transport: "http"
+  #   auth_type: "bearer_token"
+  #   auth_value: "your-github-token"
+
+# LiteLLM settings
+litellm_settings:
+  # Optional: Create aliases for easier tool access
+  # mcp_aliases:
+  #   "github": "github_mcp"
+  #   "zapier": "zapier_mcp"
+
+litellm_params:
+  max_retries: 0 # Disable retries to see actual latency
+
