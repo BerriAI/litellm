@@ -778,6 +778,10 @@ def run_server(  # noqa: PLR0915
                         f"LiteLLM Proxy: Applying database connection pool settings - "
                         f"connection_limit={db_connection_pool_limit}, pool_timeout={db_connection_timeout}"
                     )
+                    # Print the modified URL for local testing/debugging
+                    print(  # noqa: T201
+                        f"LiteLLM Proxy: DATABASE_URL (for local testing): {modified_url}"
+                    )
                     os.environ["DATABASE_URL"] = modified_url
                 if os.getenv("DIRECT_URL", None) is not None:
                     ### add connection pool + pool timeout args

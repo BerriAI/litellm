@@ -1634,6 +1634,25 @@ class PrismaClient:
             os.getenv("IAM_TOKEN_DB_AUTH")
         )
         verbose_proxy_logger.debug("Creating Prisma Client..")
+        # Verify DATABASE_URL still has connection_limit when PrismaClient is initialized
+        db_url_from_env = os.getenv("DATABASE_URL")
+        if db_url_from_env:
+            has_connection_limit = "connection_limit" in db_url_from_env
+            print(  # noqa: T201
+                f"LiteLLM Proxy: PrismaClient initialization - "
+                f"DATABASE_URL has connection_limit: {has_connection_limit}"
+            )
+            if has_connection_limit:
+                # Extract connection_limit value for verification
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(db_url_from_env)
+                query_params = parse_qs(parsed.query)
+                connection_limit = query_params.get("connection_limit", ["NOT FOUND"])[0]
+                pool_timeout = query_params.get("pool_timeout", ["NOT FOUND"])[0]
+                print(  # noqa: T201
+                    f"LiteLLM Proxy: PrismaClient will use - "
+                    f"connection_limit={connection_limit}, pool_timeout={pool_timeout}"
+                )
         try:
             from prisma import Prisma  # type: ignore
         except Exception as e:
@@ -1647,6 +1666,23 @@ class PrismaClient:
             raise Exception(
                 "Unable to find Prisma binaries. Please run 'prisma generate' first."
             )
+        # Log the DATABASE_URL that Prisma() will read from environment variable
+        # Prisma() reads from os.getenv("DATABASE_URL") based on schema.prisma: url = env("DATABASE_URL")
+        final_db_url = os.getenv("DATABASE_URL")
+        if final_db_url:
+            print(  # noqa: T201
+                f"LiteLLM Proxy: About to instantiate Prisma() - "
+                f"Prisma will read DATABASE_URL from os.getenv('DATABASE_URL')"
+            )
+            if "connection_limit" in final_db_url:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(final_db_url)
+                query_params = parse_qs(parsed.query)
+                connection_limit = query_params.get("connection_limit", ["NOT FOUND"])[0]
+                print(  # noqa: T201
+                    f"LiteLLM Proxy: Prisma() will read URL with connection_limit={connection_limit} "
+                    f"(Prisma reads this via schema.prisma: url = env('DATABASE_URL'))"
+                )
         if http_client is not None:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
@@ -1657,6 +1693,10 @@ class PrismaClient:
                 ),
             )
         else:
+            print(  # noqa: T201
+                "LiteLLM Proxy: Instantiating Prisma() - "
+                "Prisma will now read DATABASE_URL from environment variable"
+            )
             self.db = PrismaWrapper(
                 original_prisma=Prisma(),
                 iam_token_db_auth=(
@@ -1665,6 +1705,8 @@ class PrismaClient:
                     else False
                 ),
             )  # Client to connect to Prisma db
+            # Note: Prisma() constructor internally reads os.getenv("DATABASE_URL")
+            # based on schema.prisma configuration: url = env("DATABASE_URL")
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -2812,6 +2854,18 @@ class PrismaClient:
             verbose_proxy_logger.debug(
                 "PrismaClient: connect() called Attempting to Connect to DB"
             )
+            # Verify DATABASE_URL still has connection_limit when connecting
+            db_url_from_env = os.getenv("DATABASE_URL")
+            if db_url_from_env and "connection_limit" in db_url_from_env:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(db_url_from_env)
+                query_params = parse_qs(parsed.query)
+                connection_limit = query_params.get("connection_limit", ["NOT FOUND"])[0]
+                print(  # noqa: T201
+                    f"LiteLLM Proxy: PrismaClient.connect() - "
+                    f"Connecting to DB with connection_limit={connection_limit} "
+                    "(this limit will be enforced by asyncpg connection pool)"
+                )
             if self.db.is_connected() is False:
                 verbose_proxy_logger.debug(
                     "PrismaClient: DB not connected, Attempting to Connect to DB"
