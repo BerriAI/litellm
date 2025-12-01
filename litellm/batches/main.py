@@ -644,7 +644,7 @@ def retrieve_batch(
 async def alist_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -687,7 +687,7 @@ async def alist_batches(
 def list_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -784,9 +784,36 @@ def list_batches(
                 max_retries=optional_params.max_retries,
                 litellm_params=litellm_params,
             )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+
+            response = vertex_ai_batches_instance.list_batches(
+                _is_async=_is_async,
+                after=after,
+                limit=limit,
+                api_base=api_base,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'list_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'list_batch'. Supported providers: openai, azure, vertex_ai.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
@@ -1018,28 +1045,44 @@ def _handle_async_invoke_status(
         # Transform response to a LiteLLMBatch object
         from litellm.types.utils import LiteLLMBatch
 
+        # Normalize status to lowercase (AWS returns 'Completed', 'Failed', etc.)
+        aws_status_raw = status_response.get("status", "")
+        aws_status_lower = aws_status_raw.lower()
+        # Map AWS status values to LiteLLM expected values
+        status_mapping = {
+            "completed": "completed",
+            "failed": "failed",
+            "inprogress": "in_progress",
+            "in_progress": "in_progress",
+        }
+        normalized_status = status_mapping.get(aws_status_lower, aws_status_lower)
+
+        # Get output S3 URI safely
+        output_s3_uri = ""
+        try:
+            output_s3_uri = status_response["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"]
+        except (KeyError, TypeError):
+            pass
+        
+        # Use BedrockBatchesConfig's timestamp parsing method (expects raw AWS status string)
+        from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+        created_at, in_progress_at, completed_at, failed_at, _, _ = BedrockBatchesConfig()._parse_timestamps_and_status(status_response, aws_status_raw)
         result = LiteLLMBatch(
             id=status_response["invocationArn"],
             object="batch",
-            status=status_response["status"],
-            created_at=status_response["submitTime"],
-            in_progress_at=status_response["lastModifiedTime"],
-            completed_at=status_response.get("endTime"),
-            failed_at=(
-                status_response.get("endTime")
-                if status_response["status"] == "failed"
-                else None
-            ),
+            status=normalized_status,
+            created_at=created_at,
+            in_progress_at=in_progress_at,
+            completed_at=completed_at,
+            failed_at=failed_at,
             request_counts=BatchRequestCounts(
                 total=1,
-                completed=1 if status_response["status"] == "completed" else 0,
-                failed=1 if status_response["status"] == "failed" else 0,
+                completed=1 if normalized_status == "completed" else 0,
+                failed=1 if normalized_status == "failed" else 0,
             ),
             metadata=dict(
                 **{
-                    "output_file_id": status_response["outputDataConfig"][
-                        "s3OutputDataConfig"
-                    ]["s3Uri"],
+                    "output_file_id": output_s3_uri,
                     "failure_message": status_response.get("failureMessage") or "",
                     "model_arn": status_response["modelArn"],
                 }

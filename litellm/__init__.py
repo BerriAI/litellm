@@ -177,6 +177,7 @@ _known_custom_logger_compatible_callbacks: List = list(
 callbacks: List[
     Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
 ] = []
+callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
@@ -554,6 +555,7 @@ deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
 moonshot_models: Set = set()
+publicai_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -780,6 +782,8 @@ def add_known_models():
             dashscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
             moonshot_models.add(key)
+        elif value.get("litellm_provider") == "publicai":
+            publicai_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -898,6 +902,7 @@ model_list = list(
     | elevenlabs_models
     | dashscope_models
     | moonshot_models
+    | publicai_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -991,6 +996,7 @@ models_by_provider: dict = {
     "heroku": heroku_models,
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
+    "publicai": publicai_models,
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
@@ -1119,7 +1125,7 @@ from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.azure.anthropic.transformation import AzureAnthropicConfig
+from .llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -1228,6 +1234,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation imp
 from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import (
     AmazonTitanConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import (
+    AmazonTwelveLabsPegasusConfig,
+)
 from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -1250,6 +1259,9 @@ from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
+)
+from .llms.bedrock.embed.amazon_nova_transformation import (
+    AmazonNovaEmbeddingConfig,
 )
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
@@ -1369,6 +1381,7 @@ from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
+from .llms.publicai.chat.transformation import PublicAIChatConfig
 from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
 from .llms.oci.chat.transformation import OCIChatConfig

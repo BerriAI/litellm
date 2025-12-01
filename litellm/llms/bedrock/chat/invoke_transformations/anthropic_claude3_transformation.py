@@ -7,6 +7,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -76,6 +77,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             for k, v in optional_params.items()
             if k not in self.aws_authentication_params
         }
+        filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
         
         _anthropic_request = AnthropicConfig.transform_request(
             self,
@@ -91,12 +93,61 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
 
-        # Handle anthropic_beta from user headers
-        anthropic_beta_list = get_anthropic_beta_from_headers(headers)
-        if anthropic_beta_list:
-            _anthropic_request["anthropic_beta"] = anthropic_beta_list
+        tools = optional_params.get("tools")
+        tool_search_used = self.is_tool_search_used(tools)
+        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools)
+        input_examples_used = self.is_input_examples_used(tools)
+
+        beta_set = set(get_anthropic_beta_from_headers(headers))
+        auto_betas = self.get_anthropic_beta_list(
+            model=model,
+            optional_params=optional_params,
+            computer_tool_used=self.is_computer_tool_used(tools),
+            prompt_caching_set=False, 
+            file_id_used=self.is_file_id_used(messages),
+            mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
+        )
+        beta_set.update(auto_betas)
+
+        if (
+            tool_search_used
+            and not (programmatic_tool_calling_used or input_examples_used)
+        ):
+            beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
+            if "opus-4" in model.lower() or "opus_4" in model.lower():
+                beta_set.add("tool-search-tool-2025-10-19")
+
+        if beta_set:
+            _anthropic_request["anthropic_beta"] = list(beta_set)
 
         return _anthropic_request
+
+    def _normalize_bedrock_tool_search_tools(self, optional_params: dict) -> dict:
+        """
+        Convert tool search entries to the format supported by the Bedrock Invoke API.
+        """
+        tools = optional_params.get("tools")
+        if not tools or not isinstance(tools, list):
+            return optional_params
+
+        normalized_tools = []
+        for tool in tools:
+            tool_type = tool.get("type")
+            if tool_type == "tool_search_tool_bm25_20251119":
+                # Bedrock Invoke does not support the BM25 variant, so skip it.
+                continue
+            if tool_type == "tool_search_tool_regex_20251119":
+                normalized_tool = tool.copy()
+                normalized_tool["type"] = "tool_search_tool_regex"
+                normalized_tool["name"] = normalized_tool.get(
+                    "name", "tool_search_tool_regex"
+                )
+                normalized_tools.append(normalized_tool)
+                continue
+            normalized_tools.append(tool)
+
+        optional_params["tools"] = normalized_tools
+        return optional_params
 
     def transform_response(
         self,
