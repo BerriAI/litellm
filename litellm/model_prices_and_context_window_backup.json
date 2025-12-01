@@ -10198,6 +10198,19 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "fireworks_ai/accounts/fireworks/models/kimi-k2-instruct-0905": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://app.fireworks.ai/models/fireworks/kimi-k2-instruct-0905",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "fireworks_ai/accounts/fireworks/models/kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
         "litellm_provider": "fireworks_ai",
