@@ -14,6 +14,8 @@ USER root
 # Install build dependencies
 RUN apk add --no-cache \
     build-base \
+    python3-dev \
+    python3 \
     openssl-dev
 
 
