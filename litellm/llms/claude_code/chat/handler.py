@@ -14,7 +14,18 @@ import os
 import subprocess
 import tempfile
 import uuid
-from typing import AsyncIterator, Callable, Iterator, List, Optional, Tuple, Union
+from typing import (
+    IO,
+    Any,
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import (
@@ -68,8 +79,8 @@ class ClaudeCodeChatCompletion(BaseLLM):
         messages: list,
         model_response: ModelResponse,
         print_verbose: Callable,
-        encoding,
-        logging_obj,
+        encoding: Any,
+        logging_obj: Any,
         optional_params: dict,
         custom_prompt_dict: dict = {},
         acompletion: bool = False,
@@ -77,9 +88,13 @@ class ClaudeCodeChatCompletion(BaseLLM):
         logger_fn: Optional[Callable] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        timeout: Optional[float] = None,
+        timeout: Optional[Union[float, int]] = None,
         headers: Optional[dict] = None,
-    ) -> Union[ModelResponse, Iterator[ModelResponseStream]]:
+    ) -> Union[
+        ModelResponse,
+        Iterator[ModelResponseStream],
+        Coroutine[Any, Any, Union[ModelResponse, AsyncIterator[ModelResponseStream]]],
+    ]:
         """
         Execute a chat completion using Claude Code CLI.
         """
@@ -94,6 +109,9 @@ class ClaudeCodeChatCompletion(BaseLLM):
         # Get thinking budget if set
         thinking_budget_tokens = optional_params.get("thinking_budget_tokens", 0)
 
+        # Convert timeout to float
+        effective_timeout: float = float(timeout) if timeout is not None else CLAUDE_CODE_TIMEOUT
+
         if acompletion:
             return self.acompletion(
                 model=model,
@@ -104,7 +122,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
                 config=config,
                 thinking_budget_tokens=thinking_budget_tokens,
                 logging_obj=logging_obj,
-                timeout=timeout or CLAUDE_CODE_TIMEOUT,
+                timeout=effective_timeout,
             )
 
         if stream:
@@ -116,7 +134,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
                 config=config,
                 thinking_budget_tokens=thinking_budget_tokens,
                 logging_obj=logging_obj,
-                timeout=timeout or CLAUDE_CODE_TIMEOUT,
+                timeout=effective_timeout,
             )
         else:
             return self._sync_completion(
@@ -127,7 +145,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
                 config=config,
                 thinking_budget_tokens=thinking_budget_tokens,
                 logging_obj=logging_obj,
-                timeout=timeout or CLAUDE_CODE_TIMEOUT,
+                timeout=effective_timeout,
             )
 
     async def acompletion(
@@ -139,7 +157,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
         stream: bool,
         config: ClaudeCodeChatConfig,
         thinking_budget_tokens: int,
-        logging_obj,
+        logging_obj: Any,
         timeout: float,
     ) -> Union[ModelResponse, AsyncIterator[ModelResponseStream]]:
         """
@@ -183,7 +201,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
             Tuple of (args list, temp_file_path or None)
         """
         claude_path = config.get_claude_code_path()
-        temp_file_path = None
+        temp_file_path: Optional[str] = None
 
         # Handle long system prompts
         if len(system_prompt) > MAX_SYSTEM_PROMPT_LENGTH or os.name == "nt":
@@ -238,7 +256,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
         model_response: ModelResponse,
         config: ClaudeCodeChatConfig,
         thinking_budget_tokens: int,
-        logging_obj,
+        logging_obj: Any,
         timeout: float,
     ) -> ModelResponse:
         """
@@ -251,6 +269,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
             thinking_budget_tokens=thinking_budget_tokens,
         )
 
+        process: Optional[subprocess.Popen[str]] = None
         try:
             process = subprocess.Popen(
                 args,
@@ -270,7 +289,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
 
             if process.returncode != 0:
                 raise ClaudeCodeError(
-                    status_code=process.returncode,
+                    status_code=process.returncode or 1,
                     message=f"Claude Code process failed: {stderr}",
                 )
 
@@ -278,7 +297,8 @@ class ClaudeCodeChatCompletion(BaseLLM):
             return self._parse_response(stdout, model_response, model)
 
         except subprocess.TimeoutExpired:
-            process.kill()
+            if process is not None:
+                process.kill()
             raise ClaudeCodeError(
                 status_code=408,
                 message=f"Claude Code process timed out after {timeout} seconds",
@@ -300,7 +320,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
         model_response: ModelResponse,
         config: ClaudeCodeChatConfig,
         thinking_budget_tokens: int,
-        logging_obj,
+        logging_obj: Any,
         timeout: float,
     ) -> Iterator[ModelResponseStream]:
         """
@@ -313,6 +333,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
             thinking_budget_tokens=thinking_budget_tokens,
         )
 
+        process: Optional[subprocess.Popen[str]] = None
         try:
             process = subprocess.Popen(
                 args,
@@ -326,25 +347,29 @@ class ClaudeCodeChatCompletion(BaseLLM):
 
             # Send messages as JSON to stdin
             messages_json = json.dumps(messages)
-            process.stdin.write(messages_json)
-            process.stdin.close()
+            if process.stdin is not None:
+                process.stdin.write(messages_json)
+                process.stdin.close()
 
             response_id = f"chatcmpl-{_generate_id()}"
 
             # Read and yield chunks
-            for chunk in self._parse_streaming_response(
-                process.stdout, model, response_id
-            ):
-                yield chunk
+            if process.stdout is not None:
+                for chunk in self._parse_streaming_response(
+                    process.stdout, model, response_id
+                ):
+                    yield chunk
 
             process.wait(timeout=timeout)
 
             if process.returncode != 0:
-                stderr = process.stderr.read()
-                verbose_logger.warning(f"Claude Code stderr: {stderr}")
+                if process.stderr is not None:
+                    stderr = process.stderr.read()
+                    verbose_logger.warning(f"Claude Code stderr: {stderr}")
 
         except subprocess.TimeoutExpired:
-            process.kill()
+            if process is not None:
+                process.kill()
             raise ClaudeCodeError(
                 status_code=408,
                 message=f"Claude Code process timed out after {timeout} seconds",
@@ -366,7 +391,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
         model_response: ModelResponse,
         config: ClaudeCodeChatConfig,
         thinking_budget_tokens: int,
-        logging_obj,
+        logging_obj: Any,
         timeout: float,
     ) -> ModelResponse:
         """
@@ -379,6 +404,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
             thinking_budget_tokens=thinking_budget_tokens,
         )
 
+        process: Optional[asyncio.subprocess.Process] = None
         try:
             process = await asyncio.create_subprocess_exec(
                 *args,
@@ -396,14 +422,15 @@ class ClaudeCodeChatCompletion(BaseLLM):
 
             if process.returncode != 0:
                 raise ClaudeCodeError(
-                    status_code=process.returncode,
+                    status_code=process.returncode or 1,
                     message=f"Claude Code process failed: {stderr.decode()}",
                 )
 
             return self._parse_response(stdout.decode(), model_response, model)
 
         except asyncio.TimeoutError:
-            process.kill()
+            if process is not None:
+                process.kill()
             raise ClaudeCodeError(
                 status_code=408,
                 message=f"Claude Code process timed out after {timeout} seconds",
@@ -425,7 +452,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
         model_response: ModelResponse,
         config: ClaudeCodeChatConfig,
         thinking_budget_tokens: int,
-        logging_obj,
+        logging_obj: Any,
         timeout: float,
     ) -> AsyncIterator[ModelResponseStream]:
         """
@@ -438,6 +465,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
             thinking_budget_tokens=thinking_budget_tokens,
         )
 
+        process: Optional[asyncio.subprocess.Process] = None
         try:
             process = await asyncio.create_subprocess_exec(
                 *args,
@@ -448,25 +476,29 @@ class ClaudeCodeChatCompletion(BaseLLM):
             )
 
             messages_json = json.dumps(messages).encode()
-            process.stdin.write(messages_json)
-            await process.stdin.drain()
-            process.stdin.close()
+            if process.stdin is not None:
+                process.stdin.write(messages_json)
+                await process.stdin.drain()
+                process.stdin.close()
 
             response_id = f"chatcmpl-{_generate_id()}"
 
-            async for chunk in self._parse_async_streaming_response(
-                process.stdout, model, response_id
-            ):
-                yield chunk
+            if process.stdout is not None:
+                async for chunk in self._parse_async_streaming_response(
+                    process.stdout, model, response_id
+                ):
+                    yield chunk
 
             await asyncio.wait_for(process.wait(), timeout=timeout)
 
             if process.returncode != 0:
-                stderr = await process.stderr.read()
-                verbose_logger.warning(f"Claude Code stderr: {stderr.decode()}")
+                if process.stderr is not None:
+                    stderr = await process.stderr.read()
+                    verbose_logger.warning(f"Claude Code stderr: {stderr.decode()}")
 
         except asyncio.TimeoutError:
-            process.kill()
+            if process is not None:
+                process.kill()
             raise ClaudeCodeError(
                 status_code=408,
                 message=f"Claude Code process timed out after {timeout} seconds",
@@ -529,7 +561,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
                 finish_reason="stop",
             )
         ]
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
 
         # Add cost to response metadata
         if hasattr(model_response, "_hidden_params"):
@@ -539,7 +571,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
 
     def _parse_streaming_response(
         self,
-        stdout,
+        stdout: IO[str],
         model: str,
         response_id: str,
     ) -> Iterator[ModelResponseStream]:
@@ -561,7 +593,7 @@ class ClaudeCodeChatCompletion(BaseLLM):
 
     async def _parse_async_streaming_response(
         self,
-        stdout,
+        stdout: asyncio.StreamReader,
         model: str,
         response_id: str,
     ) -> AsyncIterator[ModelResponseStream]:
@@ -569,12 +601,12 @@ class ClaudeCodeChatCompletion(BaseLLM):
         Parse async streaming output from Claude Code CLI.
         """
         async for line in stdout:
-            line = line.decode().strip()
-            if not line:
+            line_str = line.decode().strip()
+            if not line_str:
                 continue
 
             try:
-                chunk = json.loads(line)
+                chunk = json.loads(line_str)
             except json.JSONDecodeError:
                 continue
 
