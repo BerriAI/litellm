@@ -1633,7 +1633,7 @@ class PrismaClient:
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
             os.getenv("IAM_TOKEN_DB_AUTH")
         )
-        verbose_proxy_logger.debug("Creating Prisma Client..")
+        print("LiteLLM Proxy: Creating Prisma Client..")  # noqa: T201
         # Verify DATABASE_URL still has connection_limit when PrismaClient is initialized
         db_url_from_env = os.getenv("DATABASE_URL")
         if db_url_from_env:
@@ -1707,7 +1707,11 @@ class PrismaClient:
             )  # Client to connect to Prisma db
             # Note: Prisma() constructor internally reads os.getenv("DATABASE_URL")
             # based on schema.prisma configuration: url = env("DATABASE_URL")
-        verbose_proxy_logger.debug("Success - Created Prisma Client")
+            # Prisma manages the connection pool using the connection_limit parameter
+            # from DATABASE_URL. For PostgreSQL, Prisma uses asyncpg which enforces
+            # the pool limit. The database itself just accepts connections and has
+            # its own max_connections limit, but doesn't manage client-side pools.
+        print("LiteLLM Proxy: Success - Created Prisma Client")  # noqa: T201
 
     def get_request_status(
         self, payload: Union[dict, SpendLogsPayload]
@@ -2851,9 +2855,7 @@ class PrismaClient:
     async def connect(self):
         start_time = time.time()
         try:
-            verbose_proxy_logger.debug(
-                "PrismaClient: connect() called Attempting to Connect to DB"
-            )
+            print("LiteLLM Proxy: PrismaClient: connect() called Attempting to Connect to DB")  # noqa: T201
             # Verify DATABASE_URL still has connection_limit when connecting
             db_url_from_env = os.getenv("DATABASE_URL")
             if db_url_from_env and "connection_limit" in db_url_from_env:
@@ -2864,12 +2866,10 @@ class PrismaClient:
                 print(  # noqa: T201
                     f"LiteLLM Proxy: PrismaClient.connect() - "
                     f"Connecting to DB with connection_limit={connection_limit} "
-                    "(this limit will be enforced by asyncpg connection pool)"
+                    f"(Prisma manages the connection pool; asyncpg enforces the limit)"
                 )
             if self.db.is_connected() is False:
-                verbose_proxy_logger.debug(
-                    "PrismaClient: DB not connected, Attempting to Connect to DB"
-                )
+                print("LiteLLM Proxy: PrismaClient: DB not connected, Attempting to Connect to DB")  # noqa: T201
                 await self.db.connect()
         except Exception as e:
             import traceback
