@@ -256,7 +256,7 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     }
 
     with patch.object(client, "post") as mock_post, patch.object(
-        litellm.module_level_client, "post", return_value=mock_token_response
+            litellm.module_level_client, "post", return_value=mock_token_response
     ):
         # Set the mock to return the completion response
         mock_post.return_value = mock_completion_response
@@ -275,7 +275,7 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
 
     # Verify the POST was called
     assert (
-        mock_post.call_count >= 1
+            mock_post.call_count >= 1
     ), f"POST should have been called at least once, got {mock_post.call_count}"
 
     # Get the request body from the first call
@@ -310,10 +310,10 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     assert "<|message|>" in transformed_prompt, "Prompt should contain <|message|> tag"
     assert "<|end|>" in transformed_prompt, "Prompt should contain <|end|> tag"
     assert (
-        "You are chatgpt" in transformed_prompt
+            "You are chatgpt" in transformed_prompt
     ), "Prompt should contain system message content"
     assert (
-        "Hi there" in transformed_prompt
+            "Hi there" in transformed_prompt
     ), "Prompt should contain user message content"
 
 

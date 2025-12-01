@@ -396,6 +396,7 @@ LITELLM_CHAT_PROVIDERS = [
     "ovhcloud",
     "lemonade",
     "docker_model_runner",
+    "burncloud",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -585,6 +586,7 @@ openai_compatible_providers: List = [
     "cometapi",
     "clarifai",
     "docker_model_runner",
+    "burncloud",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`

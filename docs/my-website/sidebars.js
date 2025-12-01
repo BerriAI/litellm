@@ -656,6 +656,7 @@ const sidebars = {
         },
         "providers/xai",
         "providers/xinference",
+        "providers/burncloud",
       ],
     },
     {
