@@ -191,7 +191,7 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
             )
 
 # Test cases for OCI exception mapping
-# Tuple format: (status_code, error_message, expected_exception_type)
+# (status_code, error_message, expected_exception_type)
 oci_exception_test_cases = [
     (400, "Bad request error", litellm.BadRequestError),
     (401, "Authentication failed", litellm.AuthenticationError),
@@ -207,10 +207,8 @@ oci_exception_test_cases = [
 
 @pytest.mark.parametrize("status_code, error_message, expected_exception", oci_exception_test_cases)
 def test_oci_exception_mapping(status_code, error_message, expected_exception):
-    """
-    Tests that OCI exceptions are correctly mapped to litellm exception types
-    based on HTTP status codes.
-    """
+    """Tests that OCI exceptions are correctly mapped to 
+    litellm exception types based on HTTP status codes."""
     model = "oci/test-model"
     custom_llm_provider = "oci"
     
@@ -227,10 +225,8 @@ def test_oci_exception_mapping(status_code, error_message, expected_exception):
 
 
 def test_oci_throttling_heuristic():
-    """
-    Tests that OCI throttling errors without explicit status code are mapped to RateLimitError
-    when error message contains 'throttled' or 'request limit'.
-    """
+    """Tests that OCI throttling errors without explicit status code are mapped to RateLimitError
+    when error message contains 'throttled' or 'request limit'."""
     model = "oci/test-model"
     custom_llm_provider = "oci"
     
@@ -251,9 +247,7 @@ def test_oci_throttling_heuristic():
 
 
 def test_oci_no_status_code():
-    """
-    Tests that OCI errors without a status code are mapped to APIConnectionError.
-    """
+    """Tests that OCI errors without a status code are mapped to APIConnectionError."""
     model = "oci/test-model"
     custom_llm_provider = "oci"
     error_message = "Generic connection error"
