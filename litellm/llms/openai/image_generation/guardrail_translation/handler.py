@@ -78,6 +78,7 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         response: "ImageResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
         Process output response - typically not needed for image generation.
@@ -89,6 +90,8 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         Args:
             response: Image generation response object
             guardrail_to_apply: The guardrail instance to apply
+            litellm_logging_obj: Optional logging object (unused)
+            user_api_key_dict: User API key metadata (unused)
 
         Returns:
             Unmodified response (images don't need text guardrails)

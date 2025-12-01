@@ -76,6 +76,7 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         response: "HttpxBinaryResponseContent",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
         Process output - not applicable for text-to-speech.
@@ -86,6 +87,8 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         Args:
             response: Binary audio response
             guardrail_to_apply: The guardrail instance (unused)
+            litellm_logging_obj: Optional logging object (unused)
+            user_api_key_dict: User API key metadata (unused)
 
         Returns:
             Unmodified response (audio data doesn't need text guardrails)

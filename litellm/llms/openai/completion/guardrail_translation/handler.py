@@ -109,6 +109,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         response: "TextCompletionResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to completion text.
@@ -116,6 +117,8 @@ class OpenAITextCompletionHandler(BaseTranslation):
         Args:
             response: Text completion response object
             guardrail_to_apply: The guardrail instance to apply
+            litellm_logging_obj: Optional logging object
+            user_api_key_dict: User API key metadata to pass to guardrails
 
         Returns:
             Modified response with guardrails applied to completion text
@@ -137,8 +140,11 @@ class OpenAITextCompletionHandler(BaseTranslation):
 
         # Apply guardrails in batch
         if texts_to_check:
-            # Create a request_data dict with response info
+            # Create a request_data dict with response info and user API key metadata
             request_data = {"response": response}
+            if user_api_key_dict is not None:
+                request_data["user_api_key_dict"] = user_api_key_dict
+            
             guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
                 texts=texts_to_check,
                 request_data=request_data,

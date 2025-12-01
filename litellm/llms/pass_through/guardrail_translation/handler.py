@@ -131,9 +131,16 @@ class PassThroughEndpointHandler(BaseTranslation):
         response: Any,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to targeted fields.
+        
+        Args:
+            response: The response to process
+            guardrail_to_apply: The guardrail instance to apply
+            litellm_logging_obj: Optional logging object
+            user_api_key_dict: User API key metadata to pass to guardrails
         """
         if not isinstance(response, dict):
             verbose_proxy_logger.debug(
@@ -157,10 +164,15 @@ class PassThroughEndpointHandler(BaseTranslation):
         if not text_to_check:
             return response
 
+        # Create a request_data dict with response info and user API key metadata
+        request_data = {"response": response} if not isinstance(response, dict) else response.copy()
+        if user_api_key_dict is not None:
+            request_data["user_api_key_dict"] = user_api_key_dict
+
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
         await guardrail_to_apply.apply_guardrail(
             texts=[text_to_check],
-            request_data=response,
+            request_data=request_data,
             input_type="response",
         )
 

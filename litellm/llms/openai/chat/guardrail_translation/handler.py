@@ -164,6 +164,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         response: "ModelResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to text content.
@@ -171,6 +172,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         Args:
             response: LiteLLM ModelResponse object
             guardrail_to_apply: The guardrail instance to apply
+            litellm_logging_obj: Optional logging object
+            user_api_key_dict: User API key metadata to pass to guardrails
 
         Returns:
             Modified response with guardrail applied to content
@@ -204,8 +207,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
-            # Create a request_data dict with response info
+            # Create a request_data dict with response info and user API key metadata
             request_data = {"response": response}
+            if user_api_key_dict is not None:
+                request_data["user_api_key_dict"] = user_api_key_dict
+
             guardrailed_texts, guardrailed_images = (
                 await guardrail_to_apply.apply_guardrail(
                     texts=texts_to_check,
