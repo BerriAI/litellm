@@ -7384,6 +7384,12 @@ class ProviderConfigManager:
             )
 
             return IBMWatsonXAudioTranscriptionConfig()
+        elif litellm.LlmProviders.OVHCLOUD == provider:
+            from litellm.llms.ovhcloud.audio_transcription.transformation import (
+                OVHCloudAudioTranscriptionConfig,
+            )
+
+            return OVHCloudAudioTranscriptionConfig()
         return None
 
     @staticmethod
