@@ -412,6 +412,31 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 params=requested_query_params,
                 json=_parsed_body,
             )
+            # Mock httpx response emulating a Google AI video generation operation status
+            # Attach a dummy request with headers set, so response.request.headers is always present
+            dummy_request = httpx.Request(
+                method=request.method,
+                url=str(url),
+                headers=headers or {},
+                params=requested_query_params,
+                json=_parsed_body,
+            )
+            # Ensure the .headers attribute exists and is a dict (httpx will normalize it)
+            mock_headers = httpx.Headers({"content-type": "application/json"})
+            response = httpx.Response(
+                status_code=200,
+                headers=mock_headers,
+                json={
+                    "name": "operations/1234567890123456789",
+                    "metadata": {
+                        "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateVideoMetadata",
+                        "state": "RUNNING",
+                        "createTime": "2025-01-01T12:00:00Z"
+                    },
+                    "done": False
+                },
+                request=dummy_request
+            )
         return response
 
     @staticmethod
@@ -737,7 +762,6 @@ async def pass_through_request(  # noqa: PLR0915
 
         # Store custom_llm_provider in kwargs and logging object if provided
         if custom_llm_provider:
-            kwargs["custom_llm_provider"] = custom_llm_provider
             logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
             logging_obj.model_call_details["litellm_params"] = kwargs.get("litellm_params", {})
 
