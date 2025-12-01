@@ -1,28 +1,28 @@
-import React, { useState, useEffect } from "react";
 import {
+  credentialCreateCall,
+  credentialDeleteCall,
+  CredentialItem,
+  credentialUpdateCall,
+} from "@/components/networking"; // Assume this is your networking function
+import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import {
+  Badge,
+  Button,
+  Card,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeaderCell,
   TableRow,
-  Card,
   Text,
-  Badge,
-  Button,
 } from "@tremor/react";
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
-import { UploadProps } from "antd/es/upload";
-import {
-  credentialCreateCall,
-  credentialDeleteCall,
-  credentialUpdateCall,
-  CredentialItem,
-} from "@/components/networking"; // Assume this is your networking function
-import AddCredentialsTab from "./add_credentials_tab";
-import CredentialDeleteModal from "./CredentialDeleteModal";
 import { Form } from "antd";
+import { UploadProps } from "antd/es/upload";
+import React, { useEffect, useState } from "react";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
+import AddCredentialsTab from "./add_credentials_tab";
 interface CredentialsPanelProps {
   accessToken: string | null;
   uploadProps: UploadProps;
@@ -39,7 +39,9 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState<CredentialItem | null>(null);
-  const [credentialToDelete, setCredentialToDelete] = useState<string | null>(null);
+  const [credentialToDelete, setCredentialToDelete] = useState<CredentialItem | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isCredentialDeleting, setIsCredentialDeleting] = useState(false);
   const [form] = Form.useForm();
 
   const restrictedFields = ["credential_name", "custom_llm_provider"];
@@ -113,27 +115,38 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
     );
   };
 
-  const handleDeleteCredential = async (credentialName: string) => {
-    if (!accessToken) {
+  const handleDeleteCredential = async () => {
+    if (!accessToken || !credentialToDelete) {
       return;
     }
-    const response = await credentialDeleteCall(accessToken, credentialName);
-    NotificationsManager.success("Credential deleted successfully");
-    setCredentialToDelete(null);
-    fetchCredentials(accessToken);
+    setIsCredentialDeleting(true);
+    try {
+      await credentialDeleteCall(accessToken, credentialToDelete.credential_name);
+      NotificationsManager.success("Credential deleted successfully");
+      await fetchCredentials(accessToken);
+    } catch (error) {
+      NotificationsManager.error("Failed to delete credential");
+    } finally {
+      setCredentialToDelete(null);
+      setIsDeleteModalOpen(false);
+      setIsCredentialDeleting(false);
+    }
   };
 
-  const openDeleteModal = (credentialName: string) => {
-    setCredentialToDelete(credentialName);
+  const openDeleteModal = (credential: CredentialItem) => {
+    setCredentialToDelete(credential);
+    setIsDeleteModalOpen(true);
   };
 
   const closeDeleteModal = () => {
     setCredentialToDelete(null);
+    setIsDeleteModalOpen(false);
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <div className="flex justify-between items-center mb-4">
+    <div className="w-full mx-auto flex-auto overflow-y-auto p-2">
+      <Button onClick={() => setIsAddModalOpen(true)}>Add Credential</Button>
+      <div className="flex justify-between items-center mt-4 mb-4">
         <Text>Configured credentials for different AI providers. Add and manage your API credentials.</Text>
       </div>
 
@@ -143,6 +156,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
             <TableRow>
               <TableHeaderCell>Credential Name</TableHeaderCell>
               <TableHeaderCell>Provider</TableHeaderCell>
+              <TableHeaderCell>Actions</TableHeaderCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -173,7 +187,8 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
                       icon={TrashIcon}
                       variant="light"
                       size="sm"
-                      onClick={() => openDeleteModal(credential.credential_name)}
+                      onClick={() => openDeleteModal(credential)}
+                      className="ml-2"
                     />
                   </TableCell>
                 </TableRow>
@@ -182,9 +197,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
           </TableBody>
         </Table>
       </Card>
-      <Button onClick={() => setIsAddModalOpen(true)} className="mt-4">
-        Add Credential
-      </Button>
 
       {isAddModalOpen && (
         <AddCredentialsTab
@@ -209,14 +221,20 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
         />
       )}
 
-      {credentialToDelete && (
-        <CredentialDeleteModal
-          isVisible={true}
-          onCancel={closeDeleteModal}
-          onConfirm={() => handleDeleteCredential(credentialToDelete)}
-          credentialName={credentialToDelete}
-        />
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        onCancel={closeDeleteModal}
+        onOk={handleDeleteCredential}
+        title="Delete Credential?"
+        message="Are you sure you want to delete this credential? This action cannot be undone and may break existing integrations."
+        resourceInformationTitle="Credential Information"
+        resourceInformation={[
+          { label: "Credential Name", value: credentialToDelete?.credential_name },
+          { label: "Provider", value: credentialToDelete?.credential_info?.custom_llm_provider || "-" },
+        ]}
+        confirmLoading={isCredentialDeleting}
+        requiredConfirmation={credentialToDelete?.credential_name}
+      />
     </div>
   );
 };
