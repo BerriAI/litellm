@@ -4,6 +4,7 @@ Tests for IBM WatsonX Audio Transcription.
 Validates that litellm.transcription transforms requests correctly for WatsonX.
 """
 
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -111,6 +112,9 @@ class TestWatsonXAudioTranscription:
 
         # Validate form data contains expected fields
         data = captured_request.get("data", {})
+
+        print("JSON DUMPS captured_request:")
+        print(json.dumps(captured_request, indent=4, default=str))
         
         # Model name should NOT have watsonx/ prefix
         assert data.get("model") == "whisper-large-v3-turbo"
