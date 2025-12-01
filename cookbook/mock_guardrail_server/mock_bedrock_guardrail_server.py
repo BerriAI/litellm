@@ -249,18 +249,25 @@ def check_pii(text: str) -> tuple[Optional[SensitiveInformationPolicy], str]:
     action = "ANONYMIZED" if GUARDRAIL_CONFIG.anonymize_pii else "BLOCKED"
 
     for pii_type, pattern in GUARDRAIL_CONFIG.pii_patterns.items():
-        matches = re.finditer(pattern, text)
-        for match in matches:
-            matched_text = match.group()
-            pii_entities.append(
-                PiiEntity(type=pii_type, match=matched_text, action=action)
-            )
-
-            # Anonymize the text if configured
-            if GUARDRAIL_CONFIG.anonymize_pii:
-                anonymized_text = anonymized_text.replace(
-                    matched_text, f"[{pii_type}_REDACTED]"
+        try:
+            # Compile the regex pattern with a timeout to prevent ReDoS attacks
+            compiled_pattern = re.compile(pattern)
+            matches = compiled_pattern.finditer(text)
+            for match in matches:
+                matched_text = match.group()
+                pii_entities.append(
+                    PiiEntity(type=pii_type, match=matched_text, action=action)
                 )
+
+                # Anonymize the text if configured
+                if GUARDRAIL_CONFIG.anonymize_pii:
+                    anonymized_text = anonymized_text.replace(
+                        matched_text, f"[{pii_type}_REDACTED]"
+                    )
+        except re.error:
+            # Invalid regex pattern - skip it and log a warning
+            print(f"Warning: Invalid regex pattern for PII type {pii_type}: {pattern}")
+            continue
 
     if pii_entities:
         return SensitiveInformationPolicy(piiEntities=pii_entities), anonymized_text

@@ -171,7 +171,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         # Create request payload
         guardrail_request = GenericGuardrailAPIRequest(
             text=text,
-            request_body={},
+            request_body=request_data,
             additional_provider_specific_params=additional_params,
         )
 
