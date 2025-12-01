@@ -117,10 +117,11 @@ class PassThroughEndpointHandler(BaseTranslation):
             )
             return data
 
-        # Apply guardrail
+        # Apply guardrail (pass-through doesn't modify the text, just checks it)
         await guardrail_to_apply.apply_guardrail(
-            text=text_to_check,
+            texts=[text_to_check],
             request_data=data,
+            input_type="request",
         )
 
         return data
@@ -156,10 +157,11 @@ class PassThroughEndpointHandler(BaseTranslation):
         if not text_to_check:
             return response
 
-        # Apply guardrail
+        # Apply guardrail (pass-through doesn't modify the text, just checks it)
         await guardrail_to_apply.apply_guardrail(
-            text=text_to_check,
+            texts=[text_to_check],
             request_data=response,
+            input_type="response",
         )
 
         return response

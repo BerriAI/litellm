@@ -49,14 +49,18 @@ class CohereRerankHandler(BaseTranslation):
         # Process query only
         query = data.get("query")
         if query is not None and isinstance(query, str):
-            guardrailed_query = await guardrail_to_apply.apply_guardrail(text=query)
-            data["query"] = guardrailed_query
+            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
+                texts=[query],
+                request_data=data,
+                input_type="request",
+            )
+            data["query"] = guardrailed_texts[0] if guardrailed_texts else query
 
             verbose_proxy_logger.debug(
                 "Rerank: Applied guardrail to query. "
                 "Original length: %d, New length: %d",
                 len(query),
-                len(guardrailed_query),
+                len(data["query"]),
             )
         else:
             verbose_proxy_logger.debug(

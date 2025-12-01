@@ -70,15 +70,15 @@ class GenericGuardrailAPIRequest:
 class GenericGuardrailAPIResponse:
     """Response model for the Generic Guardrail API"""
 
-    texts: List[str]
+    texts: Optional[List[str]]
     images: Optional[List[str]]
     action: str
     blocked_reason: Optional[str]
 
     def __init__(
         self,
-        texts: List[str],
         action: str,
+        texts: Optional[List[str]] = None,
         blocked_reason: Optional[str] = None,
         images: Optional[List[str]] = None,
     ):
@@ -92,6 +92,6 @@ class GenericGuardrailAPIResponse:
         return cls(
             action=data.get("action", "NONE"),
             blocked_reason=data.get("blocked_reason"),
-            texts=data.get("texts", []),
+            texts=data.get("texts"),
             images=data.get("images"),
         )

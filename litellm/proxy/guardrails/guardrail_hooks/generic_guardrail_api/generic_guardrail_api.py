@@ -178,7 +178,10 @@ class GenericGuardrailAPI(CustomGuardrail):
                     return guardrail_response.texts, guardrail_response.images
 
             # Action is NONE or no modifications needed
-            return guardrail_response.texts, guardrail_response.images or None
+            return (
+                guardrail_response.texts or texts,
+                guardrail_response.images or images,
+            )
 
         except Exception as e:
             # Check if it's already an exception we raised

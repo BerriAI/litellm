@@ -52,14 +52,18 @@ class OpenAIImageGenerationHandler(BaseTranslation):
 
         # Apply guardrail to the prompt
         if isinstance(prompt, str):
-            guardrailed_prompt = await guardrail_to_apply.apply_guardrail(text=prompt)
-            data["prompt"] = guardrailed_prompt
+            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
+                texts=[prompt],
+                request_data=data,
+                input_type="request",
+            )
+            data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
 
             verbose_proxy_logger.debug(
                 "OpenAI Image Generation: Applied guardrail to prompt. "
                 "Original length: %d, New length: %d",
                 len(prompt),
-                len(guardrailed_prompt),
+                len(data["prompt"]),
             )
         else:
             verbose_proxy_logger.debug(

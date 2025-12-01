@@ -53,41 +53,48 @@ class OpenAITextCompletionHandler(BaseTranslation):
 
         if isinstance(prompt, str):
             # Single string prompt
-            guardrailed_prompt = await guardrail_to_apply.apply_guardrail(text=prompt)
-            data["prompt"] = guardrailed_prompt
+            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
+                texts=[prompt],
+                request_data=data,
+                input_type="request",
+            )
+            data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
 
             verbose_proxy_logger.debug(
                 "OpenAI Text Completion: Applied guardrail to string prompt. "
                 "Original length: %d, New length: %d",
                 len(prompt),
-                len(guardrailed_prompt),
+                len(data["prompt"]),
             )
 
         elif isinstance(prompt, list):
             # List of string prompts (batch completion)
-            guardrailed_prompts = []
+            texts_to_check = []
+            text_indices = []  # Track which prompts are strings
+            
             for idx, p in enumerate(prompt):
                 if isinstance(p, str):
-                    guardrailed_p = await guardrail_to_apply.apply_guardrail(text=p)
-                    guardrailed_prompts.append(guardrailed_p)
-                    verbose_proxy_logger.debug(
-                        "OpenAI Text Completion: Applied guardrail to prompt[%d]. "
-                        "Original length: %d, New length: %d",
-                        idx,
-                        len(p),
-                        len(guardrailed_p),
-                    )
-                else:
-                    # For non-string items (e.g., token lists), keep unchanged
-                    guardrailed_prompts.append(p)
-                    verbose_proxy_logger.debug(
-                        "OpenAI Text Completion: Skipping guardrail for prompt[%d] "
-                        "(not a string, type: %s)",
-                        idx,
-                        type(p),
-                    )
-
-            data["prompt"] = guardrailed_prompts
+                    texts_to_check.append(p)
+                    text_indices.append(idx)
+            
+            if texts_to_check:
+                guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
+                    texts=texts_to_check,
+                    request_data=data,
+                    input_type="request",
+                )
+                
+                # Replace guardrailed texts back
+                for guardrail_idx, prompt_idx in enumerate(text_indices):
+                    if guardrail_idx < len(guardrailed_texts):
+                        data["prompt"][prompt_idx] = guardrailed_texts[guardrail_idx]
+                        verbose_proxy_logger.debug(
+                            "OpenAI Text Completion: Applied guardrail to prompt[%d]. "
+                            "Original length: %d, New length: %d",
+                            prompt_idx,
+                            len(texts_to_check[guardrail_idx]),
+                            len(guardrailed_texts[guardrail_idx]),
+                        )
 
         else:
             verbose_proxy_logger.warning(
@@ -119,21 +126,37 @@ class OpenAITextCompletionHandler(BaseTranslation):
             )
             return response
 
-        # Apply guardrails to each choice's text
+        # Collect all texts to check
+        texts_to_check = []
+        choice_indices = []
+        
         for idx, choice in enumerate(response.choices):
             if hasattr(choice, "text") and isinstance(choice.text, str):
-                original_text = choice.text
-                guardrailed_text = await guardrail_to_apply.apply_guardrail(
-                    text=original_text
-                )
-                choice.text = guardrailed_text
+                texts_to_check.append(choice.text)
+                choice_indices.append(idx)
 
-                verbose_proxy_logger.debug(
-                    "OpenAI Text Completion: Applied guardrail to choice[%d] text. "
-                    "Original length: %d, New length: %d",
-                    idx,
-                    len(original_text),
-                    len(guardrailed_text),
-                )
+        # Apply guardrails in batch
+        if texts_to_check:
+            # Create a request_data dict with response info
+            request_data = {"response": response}
+            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
+                texts=texts_to_check,
+                request_data=request_data,
+                input_type="response",
+            )
+            
+            # Apply guardrailed texts back to choices
+            for guardrail_idx, choice_idx in enumerate(choice_indices):
+                if guardrail_idx < len(guardrailed_texts):
+                    original_text = response.choices[choice_idx].text
+                    response.choices[choice_idx].text = guardrailed_texts[guardrail_idx]
+
+                    verbose_proxy_logger.debug(
+                        "OpenAI Text Completion: Applied guardrail to choice[%d] text. "
+                        "Original length: %d, New length: %d",
+                        choice_idx,
+                        len(original_text),
+                        len(guardrailed_texts[guardrail_idx]),
+                    )
 
         return response

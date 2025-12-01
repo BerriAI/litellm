@@ -75,16 +75,20 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
 
         if isinstance(response.text, str):
             original_text = response.text
-            guardrailed_text = await guardrail_to_apply.apply_guardrail(
-                text=original_text
+            # Create a request_data dict with response info
+            request_data = {"response": response}
+            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
+                texts=[original_text],
+                request_data=request_data,
+                input_type="response",
             )
-            response.text = guardrailed_text
+            response.text = guardrailed_texts[0] if guardrailed_texts else original_text
 
             verbose_proxy_logger.debug(
                 "OpenAI Audio Transcription: Applied guardrail to transcribed text. "
                 "Original length: %d, New length: %d",
                 len(original_text),
-                len(guardrailed_text),
+                len(response.text),
             )
         else:
             verbose_proxy_logger.debug(

@@ -14,8 +14,7 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
-import asyncio
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -51,31 +50,39 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if messages is None:
             return data
 
-        tasks: List[Coroutine[Any, Any, str]] = []
+        texts_to_check: List[str] = []
+        images_to_check: List[str] = []
         task_mappings: List[Tuple[int, Optional[int]]] = []
-        # Track (message_index, content_index) for each task
+        # Track (message_index, content_index) for each text
         # content_index is None for string content, int for list content
 
-        # Step 1: Extract all text content and create guardrail tasks
+        # Step 1: Extract all text content and images
         for msg_idx, message in enumerate(messages):
-            await self._extract_input_text_and_create_tasks(
+            self._extract_input_text_and_images(
                 message=message,
                 msg_idx=msg_idx,
-                tasks=tasks,
+                texts_to_check=texts_to_check,
+                images_to_check=images_to_check,
                 task_mappings=task_mappings,
-                guardrail_to_apply=guardrail_to_apply,
-                request_data=data,
             )
 
-        # Step 2: Run all guardrail tasks in parallel
-        responses = await asyncio.gather(*tasks)
+        # Step 2: Apply guardrail to all texts in batch
+        if texts_to_check:
+            guardrailed_texts, guardrailed_images = (
+                await guardrail_to_apply.apply_guardrail(
+                    texts=texts_to_check,
+                    request_data=data,
+                    input_type="request",
+                    images=images_to_check if images_to_check else None,
+                )
+            )
 
-        # Step 3: Map guardrail responses back to original message structure
-        await self._apply_guardrail_responses_to_input(
-            messages=messages,
-            responses=responses,
-            task_mappings=task_mappings,
-        )
+            # Step 3: Map guardrail responses back to original message structure
+            await self._apply_guardrail_responses_to_input(
+                messages=messages,
+                responses=guardrailed_texts,
+                task_mappings=task_mappings,
+            )
 
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed input messages: %s", messages
@@ -83,19 +90,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         return data
 
-    async def _extract_input_text_and_create_tasks(
+    def _extract_input_text_and_images(
         self,
         message: Dict[str, Any],
         msg_idx: int,
-        tasks: List,
+        texts_to_check: List[str],
+        images_to_check: List[str],
         task_mappings: List[Tuple[int, Optional[int]]],
-        guardrail_to_apply: "CustomGuardrail",
-        request_data: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        Extract text content from a message and create guardrail tasks.
+        Extract text content and images from a message.
 
-        Override this method to customize text extraction logic.
+        Override this method to customize text/image extraction logic.
         """
         content = message.get("content", None)
         if content is None:
@@ -103,17 +109,25 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         if isinstance(content, str):
             # Simple string content
-            tasks.append(guardrail_to_apply.apply_guardrail(text=content, request_data=request_data))
+            texts_to_check.append(content)
             task_mappings.append((msg_idx, None))
 
         elif isinstance(content, list):
             # List content (e.g., multimodal with text and images)
             for content_idx, content_item in enumerate(content):
+                # Extract text
                 text_str = content_item.get("text", None)
-                if text_str is None:
-                    continue
-                tasks.append(guardrail_to_apply.apply_guardrail(text=text_str, request_data=request_data))
-                task_mappings.append((msg_idx, int(content_idx)))
+                if text_str is not None:
+                    texts_to_check.append(text_str)
+                    task_mappings.append((msg_idx, int(content_idx)))
+
+                # Extract images (image_url)
+                if content_item.get("type") == "image_url":
+                    image_url = content_item.get("image_url", {})
+                    if isinstance(image_url, dict):
+                        url = image_url.get("url")
+                        if url:
+                            images_to_check.append(url)
 
     async def _apply_guardrail_responses_to_input(
         self,
@@ -172,29 +186,40 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
             return response
 
-        tasks: List[Coroutine[Any, Any, str]] = []
+        texts_to_check: List[str] = []
+        images_to_check: List[str] = []
         task_mappings: List[Tuple[int, Optional[int]]] = []
-        # Track (choice_index, content_index) for each task
+        # Track (choice_index, content_index) for each text
 
-        # Step 1: Extract all text content from response choices
+        # Step 1: Extract all text content and images from response choices
         for choice_idx, choice in enumerate(response.choices):
-            await self._extract_output_text_and_create_tasks(
+            self._extract_output_text_and_images(
                 choice=choice,
                 choice_idx=choice_idx,
-                tasks=tasks,
+                texts_to_check=texts_to_check,
+                images_to_check=images_to_check,
                 task_mappings=task_mappings,
-                guardrail_to_apply=guardrail_to_apply,
             )
 
-        # Step 2: Run all guardrail tasks in parallel
-        responses = await asyncio.gather(*tasks)
+        # Step 2: Apply guardrail to all texts in batch
+        if texts_to_check:
+            # Create a request_data dict with response info
+            request_data = {"response": response}
+            guardrailed_texts, guardrailed_images = (
+                await guardrail_to_apply.apply_guardrail(
+                    texts=texts_to_check,
+                    request_data=request_data,
+                    input_type="response",
+                    images=images_to_check if images_to_check else None,
+                )
+            )
 
-        # Step 3: Map guardrail responses back to original response structure
-        await self._apply_guardrail_responses_to_output(
-            response=response,
-            responses=responses,
-            task_mappings=task_mappings,
-        )
+            # Step 3: Map guardrail responses back to original response structure
+            await self._apply_guardrail_responses_to_output(
+                response=response,
+                responses=guardrailed_texts,
+                task_mappings=task_mappings,
+            )
 
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed output response: %s", response
@@ -214,19 +239,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     return True
         return False
 
-    async def _extract_output_text_and_create_tasks(
+    def _extract_output_text_and_images(
         self,
         choice: Any,
         choice_idx: int,
-        tasks: List,
+        texts_to_check: List[str],
+        images_to_check: List[str],
         task_mappings: List[Tuple[int, Optional[int]]],
-        guardrail_to_apply: "CustomGuardrail",
-        request_data: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        Extract text content from a response choice and create guardrail tasks.
+        Extract text content and images from a response choice.
 
-        Override this method to customize text extraction logic.
+        Override this method to customize text/image extraction logic.
         """
         if not isinstance(choice, litellm.Choices):
             return
@@ -237,18 +261,25 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         if choice.message.content and isinstance(choice.message.content, str):
             # Simple string content
-            tasks.append(
-                guardrail_to_apply.apply_guardrail(text=choice.message.content, request_data=request_data)
-            )
+            texts_to_check.append(choice.message.content)
             task_mappings.append((choice_idx, None))
 
         elif choice.message.content and isinstance(choice.message.content, list):
             # List content (e.g., multimodal response)
             for content_idx, content_item in enumerate(choice.message.content):
+                # Extract text
                 content_text = content_item.get("text")
                 if content_text:
-                    tasks.append(guardrail_to_apply.apply_guardrail(text=content_text, request_data=request_data))
+                    texts_to_check.append(content_text)
                     task_mappings.append((choice_idx, int(content_idx)))
+
+                # Extract images
+                if content_item.get("type") == "image_url":
+                    image_url = content_item.get("image_url", {})
+                    if isinstance(image_url, dict):
+                        url = image_url.get("url")
+                        if url:
+                            images_to_check.append(url)
 
     async def _apply_guardrail_responses_to_output(
         self,

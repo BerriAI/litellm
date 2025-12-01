@@ -50,16 +50,18 @@ class OpenAITextToSpeechHandler(BaseTranslation):
             return data
 
         if isinstance(input_text, str):
-            guardrailed_input = await guardrail_to_apply.apply_guardrail(
-                text=input_text
+            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
+                texts=[input_text],
+                request_data=data,
+                input_type="request",
             )
-            data["input"] = guardrailed_input
+            data["input"] = guardrailed_texts[0] if guardrailed_texts else input_text
 
             verbose_proxy_logger.debug(
                 "OpenAI Text-to-Speech: Applied guardrail to input text. "
                 "Original length: %d, New length: %d",
                 len(input_text),
-                len(guardrailed_input),
+                len(data["input"]),
             )
         else:
             verbose_proxy_logger.debug(

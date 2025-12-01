@@ -424,8 +424,9 @@ This is a beta API. Please help us improve it.
 
 
 class LitellmBasicGuardrailRequest(BaseModel):
-    text: str
-    request_body: Dict[str, Any] = Field(default_factory=dict)
+    texts: List[str]
+    images: Optional[List[str]] = None
+    request_data: Dict[str, Any] = Field(default_factory=dict)
     additional_provider_specific_params: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -434,7 +435,8 @@ class LitellmBasicGuardrailResponse(BaseModel):
         "BLOCKED", "NONE", "GUARDRAIL_INTERVENED"
     ]  # BLOCKED = litellm will raise an error, NONE = litellm will continue, GUARDRAIL_INTERVENED = litellm will continue, but the text was modified by the guardrail
     blocked_reason: Optional[str] = None  # only if action is BLOCKED, otherwise None
-    text: Optional[str] = None
+    texts: Optional[List[str]] = None
+    images: Optional[List[str]] = None
 
 
 @app.post(
@@ -457,14 +459,17 @@ async def beta_litellm_basic_guardrail_api(
         LitellmBasicGuardrailResponse with analysis results
     """
     print(f"request: {request}")
-    if "ishaan" in request.text.lower():
+    if any("ishaan" in text.lower() for text in request.texts):
         return LitellmBasicGuardrailResponse(
             action="BLOCKED", blocked_reason="Ishaan is not allowed"
         )
-    elif "pii_value" in request.text:
+    elif any("pii_value" in text for text in request.texts):
         return LitellmBasicGuardrailResponse(
             action="GUARDRAIL_INTERVENED",
-            text=request.text.replace("pii_value", "pii_value_redacted"),
+            texts=[
+                text.replace("pii_value", "pii_value_redacted")
+                for text in request.texts
+            ],
         )
     return LitellmBasicGuardrailResponse(action="NONE")
 
