@@ -255,6 +255,7 @@ TOGETHER_AI_EMBEDDING_350_M = int(os.getenv("TOGETHER_AI_EMBEDDING_350_M", 350))
 QDRANT_SCALAR_QUANTILE = float(os.getenv("QDRANT_SCALAR_QUANTILE", 0.99))
 QDRANT_VECTOR_SIZE = int(os.getenv("QDRANT_VECTOR_SIZE", 1536))
 CACHED_STREAMING_CHUNK_DELAY = float(os.getenv("CACHED_STREAMING_CHUNK_DELAY", 0.02))
+AUDIO_SPEECH_CHUNK_SIZE = 8192  # chunk_size for audio speech streaming. Balance between latency and memory usage
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
     os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 512)
 )
@@ -856,12 +857,14 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "nova",
     "deepseek_r1",
     "qwen3",
+    "twelvelabs",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
     "cohere",
     "amazon",
     "twelvelabs",
+    "nova",
 ]
 
 BEDROCK_CONVERSE_MODELS = [
@@ -922,6 +925,7 @@ cohere_embedding_models: set = set(
 bedrock_embedding_models: set = set(
     [
         "amazon.titan-embed-text-v1",
+        "amazon.nova-2-multimodal-embeddings-v1:0",
         "cohere.embed-english-v3",
         "cohere.embed-multilingual-v3",
         "cohere.embed-v4:0",

@@ -3,7 +3,11 @@
 Programmatic tool calling allows Claude to write code that calls your tools programmatically within a code execution container, rather than requiring round trips through the model for each tool invocation. This reduces latency for multi-tool workflows and decreases token consumption by allowing Claude to filter or process data before it reaches the model's context window.
 
 :::info
-Programmatic tool calling is currently in public beta. LiteLLM automatically adds the required `advanced-tool-use-2025-11-20` beta header when it detects tools with the `allowed_callers` field.
+Programmatic tool calling is currently in public beta. LiteLLM automatically detects tools with the `allowed_callers` field and adds the appropriate beta header based on your provider:
+
+- **Anthropic API & Microsoft Foundry**: `advanced-tool-use-2025-11-20`
+- **Amazon Bedrock**: `advanced-tool-use-2025-11-20`
+- **Google Cloud Vertex AI**: Not supported
 
 This feature requires the code execution tool to be enabled.
 :::
@@ -380,13 +384,14 @@ For example, calling 10 tools directly uses ~10x the tokens of calling them prog
 
 ## Provider Support
 
-LiteLLM supports programmatic tool calling across all Anthropic-compatible providers:
+LiteLLM supports programmatic tool calling across the following Anthropic-compatible providers:
 
-- **Standard Anthropic API** (`anthropic/claude-sonnet-4-5-20250929`)
-- **Azure Anthropic** (`azure/claude-sonnet-4-5-20250929`)
-- **Vertex AI Anthropic** (`vertex_ai/claude-sonnet-4-5-20250929`)
+- **Standard Anthropic API** (`anthropic/claude-sonnet-4-5-20250929`) ✅
+- **Azure Anthropic / Microsoft Foundry** (`azure/claude-sonnet-4-5-20250929`) ✅
+- **Amazon Bedrock** (`bedrock/invoke/anthropic.claude-sonnet-4-5-20250929-v1:0`) ✅
+- **Google Cloud Vertex AI** (`vertex_ai/claude-sonnet-4-5-20250929`) ❌ Not supported
 
-The beta header is automatically added when LiteLLM detects tools with `allowed_callers` field.
+The beta header (`advanced-tool-use-2025-11-20`) is automatically added when LiteLLM detects tools with the `allowed_callers` field.
 
 ## Limitations
 
