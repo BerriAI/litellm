@@ -78,14 +78,14 @@ export const columns = (
       ),
     },
     {
-      header: "API Keys",
+      header: "Virtual Keys",
       accessorKey: "key_count",
       enableSorting: false,
       cell: ({ row }) => (
         <Grid numItems={2}>
           {row.original.key_count > 0 ? (
             <Badge size="xs" color="indigo">
-              {row.original.key_count} Keys
+              {row.original.key_count} {row.original.key_count === 1 ? "Key" : "Keys"}
             </Badge>
           ) : (
             <Badge size="xs" color="gray">
