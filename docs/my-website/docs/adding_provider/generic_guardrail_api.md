@@ -1,4 +1,4 @@
-# Generic Guardrail API - Integrate Without a PR
+# [BETA] Generic Guardrail API - Integrate Without a PR
 
 ## The Problem
 
