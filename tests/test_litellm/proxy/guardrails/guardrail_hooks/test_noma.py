@@ -413,7 +413,7 @@ class TestNomaGuardrailHooks:
 
             # Verify API call details
             call_args = mock_post.call_args
-            # Verify the URL endpoint  
+            # Verify the URL endpoint
             assert call_args.args[0].endswith("/ai-dr/v2/prompt/scan")
             # Verify headers and JSON payload
             if "headers" in call_args.kwargs:
@@ -425,6 +425,126 @@ class TestNomaGuardrailHooks:
                 json_payload = call_args.kwargs["json"]
                 assert "x-noma-context" in json_payload
                 assert json_payload["x-noma-context"]["applicationId"] == "test-app"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_with_system_prompt(
+        self, noma_guardrail, mock_user_api_key_dict
+    ):
+        """Test pre-call hook includes system prompt in Noma API request"""
+        request_data = {
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant"},
+                {"role": "user", "content": "Hello, how are you?"},
+            ],
+            "litellm_call_id": "test-call-id",
+            "metadata": {"requester_ip_address": "192.168.1.1"},
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "aggregatedScanResult": False,  # False means safe
+            "scanResult": [
+                {
+                    "role": "system",
+                    "type": "message",
+                    "results": {}
+                },
+                {
+                    "role": "user",
+                    "type": "message",
+                    "results": {}
+                }
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            noma_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await noma_guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                cache=MagicMock(),
+                data=request_data,
+                call_type="completion",
+            )
+
+            assert result == request_data
+            mock_post.assert_called_once()
+
+            # Verify the payload includes both system and user messages
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+            assert "input" in json_payload
+            messages = json_payload["input"]
+
+            # Should have 2 messages: system and user
+            assert len(messages) == 2
+
+            # First message should be system
+            assert messages[0]["type"] == "message"
+            assert messages[0]["role"] == "system"
+            assert messages[0]["content"][0]["type"] == "input_text"
+            assert messages[0]["content"][0]["text"] == "You are a helpful assistant"
+
+            # Second message should be user
+            assert messages[1]["type"] == "message"
+            assert messages[1]["role"] == "user"
+            assert messages[1]["content"][0]["type"] == "input_text"
+            assert messages[1]["content"][0]["text"] == "Hello, how are you?"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_with_multiple_system_prompts(
+        self, noma_guardrail, mock_user_api_key_dict
+    ):
+        """Test pre-call hook combines multiple system prompts into single message"""
+        request_data = {
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant"},
+                {"role": "system", "content": "You should be polite and respectful"},
+                {"role": "user", "content": "Hello, how are you?"},
+            ],
+            "litellm_call_id": "test-call-id",
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "aggregatedScanResult": False,
+            "scanResult": [
+                {"role": "system", "type": "message", "results": {}},
+                {"role": "user", "type": "message", "results": {}}
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            noma_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await noma_guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                cache=MagicMock(),
+                data=request_data,
+                call_type="completion",
+            )
+
+            assert result == request_data
+            mock_post.assert_called_once()
+
+            # Verify the payload combines system prompts into single message
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+            messages = json_payload["input"]
+
+            # Should have 2 messages: 1 combined system and 1 user
+            assert len(messages) == 2
+
+            # First message should be system with combined content
+            assert messages[0]["role"] == "system"
+            assert messages[0]["content"][0]["type"] == "input_text"
+            assert messages[0]["content"][0]["text"] == "You are a helpful assistant You should be polite and respectful"
+
+            # Second message should be user
+            assert messages[1]["role"] == "user"
+            assert messages[1]["content"][0]["text"] == "Hello, how are you?"
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_blocked(

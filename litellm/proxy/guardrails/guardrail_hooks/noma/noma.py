@@ -164,13 +164,11 @@ class NomaGuardrail(CustomGuardrail):
         start_time = datetime.now()
         extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
 
-        user_message = await self._extract_user_message(request_data)
-        if not user_message:
+        messages_for_scan = await self._extract_messages_for_scan(request_data)
+        if not messages_for_scan:
             return None
 
-        payload = {
-            "input": [{"type": "message", "role": "user", "content": user_message}]
-        }
+        payload = {"input": messages_for_scan}
         response_json = await self._call_noma_api(
             payload=payload,
             llm_request_id=None,
@@ -198,9 +196,9 @@ class NomaGuardrail(CustomGuardrail):
 
         if self.monitor_mode:
             await self._handle_verdict_background(
-                USER_ROLE, json.dumps(user_message), response_json
+                USER_ROLE, json.dumps(messages_for_scan), response_json
             )
-            return json.dumps(user_message)
+            return json.dumps(messages_for_scan)
 
         # Check if we should anonymize content
         if self._should_anonymize(response_json, USER_ROLE):
@@ -215,8 +213,8 @@ class NomaGuardrail(CustomGuardrail):
                 )
                 return anonymized_content
 
-        await self._check_verdict(USER_ROLE, json.dumps(user_message), response_json)
-        return json.dumps(user_message)
+        await self._check_verdict(USER_ROLE, json.dumps(messages_for_scan), response_json)
+        return json.dumps(messages_for_scan)
 
     async def _process_llm_response_check(
         self,
@@ -731,6 +729,61 @@ class NomaGuardrail(CustomGuardrail):
             return response
 
         return response
+
+    async def _extract_messages_for_scan(self, data: dict) -> Optional[List[dict]]:
+        """
+        Extract system and user messages from request data for scanning.
+
+        Multiple system prompts are combined into a single system message
+        with content joined by spaces.
+
+        Returns a list of message objects in the format:
+        [
+            {"type": "message", "role": "system", "content": [...]},
+            {"type": "message", "role": "user", "content": [...]}
+        ]
+        """
+        messages = data.get("messages", [])
+        if not messages:
+            return None
+
+        messages_for_scan = []
+
+        # Extract and combine all system messages into a single message
+        system_messages = [msg for msg in messages if msg.get("role") == "system"]
+        if system_messages:
+            system_contents = []
+            for msg in system_messages:
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    system_contents.append(content)
+                elif isinstance(content, list):
+                    # Handle multimodal content - extract text parts
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            system_contents.append(item.get("text", ""))
+                        elif isinstance(item, str):
+                            system_contents.append(item)
+
+            if system_contents:
+                # Combine all system prompts with spaces
+                combined_system_content = " ".join(system_contents)
+                messages_for_scan.append({
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": combined_system_content}]
+                })
+
+        # Extract the last user message using existing method
+        user_message_content = await self._extract_user_message(data)
+        if user_message_content:
+            messages_for_scan.append({
+                "type": "message",
+                "role": "user",
+                "content": user_message_content
+            })
+
+        return messages_for_scan if messages_for_scan else None
 
     async def _extract_user_message(self, data: dict) -> Optional[List[dict]]:
         """Extract the last user message from request data"""
