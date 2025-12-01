@@ -102,7 +102,7 @@ class LassoGuardrail(CustomGuardrail):
             )
 
         self.api_base = (
-            api_base or os.getenv("LASSO_API_BASE") or "https://server.lasso.security"
+            api_base or os.getenv("LASSO_API_BASE") or "https://server.lasso.security/gateway/v3"
         )
 
         verbose_proxy_logger.debug(
@@ -220,7 +220,7 @@ class LassoGuardrail(CustomGuardrail):
                 if self.mask:
                     headers = self._prepare_headers(response_data, global_cache)
                     payload = self._prepare_payload(response_messages, response_data, global_cache, "COMPLETION")
-                    api_url = f"{self.api_base}/gateway/v3/classifix"
+                    api_url = f"{self.api_base}/classifix"
 
                     try:
                         lasso_response = await self._call_lasso_api(headers=headers, payload=payload, api_url=api_url)
@@ -368,7 +368,7 @@ class LassoGuardrail(CustomGuardrail):
         try:
             headers = self._prepare_headers(data, cache)
             payload = self._prepare_payload(messages, data, cache, message_type)
-            api_url = f"{self.api_base}/gateway/v3/classifix"
+            api_url = f"{self.api_base}/classifix"
             response = await self._call_lasso_api(headers=headers, payload=payload, api_url=api_url)
             self._process_lasso_response(response)
 
@@ -494,7 +494,7 @@ class LassoGuardrail(CustomGuardrail):
         api_url: Optional[str] = None,
     ) -> LassoResponse:
         """Call the Lasso API and return the response."""
-        url = api_url or f"{self.api_base}/gateway/v3/classify"
+        url = api_url or f"{self.api_base}/classify"
         verbose_proxy_logger.debug(f"Calling Lasso API with messageType: {payload.get('messageType')}")
         response = await self.async_handler.post(
             url=url,
