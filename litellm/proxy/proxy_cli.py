@@ -719,6 +719,10 @@ def run_server(  # noqa: PLR0915
                 "database_connection_pool_timeout",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
             )
+            print(  # noqa: T201
+                f"LiteLLM Proxy: Database connection pool limit set to {db_connection_pool_limit} "
+                f"(from config file: {general_settings.get('database_connection_pool_limit', 'NOT SET - using default')})"
+            )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
                 # set the working directory to where this script is
@@ -750,6 +754,10 @@ def run_server(  # noqa: PLR0915
             db_connection_timeout = (
                 LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
             )
+            print(  # noqa: T201
+                f"LiteLLM Proxy: Database connection pool limit set to {db_connection_pool_limit} "
+                "(no config file - using default)"
+            )
 
         if (
             os.getenv("DATABASE_URL", None) is not None
@@ -766,6 +774,10 @@ def run_server(  # noqa: PLR0915
                     }
                     database_url = get_secret("DATABASE_URL", default_value=None)
                     modified_url = append_query_params(database_url, params)
+                    print(  # noqa: T201
+                        f"LiteLLM Proxy: Applying database connection pool settings - "
+                        f"connection_limit={db_connection_pool_limit}, pool_timeout={db_connection_timeout}"
+                    )
                     os.environ["DATABASE_URL"] = modified_url
                 if os.getenv("DIRECT_URL", None) is not None:
                     ### add connection pool + pool timeout args
