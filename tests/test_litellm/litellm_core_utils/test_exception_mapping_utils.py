@@ -189,3 +189,80 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
                 original_exception=original_exception,
                 custom_llm_provider=custom_llm_provider,
             )
+
+# Test cases for OCI exception mapping
+# Tuple format: (status_code, error_message, expected_exception_type)
+oci_exception_test_cases = [
+    (400, "Bad request error", litellm.BadRequestError),
+    (401, "Authentication failed", litellm.AuthenticationError),
+    (404, "Model not found", litellm.NotFoundError),
+    (409, "Conflict error", litellm.exceptions.ConflictError),
+    (429, "Rate limit exceeded", litellm.RateLimitError),
+    (500, "Internal server error", litellm.InternalServerError),
+    (502, "Bad gateway", litellm.exceptions.BadGatewayError),
+    (503, "Service unavailable", litellm.ServiceUnavailableError),
+    (504, "Gateway timeout", litellm.Timeout),
+]
+
+
+@pytest.mark.parametrize("status_code, error_message, expected_exception", oci_exception_test_cases)
+def test_oci_exception_mapping(status_code, error_message, expected_exception):
+    """
+    Tests that OCI exceptions are correctly mapped to litellm exception types
+    based on HTTP status codes.
+    """
+    model = "oci/test-model"
+    custom_llm_provider = "oci"
+    
+    # Create exception with status_code attribute to simulate OCI error
+    original_exception = Exception(error_message)
+    original_exception.status_code = status_code
+    
+    with pytest.raises(expected_exception):
+        exception_type(
+            model=model,
+            original_exception=original_exception,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+
+def test_oci_throttling_heuristic():
+    """
+    Tests that OCI throttling errors without explicit status code are mapped to RateLimitError
+    when error message contains 'throttled' or 'request limit'.
+    """
+    model = "oci/test-model"
+    custom_llm_provider = "oci"
+    
+    throttling_messages = [
+        "Request has been throttled",
+        "Request limit exceeded",
+    ]
+    
+    for error_message in throttling_messages:
+        original_exception = Exception(error_message)
+        
+        with pytest.raises(litellm.RateLimitError):
+            exception_type(
+                model=model,
+                original_exception=original_exception,
+                custom_llm_provider=custom_llm_provider,
+            )
+
+
+def test_oci_no_status_code():
+    """
+    Tests that OCI errors without a status code are mapped to APIConnectionError.
+    """
+    model = "oci/test-model"
+    custom_llm_provider = "oci"
+    error_message = "Generic connection error"
+    
+    original_exception = Exception(error_message)
+    
+    with pytest.raises(litellm.APIConnectionError):
+        exception_type(
+            model=model,
+            original_exception=original_exception,
+            custom_llm_provider=custom_llm_provider,
+        )
