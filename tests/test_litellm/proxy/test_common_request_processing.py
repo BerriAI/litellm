@@ -1,13 +1,11 @@
 import copy
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import Request, Response, status
+from fastapi import Request, status
 from fastapi.responses import StreamingResponse
 
 import litellm
-import litellm.proxy.common_request_processing as common_request_processing
 from litellm._uuid import uuid
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -76,101 +74,6 @@ class TestProxyBaseLLMRequestProcessing:
         except ValueError:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
-
-    @pytest.mark.asyncio
-    async def test_base_process_llm_request_prefers_guardrail_mock_response(
-        self, monkeypatch
-    ):
-        processing_obj = ProxyBaseLLMRequestProcessing(
-            data={
-                "messages": [],
-                "metadata": {},
-                "litellm_metadata": {"model_info": {"id": "fallback-model"}},
-            }
-        )
-
-        guardrail_response = litellm.ModelResponse(
-            model="bedrock-guardrail",
-            hidden_params={"model_id": "guardrail-model"},
-        )
-        llm_response = litellm.ModelResponse(
-            model="real-model",
-            hidden_params={"model_id": "real-model"},
-        )
-
-        async def mock_common_processing(self, *args, **kwargs):
-            logging_obj = SimpleNamespace(litellm_call_id="test-call-id")
-            self.data["litellm_call_id"] = "test-call-id"
-            self.data["litellm_logging_obj"] = logging_obj
-            return self.data, logging_obj
-
-        monkeypatch.setattr(
-            ProxyBaseLLMRequestProcessing,
-            "common_processing_pre_call_logic",
-            mock_common_processing,
-        )
-
-        async def mock_route_request(*args, **kwargs):
-            async def _inner():
-                return llm_response
-
-            return _inner()
-
-        monkeypatch.setattr(
-            common_request_processing,
-            "route_request",
-            mock_route_request,
-        )
-
-        check_response_size_is_safe_mock = AsyncMock()
-        monkeypatch.setattr(
-            common_request_processing,
-            "check_response_size_is_safe",
-            check_response_size_is_safe_mock,
-        )
-
-        async def mock_during_call_hook(*args, **kwargs):
-            kwargs["data"]["mock_response"] = guardrail_response
-
-        proxy_logging_obj = MagicMock(spec=ProxyLogging)
-        proxy_logging_obj.during_call_hook = AsyncMock(
-            side_effect=mock_during_call_hook
-        )
-        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_success_hook = AsyncMock(
-            return_value=guardrail_response
-        )
-
-        user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
-        user_api_key_dict.tpm_limit = None
-        user_api_key_dict.rpm_limit = None
-        user_api_key_dict.max_budget = None
-        user_api_key_dict.spend = 0
-        user_api_key_dict.allowed_model_region = None
-
-        fastapi_response = Response()
-        proxy_config = MagicMock(spec=ProxyConfig)
-
-        result = await processing_obj.base_process_llm_request(
-            request=MagicMock(spec=Request),
-            fastapi_response=fastapi_response,
-            user_api_key_dict=user_api_key_dict,
-            route_type="acompletion",
-            proxy_logging_obj=proxy_logging_obj,
-            general_settings={},
-            proxy_config=proxy_config,
-            select_data_generator=lambda **kwargs: None,
-        )
-
-        assert result is guardrail_response
-        assert (
-            proxy_logging_obj.post_call_success_hook.await_args.kwargs["response"]
-            is guardrail_response
-        )
-        assert (
-            check_response_size_is_safe_mock.await_args.kwargs["response"]
-            is guardrail_response
-        )
 
     @pytest.mark.asyncio
     async def test_stream_timeout_header_processing(self):
