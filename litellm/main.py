@@ -5799,9 +5799,10 @@ def transcription(
 
 
 @client
-async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
+async def aspeech(*args, **kwargs) -> Union[HttpxBinaryResponseContent, dict]:
     """
     Calls openai tts endpoints.
+    Supports with_timestamps parameter for ElevenLabs to return JSON response with alignment data.
     """
     loop = asyncio.get_event_loop()
     model = args[0] if len(args) > 0 else kwargs["model"]
@@ -5855,13 +5856,16 @@ def speech(  # noqa: PLR0915
     response_format: Optional[str] = None,
     speed: Optional[int] = None,
     instructions: Optional[str] = None,
+    with_timestamps: Optional[bool] = None,
     client=None,
     headers: Optional[dict] = None,
     custom_llm_provider: Optional[str] = None,
     aspeech: Optional[bool] = None,
     **kwargs,
 ) -> Union[
-    HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
+    HttpxBinaryResponseContent, 
+    dict,
+    Coroutine[Any, Any, Union[HttpxBinaryResponseContent, dict]]
 ]:
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
@@ -5880,6 +5884,8 @@ def speech(  # noqa: PLR0915
         optional_params["speed"] = speed  # type: ignore
     if instructions is not None:
         optional_params["instructions"] = instructions
+    if with_timestamps is not None:
+        optional_params["with_timestamps"] = with_timestamps
 
     if timeout is None:
         timeout = litellm.request_timeout
