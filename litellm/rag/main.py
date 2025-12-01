@@ -127,7 +127,10 @@ async def aingest(
         ```python
         response = await litellm.aingest(
             ingest_options={
-                "vector_store": {"custom_llm_provider": "openai"}
+                "vector_store": {
+                    "custom_llm_provider": "openai",
+                    "litellm_credential_name": "my-openai-creds",  # optional
+                }
             },
             file_url="https://example.com/doc.pdf",
         )
@@ -193,7 +196,10 @@ def ingest(
         ```python
         response = litellm.ingest(
             ingest_options={
-                "vector_store": {"custom_llm_provider": "openai"}
+                "vector_store": {
+                    "custom_llm_provider": "openai",
+                    "litellm_credential_name": "my-openai-creds",  # optional
+                }
             },
             file_data=("doc.txt", b"Hello world", "text/plain"),
         )
