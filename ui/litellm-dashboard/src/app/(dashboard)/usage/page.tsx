@@ -15,6 +15,7 @@ const UsagePage = () => {
       userID={userId}
       teams={teams ?? []}
       premiumUser={premiumUser}
+      organizations={[]}
     />
   );
 };
