@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Annotated
+from typing import Annotated, Literal, Optional, Union
 import json
 import time
 import uuid
@@ -16,8 +16,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     NewUserRequest,
 )
-from .import zixun_auth
+from . import zixun_auth
 from . import zx_development_data
+from . import zx_security_validator
 
 auth = zixun_auth.ZixunAuth(
     os.environ.get('ZX_AUTH_HOST'),
@@ -32,7 +33,23 @@ router = APIRouter()
 
 token_store = {}
 
-def get_store(token: str | None):
+continue_plugin_dev_data_enabled = 'true' == os.environ.get('ZX_CONTINUE_PLUGIN_DEV_DATA_ENABLED', 'false').strip()
+
+security_validator = zx_security_validator.SecurityValidator('ZX_APP_CLIENT_CREDENTIALS_')
+add_user_allow_email_domain = '@'+os.environ.get('ZX_ADD_USER_ALLOW_EMAIL_DOMAIN', 'fzzixun.com').strip()
+
+
+def set_store(token: str, auth_key: str | None = None, data: dict | None = None, timeout: int = 30):
+    token_store[token] = {
+        'login': False,
+        'status': "pending",
+        # 过期时间
+        'expire_time': time.time() + timeout * 60,
+        'auth_key': auth_key,
+        'data': data,
+    }
+
+def get_store(token: str | None, check_login: bool = True):
     for k, v in list(token_store.items()):
         if v['expire_time'] < time.time():
             del token_store[k]
@@ -40,12 +57,64 @@ def get_store(token: str | None):
     store = token_store.get(token, None)
     if not store:
         return None
-    # if store['expire_time'] < time.time():
-    #     del token_store[token]
-    #     return None
-    if not store['login']:
+    if check_login and not store['login']:
         return None
     return store
+
+
+async def create_or_get_user_key(
+        provider: str, 
+        user_id: str, 
+        user_name: str, 
+        org_email: str, 
+        dept_id: Optional[str], 
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None
+) -> tuple[bool, str]:
+    if dept_id is None:
+        dept_id = "none_dept_id"
+    if user_api_key_dict is None:
+        user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    
+    keys = await key_management_endpoints.list_keys(
+        Request({'type': 'http', 'query_string': '',}),
+        page=1, 
+        size=1, 
+        key_alias=org_email, 
+        user_api_key_dict=user_api_key_dict,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc"
+    )
+    if keys:
+        total_count = keys.get('total_count', 0) or 0
+        if total_count == 1:
+            key_id = keys.get('key', [None])[0]
+            if key_id is not None:
+                return (False, key_id)
+    
+    logger.info(f'user[{user_id}:{org_email}] create start...')
+    teams = await team_endpoints.list_team(Request({'type': 'http', 'query_string': '',}), user_id=None, organization_id=None, user_api_key_dict=user_api_key_dict)
+    team = next((x for x in teams if x.team_alias and x.team_alias.endswith(f'__{dept_id}')), None)
+    if team is None:
+        logger.info(f'user[{user_id}:{org_email}] create team')
+        team_data = NewTeamRequest(team_alias=f'__{dept_id}', models=["all-proxy-models"])
+        team_res = await team_endpoints.new_team(team_data, Request({'type': 'http', 'query_string': '',}), litellm_changed_by=provider, user_api_key_dict=user_api_key_dict)
+        team_id = team_res['team_id']
+    else:
+        team_id = team.team_id
+    metadata = {
+        'provider': provider
+    }
+    user_data = NewUserRequest(key_alias=org_email, auto_create_key=True, user_id=user_id, user_alias=user_name, user_email=org_email, user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, team_id=team_id, metadata=metadata)
+    logger.info(f'user[{user_id}:{org_email}] create end...')
+    key_res = await internal_user_endpoints.new_user(user_data, user_api_key_dict=user_api_key_dict)
+    return (True, key_res.key)
 
 
 @router.get(
@@ -175,53 +244,18 @@ async def cli_get_key(token: Annotated[str | None, Header()] = None):
     dept_id = ""
     if user_info.get('deptIdList'):
         dept_id = user_info.get('deptIdList')[0]
-    if not dept_id:
-        dept_id = "none_dept_id"
-    keys = await key_management_endpoints.list_keys(
-        Request({'type': 'http', 'query_string': '',}),
-        page=1, 
-        size=1, 
-        key_alias=org_email, 
-        user_api_key_dict=user_api_key_dict,
-        user_id=None,
-        team_id=None,
-        organization_id=None,
-        key_hash=None,
-        return_full_object=False,
-        include_team_keys=False,
-        include_created_by_keys=False,
-        sort_by=None,
-        sort_order="desc"
-    )
-    key_id = None
-    if keys:
-        key_id = keys.get('key', [None])[0]
-    if key_id is None:
-        logger.info(f'user[{user_id}] create key')
-        teams = await team_endpoints.list_team(Request({'type': 'http', 'query_string': '',}), user_id=None, organization_id=None, user_api_key_dict=user_api_key_dict)
-        team = next((x for x in teams if x.team_alias and x.team_alias.endswith(f'__{dept_id}')), None)
-        if team is None:
-            logger.info(f'user[{user_id}] create team')
-            team_data = NewTeamRequest(team_alias=f'__{dept_id}', models=["all-proxy-models"])
-            team_res = await team_endpoints.new_team(team_data, Request({'type': 'http', 'query_string': '',}), litellm_changed_by='ai_developer', user_api_key_dict=user_api_key_dict)
-            team_id = team_res['team_id']
-        else:
-            team_id = team.team_id
-        user_data = NewUserRequest(key_alias=org_email, auto_create_key=True, user_id=user_id, user_alias=user_name, user_email=org_email, user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, team_id=team_id)
-        logger.info(f'user[{user_id}] create user')
-        key_res = await internal_user_endpoints.new_user(user_data, user_api_key_dict=user_api_key_dict)
-        # key_data = GenerateKeyRequest(user_id='default_user_id', key_alias=org_email, team_id=team_id, models=["all-team-models"])
-        # key_res = await generate_key_fn(key_data, user_api_key_dict=user_api_key_dict)
+    (created, key_or_key_id) = await create_or_get_user_key('ai_developer', user_id, user_name, org_email, dept_id, user_api_key_dict)
+    key = None
+    if created:
+        key = key_or_key_id
     else:
         logger.info(f'user[{user_id}] recreate key')
-        key_res = await key_management_endpoints.regenerate_key_fn(key_id, litellm_changed_by='ai_developer', user_api_key_dict=user_api_key_dict)
-
-    new_key = None
-    if key_res is not None:
-        new_key = key_res.key
+        key_res = await key_management_endpoints.regenerate_key_fn(key_or_key_id, litellm_changed_by='ai_developer', user_api_key_dict=user_api_key_dict)
+        if key_res is not None:
+            key = key_res.key
 
     return {
-        'key': new_key
+        'key': key
     }
 
 
@@ -282,12 +316,49 @@ async def continue_plugin_dev_data(request: Request, utoken: Annotated[str | Non
     """
     接收Continue插件使用数据
     """
-    # store = get_store(token)
-    # if store is None:
-    #     raise HTTPException(status_code=401, detail="Invalid token")
+    
+    if continue_plugin_dev_data_enabled:
+        body = await request.body()
+        event = body.decode('utf-8')
+        user_event = f'{event[0]}"litellm_user_id":"{utoken}",{event[1:]}'
+        zx_development_data.add_continue_plugin_event(user_event)
+
+    return {'success': 'true'}
+
+
+@router.post(
+    "/zx/provider/user_add",
+    tags=["ZX"],
+)
+async def provider_user_add(client_id: str, signature: str, timestamp: str, request: Request,):
+    """
+    动态添加用户
+    """
+
+    try:
+        int_num = int(timestamp)
+    except ValueError as e:
+        raise Exception(f"Invalid API key: timestamp[{timestamp}] error")
+    # 半小时内有效
+    if time.time() - int_num > 1800:
+        raise Exception(f"Invalid API key: timestamp[{timestamp}] expired")
 
     body = await request.body()
-    event = body.decode('utf-8')
-    user_event = f'{event[0]}"litellm_user_id":"{utoken}",{event[1:]}'
-    zx_development_data.add_continue_plugin_event(user_event)
-    return {'success': 'true'}
+    data = body.decode('utf-8')
+
+    if not security_validator.validate(client_id, signature, f"{data}:{timestamp}"):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user_info = json.loads(data)
+    org_email = user_info['orgEmail']
+    if not org_email.endswith(add_user_allow_email_domain):
+        return {'success': 'false', 'email': org_email, 'error': 'Invalid email domain' }
+
+    user_id = user_info['userId']
+    user_name = user_info['name']
+    dept_id = user_info.get('deptId')
+    if dept_id is None and user_info.get('deptIdList'):
+        dept_id = user_info.get('deptIdList')[0]
+    (created, res) = await create_or_get_user_key(client_id, user_id, user_name, org_email, dept_id)
+
+    return {'success': 'true', 'email': org_email, 'created': created }
