@@ -15,11 +15,11 @@ sys.path.insert(
 import json
 import sys
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncGenerator,
     List,
     Literal,
-    NamedTuple,
     Optional,
     Tuple,
     Union,
@@ -41,7 +41,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks, PiiEntityType
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
@@ -50,6 +50,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockRequest,
     BedrockTextContent,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
@@ -1241,34 +1244,42 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def apply_guardrail(
         self,
-        text: str,
-        language: Optional[str] = None,
-        entities: Optional[List[PiiEntityType]] = None,
-        request_data: Optional[dict] = None,
-    ) -> str:
+        texts: List[str],
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        images: Optional[List[str]] = None,
+    ) -> Tuple[List[str], Optional[List[str]]]:
         """
-        Apply Bedrock guardrail to the given text for testing purposes.
+        Apply Bedrock guardrail to a batch of texts for testing purposes.
 
         This method allows users to test Bedrock guardrails without making actual LLM calls.
-        It creates a mock request and response to test the guardrail functionality.
+        It creates mock messages to test the guardrail functionality.
 
         Args:
-            text: The text to analyze
-            language: Optional language parameter (not used by Bedrock)
-            entities: Optional entities parameter (not used by Bedrock)
-            request_data: Optional request data dictionary for logging metadata
+            texts: List of texts to analyze
+            request_data: Request data dictionary for logging metadata
+            input_type: Whether this is a "request" or "response"
+            images: Optional list of images (not processed separately)
+
+        Returns:
+            Tuple of (processed_texts, images) - texts may be masked, images unchanged
+
+        Raises:
+            Exception: If content is blocked by Bedrock guardrail
         """
         try:
-            verbose_proxy_logger.debug("Bedrock Guardrail: Applying guardrail")
-            mock_messages: List[AllMessageValues] = [
-                ChatCompletionUserMessage(role="user", content=text)
-            ]
+            verbose_proxy_logger.debug(
+                f"Bedrock Guardrail: Applying guardrail to {len(texts)} text(s)"
+            )
 
-            # Use provided request_data or create a mock one for testing
-            if request_data is None:
-                request_data = {"messages": mock_messages}
+            masked_texts = []
 
-            request_messages = request_data.get("messages") or mock_messages
+            for text in texts:
+                mock_messages: List[AllMessageValues] = [
+                    ChatCompletionUserMessage(role="user", content=text)
+                ]
+            request_messages = mock_messages
             filter_result = self._prepare_guardrail_messages_for_role(
                 messages=request_messages
             )
@@ -1280,36 +1291,44 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data,
             )
 
-            if bedrock_response.get("action") == "BLOCKED":
-                raise Exception(
-                    f"Content blocked by Bedrock guardrail: {bedrock_response.get('reason', 'Unknown reason')}"
+                bedrock_response = await self.make_bedrock_api_request(
+                    source="INPUT",
+                    messages=mock_messages,
+                    request_data=request_data,
                 )
 
-            # Apply any masking that was applied by the guardrail
-            masked_text = text
-            output_list = bedrock_response.get("output")
-            if output_list:
-                # If the guardrail returned modified content, use that
-                for output_item in output_list:
-                    text_content = output_item.get("text")
-                    if text_content:
-                        masked_text = str(text_content)
-                        break
-            else:
-                outputs_list = bedrock_response.get("outputs")
-                if outputs_list:
-                    # Fallback to outputs field if output is not available
-                    for output_item in outputs_list:
+                if bedrock_response.get("action") == "BLOCKED":
+                    raise Exception(
+                        f"Content blocked by Bedrock guardrail: {bedrock_response.get('reason', 'Unknown reason')}"
+                    )
+
+                # Apply any masking that was applied by the guardrail
+                masked_text = text
+                output_list = bedrock_response.get("output")
+                if output_list:
+                    # If the guardrail returned modified content, use that
+                    for output_item in output_list:
                         text_content = output_item.get("text")
                         if text_content:
                             masked_text = str(text_content)
                             break
+                else:
+                    outputs_list = bedrock_response.get("outputs")
+                    if outputs_list:
+                        # Fallback to outputs field if output is not available
+                        for output_item in outputs_list:
+                            text_content = output_item.get("text")
+                            if text_content:
+                                masked_text = str(text_content)
+                                break
+
+                masked_texts.append(masked_text)
 
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Successfully applied guardrail"
             )
 
-            return masked_text
+            return masked_texts, images
 
         except Exception as e:
             verbose_proxy_logger.error(
