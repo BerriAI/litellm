@@ -99,11 +99,13 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
-            guardrailed_texts, guardrailed_images = await guardrail_to_apply.apply_guardrail(
-                texts=texts_to_check,
-                request_data=data,
-                input_type="request",
-                images=images_to_check if images_to_check else None,
+            guardrailed_texts, guardrailed_images = (
+                await guardrail_to_apply.apply_guardrail(
+                    texts=texts_to_check,
+                    request_data=data,
+                    input_type="request",
+                    images=images_to_check if images_to_check else None,
+                )
             )
 
             # Step 3: Map guardrail responses back to original input structure
@@ -150,7 +152,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                     if text_str is not None:
                         texts_to_check.append(text_str)
                         task_mappings.append((msg_idx, int(content_idx)))
-                    
+
                     # Extract images
                     if content_item.get("type") == "image_url":
                         image_url = content_item.get("image_url", {})
@@ -239,15 +241,22 @@ class OpenAIResponsesHandler(BaseTranslation):
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
             # Create a request_data dict with response info and user API key metadata
-            request_data = {"response": response}
-            if user_api_key_dict is not None:
-                request_data["user_api_key_dict"] = user_api_key_dict
-            
-            guardrailed_texts, guardrailed_images = await guardrail_to_apply.apply_guardrail(
-                texts=texts_to_check,
-                request_data=request_data,
-                input_type="response",
-                images=images_to_check if images_to_check else None,
+            request_data: dict = {"response": response}
+
+            # Add user API key metadata with prefixed keys
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
+
+            guardrailed_texts, guardrailed_images = (
+                await guardrail_to_apply.apply_guardrail(
+                    texts=texts_to_check,
+                    request_data=request_data,
+                    input_type="response",
+                    images=images_to_check if images_to_check else None,
+                )
             )
 
             # Step 3: Map guardrail responses back to original response structure

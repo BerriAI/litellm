@@ -135,7 +135,7 @@ class PassThroughEndpointHandler(BaseTranslation):
     ) -> Any:
         """
         Process output response by applying guardrails to targeted fields.
-        
+
         Args:
             response: The response to process
             guardrail_to_apply: The guardrail instance to apply
@@ -165,9 +165,16 @@ class PassThroughEndpointHandler(BaseTranslation):
             return response
 
         # Create a request_data dict with response info and user API key metadata
-        request_data = {"response": response} if not isinstance(response, dict) else response.copy()
-        if user_api_key_dict is not None:
-            request_data["user_api_key_dict"] = user_api_key_dict
+        request_data: dict = (
+            {"response": response}
+            if not isinstance(response, dict)
+            else response.copy()
+        )
+
+        # Add user API key metadata with prefixed keys
+        user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+        if user_metadata:
+            request_data["litellm_metadata"] = user_metadata
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
         await guardrail_to_apply.apply_guardrail(

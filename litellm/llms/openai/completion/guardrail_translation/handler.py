@@ -71,19 +71,19 @@ class OpenAITextCompletionHandler(BaseTranslation):
             # List of string prompts (batch completion)
             texts_to_check = []
             text_indices = []  # Track which prompts are strings
-            
+
             for idx, p in enumerate(prompt):
                 if isinstance(p, str):
                     texts_to_check.append(p)
                     text_indices.append(idx)
-            
+
             if texts_to_check:
                 guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
                     texts=texts_to_check,
                     request_data=data,
                     input_type="request",
                 )
-                
+
                 # Replace guardrailed texts back
                 for guardrail_idx, prompt_idx in enumerate(text_indices):
                     if guardrail_idx < len(guardrailed_texts):
@@ -132,7 +132,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         # Collect all texts to check
         texts_to_check = []
         choice_indices = []
-        
+
         for idx, choice in enumerate(response.choices):
             if hasattr(choice, "text") and isinstance(choice.text, str):
                 texts_to_check.append(choice.text)
@@ -141,16 +141,21 @@ class OpenAITextCompletionHandler(BaseTranslation):
         # Apply guardrails in batch
         if texts_to_check:
             # Create a request_data dict with response info and user API key metadata
-            request_data = {"response": response}
-            if user_api_key_dict is not None:
-                request_data["user_api_key_dict"] = user_api_key_dict
-            
+            request_data: dict = {"response": response}
+
+            # Add user API key metadata with prefixed keys
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
+
             guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
                 texts=texts_to_check,
                 request_data=request_data,
                 input_type="response",
             )
-            
+
             # Apply guardrailed texts back to choices
             for guardrail_idx, choice_idx in enumerate(choice_indices):
                 if guardrail_idx < len(guardrailed_texts):

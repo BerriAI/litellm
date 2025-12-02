@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -8,6 +8,50 @@ if TYPE_CHECKING:
 
 
 class BaseTranslation(ABC):
+    @staticmethod
+    def transform_user_api_key_dict_to_metadata(
+        user_api_key_dict: Optional[Any],
+    ) -> Dict[str, Any]:
+        """
+        Transform user_api_key_dict to a metadata dict with prefixed keys.
+
+        Converts keys like 'user_id' to 'user_api_key_user_id' to clearly indicate
+        the source of the metadata.
+
+        Args:
+            user_api_key_dict: UserAPIKeyAuth object or dict with user information
+
+        Returns:
+            Dict with keys prefixed with 'user_api_key_'
+        """
+        if user_api_key_dict is None:
+            return {}
+
+        # Convert to dict if it's a Pydantic object
+        user_dict = (
+            user_api_key_dict.model_dump()
+            if hasattr(user_api_key_dict, "model_dump")
+            else user_api_key_dict
+        )
+
+        if not isinstance(user_dict, dict):
+            return {}
+
+        # Transform keys to be prefixed with 'user_api_key_'
+        transformed = {}
+        for key, value in user_dict.items():
+            # Skip None values and internal fields
+            if value is None or key.startswith("_"):
+                continue
+
+            # If key already has the prefix, use as-is, otherwise add prefix
+            if key.startswith("user_api_key_"):
+                transformed[key] = value
+            else:
+                transformed[f"user_api_key_{key}"] = value
+
+        return transformed
+
     @abstractmethod
     async def process_input_messages(
         self,

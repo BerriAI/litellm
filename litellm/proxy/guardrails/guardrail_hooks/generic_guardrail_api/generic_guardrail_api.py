@@ -97,45 +97,47 @@ class GenericGuardrailAPI(CustomGuardrail):
         Extract user API key metadata from request_data.
 
         Args:
-            request_data: Request data dictionary that may contain user_api_key_dict
+            request_data: Request data dictionary that may contain:
+                - metadata (for input requests) with user_api_key_* fields
+                - litellm_metadata (for output responses) with user_api_key_* fields
 
         Returns:
             GenericGuardrailAPIMetadata with extracted user information
         """
-        metadata = GenericGuardrailAPIMetadata()
+        result_metadata = GenericGuardrailAPIMetadata()
 
-        # Extract user_api_key_dict from request_data
-        user_api_key_dict = request_data.get("user_api_key_dict")
-        if user_api_key_dict is None:
-            return metadata
+        # Get the source of metadata - try both locations
+        # 1. For output responses: litellm_metadata (set by handlers with prefixed keys)
+        # 2. For input requests: metadata (already present in request_data with prefixed keys)
+        litellm_metadata = request_data.get("litellm_metadata", {})
+        top_level_metadata = request_data.get("metadata", {})
 
-        # Map UserAPIKeyAuth fields to GenericGuardrailAPIMetadata fields
-        # Use getattr to safely access fields that might not exist
-        if hasattr(user_api_key_dict, "token"):
-            metadata["user_api_key_hash"] = getattr(user_api_key_dict, "token", None)
-        elif hasattr(user_api_key_dict, "api_key"):
-            metadata["user_api_key_hash"] = getattr(user_api_key_dict, "api_key", None)
+        # Merge both sources, preferring litellm_metadata if both exist
+        metadata_dict = {**top_level_metadata, **litellm_metadata}
 
-        metadata["user_api_key_alias"] = getattr(user_api_key_dict, "key_alias", None)
-        metadata["user_api_key_user_id"] = getattr(user_api_key_dict, "user_id", None)
-        metadata["user_api_key_user_email"] = getattr(
-            user_api_key_dict, "user_email", None
-        )
-        metadata["user_api_key_team_id"] = getattr(user_api_key_dict, "team_id", None)
-        metadata["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        metadata["user_api_key_end_user_id"] = getattr(
-            user_api_key_dict, "end_user_id", None
-        )
-        metadata["user_api_key_org_id"] = getattr(user_api_key_dict, "org_id", None)
+        if not metadata_dict:
+            return result_metadata
+
+        # Dynamically iterate through GenericGuardrailAPIMetadata fields
+        # and extract matching fields from the source metadata
+        # Fields in metadata are already prefixed with 'user_api_key_'
+        for field_name in GenericGuardrailAPIMetadata.__annotations__.keys():
+            value = metadata_dict.get(field_name)
+            if value is not None:
+                result_metadata[field_name] = value
+
+        # handle user_api_key_token = user_api_key_hash
+        if metadata_dict.get("user_api_key_token") is not None:
+            result_metadata["user_api_key_hash"] = metadata_dict.get(
+                "user_api_key_token"
+            )
 
         verbose_proxy_logger.debug(
             "Generic Guardrail API: Extracted user metadata: %s",
-            {k: v for k, v in metadata.items() if v is not None},
+            {k: v for k, v in result_metadata.items() if v is not None},
         )
 
-        return metadata
+        return result_metadata
 
     async def apply_guardrail(
         self,

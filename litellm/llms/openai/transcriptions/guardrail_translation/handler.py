@@ -79,9 +79,14 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         if isinstance(response.text, str):
             original_text = response.text
             # Create a request_data dict with response info and user API key metadata
-            request_data = {"response": response}
-            if user_api_key_dict is not None:
-                request_data["user_api_key_dict"] = user_api_key_dict
+            request_data: dict = {"response": response}
+
+            # Add user API key metadata with prefixed keys
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
 
             guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
                 texts=[original_text],
