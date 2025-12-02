@@ -188,3 +188,95 @@ async def test_bedrock_apply_guardrail_endpoint_integration():
             assert isinstance(response, ApplyGuardrailResponse)
             assert response.response_text == "This is a test message with processed content"
             mock_api_request.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enabled():
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    request_messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "response"},
+        {"role": "user", "content": "latest question"},
+    ]
+
+    request_data = {"messages": request_messages}
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {"action": "ALLOWED"}
+
+        result = await guardrail.apply_guardrail(
+            text="latest question",
+            request_data=request_data,
+        )
+
+        assert mock_api.called
+        _, kwargs = mock_api.call_args
+        assert kwargs["messages"] == [request_messages[-1]]
+        assert result == "latest question"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enabled_blocked():
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    request_messages = [
+        {"role": "user", "content": "first"},
+        {"role": "user", "content": "blocked"},
+    ]
+
+    request_data = {"messages": request_messages}
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {"action": "BLOCKED", "reason": "policy"}
+
+        with pytest.raises(Exception, match="policy") as exc_info:
+            await guardrail.apply_guardrail(
+                text="blocked",
+                request_data=request_data,
+            )
+
+        assert mock_api.called
+        _, kwargs = mock_api.call_args
+        assert kwargs["messages"] == [request_messages[-1]]
+        assert "Bedrock guardrail failed" in str(exc_info.value)
+
+def test_bedrock_guardrail_filters_latest_user_message_when_enabled():
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "response"},
+        {"role": "user", "content": "latest question"},
+    ]
+
+    filter_result = guardrail._prepare_guardrail_messages_for_role(messages=messages)
+
+    assert filter_result.payload_messages is not None
+    assert len(filter_result.payload_messages) == 1
+    assert filter_result.payload_messages[0]["content"] == "latest question"
+    assert filter_result.target_indices == [3]
+
+    masked_messages = guardrail._merge_filtered_messages(
+        original_messages=filter_result.original_messages,
+        updated_target_messages=[{"role": "user", "content": "[MASKED]"}],
+        target_indices=filter_result.target_indices,
+    )
+    assert masked_messages[3]["content"] == "[MASKED]"

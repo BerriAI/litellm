@@ -525,6 +525,11 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         default=None, description="Base URL for the guardrail service API"
     )
 
+    experimental_use_latest_role_message_only: Optional[bool] = Field(
+        default=False,
+        description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
+    )
+
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds] = Field(
         default=None,
