@@ -860,6 +860,7 @@ def mock_completion(
             raise mock_response
         # At this point, mock_response must be a string (all other types have been handled or returned early)
         mock_response = cast(str, mock_response)
+
         if n is None:
             model_response.choices[0].message.content = mock_response  # type: ignore
         else:
@@ -906,6 +907,7 @@ def mock_completion(
                 api_key="my-secret-key",
                 original_response="my-original-response",
             )
+
         return model_response
 
     except Exception as e:
@@ -942,10 +944,16 @@ def responses_api_bridge_check(
     return model_info, model
 
 
-def _should_allow_input_examples(custom_llm_provider: Optional[str], model: str) -> bool:
+def _should_allow_input_examples(
+    custom_llm_provider: Optional[str], model: str
+) -> bool:
     if custom_llm_provider == "anthropic":
         return True
-    if custom_llm_provider == "azure_ai" or custom_llm_provider == "bedrock" or custom_llm_provider == "vertex_ai":
+    if (
+        custom_llm_provider == "azure_ai"
+        or custom_llm_provider == "bedrock"
+        or custom_llm_provider == "vertex_ai"
+    ):
         return "claude" in model.lower()
     return False
 
@@ -961,7 +969,9 @@ def _drop_input_examples_from_tool(tool: dict) -> dict:
     return tool_copy
 
 
-def _drop_input_examples_from_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
+def _drop_input_examples_from_tools(
+    tools: Optional[List[dict]],
+) -> Optional[List[dict]]:
     if tools is None:
         return None
     cleaned_tools: List[dict] = []
@@ -1735,7 +1745,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "Set `api_base` or the AZURE_AI_API_BASE env var."
                     )
                 api_key = AzureFoundryModelInfo.get_api_key(api_key)
-                
+
                 # Ensure the URL ends with /v1/messages for Anthropic
                 if api_base:
                     api_base = api_base.rstrip("/")
@@ -1746,7 +1756,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         else:
                             api_base = api_base + "/anthropic"
                         api_base = api_base + "/v1/messages"
-                
+
                 response = azure_anthropic_chat_completions.completion(
                     model=model,
                     messages=messages,
@@ -4253,6 +4263,22 @@ def embedding(  # noqa: PLR0915
                 headers=headers or extra_headers,
                 litellm_params=litellm_params_dict,
             )
+        elif custom_llm_provider == "github_copilot":
+            api_key = (api_key or litellm.api_key)
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+            )
         elif (
             model in litellm.open_ai_embedding_models
             or custom_llm_provider == "openai"
@@ -5872,6 +5898,7 @@ def speech(  # noqa: PLR0915
     proxy_server_request = kwargs.get("proxy_server_request", None)
     extra_headers = kwargs.get("extra_headers", None)
     model_info = kwargs.get("model_info", None)
+    shared_session = kwargs.get("shared_session", None)
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
     )  # type: ignore
@@ -5912,7 +5939,9 @@ def speech(  # noqa: PLR0915
             kwargs=kwargs,
         )
 
-    logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
+    logging_obj: LiteLLMLoggingObj = cast(
+        LiteLLMLoggingObj, kwargs.get("litellm_logging_obj")
+    )
     logging_obj.update_environment_variables(
         model=model,
         user=user,
@@ -5987,6 +6016,7 @@ def speech(  # noqa: PLR0915
             timeout=timeout,
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
+            shared_session=shared_session,
         )
     elif custom_llm_provider == "azure":
         # Check if this is Azure Speech Service (Cognitive Services TTS)

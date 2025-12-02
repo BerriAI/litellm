@@ -157,7 +157,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             computer_tool_used=anthropic_model_info.is_computer_tool_used(tools),
-            prompt_caching_set=anthropic_model_info.is_cache_control_set(messages_typed),
+            prompt_caching_set=False,
             file_id_used=anthropic_model_info.is_file_id_used(messages_typed),
             mcp_server_used=anthropic_model_info.is_mcp_server_used(
                 anthropic_messages_optional_request_params.get("mcp_servers")
