@@ -309,7 +309,7 @@ def get_tags_from_request_body(request_body: dict) -> List[str]:
         List of tag names (strings), empty list if no valid tags found
     """
     metadata_variable_name = get_metadata_variable_name_from_kwargs(request_body)
-    metadata = request_body.get(metadata_variable_name, {})
+    metadata = request_body.get(metadata_variable_name) or {}
     tags_in_metadata: Any = metadata.get("tags", [])
     tags_in_request_body: Any = request_body.get("tags", [])
     combined_tags: List[str] = []
@@ -323,4 +323,79 @@ def get_tags_from_request_body(request_body: dict) -> List[str]:
         combined_tags.extend(tags_in_request_body)
     ######################################
     return [tag for tag in combined_tags if isinstance(tag, str)]
+
+
+def populate_request_with_path_params(
+    request_data: dict, request: Request
+) -> dict:
+    """
+    Copy FastAPI path params into the request payload so downstream checks
+    (e.g. vector store RBAC) see them the same way as body params.
+    
+    Since path_params may not be available during dependency injection,
+    we parse the URL path directly for known patterns.
+    
+    Args:
+        request_data: The request data dictionary to populate
+        request: The FastAPI Request object
+        
+    Returns:
+        dict: Updated request_data with path parameters added
+    """    
+    # Try to get path_params if available (sometimes populated by FastAPI)
+    path_params = getattr(request, "path_params", None)
+    if isinstance(path_params, dict) and path_params:
+        for key, value in path_params.items():
+            if key == "vector_store_id":
+                request_data.setdefault("vector_store_id", value)
+                existing_ids = request_data.get("vector_store_ids")
+                if isinstance(existing_ids, list):
+                    if value not in existing_ids:
+                        existing_ids.append(value)
+                else:
+                    request_data["vector_store_ids"] = [value]
+                continue
+            request_data.setdefault(key, value)
+        verbose_proxy_logger.debug(
+            f"populate_request_with_path_params: Found path_params, vector_store_ids={request_data.get('vector_store_ids')}"
+        )
+        return request_data
+
+    # Fallback: parse the URL path directly to extract vector_store_id
+    _add_vector_store_id_from_path(request_data=request_data, request=request)
+
+    return request_data
+
+
+def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None:
+    """
+    Parse the request path to find /vector_stores/{vector_store_id}/... segments.
+
+    When found, ensure both vector_store_id and vector_store_ids are populated.
+    
+    Args:
+        request_data: The request data dictionary to populate
+        request: The FastAPI Request object
+    """
+    path = request.url.path
+    vector_store_match = re.search(r"/vector_stores/([^/]+)/", path)
+    if vector_store_match:
+        vector_store_id = vector_store_match.group(1)
+        verbose_proxy_logger.debug(
+            f"populate_request_with_path_params: Extracted vector_store_id={vector_store_id} from path={path}"
+        )
+        request_data.setdefault("vector_store_id", vector_store_id)
+        existing_ids = request_data.get("vector_store_ids")
+        if isinstance(existing_ids, list):
+            if vector_store_id not in existing_ids:
+                existing_ids.append(vector_store_id)
+        else:
+            request_data["vector_store_ids"] = [vector_store_id]
+        verbose_proxy_logger.debug(
+            f"populate_request_with_path_params: Updated request_data with vector_store_ids={request_data.get('vector_store_ids')}"
+        )
+    else:
+        verbose_proxy_logger.debug(
+            f"populate_request_with_path_params: No vector_store_id present in path={path}"
+        )
 

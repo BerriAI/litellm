@@ -855,7 +855,7 @@
         "responses": true,
         "embeddings": true,
         "image_generations": false,
-        "audio_transcriptions": false,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,
@@ -1272,7 +1272,7 @@
         "responses": true,
         "embeddings": false,
         "image_generations": false,
-        "audio_transcriptions": false,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,
@@ -1316,6 +1316,22 @@
     "petals": {
       "display_name": "Petals (`petals`)",
       "url": "https://docs.litellm.ai/docs/providers/petals",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
+    "publicai": {
+      "display_name": "PublicAI (`publicai`)",
+      "url": "https://docs.litellm.ai/docs/providers/publicai",
       "endpoints": {
         "chat_completions": true,
         "messages": true,

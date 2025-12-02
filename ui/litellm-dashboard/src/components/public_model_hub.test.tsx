@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render } from "@testing-library/react";
 import PublicModelHub from "./public_model_hub";
-import { FeatureFlagsProvider } from "@/hooks/useFeatureFlags";
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
@@ -58,11 +57,7 @@ beforeEach(() => {
 
 describe("PublicModelHub", () => {
   it("renders", () => {
-    const { container } = render(
-      <FeatureFlagsProvider>
-        <PublicModelHub />
-      </FeatureFlagsProvider>,
-    );
+    const { container } = render(<PublicModelHub />);
     expect(container).toBeInTheDocument();
   });
 });
