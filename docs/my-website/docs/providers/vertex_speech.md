@@ -6,7 +6,7 @@ import TabItem from '@theme/TabItem';
 | Property | Details |
 |-------|-------|
 | Description | Google Cloud Text-to-Speech with Chirp3 HD voices and Gemini TTS |
-| Provider Route on LiteLLM | `vertex_ai/` (Chirp), `vertex_ai/gemini-*-tts` (Gemini) |
+| Provider Route on LiteLLM | `vertex_ai/chirp` (Chirp), `vertex_ai/gemini-*-tts` (Gemini) |
 
 ## Chirp3 HD Voices
 
@@ -14,16 +14,15 @@ Google Cloud Text-to-Speech API with high-quality Chirp3 HD voices.
 
 ### Quick Start
 
-<Tabs>
-<TabItem value="sdk" label="LiteLLM SDK">
+#### LiteLLM Python SDK
 
-```python
+```python showLineNumbers title="Chirp3 Quick Start"
 from litellm import speech
 from pathlib import Path
 
 speech_file_path = Path(__file__).parent / "speech.mp3"
 response = speech(
-    model="vertex_ai/",
+    model="vertex_ai/chirp",
     voice="alloy",  # OpenAI voice name - automatically mapped
     input="Hello, this is Vertex AI Text to Speech",
     vertex_project="your-project-id",
@@ -32,20 +31,32 @@ response = speech(
 response.stream_to_file(speech_file_path)
 ```
 
-</TabItem>
-<TabItem value="proxy" label="LiteLLM Proxy">
+#### LiteLLM AI Gateway
 
-```yaml
+**1. Setup config.yaml**
+
+```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: vertex-tts
     litellm_params:
-      model: vertex_ai/
+      model: vertex_ai/chirp
       vertex_project: "your-project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json"
 ```
 
-```bash
+**2. Start the proxy**
+
+```bash title="Start LiteLLM Proxy"
+litellm --config /path/to/config.yaml
+```
+
+**3. Make requests**
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers title="Chirp3 Quick Start"
 curl http://0.0.0.0:4000/v1/audio/speech \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
@@ -55,6 +66,22 @@ curl http://0.0.0.0:4000/v1/audio/speech \
     "input": "Hello, this is Vertex AI Text to Speech"
   }' \
   --output speech.mp3
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python showLineNumbers title="Chirp3 Quick Start"
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.audio.speech.create(
+    model="vertex-tts",
+    voice="alloy",
+    input="Hello, this is Vertex AI Text to Speech",
+)
+response.stream_to_file("speech.mp3")
 ```
 
 </TabItem>
@@ -75,28 +102,30 @@ LiteLLM maps OpenAI voice names to Google Cloud voices. You can use either OpenA
 
 ### Using Google Cloud Voices Directly
 
-<Tabs>
-<TabItem value="sdk" label="LiteLLM SDK">
+#### LiteLLM Python SDK
 
-```python
+```python showLineNumbers title="Chirp3 HD Voice"
 from litellm import speech
-from pathlib import Path
 
-# Pass Google Cloud voice name directly
+# Pass Chirp3 HD voice name directly
 response = speech(
-    model="vertex_ai/",
-    voice="en-US-Neural2-A",
-    input="Hello with a Neural2 voice",
+    model="vertex_ai/chirp",
+    voice="en-US-Chirp3-HD-Charon",
+    input="Hello with a Chirp3 HD voice",
     vertex_project="your-project-id",
 )
 response.stream_to_file("speech.mp3")
+```
 
-# Or pass as dict for full control
+```python showLineNumbers title="Voice as Dict (Multilingual)"
+from litellm import speech
+
+# Pass as dict for full control over language and voice
 response = speech(
-    model="vertex_ai/",
+    model="vertex_ai/chirp",
     voice={
         "languageCode": "de-DE",
-        "name": "de-DE-Wavenet-A",
+        "name": "de-DE-Chirp3-HD-Charon",
     },
     input="Hallo, dies ist ein Test",
     vertex_project="your-project-id",
@@ -104,31 +133,62 @@ response = speech(
 response.stream_to_file("speech.mp3")
 ```
 
-</TabItem>
-<TabItem value="proxy" label="LiteLLM Proxy">
+#### LiteLLM AI Gateway
 
-```bash
-# Pass Google Cloud voice name directly
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers title="Chirp3 HD Voice"
 curl http://0.0.0.0:4000/v1/audio/speech \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "vertex-tts",
-    "voice": "en-US-Neural2-A",
-    "input": "Hello with a Neural2 voice"
+    "voice": "en-US-Chirp3-HD-Charon",
+    "input": "Hello with a Chirp3 HD voice"
   }' \
   --output speech.mp3
+```
 
-# Or pass as dict
+```bash showLineNumbers title="Voice as Dict (Multilingual)"
 curl http://0.0.0.0:4000/v1/audio/speech \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "vertex-tts",
-    "voice": {"languageCode": "de-DE", "name": "de-DE-Wavenet-A"},
+    "voice": {"languageCode": "de-DE", "name": "de-DE-Chirp3-HD-Charon"},
     "input": "Hallo, dies ist ein Test"
   }' \
   --output speech.mp3
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python showLineNumbers title="Chirp3 HD Voice"
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.audio.speech.create(
+    model="vertex-tts",
+    voice="en-US-Chirp3-HD-Charon",
+    input="Hello with a Chirp3 HD voice",
+)
+response.stream_to_file("speech.mp3")
+```
+
+```python showLineNumbers title="Voice as Dict (Multilingual)"
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.audio.speech.create(
+    model="vertex-tts",
+    voice={"languageCode": "de-DE", "name": "de-DE-Chirp3-HD-Charon"},
+    input="Hallo, dies ist ein Test",
+)
+response.stream_to_file("speech.mp3")
 ```
 
 </TabItem>
@@ -140,12 +200,10 @@ Browse available voices: [Google Cloud Text-to-Speech Console](https://console.c
 
 LiteLLM auto-detects SSML when your input contains `<speak>` tags and passes it through unchanged.
 
-<Tabs>
-<TabItem value="sdk" label="LiteLLM SDK">
+#### LiteLLM Python SDK
 
-```python
+```python showLineNumbers title="SSML Input"
 from litellm import speech
-from pathlib import Path
 
 ssml = """
 <speak>
@@ -155,27 +213,34 @@ ssml = """
 """
 
 response = speech(
-    model="vertex_ai/",
+    model="vertex_ai/chirp",
     voice="en-US-Studio-O",
     input=ssml,  # Auto-detected as SSML
     vertex_project="your-project-id",
 )
 response.stream_to_file("speech.mp3")
+```
+
+```python showLineNumbers title="Force SSML Mode"
+from litellm import speech
 
 # Force SSML mode with use_ssml=True
 response = speech(
-    model="vertex_ai/",
+    model="vertex_ai/chirp",
     voice="en-US-Studio-O",
     input="<speak><prosody rate='slow'>Speaking slowly</prosody></speak>",
     use_ssml=True,
     vertex_project="your-project-id",
 )
+response.stream_to_file("speech.mp3")
 ```
 
-</TabItem>
-<TabItem value="proxy" label="LiteLLM Proxy">
+#### LiteLLM AI Gateway
 
-```bash
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers title="SSML Input"
 curl http://0.0.0.0:4000/v1/audio/speech \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
@@ -185,6 +250,24 @@ curl http://0.0.0.0:4000/v1/audio/speech \
     "input": "<speak><p>Hello!</p><break time=\"500ms\"/><p>How are you?</p></speak>"
   }' \
   --output speech.mp3
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python showLineNumbers title="SSML Input"
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+ssml = """<speak><p>Hello!</p><break time="500ms"/><p>How are you?</p></speak>"""
+
+response = client.audio.speech.create(
+    model="vertex-tts",
+    voice="en-US-Studio-O",
+    input=ssml,
+)
+response.stream_to_file("speech.mp3")
 ```
 
 </TabItem>
@@ -202,13 +285,13 @@ curl http://0.0.0.0:4000/v1/audio/speech \
 
 ### Async Usage
 
-```python
+```python showLineNumbers title="Async Speech Generation"
 import asyncio
 from litellm import aspeech
 
 async def main():
     response = await aspeech(
-        model="vertex_ai/",
+        model="vertex_ai/chirp",
         voice="alloy",
         input="Hello from async",
         vertex_project="your-project-id",
@@ -233,10 +316,9 @@ Gemini models with audio output capabilities using the chat completions API.
 
 ### Quick Start
 
-<Tabs>
-<TabItem value="sdk" label="LiteLLM SDK">
+#### LiteLLM Python SDK
 
-```python
+```python showLineNumbers title="Gemini TTS Quick Start"
 from litellm import completion
 import json
 
@@ -257,10 +339,11 @@ response = completion(
 print(response)
 ```
 
-</TabItem>
-<TabItem value="proxy" label="LiteLLM Proxy">
+#### LiteLLM AI Gateway
 
-```yaml
+**1. Setup config.yaml**
+
+```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: gemini-tts
     litellm_params:
@@ -270,7 +353,18 @@ model_list:
       vertex_credentials: "/path/to/service_account.json"
 ```
 
-```bash
+**2. Start the proxy**
+
+```bash title="Start LiteLLM Proxy"
+litellm --config /path/to/config.yaml
+```
+
+**3. Make requests**
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers title="Gemini TTS Request"
 curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
@@ -280,6 +374,23 @@ curl http://0.0.0.0:4000/v1/chat/completions \
     "modalities": ["audio"],
     "audio": {"voice": "Kore", "format": "pcm16"}
   }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python showLineNumbers title="Gemini TTS Request"
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.chat.completions.create(
+    model="gemini-tts",
+    messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
+    modalities=["audio"],
+    audio={"voice": "Kore", "format": "pcm16"},
+)
+print(response)
 ```
 
 </TabItem>
@@ -294,7 +405,9 @@ See [Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-gene
 
 ### Advanced Usage
 
-```python
+```python showLineNumbers title="Gemini TTS with System Prompt"
+from litellm import completion
+
 response = completion(
     model="vertex_ai/gemini-2.5-pro-preview-tts",
     messages=[
