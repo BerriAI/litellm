@@ -9,7 +9,7 @@
 #   1. BerriAI/litellm:main -> CartoDB/litellm:main (direct push with PAT)
 #   2. CartoDB/litellm:main -> CartoDB/litellm:carto/main (PR for manual review)
 #
-# The workflow runs every 8 hours and performs two checks:
+# The workflow runs every Monday at noon and performs two checks:
 #   - Detects new stable releases (tagged with -stable suffix) and syncs main
 #   - Creates PR to carto/main if carto/main is behind main (regardless of upstream sync)
 #
@@ -22,10 +22,8 @@ permissions:
   pull-requests: write   # Allow PR creation and management
 
 on:
-  # Automatic sync disabled for initial testing phase
-  # Uncomment after successful manual testing
-  # schedule:
-  #   - cron: "0 */8 * * *"  # Every 8 hours
+  schedule:
+    - cron: "0 12 * * 1"  # Every Monday at noon (12:00 UTC)
 
   workflow_dispatch:  # Manual trigger for testing
 
