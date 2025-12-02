@@ -358,7 +358,7 @@ audio = litellm.speech(
 
 ### Voice Settings Reference
 
-For more details, see the [ElevenLabs Voice Settings API ↗](https://elevenlabs.io/docs/api-reference/voices/settings/get).
+For more details, see the [ElevenLabs Voice Settings API ↗](https://elevenlabs.io/docs/api-reference/voices/settings/update).
 
 | Parameter | Type | Range | Description |
 |-----------|------|-------|-------------|
@@ -366,7 +366,7 @@ For more details, see the [ElevenLabs Voice Settings API ↗](https://elevenlabs
 | `similarity_boost` | float | 0.0-1.0 | Controls how closely the generated voice matches the original. Higher = more similar. Corresponds to "Clarity + Similarity Enhancement" in the web app |
 | `style` | float | 0.0-1.0 | Style exaggeration. Only available for `eleven_multilingual_v2` and `eleven_turbo_v2` models |
 | `use_speaker_boost` | bool | true/false | Enhances voice clarity and target speaker similarity. May increase latency |
-| `speed` | float | 0.25-1.2 | Speech speed multiplier. 1.0 = normal speed, <1.2 = slower, >1.2 = faster |
+| `speed` | float | 0.25-1.0 | Speech speed multiplier. 1.0 = normal speed, <1.0 = slower, >1.0 = faster |
 
 ### Text-to-Speech with Timestamps (ElevenLabs-specific)
 
