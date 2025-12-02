@@ -189,6 +189,7 @@ async def make_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
+    stream_chunk_size: int = 1024,
 ):
     try:
         if client is None:
@@ -232,7 +233,7 @@ async def make_call(
                 json_mode=json_mode,
             )
             completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=1024)
+                response.aiter_bytes(chunk_size=stream_chunk_size)
             )
         elif bedrock_invoke_provider == "deepseek_r1":
             decoder = AmazonDeepSeekR1StreamDecoder(
@@ -240,12 +241,12 @@ async def make_call(
                 sync_stream=False,
             )
             completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=1024)
+                response.aiter_bytes(chunk_size=stream_chunk_size)
             )
         else:
             decoder = AWSEventStreamDecoder(model=model)
             completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=1024)
+                response.aiter_bytes(chunk_size=stream_chunk_size)
             )
 
         # LOGGING
@@ -278,6 +279,7 @@ def make_sync_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
+    stream_chunk_size: int = 1024,
 ):
     try:
         if client is None:
@@ -318,16 +320,16 @@ def make_sync_call(
                 sync_stream=True,
                 json_mode=json_mode,
             )
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
         elif bedrock_invoke_provider == "deepseek_r1":
             decoder = AmazonDeepSeekR1StreamDecoder(
                 model=model,
                 sync_stream=True,
             )
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
         else:
             decoder = AWSEventStreamDecoder(model=model)
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
 
         # LOGGING
         logging_obj.post_call(
@@ -698,6 +700,7 @@ class BedrockLLM(BaseAWSLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        stream_chunk_size = optional_params.pop("stream_chunk_size", 1024)
 
         provider = self.get_bedrock_invoke_provider(model)
         modelId = self.get_bedrock_model_id(
@@ -958,6 +961,7 @@ class BedrockLLM(BaseAWSLLM):
                     headers=prepped.headers,
                     timeout=timeout,
                     client=client,
+                    stream_chunk_size=stream_chunk_size,
                 )  # type: ignore
             ### ASYNC COMPLETION
             return self.async_completion(
@@ -1003,7 +1007,7 @@ class BedrockLLM(BaseAWSLLM):
 
             decoder = AWSEventStreamDecoder(model=model)
 
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
             streaming_response = CustomStreamWrapper(
                 completion_stream=completion_stream,
                 model=model,
@@ -1123,6 +1127,7 @@ class BedrockLLM(BaseAWSLLM):
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
+        stream_chunk_size: int = 1024,
     ) -> CustomStreamWrapper:
         # The call is not made here; instead, we prepare the necessary objects for the stream.
 
@@ -1138,6 +1143,7 @@ class BedrockLLM(BaseAWSLLM):
                 messages=messages,
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
+                stream_chunk_size=stream_chunk_size,
             ),
             model=model,
             custom_llm_provider="bedrock",
