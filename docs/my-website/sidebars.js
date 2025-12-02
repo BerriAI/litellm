@@ -141,6 +141,7 @@ const sidebars = {
             "proxy/quick_start",
             "proxy/cli",
             "proxy/debugging",
+            "proxy/error_diagnosis",
             "proxy/deploy",
             "proxy/health",
             "proxy/master_key_rotations",
