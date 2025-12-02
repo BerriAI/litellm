@@ -125,4 +125,3 @@ async def test_health_services_endpoint_sqs(status, error_message):
         assert result["status"] == status
         assert result["message"] == error_message
         mock_instance.async_health_check.assert_awaited_once()
-

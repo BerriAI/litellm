@@ -44,15 +44,15 @@ class TestOCIStreamingToolCalls:
                         "name": "get_weather"
                         # Note: 'arguments' field is missing
                     }
-                ]
-            }
+                ],
+            },
         }
 
         wrapper = OCIStreamWrapper(
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=MagicMock()
+            logging_obj=MagicMock(),
         )
 
         # This should not raise a ValidationError
@@ -81,15 +81,15 @@ class TestOCIStreamingToolCalls:
                         "arguments": '{"location": "San Francisco"}'
                         # Note: 'id' field is missing
                     }
-                ]
-            }
+                ],
+            },
         }
 
         wrapper = OCIStreamWrapper(
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=MagicMock()
+            logging_obj=MagicMock(),
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
@@ -115,15 +115,15 @@ class TestOCIStreamingToolCalls:
                         "arguments": '{"location": "San Francisco"}'
                         # Note: 'name' field is missing
                     }
-                ]
-            }
+                ],
+            },
         }
 
         wrapper = OCIStreamWrapper(
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=MagicMock()
+            logging_obj=MagicMock(),
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
@@ -147,15 +147,15 @@ class TestOCIStreamingToolCalls:
                         "type": "FUNCTION"
                         # All fields missing: id, name, arguments
                     }
-                ]
-            }
+                ],
+            },
         }
 
         wrapper = OCIStreamWrapper(
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=MagicMock()
+            logging_obj=MagicMock(),
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
@@ -181,17 +181,17 @@ class TestOCIStreamingToolCalls:
                         "type": "FUNCTION",
                         "id": "call_abc123",
                         "name": "get_weather",
-                        "arguments": '{"location": "San Francisco", "unit": "celsius"}'
+                        "arguments": '{"location": "San Francisco", "unit": "celsius"}',
                     }
-                ]
-            }
+                ],
+            },
         }
 
         wrapper = OCIStreamWrapper(
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=MagicMock()
+            logging_obj=MagicMock(),
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
@@ -200,8 +200,13 @@ class TestOCIStreamingToolCalls:
         assert result.choices[0].delta.tool_calls is not None
         assert len(result.choices[0].delta.tool_calls) == 1
         assert result.choices[0].delta.tool_calls[0]["id"] == "call_abc123"
-        assert result.choices[0].delta.tool_calls[0]["function"]["name"] == "get_weather"
-        assert result.choices[0].delta.tool_calls[0]["function"]["arguments"] == '{"location": "San Francisco", "unit": "celsius"}'
+        assert (
+            result.choices[0].delta.tool_calls[0]["function"]["name"] == "get_weather"
+        )
+        assert (
+            result.choices[0].delta.tool_calls[0]["function"]["arguments"]
+            == '{"location": "San Francisco", "unit": "celsius"}'
+        )
 
     def test_stream_chunk_with_multiple_tool_calls_missing_fields(self):
         """
@@ -232,16 +237,16 @@ class TestOCIStreamingToolCalls:
                         "name": "calculate",
                         "arguments": '{"expression": "2+2"}'
                         # Complete
-                    }
-                ]
-            }
+                    },
+                ],
+            },
         }
 
         wrapper = OCIStreamWrapper(
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=MagicMock()
+            logging_obj=MagicMock(),
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)
@@ -252,18 +257,26 @@ class TestOCIStreamingToolCalls:
 
         # First tool call - missing arguments
         assert result.choices[0].delta.tool_calls[0]["id"] == "call_1"
-        assert result.choices[0].delta.tool_calls[0]["function"]["name"] == "get_weather"
+        assert (
+            result.choices[0].delta.tool_calls[0]["function"]["name"] == "get_weather"
+        )
         assert result.choices[0].delta.tool_calls[0]["function"]["arguments"] == ""
 
         # Second tool call - missing id
         assert result.choices[0].delta.tool_calls[1]["id"] == ""
         assert result.choices[0].delta.tool_calls[1]["function"]["name"] == "get_time"
-        assert result.choices[0].delta.tool_calls[1]["function"]["arguments"] == '{"timezone": "UTC"}'
+        assert (
+            result.choices[0].delta.tool_calls[1]["function"]["arguments"]
+            == '{"timezone": "UTC"}'
+        )
 
         # Third tool call - complete
         assert result.choices[0].delta.tool_calls[2]["id"] == "call_3"
         assert result.choices[0].delta.tool_calls[2]["function"]["name"] == "calculate"
-        assert result.choices[0].delta.tool_calls[2]["function"]["arguments"] == '{"expression": "2+2"}'
+        assert (
+            result.choices[0].delta.tool_calls[2]["function"]["arguments"]
+            == '{"expression": "2+2"}'
+        )
 
     def test_stream_chunk_without_tool_calls(self):
         """
@@ -274,20 +287,15 @@ class TestOCIStreamingToolCalls:
             "finishReason": None,
             "message": {
                 "role": "ASSISTANT",
-                "content": [
-                    {
-                        "type": "TEXT",
-                        "text": "Hello, how can I help you?"
-                    }
-                ]
-            }
+                "content": [{"type": "TEXT", "text": "Hello, how can I help you?"}],
+            },
         }
 
         wrapper = OCIStreamWrapper(
             completion_stream=iter([]),
             model="meta.llama-3.1-405b-instruct",
             custom_llm_provider="oci",
-            logging_obj=MagicMock()
+            logging_obj=MagicMock(),
         )
 
         result = wrapper._handle_generic_stream_chunk(chunk_data)

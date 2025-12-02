@@ -794,9 +794,9 @@ def test_translate_anthropic_messages_to_openai_mixed_content_with_image():
 
 def test_translate_anthropic_messages_to_openai_tool_use_with_signature():
     """Test that thought signatures from tool_use blocks are correctly extracted and placed in provider_specific_fields."""
-    
+
     test_signature = "EpYECpMEAdHtim9iBECdK1l5uVIIXoZZmq+PUBH9nz3Q6EMeIdEqWwVb5GlxSNtxuSkFoseFco5U4zxN/lacJxD2WUjFvEyL2GOkbPgXFeCcgNBMEYVRg7UAr45KGeWJJmJMoheLHezKawI1L94vi2PsB9TDpWv4vyAx1vKG2PByiVmWWtd0rondsdbENNp2Rrz3ol1zha+XhOtyhTCdSWce8GVD/zElklL3C0h9HrsTQrnNyouaZa9KlXZJ72XDCIkIlV0m6EtxbzdMwbH4sLFOpifRlRn+AmzXjxvLovRtn2bXh/X3bUgPxqypaST57Dlpddlk1Mt0oJmGFtwB/FH1JmK21cIC06uXtlUc8lm/9cTQLd5hcEUX+XRrmTdzqxDgRttN8CRfVUAGE7Er+prN4yCIdNtEQdZm8zymEpHTkYplJ/hK7SMf9Iu1k+eCDFYCzvQuzLcJtNpRaGS1BbVA3va5JKrEu96G7a3Wl3DyzmrH8N3+RA+UIHvP6P5v93tI/eTyfMY54rKpLGkfFeeSMAr5aSoUZVYkvFI8xGEcIrqLWPDF91MclLZa7USSVql0wYu1G9KD10IkopeKkTIAl81WfoY5+Kw1o4CHo7bEQ6tfTuTB4IEywf1XKMBYHmsfAe5B9ferkLYtnAzzt1hoiK1m/2CjX8yQAknRLsnAuyeXfJZRZidVKYOKaSDftddbXJpIlJApC"
-    
+
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(
             role="user",
@@ -825,10 +825,13 @@ def test_translate_anthropic_messages_to_openai_tool_use_with_signature():
     assert result[1]["role"] == "assistant"
     assert "tool_calls" in result[1]
     assert len(result[1]["tool_calls"]) == 1
-    
+
     # Verify thought signature is extracted and placed in provider_specific_fields
     tool_call = result[1]["tool_calls"][0]
     assert tool_call["id"] == "call_386f67af31f9415781bc35071405"
     assert "function" in tool_call
     assert "provider_specific_fields" in tool_call["function"]
-    assert tool_call["function"]["provider_specific_fields"]["thought_signature"] == test_signature
+    assert (
+        tool_call["function"]["provider_specific_fields"]["thought_signature"]
+        == test_signature
+    )

@@ -30,7 +30,9 @@ def test_all_numeric_constants_can_be_overridden():
     numeric_constants = [
         (name, value)
         for name, value in constants_attributes
-        if name.isupper() and isinstance(value, (int, float)) and not isinstance(value, bool)
+        if name.isupper()
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
     ]
 
     # Ensure we found some constants to test

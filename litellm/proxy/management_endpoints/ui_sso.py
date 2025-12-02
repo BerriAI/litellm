@@ -558,11 +558,12 @@ async def get_user_info_from_db(
 
     return None
 
+
 def _should_use_role_from_sso_response(sso_role: Optional[str]) -> bool:
     """returns true if SSO upsert should use the 'role' defined on the SSO response"""
     if sso_role is None:
         return False
-    
+
     if not is_valid_litellm_user_role(sso_role):
         verbose_proxy_logger.debug(
             f"SSO role '{sso_role}' is not a valid LiteLLM user role. "
@@ -570,7 +571,6 @@ def _should_use_role_from_sso_response(sso_role: Optional[str]) -> bool:
         )
         return False
     return True
-
 
 
 def apply_user_info_values_to_sso_user_defined_values(
@@ -586,15 +586,21 @@ def apply_user_info_values_to_sso_user_defined_values(
     # This ensures SSO is the authoritative source for user roles
     sso_role = user_defined_values.get("user_role")
     db_role = user_info.user_role if user_info else None
-    
+
     if _should_use_role_from_sso_response(sso_role):
         # SSO provided a valid role, keep it and log that we're using it
-        verbose_proxy_logger.info(f"Using SSO role: {sso_role} (DB role was: {db_role})")
+        verbose_proxy_logger.info(
+            f"Using SSO role: {sso_role} (DB role was: {db_role})"
+        )
     else:
         # SSO didn't provide a valid role, fall back to DB role or default
         if user_info is None or user_info.user_role is None:
-            user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            verbose_proxy_logger.debug("No SSO or DB role found, using default: INTERNAL_USER_VIEW_ONLY")
+            user_defined_values[
+                "user_role"
+            ] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+            verbose_proxy_logger.debug(
+                "No SSO or DB role found, using default: INTERNAL_USER_VIEW_ONLY"
+            )
         else:
             user_defined_values["user_role"] = user_info.user_role
             verbose_proxy_logger.debug(f"Using DB role: {user_info.user_role}")
@@ -838,11 +844,11 @@ async def cli_sso_callback(
 async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
     """
     CLI polling endpoint - retrieves session from cache and generates JWT.
-    
+
     Flow:
     1. First poll (no team_id): Returns teams list without generating JWT
     2. Second poll (with team_id): Generates JWT with selected team and deletes session
-    
+
     Args:
         key_id: The session key ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
@@ -862,11 +868,11 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
         if session_data:
             user_teams = session_data.get("teams", [])
             user_id = session_data["user_id"]
-            
+
             verbose_proxy_logger.info(
                 f"CLI poll: user={user_id}, team_id={team_id}, user_teams={user_teams}, num_teams={len(user_teams)}"
             )
-            
+
             # If no team_id provided and user has teams, return teams list for selection
             # Don't generate JWT yet - let CLI select a team first
             if team_id is None and len(user_teams) > 1:
@@ -879,7 +885,7 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
                     "teams": user_teams,
                     "requires_team_selection": True,
                 }
-            
+
             # Validate team_id if provided
             if team_id is not None:
                 if team_id not in user_teams:
@@ -961,9 +967,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -1182,11 +1188,12 @@ class SSOAuthenticationHandler:
             # or a cryptographicly signed state that we can verify stateless
             # For simplification we are using a static state, this is not perfect but some
             # SSO providers do not allow stateless verification
-            redirect_params, code_verifier = (
-                SSOAuthenticationHandler._get_generic_sso_redirect_params(
-                    state=state,
-                    generic_authorization_endpoint=generic_authorization_endpoint,
-                )
+            (
+                redirect_params,
+                code_verifier,
+            ) = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                state=state,
+                generic_authorization_endpoint=generic_authorization_endpoint,
             )
 
             # Separate PKCE params from state params (fastapi-sso doesn't accept code_challenge)
@@ -1203,7 +1210,6 @@ class SSOAuthenticationHandler:
 
             # If PKCE is enabled, add PKCE parameters to the redirect URL
             if code_verifier and "state" in redirect_params:
-
                 # Store code_verifier in cache (10 min TTL)
                 cache_key = f"pkce_verifier:{redirect_params['state']}"
                 user_api_key_cache.set_cache(
@@ -1283,9 +1289,10 @@ class SSOAuthenticationHandler:
         # Set GENERIC_CLIENT_USE_PKCE=true to enable PKCE for enhanced OAuth security
         use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
         if use_pkce:
-            code_verifier, code_challenge = (
-                SSOAuthenticationHandler.generate_pkce_params()
-            )
+            (
+                code_verifier,
+                code_challenge,
+            ) = SSOAuthenticationHandler.generate_pkce_params()
             redirect_params["code_challenge"] = code_challenge
             redirect_params["code_challenge_method"] = "S256"
             verbose_proxy_logger.debug(
@@ -1569,8 +1576,14 @@ class SSOAuthenticationHandler:
             _user_role = getattr(result, "user_role", None)
             if _user_role is not None:
                 # Convert enum to string if needed
-                user_role = _user_role.value if isinstance(_user_role, LitellmUserRoles) else _user_role
-                verbose_proxy_logger.debug(f"Extracted user_role from SSO result: {user_role}")
+                user_role = (
+                    _user_role.value
+                    if isinstance(_user_role, LitellmUserRoles)
+                    else _user_role
+                )
+                verbose_proxy_logger.debug(
+                    f"Extracted user_role from SSO result: {user_role}"
+                )
 
         # generic client id - override with custom attribute name if specified
         if generic_client_id is not None and result is not None:
@@ -1943,9 +1956,9 @@ class MicrosoftSSOHandler:
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
-                user_team_ids
-            )
+            original_msft_result[
+                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
+            ] = user_team_ids
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
@@ -2062,9 +2075,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = (
-                MicrosoftSSOHandler.graph_api_user_groups_endpoint
-            )
+            next_link: Optional[
+                str
+            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 

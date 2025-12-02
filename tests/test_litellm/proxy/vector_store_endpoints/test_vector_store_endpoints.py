@@ -768,7 +768,7 @@ class TestVectorStoreManagementEndpointsExist:
     def test_vector_store_management_endpoints_exist_on_proxy_startup(self):
         """
         Test that all vector store management endpoints are registered on proxy app startup.
-        
+
         Verifies the following endpoints exist in the proxy_server app:
         - POST /vector_store/new
         - GET /vector_store/list
@@ -786,7 +786,7 @@ class TestVectorStoreManagementEndpointsExist:
             ("POST", "/vector_store/info"),
             ("POST", "/vector_store/update"),
         ]
-        
+
         # Get all routes from the app
         app_routes = []
         for route in app.routes:
@@ -795,7 +795,7 @@ class TestVectorStoreManagementEndpointsExist:
             if methods is not None and path is not None:
                 for method in methods:
                     app_routes.append((method, path))
-        
+
         # Verify each expected endpoint exists
         for method, path in expected_endpoints:
             assert (method, path) in app_routes, (

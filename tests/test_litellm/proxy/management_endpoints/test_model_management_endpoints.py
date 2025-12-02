@@ -399,7 +399,9 @@ class TestClearCache:
         """
         Test that clear_cache clears DB models and preserves config models.
         """
-        from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            clear_cache,
+        )
 
         # Create mock router with mixed DB and config models
         mock_router = MagicMock()
@@ -407,18 +409,18 @@ class TestClearCache:
             {
                 "model_name": "gpt-4",
                 "model_info": {"id": "db-model-1", "db_model": True},
-                "litellm_params": {"model": "gpt-4"}
+                "litellm_params": {"model": "gpt-4"},
             },
             {
-                "model_name": "gpt-3.5-turbo", 
+                "model_name": "gpt-3.5-turbo",
                 "model_info": {"id": "config-model-1", "db_model": False},
-                "litellm_params": {"model": "gpt-3.5-turbo"}
+                "litellm_params": {"model": "gpt-3.5-turbo"},
             },
             {
                 "model_name": "claude-3",
                 "model_info": {"id": "db-model-2", "db_model": True},
-                "litellm_params": {"model": "claude-3"}
-            }
+                "litellm_params": {"model": "claude-3"},
+            },
         ]
         mock_router.delete_deployment = MagicMock(return_value=True)
         mock_router.auto_routers = MagicMock()
@@ -552,27 +554,37 @@ class TestModelInfoEndpoint:
             user_id="test_user",
             api_key="test_key",
             models=["gpt-4", "claude-3"],
-            team_models=["gpt-3.5-turbo"]
+            team_models=["gpt-3.5-turbo"],
         )
 
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
-             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
-             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
-             patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models, \
-             patch("litellm.get_llm_provider") as mock_get_provider:
-            
+        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
+            "litellm.proxy.proxy_server.get_key_models"
+        ) as mock_get_key_models, patch(
+            "litellm.proxy.proxy_server.get_team_models"
+        ) as mock_get_team_models, patch(
+            "litellm.proxy.proxy_server.get_complete_model_list"
+        ) as mock_get_complete_models, patch(
+            "litellm.get_llm_provider"
+        ) as mock_get_provider:
             # Setup mocks
-            mock_router.get_model_names.return_value = ["gpt-4", "claude-3", "gpt-3.5-turbo"]
+            mock_router.get_model_names.return_value = [
+                "gpt-4",
+                "claude-3",
+                "gpt-3.5-turbo",
+            ]
             mock_router.get_model_access_groups.return_value = {}
             mock_get_key_models.return_value = ["gpt-4", "claude-3"]
             mock_get_team_models.return_value = ["gpt-3.5-turbo"]
-            mock_get_complete_models.return_value = ["gpt-4", "claude-3", "gpt-3.5-turbo"]
+            mock_get_complete_models.return_value = [
+                "gpt-4",
+                "claude-3",
+                "gpt-3.5-turbo",
+            ]
             mock_get_provider.return_value = (None, "openai", None, None)
 
             # Test accessible model
             result = await model_info(
-                model_id="gpt-4",
-                user_api_key_dict=user_api_key_dict
+                model_id="gpt-4", user_api_key_dict=user_api_key_dict
             )
 
             assert result["id"] == "gpt-4"
@@ -591,14 +603,16 @@ class TestModelInfoEndpoint:
             user_id="test_user",
             api_key="test_key",
             models=["gpt-4"],  # Only has access to gpt-4
-            team_models=[]
+            team_models=[],
         )
 
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
-             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
-             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
-             patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models:
-            
+        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
+            "litellm.proxy.proxy_server.get_key_models"
+        ) as mock_get_key_models, patch(
+            "litellm.proxy.proxy_server.get_team_models"
+        ) as mock_get_team_models, patch(
+            "litellm.proxy.proxy_server.get_complete_model_list"
+        ) as mock_get_complete_models:
             # Setup mocks - user only has access to gpt-4
             mock_router.get_model_names.return_value = ["gpt-4", "claude-3"]
             mock_router.get_model_access_groups.return_value = {}
@@ -610,32 +624,35 @@ class TestModelInfoEndpoint:
             with pytest.raises(HTTPException) as exc_info:
                 await model_info(
                     model_id="claude-3",  # Not in user's accessible models
-                    user_api_key_dict=user_api_key_dict
+                    user_api_key_dict=user_api_key_dict,
                 )
-            
+
             assert exc_info.value.status_code == 404
             assert "does not exist or is not accessible" in exc_info.value.detail
 
-    @pytest.mark.asyncio 
+    @pytest.mark.asyncio
     async def test_model_info_team_model_access(self):
         """Test model_info works with team model access"""
         from litellm.proxy.proxy_server import model_info
-        
+
         # Mock user with team access
         user_api_key_dict = UserAPIKeyAuth(
             user_id="test_user",
-            api_key="test_key", 
+            api_key="test_key",
             team_id="test_team",
             models=[],  # No direct key models
-            team_models=["team-model-1"]
+            team_models=["team-model-1"],
         )
 
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
-             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
-             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
-             patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models, \
-             patch("litellm.get_llm_provider") as mock_get_provider:
-            
+        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
+            "litellm.proxy.proxy_server.get_key_models"
+        ) as mock_get_key_models, patch(
+            "litellm.proxy.proxy_server.get_team_models"
+        ) as mock_get_team_models, patch(
+            "litellm.proxy.proxy_server.get_complete_model_list"
+        ) as mock_get_complete_models, patch(
+            "litellm.get_llm_provider"
+        ) as mock_get_provider:
             # Setup mocks
             mock_router.get_model_names.return_value = ["team-model-1"]
             mock_router.get_model_access_groups.return_value = {}
@@ -646,10 +663,9 @@ class TestModelInfoEndpoint:
 
             # Test team model access
             result = await model_info(
-                model_id="team-model-1",
-                user_api_key_dict=user_api_key_dict
+                model_id="team-model-1", user_api_key_dict=user_api_key_dict
             )
 
             assert result["id"] == "team-model-1"
-            assert result["object"] == "model" 
+            assert result["object"] == "model"
             assert result["owned_by"] == "custom"

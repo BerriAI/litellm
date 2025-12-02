@@ -2,6 +2,7 @@ from base_vector_store_test import BaseVectorStoreTest
 import os
 import pytest
 
+
 class TestAzureOpenAIVectorStore(BaseVectorStoreTest):
     def get_base_request_args(self) -> dict:
         """Must return the base request args"""
@@ -11,7 +12,6 @@ class TestAzureOpenAIVectorStore(BaseVectorStoreTest):
     @pytest.mark.asyncio
     async def test_basic_search_vector_store(self, sync_mode):
         pass
-
 
     def get_base_create_vector_store_args(self) -> dict:
         """

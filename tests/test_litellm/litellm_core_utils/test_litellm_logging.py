@@ -572,7 +572,6 @@ async def test_e2e_generate_cold_storage_object_key_successful():
     with patch("litellm.cold_storage_custom_logger", return_value="s3"), patch(
         "litellm.integrations.s3.get_s3_object_key"
     ) as mock_get_s3_key:
-
         # Mock the S3 object key generation to return a predictable result
         mock_get_s3_key.return_value = (
             "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
@@ -620,7 +619,6 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
     ) as mock_get_logger, patch(
         "litellm.integrations.s3.get_s3_object_key"
     ) as mock_get_s3_key:
-
         # Setup mocks
         mock_get_logger.return_value = mock_custom_logger
         mock_get_s3_key.return_value = (
@@ -672,7 +670,6 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
     ) as mock_get_logger, patch(
         "litellm.integrations.s3.get_s3_object_key"
     ) as mock_get_s3_key:
-
         # Setup mocks
         mock_get_logger.return_value = mock_custom_logger
         mock_get_s3_key.return_value = (

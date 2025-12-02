@@ -678,11 +678,12 @@ def test_vertex_filter_format_uri():
 
     assert "uri" not in json.dumps(new_parameters)
 
+
 def test_convert_schema_types_type_array_conversion():
     """
     Test _convert_schema_types function handles type arrays and case conversion.
-    
-    This test verifies the fix for the issue where type arrays like ["string", "number"] 
+
+    This test verifies the fix for the issue where type arrays like ["string", "number"]
     would raise an exception in Vertex AI schema validation.
 
     Relevant issue: https://github.com/BerriAI/litellm/issues/14091
@@ -695,12 +696,12 @@ def test_convert_schema_types_type_array_conversion():
         "properties": {
             "studio": {
                 "type": ["string", "number"],
-                "description": "The studio ID or name"
+                "description": "The studio ID or name",
             }
         },
         "required": ["studio"],
         "additionalProperties": False,
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "http://json-schema.org/draft-07/schema#",
     }
 
     # Expected output: Vertex AI compatible schema with anyOf and uppercase types
@@ -708,16 +709,13 @@ def test_convert_schema_types_type_array_conversion():
         "type": "object",
         "properties": {
             "studio": {
-                "anyOf": [
-                    {"type": "string"}, 
-                    {"type": "number"}
-                ],
-                "description": "The studio ID or name"
+                "anyOf": [{"type": "string"}, {"type": "number"}],
+                "description": "The studio ID or name",
             }
         },
         "required": ["studio"],
         "additionalProperties": False,
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "http://json-schema.org/draft-07/schema#",
     }
 
     # Apply the transformation
@@ -740,15 +738,17 @@ def test_convert_schema_types_type_array_conversion():
     assert anyof_types[1]["type"] == "number"
 
     # 4. Other properties preserved
-    assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
+    assert (
+        input_schema["properties"]["studio"]["description"] == "The studio ID or name"
+    )
     assert input_schema["required"] == ["studio"]
 
 
 def test_fix_enum_empty_strings():
     """
     Test _fix_enum_empty_strings function replaces empty strings with None in enum arrays.
-    
-    This test verifies the fix for the issue where Gemini rejects tool definitions 
+
+    This test verifies the fix for the issue where Gemini rejects tool definitions
     with empty strings in enum values, causing API failures.
 
     Relevant issue: Gemini does not accept empty strings in enum values
@@ -762,23 +762,23 @@ def test_fix_enum_empty_strings():
             "user_agent_type": {
                 "enum": ["", "desktop", "mobile", "tablet"],
                 "type": "string",
-                "description": "Device type for user agent"
+                "description": "Device type for user agent",
             }
         },
-        "required": ["user_agent_type"]
+        "required": ["user_agent_type"],
     }
 
     # Expected output: Empty strings replaced with None
     expected_output = {
-        "type": "object", 
+        "type": "object",
         "properties": {
             "user_agent_type": {
                 "enum": [None, "desktop", "mobile", "tablet"],
                 "type": "string",
-                "description": "Device type for user agent"
+                "description": "Device type for user agent",
             }
         },
-        "required": ["user_agent_type"]
+        "required": ["user_agent_type"],
     }
 
     # Apply the transformation
@@ -800,13 +800,16 @@ def test_fix_enum_empty_strings():
 
     # 3. Other properties preserved
     assert input_schema["properties"]["user_agent_type"]["type"] == "string"
-    assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
+    assert (
+        input_schema["properties"]["user_agent_type"]["description"]
+        == "Device type for user agent"
+    )
 
 
 def test_fix_enum_types():
     """
     Test _fix_enum_types function removes enum fields when type is not string.
-    
+
     This test verifies the fix for the issue where Gemini rejects cached content
     with function parameter enums on non-string types, causing API failures.
 
@@ -821,38 +824,41 @@ def test_fix_enum_types():
             "truncateMode": {
                 "enum": ["auto", "none", "start", "end"],
                 "type": "string",  # This should keep the enum
-                "description": "How to truncate content"
+                "description": "How to truncate content",
             },
             "maxLength": {
                 "enum": [100, 200, 500],  # This should be removed
                 "type": "integer",
-                "description": "Maximum length"
+                "description": "Maximum length",
             },
             "enabled": {
                 "enum": [True, False],  # This should be removed
                 "type": "boolean",
-                "description": "Whether feature is enabled"
+                "description": "Whether feature is enabled",
             },
             "nested": {
                 "type": "object",
                 "properties": {
                     "innerEnum": {
                         "enum": ["a", "b", "c"],  # This should be kept
-                        "type": "string"
+                        "type": "string",
                     },
                     "innerNonStringEnum": {
                         "enum": [1, 2, 3],  # This should be removed
-                        "type": "integer"
-                    }
-                }
+                        "type": "integer",
+                    },
+                },
             },
             "anyOfField": {
                 "anyOf": [
-                    {"type": "string", "enum": ["option1", "option2"]},  # This should be kept
-                    {"type": "integer", "enum": [1, 2, 3]}  # This should be removed
+                    {
+                        "type": "string",
+                        "enum": ["option1", "option2"],
+                    },  # This should be kept
+                    {"type": "integer", "enum": [1, 2, 3]},  # This should be removed
                 ]
-            }
-        }
+            },
+        },
     }
 
     # Expected output: Non-string enums removed, string enums kept
@@ -862,35 +868,36 @@ def test_fix_enum_types():
             "truncateMode": {
                 "enum": ["auto", "none", "start", "end"],  # Kept - string type
                 "type": "string",
-                "description": "How to truncate content"
+                "description": "How to truncate content",
             },
             "maxLength": {  # enum removed
                 "type": "integer",
-                "description": "Maximum length"
+                "description": "Maximum length",
             },
             "enabled": {  # enum removed
                 "type": "boolean",
-                "description": "Whether feature is enabled"
+                "description": "Whether feature is enabled",
             },
             "nested": {
                 "type": "object",
                 "properties": {
                     "innerEnum": {
                         "enum": ["a", "b", "c"],  # Kept - string type
-                        "type": "string"
+                        "type": "string",
                     },
-                    "innerNonStringEnum": {  # enum removed
-                        "type": "integer"
-                    }
-                }
+                    "innerNonStringEnum": {"type": "integer"},  # enum removed
+                },
             },
             "anyOfField": {
                 "anyOf": [
-                    {"type": "string", "enum": ["option1", "option2"]},  # Kept - has string type
-                    {"type": "integer"}  # enum removed
+                    {
+                        "type": "string",
+                        "enum": ["option1", "option2"],
+                    },  # Kept - has string type
+                    {"type": "integer"},  # enum removed
                 ]
-            }
-        }
+            },
+        },
     }
 
     # Apply the transformation
@@ -902,15 +909,27 @@ def test_fix_enum_types():
     # Verify specific transformations:
     # 1. String enums are preserved
     assert "enum" in input_schema["properties"]["truncateMode"]
-    assert input_schema["properties"]["truncateMode"]["enum"] == ["auto", "none", "start", "end"]
-    
+    assert input_schema["properties"]["truncateMode"]["enum"] == [
+        "auto",
+        "none",
+        "start",
+        "end",
+    ]
+
     assert "enum" in input_schema["properties"]["nested"]["properties"]["innerEnum"]
-    assert input_schema["properties"]["nested"]["properties"]["innerEnum"]["enum"] == ["a", "b", "c"]
+    assert input_schema["properties"]["nested"]["properties"]["innerEnum"]["enum"] == [
+        "a",
+        "b",
+        "c",
+    ]
 
     # 2. Non-string enums are removed
     assert "enum" not in input_schema["properties"]["maxLength"]
     assert "enum" not in input_schema["properties"]["enabled"]
-    assert "enum" not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
+    assert (
+        "enum"
+        not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
+    )
 
     # 3. anyOf with string type keeps enum, non-string removes it
     assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
@@ -949,8 +968,6 @@ def test_get_token_url():
     )
 
     print("url=", url)
-
-
 
     should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
         optional_params={"temperature": 0.1}
@@ -1108,9 +1125,7 @@ def test_vertex_ai_minimax_uses_openai_handler():
         VertexAIPartnerModels,
     )
 
-    assert VertexAIPartnerModels.should_use_openai_handler(
-        "minimaxai/minimax-m2-maas"
-    )
+    assert VertexAIPartnerModels.should_use_openai_handler("minimaxai/minimax-m2-maas")
 
 
 def test_vertex_ai_moonshot_uses_openai_handler():

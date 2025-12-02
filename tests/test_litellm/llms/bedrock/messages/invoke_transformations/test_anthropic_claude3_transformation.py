@@ -33,7 +33,9 @@ async def test_bedrock_sse_wrapper_encodes_dict_chunks():
         _dummy_stream(),
         litellm_logging_obj=LiteLLMLoggingObj(
             model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+            messages=[
+                {"role": "user", "content": "Hello, can you tell me a short joke?"}
+            ],
             stream=True,
             call_type="chat",
             start_time=datetime.now(),

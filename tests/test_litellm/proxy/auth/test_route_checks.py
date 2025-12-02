@@ -733,6 +733,7 @@ def test_videos_route_with_virtual_key_llm_api_routes():
             result is True
         ), f"Virtual key with llm_api_routes should be able to access {route}"
 
+
 def test_non_proxy_admin_wildcard_allowed_routes():
     """Test that nonproxy admin users can still use wildcard routes"""
 
@@ -747,7 +748,7 @@ def test_non_proxy_admin_wildcard_allowed_routes():
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         allowed_routes=["/scim/*"],
     )
-    
+
     request = MagicMock(spec=Request)
     request.query_params = {}
 
@@ -759,4 +760,3 @@ def test_non_proxy_admin_wildcard_allowed_routes():
         valid_token=valid_token,
         request_data={},
     )
-        

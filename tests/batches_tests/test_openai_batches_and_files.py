@@ -477,9 +477,7 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_response.status_code = 200
         return mock_response
 
-    with patch.object(
-        client, "post", side_effect=mock_side_effect
-    ) as mock_post, patch(
+    with patch.object(client, "post", side_effect=mock_side_effect) as mock_post, patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
     ) as mock_global_post:
         # Configure mock responses
@@ -487,7 +485,7 @@ async def test_avertex_batch_prediction(monkeypatch):
         mock_response.raise_for_status.return_value = None
 
         # Set up different responses for different API calls
-        
+
         mock_post.side_effect = mock_side_effect
         mock_global_post.side_effect = mock_side_effect
 
@@ -503,7 +501,7 @@ async def test_avertex_batch_prediction(monkeypatch):
             file=open(file_path, "rb"),
             purpose="batch",
             custom_llm_provider="vertex_ai",
-            client=client
+            client=client,
         )
         print("Response from creating file=", file_obj)
 
@@ -555,7 +553,10 @@ async def test_vertex_list_batches(monkeypatch):
 
     monkeypatch.setattr(
         "litellm.llms.vertex_ai.batches.handler.VertexAIBatchPrediction._ensure_access_token",
-        lambda self, credentials, project_id, custom_llm_provider: ("mock-token", "litellm-test-project"),
+        lambda self, credentials, project_id, custom_llm_provider: (
+            "mock-token",
+            "litellm-test-project",
+        ),
     )
 
     with patch(

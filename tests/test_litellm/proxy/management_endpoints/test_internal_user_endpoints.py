@@ -695,7 +695,7 @@ async def test_check_duplicate_user_email_case_insensitive(mocker):
 def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
     """
     Test that _process_keys_for_user_info filters out keys with team_id='litellm-dashboard'
-    
+
     UI session tokens (team_id='litellm-dashboard') should be excluded from user info responses
     to prevent confusion, as these are automatically created during dashboard login.
     """
@@ -714,7 +714,7 @@ def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
         "user_id": "test-user",
         "key_alias": "dashboard-session-key",
     }
-    
+
     mock_key_regular = MagicMock()
     mock_key_regular.model_dump.return_value = {
         "token": "sk-regular-token",
@@ -722,7 +722,7 @@ def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
         "user_id": "test-user",
         "key_alias": "regular-key",
     }
-    
+
     mock_key_no_team = MagicMock()
     mock_key_no_team.model_dump.return_value = {
         "token": "sk-no-team-token",
@@ -748,20 +748,24 @@ def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
 
     # Verify that dashboard key is filtered out
     assert len(result) == 2, "Should return 2 keys (dashboard key filtered out)"
-    
+
     # Verify dashboard key is not in results
     result_team_ids = [key.get("team_id") for key in result]
-    assert UI_SESSION_TOKEN_TEAM_ID not in result_team_ids, "Dashboard key should be filtered out"
-    
+    assert (
+        UI_SESSION_TOKEN_TEAM_ID not in result_team_ids
+    ), "Dashboard key should be filtered out"
+
     # Verify regular keys are included
     assert "regular-team" in result_team_ids, "Regular team key should be included"
     assert None in result_team_ids, "No-team key should be included"
-    
+
     # Verify the correct keys are returned
     result_tokens = [key.get("token") for key in result]
     assert "sk-regular-token" in result_tokens, "Regular key should be included"
     assert "sk-no-team-token" in result_tokens, "No-team key should be included"
-    assert "sk-dashboard-token" not in result_tokens, "Dashboard key should not be included"
+    assert (
+        "sk-dashboard-token" not in result_tokens
+    ), "Dashboard key should not be included"
 
 
 def test_process_keys_for_user_info_handles_none_keys(monkeypatch):

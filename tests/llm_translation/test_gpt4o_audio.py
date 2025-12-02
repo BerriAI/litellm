@@ -84,7 +84,7 @@ async def test_audio_output_from_model(stream):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [True, False])
-@pytest.mark.parametrize("model", ["gpt-4o-audio-preview"]) # "gpt-4o-audio-preview", 
+@pytest.mark.parametrize("model", ["gpt-4o-audio-preview"])  # "gpt-4o-audio-preview",
 async def test_audio_input_to_model(stream, model):
     # Fetch the audio file and convert it to a base64 encoded string
     audio_format = "pcm16"

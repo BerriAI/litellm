@@ -84,23 +84,29 @@ class TestProxyBaseLLMRequestProcessing:
 
         # Test with stream timeout header
         headers_with_timeout = {"x-litellm-stream-timeout": "30.5"}
-        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_timeout)
+        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+            headers_with_timeout
+        )
         assert result == 30.5
-        
+
         # Test without stream timeout header
         headers_without_timeout = {}
-        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_without_timeout)
+        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+            headers_without_timeout
+        )
         assert result is None
-        
+
         # Test with invalid header value (should raise ValueError when converting to float)
         headers_with_invalid = {"x-litellm-stream-timeout": "invalid"}
         with pytest.raises(ValueError):
-            LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_invalid)
+            LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+                headers_with_invalid
+            )
 
     @pytest.mark.asyncio
     async def test_add_litellm_data_to_request_with_stream_timeout_header(self):
         """
-        Test that x-litellm-stream-timeout header gets processed and added to request data 
+        Test that x-litellm-stream-timeout header gets processed and added to request data
         when calling add_litellm_data_to_request.
         """
         from litellm.integrations.opentelemetry import UserAPIKeyAuth
@@ -109,9 +115,9 @@ class TestProxyBaseLLMRequestProcessing:
         # Create test data with a basic completion request
         test_data = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
-        
+
         # Mock request with stream timeout header
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {"x-litellm-stream-timeout": "45.0"}
@@ -119,7 +125,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_request.method = "POST"
         mock_request.query_params = {}
         mock_request.client = None
-        
+
         # Create a minimal mock with just the required attributes
         mock_user_api_key_dict = MagicMock()
         mock_user_api_key_dict.api_key = "test_api_key_hash"
@@ -143,10 +149,10 @@ class TestProxyBaseLLMRequestProcessing:
         mock_user_api_key_dict.model_max_budget = None
         mock_user_api_key_dict.parent_otel_span = None
         mock_user_api_key_dict.team_model_aliases = None
-        
+
         general_settings = {}
         mock_proxy_config = MagicMock()
-        
+
         # Call the actual function that processes headers and adds data
         result_data = await add_litellm_data_to_request(
             data=test_data,
@@ -156,11 +162,11 @@ class TestProxyBaseLLMRequestProcessing:
             version=None,
             proxy_config=mock_proxy_config,
         )
-        
+
         # Verify that stream_timeout was extracted from header and added to request data
         assert "stream_timeout" in result_data
         assert result_data["stream_timeout"] == 45.0
-        
+
         # Verify that the original test data is preserved
         assert result_data["model"] == "gpt-3.5-turbo"
         assert result_data["messages"] == [{"role": "user", "content": "Hello"}]
@@ -180,7 +186,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_user_api_key_dict.rpm_limit = None
         mock_user_api_key_dict.max_budget = None
         mock_user_api_key_dict.spend = 0
-        
+
         # Create logging object with cost breakdown including discount
         logging_obj = LiteLLMLoggingObj(
             model="vertex_ai/gemini-pro",
@@ -191,7 +197,7 @@ class TestProxyBaseLLMRequestProcessing:
             litellm_call_id="test-call-id",
             function_id="test-function-id",
         )
-        
+
         # Set cost breakdown with discount information
         logging_obj.set_cost_breakdown(
             input_cost=0.00005,
@@ -202,7 +208,7 @@ class TestProxyBaseLLMRequestProcessing:
             discount_percent=0.05,
             discount_amount=0.000005,
         )
-        
+
         # Call get_custom_headers with discount info
         headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=mock_user_api_key_dict,
@@ -210,14 +216,14 @@ class TestProxyBaseLLMRequestProcessing:
             response_cost=0.000095,
             litellm_logging_obj=logging_obj,
         )
-        
+
         # Verify discount headers are present
         assert "x-litellm-response-cost" in headers
         assert float(headers["x-litellm-response-cost"]) == 0.000095
-        
+
         assert "x-litellm-response-cost-original" in headers
         assert float(headers["x-litellm-response-cost-original"]) == 0.0001
-        
+
         assert "x-litellm-response-cost-discount-amount" in headers
         assert float(headers["x-litellm-response-cost-discount-amount"]) == 0.000005
 
@@ -235,7 +241,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_user_api_key_dict.rpm_limit = None
         mock_user_api_key_dict.max_budget = None
         mock_user_api_key_dict.spend = 0
-        
+
         # Create logging object without discount
         logging_obj = LiteLLMLoggingObj(
             model="gpt-3.5-turbo",
@@ -246,7 +252,7 @@ class TestProxyBaseLLMRequestProcessing:
             litellm_call_id="test-call-id",
             function_id="test-function-id",
         )
-        
+
         # Set cost breakdown without discount information
         logging_obj.set_cost_breakdown(
             input_cost=0.00005,
@@ -254,7 +260,7 @@ class TestProxyBaseLLMRequestProcessing:
             total_cost=0.0001,
             cost_for_built_in_tools_cost_usd_dollar=0.0,
         )
-        
+
         # Call get_custom_headers
         headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=mock_user_api_key_dict,
@@ -262,11 +268,11 @@ class TestProxyBaseLLMRequestProcessing:
             response_cost=0.0001,
             litellm_logging_obj=logging_obj,
         )
-        
+
         # Verify discount headers are NOT present
         assert "x-litellm-response-cost" in headers
         assert float(headers["x-litellm-response-cost"]) == 0.0001
-        
+
         # Discount headers should not be in the final dict
         assert "x-litellm-response-cost-original" not in headers
         assert "x-litellm-response-cost-discount-amount" not in headers
@@ -298,11 +304,13 @@ class TestProxyBaseLLMRequestProcessing:
             discount_percent=0.05,
             discount_amount=0.000005,
         )
-        
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(logging_obj)
+
+        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(
+            logging_obj
+        )
         assert original_cost == 0.0001
         assert discount_amount == 0.000005
-        
+
         # Test with no discount info
         logging_obj_no_discount = LiteLLMLoggingObj(
             model="gpt-3.5-turbo",
@@ -319,11 +327,13 @@ class TestProxyBaseLLMRequestProcessing:
             total_cost=0.0001,
             cost_for_built_in_tools_cost_usd_dollar=0.0,
         )
-        
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
+
+        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(
+            logging_obj_no_discount
+        )
         assert original_cost is None
         assert discount_amount is None
-        
+
         # Test with None logging object
         original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(None)
         assert original_cost is None

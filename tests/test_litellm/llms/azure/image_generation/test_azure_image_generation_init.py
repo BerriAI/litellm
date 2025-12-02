@@ -36,10 +36,10 @@ def test_azure_image_generation_config(received_model, expected_config):
 def test_azure_image_generation_flattens_extra_body():
     """
     Test that Azure image generation correctly flattens extra_body parameters.
-    
+
     Azure's image generation API doesn't support the extra_body parameter,
     so we need to flatten any parameters in extra_body to the top level.
-    
+
     This test verifies the fix for: https://github.com/BerriAI/litellm/issues/16059
     Where partial_images and stream parameters were incorrectly sent in extra_body.
     """
@@ -50,15 +50,15 @@ def test_azure_image_generation_flattens_extra_body():
         size="1024x1024",
         custom_llm_provider="azure",
         partial_images=2,
-        stream=True
+        stream=True,
     )
-    
+
     assert "extra_body" in optional_params
     assert "partial_images" in optional_params["extra_body"]
     assert "stream" in optional_params["extra_body"]
     assert optional_params["extra_body"]["partial_images"] == 2
     assert optional_params["extra_body"]["stream"] is True
-    
+
     # Test 2: Verify Azure flattens extra_body when building request data
     # Simulate what happens in Azure's image_generation method
     test_optional_params = {
@@ -67,16 +67,16 @@ def test_azure_image_generation_flattens_extra_body():
         "extra_body": {
             "partial_images": 2,
             "stream": True,
-            "custom_param": "test_value"
-        }
+            "custom_param": "test_value",
+        },
     }
-    
+
     # This is what the Azure image_generation method does
     extra_body = test_optional_params.pop("extra_body", {})
     flattened_params = {**test_optional_params, **extra_body}
-    
+
     data = {"model": "gpt-image-1", "prompt": "A cute sea otter", **flattened_params}
-    
+
     # Verify the final data structure
     assert "extra_body" not in data, "extra_body should NOT be in the final data dict"
     assert "partial_images" in data, "partial_images should be at top level"

@@ -54,13 +54,16 @@ async def test_no_duplicate_spend_logs():
     that counts log_success_event calls. Before the fix, it would be
     called twice for non-OpenAI providers (Anthropic/Gemini).
     """
+
     # Create a custom logger to count log_success_event calls
     class SpendLogCounter(CustomLogger):
         def __init__(self):
             super().__init__()
             self.log_count = 0
 
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        async def async_log_success_event(
+            self, kwargs, response_obj, start_time, end_time
+        ):
             self.log_count += 1
 
     spend_logger = SpendLogCounter()
@@ -74,17 +77,20 @@ async def test_no_duplicate_spend_logs():
         # This prevents real API calls while still exercising the logging path
         response = await litellm.aresponses(
             model="anthropic/claude-3-7-sonnet-latest",
-            input=[{
-                "role": "user",
-                "content": [{"type": "input_text", "text": "Hello"}],
-                "type": "message"
-            }],
+            input=[
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Hello"}],
+                    "type": "message",
+                }
+            ],
             instructions="You are a helpful assistant.",
-            mock_response="Hello! I'm doing well."  # Use mock to avoid real API call
+            mock_response="Hello! I'm doing well.",  # Use mock to avoid real API call
         )
 
         # Give async logging time to complete
         import asyncio
+
         await asyncio.sleep(1)
 
         # Verify that log_success_event was called exactly once

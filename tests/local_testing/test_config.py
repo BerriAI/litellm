@@ -421,4 +421,3 @@ def test_litellm_proxy_responses_api_config():
     assert (
         config.custom_llm_provider == LlmProviders.LITELLM_PROXY
     ), "custom_llm_provider should be LITELLM_PROXY"
-

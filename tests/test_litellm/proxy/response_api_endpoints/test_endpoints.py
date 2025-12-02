@@ -50,4 +50,3 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         )
 
         assert response.status_code in [200, 401, 500]
-

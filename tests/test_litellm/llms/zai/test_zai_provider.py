@@ -23,7 +23,10 @@ def zai_response():
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": "Hello! How can I help you today?"},
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! How can I help you today?",
+                },
                 "finish_reason": "stop",
             }
         ],
@@ -50,6 +53,7 @@ def test_zai_in_provider_lists():
 def test_zai_models_in_model_cost():
     """Test that ZAI models are in the model cost map"""
     import os
+
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -72,6 +76,7 @@ def test_zai_models_in_model_cost():
 def test_zai_glm46_cost_calculation():
     """Test the cost calculation for glm-4.6"""
     import os
+
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -92,6 +97,7 @@ def test_zai_glm46_cost_calculation():
 def test_zai_flash_model_is_free():
     """Test that glm-4.5-flash has zero cost"""
     import os
+
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -108,7 +114,9 @@ async def test_zai_completion_call(respx_mock, zai_response, monkeypatch):
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     litellm.disable_aiohttp_transport = True
 
-    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
+        json=zai_response
+    )
 
     response = await litellm.acompletion(
         model="zai/glm-4.6",
@@ -132,7 +140,9 @@ def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     litellm.disable_aiohttp_transport = True
 
-    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(
+        json=zai_response
+    )
 
     response = completion(
         model="zai/glm-4.6",

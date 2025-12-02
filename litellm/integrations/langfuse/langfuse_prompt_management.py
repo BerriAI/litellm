@@ -136,7 +136,6 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> PROMPT_CLIENT:
-
         prompt_client = langfuse_client.get_prompt(
             langfuse_prompt_id, label=prompt_label, version=prompt_version
         )
@@ -187,11 +186,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
-    ) -> Tuple[
-        str,
-        List[AllMessageValues],
-        dict,
-    ]:
+    ) -> Tuple[str, List[AllMessageValues], dict,]:
         return self.get_chat_completion_prompt(
             model,
             messages,

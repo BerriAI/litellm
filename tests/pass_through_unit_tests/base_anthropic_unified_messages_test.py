@@ -1,5 +1,3 @@
-
-
 import json
 import os
 import sys
@@ -26,6 +24,8 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import Router
 import importlib
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+
 class TestCustomLogger(CustomLogger):
     def __init__(self):
         super().__init__()
@@ -40,71 +40,72 @@ class TestCustomLogger(CustomLogger):
 
 class BaseAnthropicMessagesTest:
     """Base class for anthropic messages tests to reduce code duplication"""
-    
+
     @property
     def model_config(self) -> Dict[str, Any]:
         """Override in subclasses to provide model-specific configuration"""
         raise NotImplementedError("Subclasses must implement model_config")
-    
+
     @property
     def expected_model_name_in_logging(self) -> str:
         """
         This is the model name that is expected to be in the logging payload
         """
-        raise NotImplementedError("Subclasses must implement expected_model_name_in_logging")
-    
+        raise NotImplementedError(
+            "Subclasses must implement expected_model_name_in_logging"
+        )
+
     def _validate_response(self, response: Any):
         """Validate non-streaming response structure"""
         # Handle type checking - response should be a dict for non-streaming
         if isinstance(response, AsyncIterator):
             pytest.fail("Expected non-streaming response but got AsyncIterator")
-        
-        assert isinstance(response, dict), f"Expected dict response, got {type(response)}"
+
+        assert isinstance(
+            response, dict
+        ), f"Expected dict response, got {type(response)}"
         assert "id" in response
         assert "content" in response
         assert "model" in response
         assert response.get("role") == "assistant"
-    
+
     @pytest.mark.asyncio
     async def test_non_streaming_base(self):
         """Base test for non-streaming requests"""
         litellm._turn_on_debug()
-        
+
         request_params = self.model_config
 
         # Set up test parameters
         messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
-        
+
         # Prepare call arguments
         call_args = {
             "messages": messages,
             "max_tokens": 100,
         }
 
-
-        
-
         # Add any additional config from subclass
         call_args.update(request_params)
-        
+
         # Call the handler
         response = await litellm.anthropic.messages.acreate(**call_args)
-        
+
         print(f"Non-streaming {request_params['model']} response: ", response)
-        
+
         # Verify response
         self._validate_response(response)
-        
+
         print(f"Non-streaming response: {json.dumps(response, indent=2, default=str)}")
         return response
-    
+
     @pytest.mark.asyncio
     async def test_streaming_base(self):
         """Base test for streaming requests"""
         request_params = self.model_config
         # Set up test parameters
         messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
-        
+
         # Prepare call arguments
         call_args = {
             "messages": messages,
@@ -113,22 +114,20 @@ class BaseAnthropicMessagesTest:
             "client": AsyncHTTPHandler(),
         }
 
-        
         # Add any additional config from subclass
         call_args.update(request_params)
-        
+
         # Call the handler
         response = await litellm.anthropic.messages.acreate(**call_args)
-        
+
         collected_chunks = []
         if isinstance(response, AsyncIterator):
             async for chunk in response:
                 print("chunk=", chunk)
                 collected_chunks.append(chunk)
-        
+
         print("collected_chunks=", collected_chunks)
         return collected_chunks
-
 
     @pytest.mark.asyncio
     async def test_anthropic_messages_litellm_router_streaming_with_logging(self):
@@ -142,9 +141,7 @@ class BaseAnthropicMessagesTest:
             model_list=[
                 {
                     "model_name": "claude-special-alias",
-                    "litellm_params": {
-                        **self.model_config
-                    },
+                    "litellm_params": {**self.model_config},
                 }
             ]
         )
@@ -199,7 +196,8 @@ class BaseAnthropicMessagesTest:
                                 usage = json_data["usage"]
                                 all_anthropic_usage_chunks.append(usage)
                                 print(
-                                    "USAGE BLOCK", json.dumps(usage, indent=4, default=str)
+                                    "USAGE BLOCK",
+                                    json.dumps(usage, indent=4, default=str),
                                 )
                         except json.JSONDecodeError:
                             print(f"Failed to parse JSON from: {line[6:]}")
@@ -236,13 +234,21 @@ class BaseAnthropicMessagesTest:
         print(
             "logged_standard_logging_payload",
             json.dumps(
-                test_custom_logger.logged_standard_logging_payload, indent=4, default=str
+                test_custom_logger.logged_standard_logging_payload,
+                indent=4,
+                default=str,
             ),
         )
 
-        assert test_custom_logger.logged_standard_logging_payload is not None, "Logging payload should not be None"
-        assert test_custom_logger.logged_standard_logging_payload["messages"] == messages
-        assert test_custom_logger.logged_standard_logging_payload["response"] is not None
+        assert (
+            test_custom_logger.logged_standard_logging_payload is not None
+        ), "Logging payload should not be None"
+        assert (
+            test_custom_logger.logged_standard_logging_payload["messages"] == messages
+        )
+        assert (
+            test_custom_logger.logged_standard_logging_payload["response"] is not None
+        )
         assert (
             test_custom_logger.logged_standard_logging_payload["model"]
             == self.expected_model_name_in_logging

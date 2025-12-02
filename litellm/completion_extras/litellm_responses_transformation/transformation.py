@@ -233,10 +233,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
                 # Convert chat completion tools to responses API tools format
-                responses_api_request["tools"] = (
-                    self._convert_tools_to_responses_format(
-                        cast(List[Dict[str, Any]], value)
-                    )
+                responses_api_request[
+                    "tools"
+                ] = self._convert_tools_to_responses_format(
+                    cast(List[Dict[str, Any]], value)
                 )
             elif key == "response_format":
                 # Convert response_format to text.format
@@ -340,9 +340,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         reasoning_content: Optional[str] = None
 
         for item in raw_response.output:
-
             if isinstance(item, ResponseReasoningItem):
-
                 for summary_item in item.summary:
                     response_text = getattr(summary_item, "text", "")
                     reasoning_content = response_text if response_text else ""
@@ -367,7 +365,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     reasoning_content = None  # flush reasoning content
                     index += 1
             elif isinstance(item, ResponseFunctionToolCall):
-
                 provider_specific_fields = getattr(
                     item, "provider_specific_fields", None
                 )
@@ -407,9 +404,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 }
 
                 if provider_specific_fields:
-                    tool_call_dict["provider_specific_fields"] = (
-                        provider_specific_fields
-                    )
+                    tool_call_dict[
+                        "provider_specific_fields"
+                    ] = provider_specific_fields
 
                 msg = Message(
                     content=None,
@@ -718,17 +715,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     }
                 }
             elif format_type == "json_object":
-                return {
-                    "format": {
-                        "type": "json_object"
-                    }
-                }
+                return {"format": {"type": "json_object"}}
             elif format_type == "text":
-                return {
-                    "format": {
-                        "type": "text"
-                    }
-                }
+                return {"format": {"type": "text"}}
 
         return None
 
@@ -826,9 +815,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
 
                 if provider_specific_fields:
-                    function_chunk["provider_specific_fields"] = (
-                        provider_specific_fields
-                    )
+                    function_chunk[
+                        "provider_specific_fields"
+                    ] = provider_specific_fields
 
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),
@@ -891,9 +880,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
                 # Add provider_specific_fields to function if present
                 if provider_specific_fields:
-                    function_chunk["provider_specific_fields"] = (
-                        provider_specific_fields
-                    )
+                    function_chunk[
+                        "provider_specific_fields"
+                    ] = provider_specific_fields
 
                 tool_call_chunk = ChatCompletionToolCallChunk(
                     id=output_item.get("call_id"),

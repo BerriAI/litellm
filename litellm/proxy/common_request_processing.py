@@ -804,21 +804,30 @@ class ProxyBaseLLMRequestProcessing:
             # This matches the original behavior before the refactor in commit 511d435f6f
             error_body = await e.response.aread()
             error_text = error_body.decode("utf-8")
-            
+
             raise HTTPException(
                 status_code=e.response.status_code,
                 detail={"error": error_text},
             )
-        error_msg = f"{str(e)}"        
+        error_msg = f"{str(e)}"
         # Check for AttributeError in various places:
         # 1. Direct AttributeError (already handled above)
         # 2. In underlying exception (__cause__, __context__, original_exception)
         has_attribute_error = (
-            (isinstance(e, Exception) and isinstance(getattr(e, "__cause__", None), AttributeError))
-            or (isinstance(e, Exception) and isinstance(getattr(e, "__context__", None), AttributeError))
-            or (isinstance(e, Exception) and isinstance(getattr(e, "original_exception", None), AttributeError))
+            (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "__cause__", None), AttributeError)
+            )
+            or (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "__context__", None), AttributeError)
+            )
+            or (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "original_exception", None), AttributeError)
+            )
         )
-        
+
         if has_attribute_error:
             raise ProxyException(
                 message=f"Invalid request format: {error_msg}",
@@ -1089,9 +1098,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = (
-                    cache_creation_input_tokens
-                )
+                usage_kwargs[
+                    "cache_creation_input_tokens"
+                ] = cache_creation_input_tokens
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
@@ -1110,7 +1119,9 @@ class ProxyBaseLLMRequestProcessing:
                 return obj
         return None
 
-    def maybe_get_model_id(self, _logging_obj: Optional[LiteLLMLoggingObj]) -> Optional[str]:
+    def maybe_get_model_id(
+        self, _logging_obj: Optional[LiteLLMLoggingObj]
+    ) -> Optional[str]:
         """
         Get model_id from logging object or request metadata.
 
@@ -1120,10 +1131,7 @@ class ProxyBaseLLMRequestProcessing:
         model_id = None
         if _logging_obj:
             # 1. Try getting from litellm_params (updated during call)
-            if (
-                hasattr(_logging_obj, "litellm_params")
-                and _logging_obj.litellm_params
-            ):
+            if hasattr(_logging_obj, "litellm_params") and _logging_obj.litellm_params:
                 # First check direct model_info path (set by router.py with selected deployment)
                 model_info = _logging_obj.litellm_params.get("model_info") or {}
                 model_id = model_info.get("id", None)

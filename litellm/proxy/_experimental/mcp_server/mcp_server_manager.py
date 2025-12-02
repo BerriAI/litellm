@@ -1953,9 +1953,9 @@ class MCPServerManager:
                             server_name_from_prefix
                         ):
                             return server
-                    elif normalize_server_name(server.server_name) == normalize_server_name(
-                        server_name_from_prefix
-                    ):
+                    elif normalize_server_name(
+                        server.server_name
+                    ) == normalize_server_name(server_name_from_prefix):
                         return server
 
         return None

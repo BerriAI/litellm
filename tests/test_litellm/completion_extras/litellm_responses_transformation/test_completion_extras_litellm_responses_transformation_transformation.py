@@ -443,4 +443,6 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("metadata") == {"user_id": "123"}
     assert result_correct.get("previous_response_id") == "resp_abc"
 
-    print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
+    print(
+        "✓ Single-character keys are not incorrectly matched to metadata/previous_response_id"
+    )

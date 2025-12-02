@@ -83,7 +83,7 @@ class ExceptionCheckers:
             if substring in _error_str_lowercase:
                 return True
         return False
-    
+
     @staticmethod
     def is_azure_content_policy_violation_error(error_str: str) -> bool:
         """
@@ -2044,20 +2044,21 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                         response=getattr(original_exception, "response", None),
                     )
-                elif (
-                    ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+                elif ExceptionCheckers.is_azure_content_policy_violation_error(
+                    error_str
                 ):
                     exception_mapping_worked = True
                     from litellm.llms.azure.exception_mapping import (
                         AzureOpenAIExceptionMapping,
                     )
+
                     raise AzureOpenAIExceptionMapping.create_content_policy_violation_error(
                         message=message,
                         model=model,
                         extra_information=extra_information,
                         original_exception=original_exception,
                     )
-                    
+
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(

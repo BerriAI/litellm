@@ -1,9 +1,7 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)
+sys.path.insert(0, os.path.abspath("../../.."))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -48,8 +46,10 @@ def test_get_provider_create_fields():
     assert isinstance(first_provider["credential_fields"], list)
 
     has_detailed_fields = any(
-        provider.get("credential_fields") and len(provider.get("credential_fields", [])) > 0
+        provider.get("credential_fields")
+        and len(provider.get("credential_fields", [])) > 0
         for provider in response_data
     )
-    assert has_detailed_fields, "Expected at least one provider to have detailed credential fields"
-
+    assert (
+        has_detailed_fields
+    ), "Expected at least one provider to have detailed credential fields"

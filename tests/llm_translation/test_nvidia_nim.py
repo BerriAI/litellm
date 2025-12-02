@@ -165,7 +165,7 @@ def test_chat_completion_nvidia_nim_with_tools():
             )
         except Exception as e:
             print(e)
-        
+
         # Add assertions to check the request
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
@@ -184,6 +184,7 @@ def test_chat_completion_nvidia_nim_with_tools():
         assert request_body["tool_choice"] == "auto"
         assert request_body["parallel_tool_calls"] == True
 
+
 class TestNvidiaNim(BaseLLMRerankTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.NVIDIA_NIM
@@ -192,7 +193,7 @@ class TestNvidiaNim(BaseLLMRerankTest):
         return {
             "model": "nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
         }
-    
+
     def get_expected_cost(self) -> float:
         """Nvidia NIM rerank models are free (cost = 0.0)"""
         return 0.0

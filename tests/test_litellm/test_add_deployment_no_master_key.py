@@ -79,7 +79,9 @@ async def test_add_deployment_without_salt_key_or_master_key():
             mock_prisma_client = MagicMock(spec=PrismaClient)
             mock_prisma_client.db = MagicMock()
             mock_prisma_client.db.litellm_config = MagicMock()
-            mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+            mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+                return_value=None
+            )
 
             mock_proxy_logging = MagicMock(spec=ProxyLogging)
 
@@ -98,12 +100,20 @@ async def test_add_deployment_without_salt_key_or_master_key():
                 )
                 assert True
             except ValueError as e:
-                if "Master key is not initialized" in str(e) or "Encryption key is not initialized" in str(e):
-                    pytest.fail(f"add_deployment raised ValueError about encryption key: {e}")
+                if "Master key is not initialized" in str(
+                    e
+                ) or "Encryption key is not initialized" in str(e):
+                    pytest.fail(
+                        f"add_deployment raised ValueError about encryption key: {e}"
+                    )
                 raise
             except Exception as e:
-                if "Master key is not initialized" in str(e) or "Encryption key is not initialized" in str(e):
-                    pytest.fail(f"add_deployment raised exception about encryption key: {e}")
+                if "Master key is not initialized" in str(
+                    e
+                ) or "Encryption key is not initialized" in str(e):
+                    pytest.fail(
+                        f"add_deployment raised exception about encryption key: {e}"
+                    )
                 raise
     finally:
         # Restore LITELLM_SALT_KEY if it was set
@@ -131,5 +141,7 @@ def test_add_deployment_sync_without_master_key():
                 assert result == 0
             except Exception as e:
                 if "Master key is not initialized" in str(e):
-                    pytest.fail(f"_add_deployment raised exception about master_key: {e}")
+                    pytest.fail(
+                        f"_add_deployment raised exception about master_key: {e}"
+                    )
                 raise

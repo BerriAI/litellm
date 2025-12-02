@@ -55,7 +55,7 @@ class IBMWatsonXAudioTranscriptionConfig(
     ) -> AudioTranscriptionRequestData:
         """
         Transform the audio transcription request for WatsonX.
-        
+
         WatsonX expects multipart/form-data with:
         - file: the audio file
         - model: the model name (without watsonx/ prefix)
@@ -64,28 +64,28 @@ class IBMWatsonXAudioTranscriptionConfig(
         """
         # Use common utility to process the audio file
         processed_audio = process_audio_file(audio_file)
-        
+
         # Get API params to extract project_id
         api_params = _get_api_params(params=optional_params.copy())
-        
+
         # Initialize form data with required fields
         form_data: WatsonXAudioTranscriptionRequestBody = {
             "model": model,
             "project_id": api_params.get("project_id", ""),
         }
-        
+
         # Add supported OpenAI params to form data
         supported_params = self.get_supported_openai_params(model)
         for key, value in optional_params.items():
             if key in supported_params and value is not None:
                 form_data[key] = value  # type: ignore
-        
+
         # Set default response_format for cost calculation
         if "response_format" not in form_data or (
             form_data.get("response_format") in ["text", "json"]
         ):
             form_data["response_format"] = "verbose_json"
-        
+
         # Prepare files dict with the audio file
         files = {
             "file": (
@@ -94,10 +94,10 @@ class IBMWatsonXAudioTranscriptionConfig(
                 processed_audio.content_type,
             )
         }
-        
+
         # Convert TypedDict to regular dict for AudioTranscriptionRequestData
         form_data_dict: Dict[str, Any] = dict(form_data)
-        
+
         return AudioTranscriptionRequestData(data=form_data_dict, files=files)
 
     def get_complete_url(
@@ -113,7 +113,7 @@ class IBMWatsonXAudioTranscriptionConfig(
         Construct the complete URL for WatsonX audio transcription.
 
         URL format: {api_base}/ml/v1/audio/transcriptions?version={version}
-        
+
         Note: project_id is sent as form data, not as a query parameter
         """
         # Get base URL
@@ -124,9 +124,10 @@ class IBMWatsonXAudioTranscriptionConfig(
         url = f"{url}/ml/v1/audio/transcriptions"
 
         # Add version parameter (only version in query string, not project_id)
-        api_version = optional_params.get(
-            "api_version", None
-        ) or litellm.WATSONX_DEFAULT_API_VERSION
+        api_version = (
+            optional_params.get("api_version", None)
+            or litellm.WATSONX_DEFAULT_API_VERSION
+        )
         url = f"{url}?version={api_version}"
 
         return url

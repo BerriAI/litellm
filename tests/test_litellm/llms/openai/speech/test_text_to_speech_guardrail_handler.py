@@ -216,11 +216,15 @@ class TestPIIMaskingScenario:
                 import re
 
                 # Mask account numbers
-                masked = re.sub(r"account number \d{8,12}", "account number [REDACTED]", text)
+                masked = re.sub(
+                    r"account number \d{8,12}", "account number [REDACTED]", text
+                )
                 # Mask SSNs
                 masked = re.sub(r"\d{3}-\d{2}-\d{4}", "[SSN_REDACTED]", masked)
                 # Mask credit cards
-                masked = re.sub(r"\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}", "[CC_REDACTED]", masked)
+                masked = re.sub(
+                    r"\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}", "[CC_REDACTED]", masked
+                )
                 return masked
 
         handler = OpenAITextToSpeechHandler()
@@ -322,4 +326,3 @@ class TestMultilingualTTS:
 
             assert f"Testing with {voice} voice [GUARDRAILED]" == result["input"]
             assert result["voice"] == voice
-

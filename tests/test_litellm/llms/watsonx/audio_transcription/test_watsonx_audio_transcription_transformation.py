@@ -31,7 +31,7 @@ class TestWatsonXAudioTranscription:
             captured_request["headers"] = kwargs.get("headers", {})
             captured_request["data"] = kwargs.get("data", {})
             captured_request["files"] = kwargs.get("files", {})
-            
+
             mock_response = MagicMock()
             mock_response.json.return_value = {
                 "text": "test transcription",
@@ -40,7 +40,10 @@ class TestWatsonXAudioTranscription:
             mock_response.status_code = 200
             return mock_response
 
-        with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", new=mock_post):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
             try:
                 await litellm.atranscription(
                     model="watsonx/whisper-large-v3-turbo",
@@ -61,11 +64,13 @@ class TestWatsonXAudioTranscription:
 
         # Validate headers contain WatsonX auth
         assert "Authorization" in captured_request["headers"]
-        assert "Bearer test-bearer-token" in captured_request["headers"]["Authorization"]
-        
+        assert (
+            "Bearer test-bearer-token" in captured_request["headers"]["Authorization"]
+        )
+
         # Validate project_id is in form data, not URL
         assert captured_request["data"].get("project_id") == "test-project-123"
-        
+
         # Validate file is in files dict
         assert "file" in captured_request["files"]
 
@@ -73,7 +78,7 @@ class TestWatsonXAudioTranscription:
     async def test_watsonx_transcription_request_body(self):
         """
         Test that litellm.transcription sends correct request body for WatsonX.
-        
+
         Validates that:
         - Request uses multipart/form-data (data + files)
         - Model name has watsonx/ prefix removed
@@ -86,7 +91,7 @@ class TestWatsonXAudioTranscription:
         async def mock_post(*args, **kwargs):
             captured_request["data"] = kwargs.get("data", {})
             captured_request["files"] = kwargs.get("files", {})
-            
+
             mock_response = MagicMock()
             mock_response.json.return_value = {
                 "text": "test transcription",
@@ -95,7 +100,10 @@ class TestWatsonXAudioTranscription:
             mock_response.status_code = 200
             return mock_response
 
-        with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", new=mock_post):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
             try:
                 await litellm.atranscription(
                     model="watsonx/whisper-large-v3-turbo",
@@ -115,19 +123,23 @@ class TestWatsonXAudioTranscription:
 
         print("JSON DUMPS captured_request:")
         print(json.dumps(captured_request, indent=4, default=str))
-        
+
         # Model name should NOT have watsonx/ prefix
         assert data.get("model") == "whisper-large-v3-turbo"
-        
+
         # project_id should be in form data
         assert data.get("project_id") == "test-project-123"
-        
+
         # OpenAI params should be in form data
         assert data.get("language") == "en"
         assert data.get("temperature") == 0.5
-        assert data.get("response_format") == "verbose_json"  # Default for cost calculation
-        
+        assert (
+            data.get("response_format") == "verbose_json"
+        )  # Default for cost calculation
+
         # Validate file is in files dict (multipart/form-data)
         files = captured_request.get("files", {})
         assert "file" in files
-        assert isinstance(files["file"], tuple)  # Should be (filename, content, content_type)
+        assert isinstance(
+            files["file"], tuple
+        )  # Should be (filename, content, content_type)

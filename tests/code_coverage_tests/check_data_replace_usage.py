@@ -24,7 +24,6 @@ class DataReplaceVisitor(ast.NodeVisitor):
                 and isinstance(node.args[0].value, str)
                 and "data:" in node.args[0].value
             ):
-
                 self.issues.append(
                     {
                         "file": self.current_file,

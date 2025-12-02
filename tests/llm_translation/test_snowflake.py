@@ -46,45 +46,51 @@ def mock_snowflake_streaming_response_chunks() -> List[str]:
     Mock streaming response chunks for Snowflake.
     """
     return [
-        json.dumps({
-            "id": "chatcmpl-snowflake-stream-123",
-            "object": "chat.completion.chunk",
-            "created": 1700000000,
-            "model": "mistral-7b",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": "The"},
-                    "finish_reason": None,
-                }
-            ],
-        }),
-        json.dumps({
-            "id": "chatcmpl-snowflake-stream-123",
-            "object": "chat.completion.chunk",
-            "created": 1700000000,
-            "model": "mistral-7b",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": " sky"},
-                    "finish_reason": None,
-                }
-            ],
-        }),
-        json.dumps({
-            "id": "chatcmpl-snowflake-stream-123",
-            "object": "chat.completion.chunk",
-            "created": 1700000000,
-            "model": "mistral-7b",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": " is blue"},
-                    "finish_reason": "stop",
-                }
-            ],
-        }),
+        json.dumps(
+            {
+                "id": "chatcmpl-snowflake-stream-123",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "mistral-7b",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "The"},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl-snowflake-stream-123",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "mistral-7b",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": " sky"},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl-snowflake-stream-123",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "mistral-7b",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": " is blue"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        ),
     ]
 
 
@@ -120,6 +126,7 @@ def test_chat_completion_snowflake(sync_mode):
         async_handler = AsyncHTTPHandler()
         with patch.object(AsyncHTTPHandler, "post", return_value=mock_response):
             import asyncio
+
             response = asyncio.run(
                 acompletion(
                     model="snowflake/mistral-7b",
@@ -148,16 +155,16 @@ def test_chat_completion_snowflake_stream(sync_mode):
     if sync_mode:
         sync_handler = HTTPHandler()
         mock_chunks = mock_snowflake_streaming_response_chunks()
-        
+
         def mock_iter_lines():
             for chunk in mock_chunks:
                 for line in [f"data: {chunk}", "data: [DONE]"]:
                     yield line
-        
+
         mock_response = MagicMock()
         mock_response.iter_lines.side_effect = mock_iter_lines
         mock_response.status_code = 200
-        
+
         with patch.object(HTTPHandler, "post", return_value=mock_response):
             response = completion(
                 model="snowflake/mistral-7b",
@@ -167,28 +174,28 @@ def test_chat_completion_snowflake_stream(sync_mode):
                 api_base="https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions",
                 client=sync_handler,
             )
-            
+
             chunks_received = []
             for chunk in response:
                 chunks_received.append(chunk)
-            
+
             assert len(chunks_received) > 0
     else:
         async_handler = AsyncHTTPHandler()
         mock_chunks = mock_snowflake_streaming_response_chunks()
-        
+
         async def mock_iter_lines():
             for chunk in mock_chunks:
                 for line in [f"data: {chunk}", "data: [DONE]"]:
                     yield line
-        
+
         mock_response = MagicMock()
         mock_response.iter_lines.side_effect = mock_iter_lines
         mock_response.status_code = 200
-        
+
         with patch.object(AsyncHTTPHandler, "post", return_value=mock_response):
             import asyncio
-            
+
             async def test_async_stream():
                 response = await acompletion(
                     model="snowflake/mistral-7b",
@@ -198,13 +205,13 @@ def test_chat_completion_snowflake_stream(sync_mode):
                     api_base="https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions",
                     client=async_handler,
                 )
-                
+
                 chunks_received = []
                 async for chunk in response:
                     chunks_received.append(chunk)
-                
+
                 assert len(chunks_received) > 0
-            
+
             asyncio.run(test_async_stream())
 
 

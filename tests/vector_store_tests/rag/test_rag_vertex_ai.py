@@ -47,7 +47,9 @@ class TestRAGVertexAI(BaseRAGTest):
         try:
             from vertexai import rag
         except ImportError:
-            pytest.skip("Skipping Vertex AI test: google-cloud-aiplatform>=1.60.0 required")
+            pytest.skip(
+                "Skipping Vertex AI test: google-cloud-aiplatform>=1.60.0 required"
+            )
 
     def get_base_ingest_options(self) -> RAGIngestOptions:
         """
@@ -99,24 +101,24 @@ class TestRAGVertexAI(BaseRAGTest):
 
         # Query the corpus
         response = rag.retrieval_query(
-            rag_resources=[
-                rag.RagResource(rag_corpus=corpus_name)
-            ],
+            rag_resources=[rag.RagResource(rag_corpus=corpus_name)],
             text=query,
             rag_retrieval_config=rag.RagRetrievalConfig(
                 top_k=5,
             ),
         )
 
-        if hasattr(response, 'contexts') and response.contexts.contexts:
+        if hasattr(response, "contexts") and response.contexts.contexts:
             # Convert to dict format
             results = []
             for ctx in response.contexts.contexts:
-                results.append({
-                    "text": ctx.text,
-                    "score": ctx.score,
-                    "source_uri": ctx.source_uri,
-                })
+                results.append(
+                    {
+                        "text": ctx.text,
+                        "score": ctx.score,
+                        "source_uri": ctx.source_uri,
+                    }
+                )
 
             # Check if query terms appear in results
             for result in results:
@@ -127,4 +129,3 @@ class TestRAGVertexAI(BaseRAGTest):
             return {"results": results}
 
         return None
-

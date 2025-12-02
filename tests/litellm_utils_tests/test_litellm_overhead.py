@@ -31,24 +31,23 @@ async def test_litellm_overhead_non_streaming(model):
 
     litellm._turn_on_debug()
     start_time = datetime.now()
-    kwargs ={
+    kwargs = {
         "messages": [{"role": "user", "content": "Hello, world!"}],
-        "model": model
+        "model": model,
     }
     #########################################################
     # Specific cases for models
     #########################################################
     if model == "vertex_ai/gemini-1.5-flash":
-        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001"
+        kwargs[
+            "api_base"
+        ] = "https://exampleopenaiendpoint-production.up.railway.app/v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001"
         # warmup call for auth validation on vertex_ai models
         await litellm.acompletion(**kwargs)
     if model == "openai/self_hosted":
         kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
 
-
-    response = await litellm.acompletion(
-        **kwargs
-    )
+    response = await litellm.acompletion(**kwargs)
     #########################################################
     # End of specific cases for models
     #########################################################
@@ -76,7 +75,6 @@ async def test_litellm_overhead_non_streaming(model):
     pass
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model",
@@ -88,10 +86,9 @@ async def test_litellm_overhead_non_streaming(model):
     ],
 )
 async def test_litellm_overhead_stream(model):
-
     litellm._turn_on_debug()
     start_time = datetime.now()
-    kwargs ={
+    kwargs = {
         "messages": [{"role": "user", "content": "Hello, world!"}],
         "model": model,
         "stream": True,
@@ -103,10 +100,8 @@ async def test_litellm_overhead_stream(model):
         kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
         # warmup call for auth validation on vertex_ai models
         await litellm.acompletion(**kwargs)
-    
-    response = await litellm.acompletion(
-        **kwargs
-    )
+
+    response = await litellm.acompletion(**kwargs)
 
     async for chunk in response:
         print()
@@ -142,28 +137,34 @@ async def test_litellm_overhead_cache_hit():
     Makes two identical requests and checks that the second one (cache hit) has overhead in hidden params.
     """
     from litellm.caching.caching import Cache
-    
+
     litellm._turn_on_debug()
     litellm.cache = Cache()
     print("test2 for caching")
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "Hello, world! Cache test"}]
-    response1 = await litellm.acompletion(model="gpt-4.1-nano", messages=messages, caching=True)
+    response1 = await litellm.acompletion(
+        model="gpt-4.1-nano", messages=messages, caching=True
+    )
     await asyncio.sleep(2)
     # Wait for any pending background tasks to complete
     pending_tasks = [task for task in asyncio.all_tasks() if not task.done()]
     print("all pending tasks", pending_tasks)
     if pending_tasks:
         await asyncio.wait(pending_tasks, timeout=1.0)
-    
-    response2 = await litellm.acompletion(model="gpt-4.1-nano", messages=messages, caching=True)
+
+    response2 = await litellm.acompletion(
+        model="gpt-4.1-nano", messages=messages, caching=True
+    )
     print("RESPONSE 1", response1)
     print("RESPONSE 2", response2)
     assert response1.id == response2.id
 
     print("response 2 hidden params", response2._hidden_params)
 
-
     assert "_response_ms" in response2._hidden_params
     total_time_ms = response2._hidden_params["_response_ms"]
-    assert response2._hidden_params["litellm_overhead_time_ms"] > 0 and response2._hidden_params["litellm_overhead_time_ms"] < total_time_ms
+    assert (
+        response2._hidden_params["litellm_overhead_time_ms"] > 0
+        and response2._hidden_params["litellm_overhead_time_ms"] < total_time_ms
+    )

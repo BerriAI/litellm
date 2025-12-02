@@ -250,13 +250,18 @@ class TestProxySettingEndpoints:
             "proxy_base_url": "https://example.com",
             "user_email": "admin@example.com",
         }
-        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_db_record)
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=mock_db_record
+        )
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         # Mock decryption to return the values as-is (simulating decryption)
         from litellm.proxy.proxy_server import proxy_config
+
         monkeypatch.setattr(
-            proxy_config, "_decrypt_and_set_db_env_variables", lambda environment_variables: environment_variables
+            proxy_config,
+            "_decrypt_and_set_db_env_variables",
+            lambda environment_variables: environment_variables,
         )
 
         response = client.get("/get/sso_settings")
@@ -289,7 +294,7 @@ class TestProxySettingEndpoints:
         assert "properties" in data["field_schema"]
         assert "google_client_id" in data["field_schema"]["properties"]
         assert "description" in data["field_schema"]["properties"]["google_client_id"]
-        
+
         # Verify find_unique was called with correct parameters
         mock_prisma.db.litellm_ssoconfig.find_unique.assert_called_once()
         call_args = mock_prisma.db.litellm_ssoconfig.find_unique.call_args
@@ -310,7 +315,12 @@ class TestProxySettingEndpoints:
 
         # Mock encryption to return values as-is
         from litellm.proxy.proxy_server import proxy_config
-        monkeypatch.setattr(proxy_config, "_encrypt_env_variables", lambda environment_variables: environment_variables)
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
 
         # New SSO settings to update
         new_sso_settings = {
@@ -350,18 +360,18 @@ class TestProxySettingEndpoints:
         # Verify upsert was called with correct parameters
         assert mock_prisma.db.litellm_ssoconfig.upsert.called
         call_args = mock_prisma.db.litellm_ssoconfig.upsert.call_args
-        
+
         # Verify the upsert is using the correct ID
         assert call_args.kwargs["where"]["id"] == "sso_config"
-        
+
         # Verify the data structure for create and update
         create_data = call_args.kwargs["data"]["create"]
         update_data = call_args.kwargs["data"]["update"]
-        
+
         assert create_data["id"] == "sso_config"
         assert "sso_settings" in create_data
         assert "sso_settings" in update_data
-        
+
         # Verify the data is stored as JSON string (as per implementation)
         # The encryption mock returns data as-is, so we verify structure
         create_sso_settings = json.loads(create_data["sso_settings"])
@@ -384,7 +394,12 @@ class TestProxySettingEndpoints:
 
         # Mock encryption to return values as-is
         from litellm.proxy.proxy_server import proxy_config
-        monkeypatch.setattr(proxy_config, "_encrypt_env_variables", lambda environment_variables: environment_variables)
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
 
         # Set some initial environment variables for runtime testing
         monkeypatch.setenv("GOOGLE_CLIENT_ID", "test_existing_google_id")
@@ -420,7 +435,7 @@ class TestProxySettingEndpoints:
         # Verify upsert was called with correct parameters
         assert mock_prisma.db.litellm_ssoconfig.upsert.called
         call_args = mock_prisma.db.litellm_ssoconfig.upsert.call_args
-        
+
         # Verify null values are stored in database
         create_data = call_args.kwargs["data"]["create"]
         create_sso_settings = json.loads(create_data["sso_settings"])
@@ -444,7 +459,12 @@ class TestProxySettingEndpoints:
 
         # Mock encryption to return values as-is
         from litellm.proxy.proxy_server import proxy_config
-        monkeypatch.setattr(proxy_config, "_encrypt_env_variables", lambda environment_variables: environment_variables)
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
 
         # Set some initial environment variables for runtime testing
         monkeypatch.setenv("GOOGLE_CLIENT_ID", "test_existing_google_id")
@@ -472,7 +492,7 @@ class TestProxySettingEndpoints:
         # Verify upsert was called with correct parameters
         assert mock_prisma.db.litellm_ssoconfig.upsert.called
         call_args = mock_prisma.db.litellm_ssoconfig.upsert.call_args
-        
+
         # Verify empty strings are stored in database
         create_data = call_args.kwargs["data"]["create"]
         create_sso_settings = json.loads(create_data["sso_settings"])
@@ -496,7 +516,12 @@ class TestProxySettingEndpoints:
 
         # Mock encryption to return values as-is
         from litellm.proxy.proxy_server import proxy_config
-        monkeypatch.setattr(proxy_config, "_encrypt_env_variables", lambda environment_variables: environment_variables)
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
 
         # Set some initial environment variables
         monkeypatch.setenv("GOOGLE_CLIENT_ID", "old_google_id")
@@ -528,7 +553,7 @@ class TestProxySettingEndpoints:
         # Verify upsert was called with correct parameters
         assert mock_prisma.db.litellm_ssoconfig.upsert.called
         call_args = mock_prisma.db.litellm_ssoconfig.upsert.call_args
-        
+
         # Verify the mixed values are stored correctly in database
         create_data = call_args.kwargs["data"]["create"]
         create_sso_settings = json.loads(create_data["sso_settings"])
@@ -555,7 +580,12 @@ class TestProxySettingEndpoints:
 
         # Mock encryption to return values as-is
         from litellm.proxy.proxy_server import proxy_config
-        monkeypatch.setattr(proxy_config, "_encrypt_env_variables", lambda environment_variables: environment_variables)
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
 
         # Test setting ui_access_mode
         sso_settings_with_ui_mode = {
@@ -622,7 +652,9 @@ class TestProxySettingEndpoints:
         assert "UI_LOGO_PATH" in updated_config["environment_variables"]
         assert mock_proxy_config["save_call_count"]() == 1
 
-    def test_get_sso_settings_from_database(self, mock_proxy_config, mock_auth, monkeypatch):
+    def test_get_sso_settings_from_database(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
         """Test getting SSO settings from the dedicated database table"""
         import json
         from unittest.mock import AsyncMock, MagicMock
@@ -630,7 +662,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_db_record = MagicMock()
-        
+
         # Simulate encrypted data from database
         mock_sso_settings = {
             "google_client_id": "encrypted_google_id",
@@ -638,12 +670,14 @@ class TestProxySettingEndpoints:
             "microsoft_client_id": "encrypted_microsoft_id",
             "proxy_base_url": "encrypted_proxy_url",
         }
-        
+
         mock_db_record.sso_settings = mock_sso_settings
-        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_db_record)
-        
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=mock_db_record
+        )
+
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
-        
+
         # Mock the decryption method to return decrypted values
         def mock_decrypt_and_set(environment_variables):
             return {
@@ -652,21 +686,22 @@ class TestProxySettingEndpoints:
                 "microsoft_client_id": "decrypted_microsoft_id",
                 "proxy_base_url": "https://decrypted.example.com",
             }
-        
+
         from litellm.proxy.proxy_server import proxy_config
+
         monkeypatch.setattr(
             proxy_config, "_decrypt_and_set_db_env_variables", mock_decrypt_and_set
         )
-        
+
         response = client.get("/get/sso_settings")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         # Verify structure
         assert "values" in data
         assert "field_schema" in data
-        
+
         # Verify decrypted values are returned
         values = data["values"]
         assert values["google_client_id"] == "decrypted_google_id"
@@ -674,36 +709,39 @@ class TestProxySettingEndpoints:
         assert values["microsoft_client_id"] == "decrypted_microsoft_id"
         assert values["proxy_base_url"] == "https://decrypted.example.com"
 
-    def test_update_sso_settings_to_database(self, mock_proxy_config, mock_auth, monkeypatch):
+    def test_update_sso_settings_to_database(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
         """Test updating SSO settings saves to the dedicated database table"""
         import json
         from unittest.mock import AsyncMock, MagicMock
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
-        
+
         # Mock the prisma client
         mock_prisma = MagicMock()
         upsert_mock = AsyncMock()
         mock_prisma.db.litellm_ssoconfig.upsert = upsert_mock
-        
+
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
-        
+
         # Track what was encrypted
         encrypted_data = {}
-        
+
         def mock_encrypt(environment_variables):
             # Simulate encryption by adding prefix
             encrypted = {
-                k: f"encrypted_{v}" if v else v 
+                k: f"encrypted_{v}" if v else v
                 for k, v in environment_variables.items()
             }
             encrypted_data.update(encrypted)
             return encrypted
-        
+
         from litellm.proxy.proxy_server import proxy_config
+
         monkeypatch.setattr(proxy_config, "_encrypt_env_variables", mock_encrypt)
-        
+
         # New SSO settings to save
         new_sso_settings = {
             "google_client_id": "new_google_id",
@@ -711,93 +749,104 @@ class TestProxySettingEndpoints:
             "microsoft_client_id": "new_microsoft_id",
             "proxy_base_url": "https://new.example.com",
         }
-        
+
         response = client.patch("/update/sso_settings", json=new_sso_settings)
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         assert data["status"] == "success"
         assert data["settings"]["google_client_id"] == "new_google_id"
-        
+
         # Verify upsert was called
         assert upsert_mock.called
         call_args = upsert_mock.call_args
-        
+
         # Verify it's using the correct ID
         assert call_args.kwargs["where"]["id"] == "sso_config"
-        
+
         # Verify encrypted data was saved
         create_data = call_args.kwargs["data"]["create"]
         update_data = call_args.kwargs["data"]["update"]
-        
+
         assert create_data["id"] == "sso_config"
         # The sso_settings should be JSON string of encrypted data
         assert "sso_settings" in create_data
         assert "sso_settings" in update_data
-        
+
         # Verify the encrypted data is correctly stored
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "encrypted_new_google_id"
-        assert create_sso_settings["google_client_secret"] == "encrypted_new_google_secret"
-        assert create_sso_settings["proxy_base_url"] == "encrypted_https://new.example.com"
+        assert (
+            create_sso_settings["google_client_secret"] == "encrypted_new_google_secret"
+        )
+        assert (
+            create_sso_settings["proxy_base_url"] == "encrypted_https://new.example.com"
+        )
 
-    def test_get_sso_settings_empty_database(self, mock_proxy_config, mock_auth, monkeypatch):
+    def test_get_sso_settings_empty_database(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
         """Test getting SSO settings when database table is empty"""
         from unittest.mock import AsyncMock, MagicMock
 
         # Mock the prisma client to return None (no record found)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
-        
+
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
-        
+
         # Mock the decryption method
         def mock_decrypt_and_set(environment_variables):
             # Should receive empty dict
             return environment_variables
-        
+
         from litellm.proxy.proxy_server import proxy_config
+
         monkeypatch.setattr(
             proxy_config, "_decrypt_and_set_db_env_variables", mock_decrypt_and_set
         )
-        
+
         response = client.get("/get/sso_settings")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         # Verify structure is still correct with empty values
         assert "values" in data
         assert "field_schema" in data
-        
+
         # All values should be None
         values = data["values"]
         assert values.get("google_client_id") is None
         assert values.get("google_client_secret") is None
         assert values.get("microsoft_client_id") is None
 
-    def test_update_sso_settings_no_database_connection(self, mock_proxy_config, mock_auth, monkeypatch):
+    def test_update_sso_settings_no_database_connection(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
         """Test updating SSO settings when database is not connected"""
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-        
+
         new_sso_settings = {
             "google_client_id": "new_google_id",
         }
-        
+
         response = client.patch("/update/sso_settings", json=new_sso_settings)
-        
+
         assert response.status_code == 500
         data = response.json()
         assert "error" in data["detail"]
         assert "Database not connected" in data["detail"]["error"]
 
-    def test_get_sso_settings_no_database_connection(self, mock_proxy_config, mock_auth, monkeypatch):
+    def test_get_sso_settings_no_database_connection(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
         """Test getting SSO settings when database is not connected"""
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-        
+
         response = client.get("/get/sso_settings")
-        
+
         assert response.status_code == 500
         data = response.json()
         assert "error" in data["detail"]

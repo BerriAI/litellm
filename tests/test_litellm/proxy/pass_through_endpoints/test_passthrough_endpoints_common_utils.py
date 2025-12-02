@@ -45,31 +45,32 @@ async def test_get_litellm_virtual_key():
     result = get_litellm_virtual_key(mock_request)
     assert result == "Bearer test-key-123"
 
+
 def test_encode_bedrock_runtime_modelid_arn():
     # Test application-inference-profile ARN
     endpoint = "model/arn:aws:bedrock:us-east-1:123456789123:application-inference-profile/r742sbn2zckd/converse"
     expected = "model/arn:aws:bedrock:us-east-1:123456789123:application-inference-profile%2Fr742sbn2zckd/converse"
     result = CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint)
     assert result == expected
-    
+
     # Test inference-profile ARN
     endpoint = "model/arn:aws:bedrock:us-east-1:123456789012:inference-profile/test-profile/invoke"
     expected = "model/arn:aws:bedrock:us-east-1:123456789012:inference-profile%2Ftest-profile/invoke"
     result = CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint)
     assert result == expected
-    
+
     # Test foundation-model ARN
     endpoint = "model/arn:aws:bedrock:us-east-1:123456789012:foundation-model/anthropic.claude-3/converse"
     expected = "model/arn:aws:bedrock:us-east-1:123456789012:foundation-model%2Fanthropic.claude-3/converse"
     result = CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint)
     assert result == expected
-    
+
     # Test custom-model ARN (2 slashes)
     endpoint = "model/arn:aws:bedrock:us-east-1:123456789012:custom-model/my-model.fine-tuned/abc123/invoke"
     expected = "model/arn:aws:bedrock:us-east-1:123456789012:custom-model%2Fmy-model.fine-tuned%2Fabc123/invoke"
     result = CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint)
     assert result == expected
-    
+
     # Test provisioned-model ARN
     endpoint = "model/arn:aws:bedrock:us-east-1:123456789012:provisioned-model/test-model/converse"
     expected = "model/arn:aws:bedrock:us-east-1:123456789012:provisioned-model%2Ftest-model/converse"
@@ -90,7 +91,7 @@ def test_encode_bedrock_runtime_modelid_arn_edge_cases():
     expected = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile%2Ftest1/converse"
     result = CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint)
     assert result == expected
-    
+
     # Test ARN with special characters in resource ID
     endpoint = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/test-profile.v1/invoke"
     expected = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile%2Ftest-profile.v1/invoke"

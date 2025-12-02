@@ -32,9 +32,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         on_flagged_action=getattr(litellm_params, "on_flagged_action", "monitor"),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
-        async_mode=_get_config_value(
-            litellm_params, optional_params, "async_mode"
-        ),
+        async_mode=_get_config_value(litellm_params, optional_params, "async_mode"),
         persist_session=_get_config_value(
             litellm_params, optional_params, "persist_session"
         ),

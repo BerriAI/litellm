@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.gemini_passthrough_logging_handler import (
@@ -34,18 +36,37 @@ class TestGeminiPassthroughLoggingHandler:
         self.mock_gemini_response = {
             "candidates": [
                 {
-                    "content": {"parts": [{"text": "Hello! How can I help you today?"}], "role": "model"},
+                    "content": {
+                        "parts": [{"text": "Hello! How can I help you today?"}],
+                        "role": "model",
+                    },
                     "finishReason": "STOP",
                     "index": 0,
                     "safetyRatings": [
-                        {"category": "HARM_CATEGORY_HARASSMENT", "probability": "NEGLIGIBLE"},
-                        {"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"},
-                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "probability": "NEGLIGIBLE"},
-                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "NEGLIGIBLE"},
+                        {
+                            "category": "HARM_CATEGORY_HARASSMENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HATE_SPEECH",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                            "probability": "NEGLIGIBLE",
+                        },
                     ],
                 }
             ],
-            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 8, "totalTokenCount": 18},
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 8,
+                "totalTokenCount": 18,
+            },
         }
 
     def _create_mock_httpx_response(self) -> httpx.Response:
@@ -101,7 +122,11 @@ class TestGeminiPassthroughLoggingHandler:
 
         # Test non-Gemini endpoint
         assert (
-            handler.is_gemini_route("https://api.openai.com/v1/chat/completions", custom_llm_provider="openai") is False
+            handler.is_gemini_route(
+                "https://api.openai.com/v1/chat/completions",
+                custom_llm_provider="openai",
+            )
+            is False
         )
 
     def test_extract_model_from_url(self):
@@ -119,8 +144,12 @@ class TestGeminiPassthroughLoggingHandler:
         assert model == "gemini-1.5-pro"
 
     @patch("litellm.completion_cost")
-    @patch("litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload")
-    def test_gemini_passthrough_handler_success(self, mock_get_standard_logging, mock_completion_cost):
+    @patch(
+        "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
+    )
+    def test_gemini_passthrough_handler_success(
+        self, mock_get_standard_logging, mock_completion_cost
+    ):
         """Test successful cost tracking for Gemini generateContent endpoint"""
         # Arrange
         mock_completion_cost.return_value = 0.000045
@@ -232,7 +261,10 @@ class TestGeminiPassthroughLoggingHandler:
             start_time=self.start_time,
             end_time=self.end_time,
             cache_hit=False,
-            request_body={"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]},
+            request_body={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
             **kwargs,
         )
 
@@ -295,25 +327,27 @@ class TestGeminiPassthroughLoggingHandler:
         # For veo-2.0-generate-001 with 8 seconds: 0.35 * 8 = 2.8
         expected_cost = 0.35 * 8.0  # $2.80
         mock_completion_cost.return_value = expected_cost
-        
+
         # Mock Veo3 predictLongRunning response
-        mock_veo_response = {
-            "name": "operations/1234567890123456789"
-        }
-        
+        mock_veo_response = {"name": "operations/1234567890123456789"}
+
         mock_httpx_response = MagicMock(spec=httpx.Response)
         mock_httpx_response.status_code = 200
         mock_httpx_response.json.return_value = mock_veo_response
         mock_httpx_response.headers = {"content-type": "application/json"}
-        
+
         mock_logging_obj = self._create_mock_logging_obj()
-        
+
         # Request body with durationSeconds
         request_body = {
-            "instances": [{"prompt": "A close up of two people staring at a cryptic drawing on a wall,"}],
-            "parameters": {"durationSeconds": 8}
+            "instances": [
+                {
+                    "prompt": "A close up of two people staring at a cryptic drawing on a wall,"
+                }
+            ],
+            "parameters": {"durationSeconds": 8},
         }
-        
+
         kwargs = {
             "passthrough_logging_payload": PassthroughStandardLoggingPayload(
                 url="https://generativelanguage.googleapis.com/v1beta/models/veo-2.0-generate-001:predictLongRunning",
@@ -321,7 +355,7 @@ class TestGeminiPassthroughLoggingHandler:
                 request_method="POST",
             ),
         }
-        
+
         # Act
         result = GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
             httpx_response=mock_httpx_response,
@@ -335,29 +369,29 @@ class TestGeminiPassthroughLoggingHandler:
             request_body=request_body,
             **kwargs,
         )
-        
+
         # Assert
         assert result is not None
         assert "result" in result
         assert "kwargs" in result
-        
+
         # Verify the cost is calculated correctly
         assert result["kwargs"]["response_cost"] == expected_cost
         assert result["kwargs"]["model"] == "veo-2.0-generate-001"
         assert result["kwargs"]["custom_llm_provider"] == "gemini"
-        
+
         # Verify completion_cost was called with create_video call_type
         mock_completion_cost.assert_called_once()
         call_args = mock_completion_cost.call_args
         assert call_args.kwargs.get("call_type") == "create_video"
         assert call_args.kwargs.get("custom_llm_provider") == "gemini"
         assert call_args.kwargs.get("model") == "veo-2.0-generate-001"
-        
+
         # Verify the response object has _hidden_params with response_cost
         video_response = result["result"]
         assert hasattr(video_response, "_hidden_params")
         assert video_response._hidden_params.get("response_cost") == expected_cost
-        
+
         # Verify logging object was updated
         assert mock_logging_obj.model_call_details["response_cost"] == expected_cost
         assert mock_logging_obj.model_call_details["model"] == "veo-2.0-generate-001"

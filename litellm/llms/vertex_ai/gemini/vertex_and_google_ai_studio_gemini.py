@@ -1404,7 +1404,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 candidates_token_count = usage_metadata.get("candidatesTokenCount", 0)
                 image_tokens = response_tokens_details.image_tokens or 0
                 audio_tokens_candidate = response_tokens_details.audio_tokens or 0
-                calculated_text_tokens = candidates_token_count - image_tokens - audio_tokens_candidate
+                calculated_text_tokens = (
+                    candidates_token_count - image_tokens - audio_tokens_candidate
+                )
                 response_tokens_details.text_tokens = calculated_text_tokens
         #########################################################
 

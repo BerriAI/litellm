@@ -1034,7 +1034,6 @@ class TestBedrockLLMProxyRoute:
             "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
             return_value=mock_processor,
         ):
-
             # Test application-inference-profile endpoint
             endpoint = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/r742sbn2zckd/converse"
 
@@ -1076,7 +1075,6 @@ class TestBedrockLLMProxyRoute:
             "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
             return_value=mock_processor,
         ):
-
             # Test regular model endpoint
             endpoint = "model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
 
@@ -1184,7 +1182,7 @@ class TestBedrockLLMProxyRoute:
         """
         Test that Bedrock passthrough endpoints use credentials from model configuration
         instead of environment variables when a router model is used.
-        
+
         This test verifies the fix for the bug where passthrough endpoints were using
         environment variables instead of model-specific credentials from config.yaml.
         """
@@ -1254,14 +1252,24 @@ class TestBedrockLLMProxyRoute:
             deployment_litellm_params = deployment.get("litellm_params", {})
 
             # Verify model-specific credentials are in the deployment
-            assert deployment_litellm_params.get("aws_access_key_id") == model_access_key
-            assert deployment_litellm_params.get("aws_secret_access_key") == model_secret_key
+            assert (
+                deployment_litellm_params.get("aws_access_key_id") == model_access_key
+            )
+            assert (
+                deployment_litellm_params.get("aws_secret_access_key")
+                == model_secret_key
+            )
             assert deployment_litellm_params.get("aws_region_name") == model_region
-            assert deployment_litellm_params.get("aws_session_token") == model_session_token
+            assert (
+                deployment_litellm_params.get("aws_session_token")
+                == model_session_token
+            )
 
             # Verify environment variables are NOT in the deployment
             assert deployment_litellm_params.get("aws_access_key_id") != env_access_key
-            assert deployment_litellm_params.get("aws_secret_access_key") != env_secret_key
+            assert (
+                deployment_litellm_params.get("aws_secret_access_key") != env_secret_key
+            )
             assert deployment_litellm_params.get("aws_region_name") != env_region
 
             # Test 3: Verify credentials are passed through the passthrough route

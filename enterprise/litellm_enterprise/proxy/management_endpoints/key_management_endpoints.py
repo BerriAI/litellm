@@ -36,7 +36,6 @@ def apply_enterprise_key_management_params(
     data: GenerateKeyRequest,
     team_table: Optional[LiteLLM_TeamTable],
 ) -> GenerateKeyRequest:
-
     data = add_team_member_key_duration(team_table, data)
     data = add_team_organization_id(team_table, data)
     return data

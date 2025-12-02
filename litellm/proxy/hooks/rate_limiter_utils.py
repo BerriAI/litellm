@@ -36,19 +36,9 @@ def convert_priority_to_percent(
 
         if val_type == "percent":
             return float(val_num)
-        elif (
-            val_type == "rpm"
-            and model_info
-            and model_info.rpm
-            and model_info.rpm > 0
-        ):
+        elif val_type == "rpm" and model_info and model_info.rpm and model_info.rpm > 0:
             return float(val_num) / model_info.rpm
-        elif (
-            val_type == "tpm"
-            and model_info
-            and model_info.tpm
-            and model_info.tpm > 0
-        ):
+        elif val_type == "tpm" and model_info and model_info.tpm and model_info.tpm > 0:
             return float(val_num) / model_info.tpm
 
         # Fallback: treat as percent

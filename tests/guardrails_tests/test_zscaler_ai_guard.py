@@ -76,6 +76,7 @@ async def test_make_zscaler_ai_guard_api_call_block():
             == "BLOCK"
         )
 
+
 @pytest.mark.asyncio
 async def test_make_zscaler_ai_guard_api_call_request_exception():
     """Test Zscaler AI Guard API call where an exception in the request occurs."""
@@ -98,6 +99,7 @@ async def test_make_zscaler_ai_guard_api_call_request_exception():
 
         assert e.value.status_code == 500
         assert "Connection error" in e.value.detail["reason"]
+
 
 def test_extract_blocking_info():
     """Test extract_blocking_info method."""

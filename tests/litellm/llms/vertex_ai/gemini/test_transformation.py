@@ -11,6 +11,7 @@ from litellm.types.llms import openai
 from litellm.types import completion
 from litellm.types.llms.vertex_ai import RequestBody
 
+
 @pytest.mark.asyncio
 async def test__transform_request_body_labels():
     """
@@ -25,9 +26,7 @@ async def test__transform_request_body_labels():
         {"role": "assistant", "content": "Hello! How can I assist you today?"},
         {"role": "user", "content": "hi"},
     ]
-    optional_params = {
-        "labels": {"lparam1": "lvalue1", "lparam2": "lvalue2"}
-    }
+    optional_params = {"labels": {"lparam1": "lvalue1", "lparam2": "lvalue2"}}
     litellm_params = {}
     transform_request_params = {
         "messages": messages,
@@ -41,8 +40,16 @@ async def test__transform_request_body_labels():
     rb: RequestBody = transformation._transform_request_body(**transform_request_params)
 
     # Check URL
-    assert rb["contents"] == [{'parts': [{'text': 'hi'}], 'role': 'user'}, {'parts': [{'text': 'Hello! How can I assist you today?'}], 'role': 'model'}, {'parts': [{'text': 'hi'}], 'role': 'user'}]
-    assert "labels" in rb and rb["labels"] == {"lparam1": "lvalue1", "lparam2": "lvalue2"}
+    assert rb["contents"] == [
+        {"parts": [{"text": "hi"}], "role": "user"},
+        {"parts": [{"text": "Hello! How can I assist you today?"}], "role": "model"},
+        {"parts": [{"text": "hi"}], "role": "user"},
+    ]
+    assert "labels" in rb and rb["labels"] == {
+        "lparam1": "lvalue1",
+        "lparam2": "lvalue2",
+    }
+
 
 @pytest.mark.asyncio
 async def test__transform_request_body_metadata():
@@ -60,9 +67,7 @@ async def test__transform_request_body_metadata():
     ]
     optional_params = {}
     litellm_params = {
-        "metadata": {
-            "requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}
-        }
+        "metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}
     }
     transform_request_params = {
         "messages": messages,
@@ -76,8 +81,16 @@ async def test__transform_request_body_metadata():
     rb: RequestBody = transformation._transform_request_body(**transform_request_params)
 
     # Check URL
-    assert rb["contents"] == [{'parts': [{'text': 'hi'}], 'role': 'user'}, {'parts': [{'text': 'Hello! How can I assist you today?'}], 'role': 'model'}, {'parts': [{'text': 'hi'}], 'role': 'user'}]
-    assert "labels" in rb and rb["labels"] == {"rparam1": "rvalue1", "rparam2": "rvalue2"}
+    assert rb["contents"] == [
+        {"parts": [{"text": "hi"}], "role": "user"},
+        {"parts": [{"text": "Hello! How can I assist you today?"}], "role": "model"},
+        {"parts": [{"text": "hi"}], "role": "user"},
+    ]
+    assert "labels" in rb and rb["labels"] == {
+        "rparam1": "rvalue1",
+        "rparam2": "rvalue2",
+    }
+
 
 @pytest.mark.asyncio
 async def test__transform_request_body_labels_and_metadata():
@@ -95,13 +108,9 @@ async def test__transform_request_body_labels_and_metadata():
         {"role": "assistant", "content": "Hello! How can I assist you today?"},
         {"role": "user", "content": "hi"},
     ]
-    optional_params = {
-        "labels": {"lparam1": "lvalue1", "lparam2": "lvalue2"}
-    }
+    optional_params = {"labels": {"lparam1": "lvalue1", "lparam2": "lvalue2"}}
     litellm_params = {
-        "metadata": {
-            "requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}
-        }
+        "metadata": {"requester_metadata": {"rparam1": "rvalue1", "rparam2": "rvalue2"}}
     }
     transform_request_params = {
         "messages": messages,
@@ -115,8 +124,16 @@ async def test__transform_request_body_labels_and_metadata():
     rb: RequestBody = transformation._transform_request_body(**transform_request_params)
 
     # Check URL
-    assert rb["contents"] == [{'parts': [{'text': 'hi'}], 'role': 'user'}, {'parts': [{'text': 'Hello! How can I assist you today?'}], 'role': 'model'}, {'parts': [{'text': 'hi'}], 'role': 'user'}]
-    assert "labels" in rb and rb["labels"] == {"lparam1": "lvalue1", "lparam2": "lvalue2"}
+    assert rb["contents"] == [
+        {"parts": [{"text": "hi"}], "role": "user"},
+        {"parts": [{"text": "Hello! How can I assist you today?"}], "role": "model"},
+        {"parts": [{"text": "hi"}], "role": "user"},
+    ]
+    assert "labels" in rb and rb["labels"] == {
+        "lparam1": "lvalue1",
+        "lparam2": "lvalue2",
+    }
+
 
 @pytest.mark.asyncio
 async def test__transform_request_body_image_config():
@@ -130,14 +147,14 @@ async def test__transform_request_body_image_config():
             "content": [
                 {
                     "type": "text",
-                    "text": "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme"
+                    "text": "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme",
                 }
-            ]
+            ],
         }
     ]
     optional_params = {
         "imageConfig": {"aspectRatio": "16:9"},
-        "responseModalities": ["Image"]
+        "responseModalities": ["Image"],
     }
     litellm_params = {}
     transform_request_params = {
@@ -169,14 +186,12 @@ async def test__transform_request_body_image_config_snake_case():
             "content": [
                 {
                     "type": "text",
-                    "text": "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme"
+                    "text": "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme",
                 }
-            ]
+            ],
         }
     ]
-    optional_params = {
-        "image_config": {"aspect_ratio": "16:9"}
-    }
+    optional_params = {"image_config": {"aspect_ratio": "16:9"}}
     litellm_params = {}
     transform_request_params = {
         "messages": messages,
@@ -203,12 +218,12 @@ async def test__transform_request_body_image_config_with_image_size():
             "role": "user",
             "content": [
                 {"type": "text", "text": "Generate a 4K image of Tokyo skyline"}
-            ]
+            ],
         }
     ]
     optional_params = {
         "imageConfig": {"aspectRatio": "16:9", "imageSize": "4K"},
-        "responseModalities": ["Image"]
+        "responseModalities": ["Image"],
     }
     litellm_params = {}
     transform_request_params = {

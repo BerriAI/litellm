@@ -25,15 +25,26 @@ class TestAzureAnthropicChatCompletion:
 
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_uses_azure_anthropic_config(self, mock_azure_config, mock_provider_manager):
+    def test_completion_uses_azure_anthropic_config(
+        self, mock_azure_config, mock_provider_manager
+    ):
         """Test that completion method uses AzureAnthropicConfig"""
         handler = AzureAnthropicChatCompletion()
         mock_config = MagicMock()
-        mock_config.transform_request.return_value = {"model": "claude-sonnet-4-5", "messages": []}
+        mock_config.transform_request.return_value = {
+            "model": "claude-sonnet-4-5",
+            "messages": [],
+        }
         mock_config.transform_response.return_value = ModelResponse()
         mock_config_instance = MagicMock()
-        mock_config_instance.validate_environment.return_value = {"x-api-key": "test-api-key", "anthropic-version": "2023-06-01"}
-        mock_config_instance.transform_request.return_value = {"model": "claude-sonnet-4-5", "messages": []}
+        mock_config_instance.validate_environment.return_value = {
+            "x-api-key": "test-api-key",
+            "anthropic-version": "2023-06-01",
+        }
+        mock_config_instance.transform_request.return_value = {
+            "model": "claude-sonnet-4-5",
+            "messages": [],
+        }
         mock_azure_config.return_value = mock_config_instance
         mock_provider_manager.get_provider_chat_config.return_value = mock_config
 
@@ -80,7 +91,9 @@ class TestAzureAnthropicChatCompletion:
     @patch("litellm.llms.anthropic.chat.handler.make_sync_call")
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_streaming(self, mock_azure_config, mock_provider_manager, mock_make_sync_call):
+    def test_completion_streaming(
+        self, mock_azure_config, mock_provider_manager, mock_make_sync_call
+    ):
         # Note: decorators are applied in reverse order
         """Test completion with streaming"""
         handler = AzureAnthropicChatCompletion()
@@ -91,7 +104,10 @@ class TestAzureAnthropicChatCompletion:
             "stream": True,
         }
         mock_config_instance = MagicMock()
-        mock_config_instance.validate_environment.return_value = {"x-api-key": "test-api-key", "anthropic-version": "2023-06-01"}
+        mock_config_instance.validate_environment.return_value = {
+            "x-api-key": "test-api-key",
+            "anthropic-version": "2023-06-01",
+        }
         mock_config_instance.transform_request.return_value = {
             "model": "claude-sonnet-4-5",
             "messages": [],
@@ -145,7 +161,9 @@ class TestAzureAnthropicChatCompletion:
     @patch("litellm.llms.custom_httpx.http_handler._get_httpx_client")
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_non_streaming(self, mock_azure_config, mock_provider_manager, mock_get_client):
+    def test_completion_non_streaming(
+        self, mock_azure_config, mock_provider_manager, mock_get_client
+    ):
         # Note: decorators are applied in reverse order
         """Test completion without streaming"""
         handler = AzureAnthropicChatCompletion()
@@ -157,7 +175,10 @@ class TestAzureAnthropicChatCompletion:
         mock_response = ModelResponse()
         mock_config.transform_response.return_value = mock_response
         mock_config_instance = MagicMock()
-        mock_config_instance.validate_environment.return_value = {"x-api-key": "test-api-key", "anthropic-version": "2023-06-01"}
+        mock_config_instance.validate_environment.return_value = {
+            "x-api-key": "test-api-key",
+            "anthropic-version": "2023-06-01",
+        }
         mock_config_instance.transform_request.return_value = {
             "model": "claude-sonnet-4-5",
             "messages": [],
@@ -184,13 +205,15 @@ class TestAzureAnthropicChatCompletion:
         mock_client = MagicMock()
         mock_response_obj = MagicMock()
         mock_response_obj.status_code = 200
-        mock_response_obj.text = json.dumps({
-            "id": "test-id",
-            "model": "claude-sonnet-4-5",
-            "content": [{"type": "text", "text": "Hello!"}],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 10, "output_tokens": 5},
-        })
+        mock_response_obj.text = json.dumps(
+            {
+                "id": "test-id",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "Hello!"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            }
+        )
         mock_response_obj.json.return_value = {
             "id": "test-id",
             "model": "claude-sonnet-4-5",
@@ -223,4 +246,3 @@ class TestAzureAnthropicChatCompletion:
         # Verify non-streaming was handled
         mock_client.post.assert_called_once()
         assert result is not None
-

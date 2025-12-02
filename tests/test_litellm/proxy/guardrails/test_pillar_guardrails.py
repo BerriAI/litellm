@@ -569,7 +569,7 @@ async def test_litellm_context_headers_automatically_added(
     assert captured_headers["X-LiteLLM-Team-Name"] == "engineering-team"
     assert "X-LiteLLM-Org-Id" in captured_headers
     assert captured_headers["X-LiteLLM-Org-Id"] == "org-789"
-    
+
     # Metadata is NOT sent (may contain sensitive information)
     assert "X-LiteLLM-Metadata" not in captured_headers
 

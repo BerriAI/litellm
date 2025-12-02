@@ -71,20 +71,20 @@ def test_serialize_non_serializable():
 async def test_router_prompt_caching_same_cacheable_prefix_routes_to_same_deployment():
     """
     End-to-end test to validate prompt caching routing through LiteLLM Router.
-    
+
     Tests that requests with same cacheable content but different user messages
     route to the same deployment (for prompt caching).
-    
+
     This reproduces the issue where requests with same cacheable prefix but different
     user messages should route to the same deployment, but previously didn't because
     the cache key included the entire messages array instead of just the cacheable prefix.
     """
     from litellm.types.llms.openai import AllMessageValues
-    
+
     def create_messages(user_content: str) -> list[AllMessageValues]:
         """
         Create messages matching the user's exact scenario.
-        
+
         Message structure:
         - BLOCK 1: System message, first content block (no cache_control)
                   → INCLUDED (comes before the last cacheable block)
@@ -98,11 +98,15 @@ async def test_router_prompt_caching_same_cacheable_prefix_routes_to_same_deploy
                 "role": "system",
                 "content": [
                     # BLOCK 1: No cache_control → INCLUDED (all blocks up to last cacheable are included)
-                    {"type": "text", "text": "You are an AI assistant tasked with analyzing legal documents."},
+                    {
+                        "type": "text",
+                        "text": "You are an AI assistant tasked with analyzing legal documents.",
+                    },
                     # BLOCK 2: Has cache_control → INCLUDED (this is the last cacheable block)
                     {
                         "type": "text",
-                        "text": "Here 3 is the full text of a complex legal agreement" * 400,
+                        "text": "Here 3 is the full text of a complex legal agreement"
+                        * 400,
                         "cache_control": {"type": "ephemeral"},
                     },
                 ],
@@ -113,7 +117,7 @@ async def test_router_prompt_caching_same_cacheable_prefix_routes_to_same_deploy
                 "content": user_content,
             },
         ]
-    
+
     # Create router with multiple deployments
     router = Router(
         model_list=[
@@ -131,23 +135,27 @@ async def test_router_prompt_caching_same_cacheable_prefix_routes_to_same_deploy
         routing_strategy="simple-shuffle",
         optional_pre_call_checks=["prompt_caching"],
     )
-    
+
     # Create test messages matching user's exact scenario
     # Same cacheable prefix (system blocks 1+2) but different user messages
-    messages1 = create_messages("what are the key terms and conditions in this agreement?")
+    messages1 = create_messages(
+        "what are the key terms and conditions in this agreement?"
+    )
     messages2 = create_messages("how many words are there?")
     messages3 = create_messages("how many sentences are there?")
-    
+
     cache = PromptCachingCache(cache=router.cache)
-    
+
     # Test 1: Cache keys should be same (same cacheable prefix, different user messages)
     key1 = PromptCachingCache.get_prompt_caching_cache_key(messages1, None)
     key2 = PromptCachingCache.get_prompt_caching_cache_key(messages2, None)
     key3 = PromptCachingCache.get_prompt_caching_cache_key(messages3, None)
-    
+
     assert key1 is not None, "Cache key should not be None"
-    assert key1 == key2 == key3, "Cache keys should be the same for same cacheable prefix"
-    
+    assert (
+        key1 == key2 == key3
+    ), "Cache keys should be the same for same cacheable prefix"
+
     # Make first request
     try:
         response1 = await router.acompletion(model="test-model", messages=messages1)
@@ -155,31 +163,33 @@ async def test_router_prompt_caching_same_cacheable_prefix_routes_to_same_deploy
     except Exception:
         # If API call fails, we can still test the cache key logic
         model_id_1 = "unknown"
-    
+
     await asyncio.sleep(1)  # Wait for cache write
-    
+
     # Test 2: Cache lookup should work for messages2 (same cacheable prefix)
     cached_2 = await cache.async_get_model_id(messages2, None)
     # Cache should be found if first request succeeded
     if model_id_1 != "unknown":
-        assert cached_2 is not None, "Cache lookup should work for same cacheable prefix"
-    
+        assert (
+            cached_2 is not None
+        ), "Cache lookup should work for same cacheable prefix"
+
     # Make second request
     try:
         response2 = await router.acompletion(model="test-model", messages=messages2)
         model_id_2 = response2._hidden_params.get("model_id", "unknown")
     except Exception:
         model_id_2 = "unknown"
-    
+
     await asyncio.sleep(1)  # Wait for cache write
-    
+
     # Make third request
     try:
         response3 = await router.acompletion(model="test-model", messages=messages3)
         model_id_3 = response3._hidden_params.get("model_id", "unknown")
     except Exception:
         model_id_3 = "unknown"
-    
+
     # Test 3: All requests should route to same deployment (if API calls succeeded)
     if model_id_1 != "unknown" and model_id_2 != "unknown" and model_id_3 != "unknown":
         assert (

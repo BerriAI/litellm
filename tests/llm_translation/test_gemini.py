@@ -364,6 +364,7 @@ def test_gemini_flash_image_preview_models(model_name: str):
             "TEXT",
         ]
 
+
 def test_gemini_imagen_models_use_predict_endpoint():
     """
     Test that Imagen models still use :predict endpoint (not broken by gemini-2.5-flash-image-preview fix)
@@ -1156,7 +1157,8 @@ def test_reasoning_effort_none_mapping():
     assert result is not None
     assert result["thinkingBudget"] == 0
     assert result["includeThoughts"] is False
-    
+
+
 def test_gemini_function_args_preserve_unicode():
     """
     Test for Issue #16533: Gemini function call arguments should preserve non-ASCII characters
@@ -1165,7 +1167,9 @@ def test_gemini_function_args_preserve_unicode():
     Before fix: "や" becomes "\u3084"
     After fix: "や" stays as "や"
     """
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
 
     # Test Japanese characters
     parts = [
@@ -1174,19 +1178,17 @@ def test_gemini_function_args_preserve_unicode():
                 "name": "send_message",
                 "args": {
                     "message": "やあ",  # Japanese "hello"
-                    "recipient": "たけし"  # Japanese name
-                }
+                    "recipient": "たけし",  # Japanese name
+                },
             }
         }
     ]
 
     function, tools, _ = VertexGeminiConfig._transform_parts(
-        parts=parts,
-        cumulative_tool_call_idx=0,
-        is_function_call=False
+        parts=parts, cumulative_tool_call_idx=0, is_function_call=False
     )
 
-    arguments_str = tools[0]['function']['arguments']
+    arguments_str = tools[0]["function"]["arguments"]
     parsed_args = json.loads(arguments_str)
 
     # Verify characters are preserved
@@ -1196,28 +1198,25 @@ def test_gemini_function_args_preserve_unicode():
     # Verify no Unicode escape sequences in raw string
     assert "\\u" not in arguments_str, "Should not contain Unicode escape sequences"
     assert "やあ" in arguments_str, "Original Japanese characters should be in the string"
-    assert "たけし" in arguments_str, "Original Japanese characters should be in the string"
+    assert (
+        "たけし" in arguments_str
+    ), "Original Japanese characters should be in the string"
 
     # Test Spanish characters
     parts_spanish = [
         {
             "functionCall": {
                 "name": "send_message",
-                "args": {
-                    "message": "¡Hola! ¿Cómo estás?",
-                    "recipient": "José"
-                }
+                "args": {"message": "¡Hola! ¿Cómo estás?", "recipient": "José"},
             }
         }
     ]
 
     function, tools, _ = VertexGeminiConfig._transform_parts(
-        parts=parts_spanish,
-        cumulative_tool_call_idx=0,
-        is_function_call=False
+        parts=parts_spanish, cumulative_tool_call_idx=0, is_function_call=False
     )
 
-    arguments_str = tools[0]['function']['arguments']
+    arguments_str = tools[0]["function"]["arguments"]
     parsed_args = json.loads(arguments_str)
 
     assert parsed_args["message"] == "¡Hola! ¿Cómo estás?"

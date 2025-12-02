@@ -38,6 +38,7 @@ class AnthropicOutputSchema(TypedDict, total=False):
 
 class AnthropicOutputConfig(TypedDict, total=False):
     """Configuration for controlling Claude's output behavior."""
+
     effort: Literal["high", "medium", "low"]
 
 
@@ -109,12 +110,14 @@ class AnthropicMemoryTool(TypedDict, total=False):
 
 class AnthropicToolSearchToolRegex(TypedDict, total=False):
     """Tool search tool using regex patterns for tool discovery."""
+
     type: Required[Literal["tool_search_tool_regex_20251119"]]
     name: Required[str]
 
 
 class AnthropicToolSearchToolBM25(TypedDict, total=False):
     """Tool search tool using BM25 algorithm for tool discovery."""
+
     type: Required[Literal["tool_search_tool_bm25_20251119"]]
     name: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
@@ -125,17 +128,20 @@ class AnthropicToolSearchToolBM25(TypedDict, total=False):
 
 class ToolReference(TypedDict, total=False):
     """Reference to a tool that should be expanded from deferred tools."""
+
     type: Required[Literal["tool_reference"]]
     tool_name: Required[str]
 
 
 class DirectToolCaller(TypedDict, total=False):
     """Indicates a tool was called directly by Claude."""
+
     type: Required[Literal["direct"]]
 
 
 class CodeExecutionToolCaller(TypedDict, total=False):
     """Indicates a tool was called programmatically from code execution."""
+
     type: Required[Literal["code_execution_20250825"]]
     tool_id: Required[str]  # ID of the code execution tool that made the call
 
@@ -145,6 +151,7 @@ ToolCaller = Union[DirectToolCaller, CodeExecutionToolCaller]
 
 class AnthropicContainer(TypedDict, total=False):
     """Container metadata for code execution."""
+
     id: Required[str]
     expires_at: Optional[str]  # ISO 8601 timestamp
 

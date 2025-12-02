@@ -144,7 +144,9 @@ def read_jsonl(filepath: str):
 
 def get_any_completed_batch_id_azure():
     print("AZURE getting any completed batch id")
-    list_of_batches = client.batches.list(extra_headers={"custom-llm-provider": "azure"})
+    list_of_batches = client.batches.list(
+        extra_headers={"custom-llm-provider": "azure"}
+    )
     print("list of batches", list_of_batches)
     for batch in list_of_batches:
         if batch.status == "completed":
@@ -266,7 +268,6 @@ async def test_list_batches_with_target_model_names():
     with patch(
         "litellm.proxy.batches_endpoints.endpoints._read_request_body"
     ) as mock_read_body, patch("litellm.proxy.proxy_server.llm_router") as mock_router:
-
         mock_read_body.return_value = {"target_model_names": target_model_names}
         mock_router.alist_batches = AsyncMock(return_value=mock_batch_response)
 

@@ -45,7 +45,6 @@ def assert_response_shape(response, custom_llm_provider):
     assert isinstance(response.meta, expected_response_shape["meta"])
 
     if custom_llm_provider == "cohere":
-
         assert isinstance(
             response.meta["api_version"], expected_meta_shape["api_version"]
         )
@@ -113,7 +112,7 @@ class BaseLLMRerankTest(ABC):
             assert response.results is not None
 
             assert response._hidden_params["response_cost"] is not None
-            
+
             # Check expected cost
             expected_cost = self.get_expected_cost()
             if expected_cost is not None:

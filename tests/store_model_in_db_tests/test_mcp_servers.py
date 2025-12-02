@@ -419,6 +419,8 @@ async def test_edit_mcp_server_redacts_credentials():
         mock_update.assert_awaited_once()
         mock_manager.add_update_server.assert_called_once_with(updated_server)
         mock_manager.reload_servers_from_database.assert_awaited_once()
+
+
 def test_validate_mcp_server_name_direct():
     """
     Test the validation function directly to ensure it works.

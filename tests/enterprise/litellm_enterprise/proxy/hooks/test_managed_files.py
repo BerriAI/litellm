@@ -389,7 +389,7 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
 
     # Use AsyncMock instead of real database connection
     prisma_client = AsyncMock()
-    
+
     batch = LiteLLMBatch(
         id="bGl0ZWxsbV9wcm94eTttb2RlbF9pZDoxMjM0NTY3OTtsbG1fYmF0Y2hfaWQ6YmF0Y2hfNjg1YzVlNWQ2Mzk4ODE5MGI4NWJkYjIxNDdiYTEzMWQ",
         completion_window="24h",
@@ -417,8 +417,10 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
     # first retrieve batch
     tasks = []
     first_create_task = asyncio.create_task
-    with patch('asyncio.create_task') as mock_create_task:
-        mock_create_task.side_effect = lambda coro: tasks.append(first_create_task(coro)) or tasks[-1]
+    with patch("asyncio.create_task") as mock_create_task:
+        mock_create_task.side_effect = (
+            lambda coro: tasks.append(first_create_task(coro)) or tasks[-1]
+        )
 
         response = await proxy_managed_files.async_post_call_success_hook(
             data={},
@@ -439,8 +441,10 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
     # second retrieve batch
     tasks = []
     second_create_task = asyncio.create_task
-    with patch('asyncio.create_task') as mock_create_task:
-        mock_create_task.side_effect = lambda coro: tasks.append(second_create_task(coro)) or tasks[-1]
+    with patch("asyncio.create_task") as mock_create_task:
+        mock_create_task.side_effect = (
+            lambda coro: tasks.append(second_create_task(coro)) or tasks[-1]
+        )
 
         await proxy_managed_files.async_post_call_success_hook(
             data={},
@@ -463,11 +467,11 @@ def test_update_responses_input_with_unified_file_id():
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         update_responses_input_with_model_file_ids,
     )
-    
+
     # Create a base64-encoded unified file ID
     # This decodes to: litellm_proxy:application/pdf;unified_id,6c0b5890-8914-48e0-b8f4-0ae5ed3c14a5;target_model_names,gpt-4o;llm_output_file_id,file-ECBPW7ML9g7XHdwGgUPZaM;llm_output_file_model_id,e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2
     unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
-    
+
     # Test input with unified file ID in content array
     input_data = [
         {
@@ -484,15 +488,18 @@ def test_update_responses_input_with_unified_file_id():
             ],
         }
     ]
-    
+
     # Update the input
     updated_input = update_responses_input_with_model_file_ids(input=input_data)
-    
+
     # Verify the file_id was updated to the provider-specific file ID
     assert updated_input[0]["content"][0]["type"] == "input_file"
     assert updated_input[0]["content"][0]["file_id"] == "file-ECBPW7ML9g7XHdwGgUPZaM"
     assert updated_input[0]["content"][1]["type"] == "input_text"
-    assert updated_input[0]["content"][1]["text"] == "What is the first dragon in the book?"
+    assert (
+        updated_input[0]["content"][1]["text"]
+        == "What is the first dragon in the book?"
+    )
 
 
 def test_update_responses_input_with_regular_file_id():
@@ -503,10 +510,10 @@ def test_update_responses_input_with_regular_file_id():
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         update_responses_input_with_model_file_ids,
     )
-    
+
     # Regular OpenAI file ID (not a unified file ID)
     regular_file_id = "file-abc123xyz"
-    
+
     input_data = [
         {
             "role": "user",
@@ -522,10 +529,10 @@ def test_update_responses_input_with_regular_file_id():
             ],
         }
     ]
-    
+
     # Update the input
     updated_input = update_responses_input_with_model_file_ids(input=input_data)
-    
+
     # Verify the file_id was kept unchanged (regular OpenAI file ID)
     assert updated_input[0]["content"][0]["type"] == "input_file"
     assert updated_input[0]["content"][0]["file_id"] == regular_file_id
@@ -539,11 +546,11 @@ def test_update_responses_input_with_string_input():
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         update_responses_input_with_model_file_ids,
     )
-    
+
     input_data = "What is AI?"
-    
+
     updated_input = update_responses_input_with_model_file_ids(input=input_data)
-    
+
     assert updated_input == input_data
     assert isinstance(updated_input, str)
 
@@ -556,12 +563,12 @@ def test_update_responses_input_with_multiple_file_ids():
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         update_responses_input_with_model_file_ids,
     )
-    
+
     # Unified file ID
     unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
     # Regular OpenAI file ID
     regular_file_id = "file-regular123"
-    
+
     input_data = [
         {
             "role": "user",
@@ -581,9 +588,9 @@ def test_update_responses_input_with_multiple_file_ids():
             ],
         }
     ]
-    
+
     updated_input = update_responses_input_with_model_file_ids(input=input_data)
-    
+
     # Verify unified file ID was updated
     assert updated_input[0]["content"][0]["file_id"] == "file-ECBPW7ML9g7XHdwGgUPZaM"
     # Verify regular file ID was kept unchanged

@@ -551,6 +551,5 @@ async def test_mock_openai_retrieve_fine_tune_job():
         except Exception as e:
             print("error=", e)
 
-
         # Verify the request
         mock_retrieve.assert_called_once_with(fine_tuning_job_id="ft-123")

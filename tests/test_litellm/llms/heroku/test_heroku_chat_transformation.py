@@ -9,6 +9,7 @@ from litellm.llms.heroku.chat.transformation import HerokuChatConfig
 os.environ["HEROKU_API_BASE"] = "https://us.inference.heroku.com"
 os.environ["HEROKU_API_KEY"] = "fake-heroku-key"
 
+
 class TestHerokuChatConfig:
     def test_default_api_base(self):
         """Test that default API base is used when none is provided"""
@@ -34,7 +35,7 @@ class TestHerokuChatConfig:
     @pytest.mark.respx()
     def test_heroku_chat_mock(self, respx_mock):
         """Test that the Heroku chat API is called correctly"""
-        
+
         litellm.disable_aiohttp_transport = True
 
         model = "heroku/claude-3-5-haiku"
@@ -70,14 +71,16 @@ class TestHerokuChatConfig:
             messages=[
                 {"role": "user", "content": "write code for saying hey from LiteLLM"}
             ],
-            extended_thinking={ "enabled": True, "include_reasoning":True }
+            extended_thinking={"enabled": True, "include_reasoning": True},
         )
 
         # Verify the request was made with correct headers
         assert len(respx_mock.calls) == 1
         request = respx_mock.calls[0].request
-        
-        assert request.headers["Authorization"] == f"Bearer {os.environ['HEROKU_API_KEY']}"
+
+        assert (
+            request.headers["Authorization"] == f"Bearer {os.environ['HEROKU_API_KEY']}"
+        )
         assert request.headers["Content-Type"] == "application/json"
 
         assert response.choices[0].message.content == "It's me, Mia! How are you?"
@@ -102,30 +105,30 @@ class TestHerokuChatConfig:
                 "system_fingerprint": "heroku-inf-cp42st",
                 "choices": [
                     {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "refusal": None,
-                        "tool_calls": [
-                        {
-                            "id": "tooluse_dV3Vtnb-S9-Z_YFicSv2Gw",
-                            "type": "function",
-                            "function": {
-                            "name": "get_current_weather",
-                            "arguments": "{\"location\":\"Portland, OR\"}"
-                            }
-                        }
-                        ],
-                        "content": "Let me check the current weather in Portland for you."
-                    },
-                    "finish_reason": "tool_calls"
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "refusal": None,
+                            "tool_calls": [
+                                {
+                                    "id": "tooluse_dV3Vtnb-S9-Z_YFicSv2Gw",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_current_weather",
+                                        "arguments": '{"location":"Portland, OR"}',
+                                    },
+                                }
+                            ],
+                            "content": "Let me check the current weather in Portland for you.",
+                        },
+                        "finish_reason": "tool_calls",
                     }
                 ],
                 "usage": {
                     "prompt_tokens": 354,
                     "completion_tokens": 69,
-                    "total_tokens": 423
-                }
+                    "total_tokens": 423,
+                },
             },
             status_code=200,
         )
@@ -133,33 +136,45 @@ class TestHerokuChatConfig:
         response = completion(
             model=model,
             messages=[{"role": "user", "content": "What's the weather in Portland?"}],
-            tools=[{
-                "type": "function", 
-                "function": {
-                    "name": "get_current_weather", 
-                    "description": "Get the current weather in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. Portland, OR"
-                            }
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "description": "Get the current weather in a given location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": "The city and state, e.g. Portland, OR",
+                                }
+                            },
+                            "required": ["location"],
                         },
-                        "required": [
-                            "location"
-                        ]
-                    }
+                    },
                 }
-            }],
+            ],
             tool_choice="auto",
         )
         print(response)
-        assert response.choices[0].message.content == "Let me check the current weather in Portland for you."
-        assert response.choices[0].message.tool_calls[0].id == "tooluse_dV3Vtnb-S9-Z_YFicSv2Gw"
+        assert (
+            response.choices[0].message.content
+            == "Let me check the current weather in Portland for you."
+        )
+        assert (
+            response.choices[0].message.tool_calls[0].id
+            == "tooluse_dV3Vtnb-S9-Z_YFicSv2Gw"
+        )
         assert response.choices[0].message.tool_calls[0].type == "function"
-        assert response.choices[0].message.tool_calls[0].function.name == "get_current_weather"
-        assert response.choices[0].message.tool_calls[0].function.arguments == "{\"location\":\"Portland, OR\"}"
+        assert (
+            response.choices[0].message.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert (
+            response.choices[0].message.tool_calls[0].function.arguments
+            == '{"location":"Portland, OR"}'
+        )
 
         assert response.usage.prompt_tokens == 354
         assert response.usage.completion_tokens == 69

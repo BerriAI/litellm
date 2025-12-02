@@ -126,13 +126,17 @@ class TestResponsesAPIRequestUtils:
         """Ensure _update_responses_api_response_id_with_model_id works with dict input"""
         responses_api_response = {"id": "resp_abc123"}
         litellm_metadata = {"model_info": {"id": "gpt-4o"}}
-        updated = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-            responses_api_response=responses_api_response,
-            custom_llm_provider="openai",
-            litellm_metadata=litellm_metadata,
+        updated = (
+            ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                responses_api_response=responses_api_response,
+                custom_llm_provider="openai",
+                litellm_metadata=litellm_metadata,
+            )
         )
         assert updated["id"] != "resp_abc123"
-        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(updated["id"])
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            updated["id"]
+        )
         assert decoded.get("response_id") == "resp_abc123"
         assert decoded.get("model_id") == "gpt-4o"
         assert decoded.get("custom_llm_provider") == "openai"
@@ -182,7 +186,10 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens == 10
         assert result.completion_tokens == 20
         assert result.total_tokens == 30
-        assert result.prompt_tokens_details and result.prompt_tokens_details.cached_tokens == 2
+        assert (
+            result.prompt_tokens_details
+            and result.prompt_tokens_details.cached_tokens == 2
+        )
 
     def test_transform_response_api_usage_with_none_values(self):
         """Test transformation handles None values properly"""

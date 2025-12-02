@@ -444,7 +444,9 @@ def test_watsonx_zen_api_key_from_client(monkeypatch, watsonx_chat_completion_ca
             print(f"Caught expected exception: {e}")
 
     # Verify the request was made
-    assert mock_post.call_count == 1, "The completion endpoint should have been called once."
+    assert (
+        mock_post.call_count == 1
+    ), "The completion endpoint should have been called once."
 
     # Get the headers sent in the POST request
     request_kwargs = mock_post.call_args.kwargs
@@ -489,7 +491,9 @@ def test_watsonx_zen_api_key_from_env(monkeypatch, watsonx_chat_completion_call)
             print(f"Caught expected exception: {e}")
 
     # Verify the request was made
-    assert mock_post.call_count == 1, "The completion endpoint should have been called once."
+    assert (
+        mock_post.call_count == 1
+    ), "The completion endpoint should have been called once."
 
     # Get the headers sent in the POST request
     request_kwargs = mock_post.call_args.kwargs

@@ -1,4 +1,3 @@
-
 import os
 import sys
 from fastapi.exceptions import HTTPException
@@ -62,8 +61,8 @@ def test_prompt_security_guard_config_no_api_key():
         del os.environ["PROMPT_SECURITY_API_BASE"]
 
     with pytest.raises(
-        PromptSecurityGuardrailMissingSecrets, 
-        match="Couldn't get Prompt Security api base or key"
+        PromptSecurityGuardrailMissingSecrets,
+        match="Couldn't get Prompt Security api base or key",
     ):
         init_guardrails_v2(
             all_guardrails=[
@@ -85,11 +84,9 @@ async def test_pre_call_block():
     """Test that pre_call hook blocks malicious prompts"""
     os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
     os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
-    
+
     guardrail = PromptSecurityGuardrail(
-        guardrail_name="test-guard", 
-        event_hook="pre_call", 
-        default_on=True
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
     )
 
     data = {
@@ -104,17 +101,15 @@ async def test_pre_call_block():
             "result": {
                 "prompt": {
                     "action": "block",
-                    "violations": ["prompt_injection", "jailbreak"]
+                    "violations": ["prompt_injection", "jailbreak"],
                 }
             }
         },
         status_code=200,
-        request=Request(
-            method="POST", url="https://test.prompt.security/api/protect"
-        ),
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
     )
     mock_response.raise_for_status = lambda: None
-    
+
     with pytest.raises(HTTPException) as excinfo:
         with patch.object(guardrail.async_handler, "post", return_value=mock_response):
             await guardrail.async_pre_call_hook(
@@ -139,11 +134,9 @@ async def test_pre_call_modify():
     """Test that pre_call hook modifies prompts when needed"""
     os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
     os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
-    
+
     guardrail = PromptSecurityGuardrail(
-        guardrail_name="test-guard", 
-        event_hook="pre_call", 
-        default_on=True
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
     )
 
     data = {
@@ -160,19 +153,14 @@ async def test_pre_call_modify():
     mock_response = Response(
         json={
             "result": {
-                "prompt": {
-                    "action": "modify",
-                    "modified_messages": modified_messages
-                }
+                "prompt": {"action": "modify", "modified_messages": modified_messages}
             }
         },
         status_code=200,
-        request=Request(
-            method="POST", url="https://test.prompt.security/api/protect"
-        ),
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
     )
     mock_response.raise_for_status = lambda: None
-    
+
     with patch.object(guardrail.async_handler, "post", return_value=mock_response):
         result = await guardrail.async_pre_call_hook(
             data=data,
@@ -193,11 +181,9 @@ async def test_pre_call_allow():
     """Test that pre_call hook allows safe prompts"""
     os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
     os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
-    
+
     guardrail = PromptSecurityGuardrail(
-        guardrail_name="test-guard", 
-        event_hook="pre_call", 
-        default_on=True
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
     )
 
     data = {
@@ -208,20 +194,12 @@ async def test_pre_call_allow():
 
     # Mock API response for allowing
     mock_response = Response(
-        json={
-            "result": {
-                "prompt": {
-                    "action": "allow"
-                }
-            }
-        },
+        json={"result": {"prompt": {"action": "allow"}}},
         status_code=200,
-        request=Request(
-            method="POST", url="https://test.prompt.security/api/protect"
-        ),
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
     )
     mock_response.raise_for_status = lambda: None
-    
+
     with patch.object(guardrail.async_handler, "post", return_value=mock_response):
         result = await guardrail.async_pre_call_hook(
             data=data,
@@ -242,16 +220,14 @@ async def test_post_call_block():
     """Test that post_call hook blocks malicious responses"""
     os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
     os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
-    
+
     guardrail = PromptSecurityGuardrail(
-        guardrail_name="test-guard", 
-        event_hook="post_call", 
-        default_on=True
+        guardrail_name="test-guard", event_hook="post_call", default_on=True
     )
 
     # Mock response
     from litellm.types.utils import ModelResponse, Message, Choices
-    
+
     mock_llm_response = ModelResponse(
         id="test-id",
         choices=[
@@ -260,13 +236,13 @@ async def test_post_call_block():
                 index=0,
                 message=Message(
                     content="Here is sensitive information: credit card 1234-5678-9012-3456",
-                    role="assistant"
-                )
+                    role="assistant",
+                ),
             )
         ],
         created=1234567890,
         model="test-model",
-        object="chat.completion"
+        object="chat.completion",
     )
 
     # Mock API response for blocking
@@ -275,17 +251,15 @@ async def test_post_call_block():
             "result": {
                 "response": {
                     "action": "block",
-                    "violations": ["pii_exposure", "sensitive_data"]
+                    "violations": ["pii_exposure", "sensitive_data"],
                 }
             }
         },
         status_code=200,
-        request=Request(
-            method="POST", url="https://test.prompt.security/api/protect"
-        ),
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
     )
     mock_response.raise_for_status = lambda: None
-    
+
     with pytest.raises(HTTPException) as excinfo:
         with patch.object(guardrail.async_handler, "post", return_value=mock_response):
             await guardrail.async_post_call_success_hook(
@@ -307,30 +281,25 @@ async def test_post_call_modify():
     """Test that post_call hook modifies responses when needed"""
     os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
     os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
-    
+
     guardrail = PromptSecurityGuardrail(
-        guardrail_name="test-guard", 
-        event_hook="post_call", 
-        default_on=True
+        guardrail_name="test-guard", event_hook="post_call", default_on=True
     )
 
     from litellm.types.utils import ModelResponse, Message, Choices
-    
+
     mock_llm_response = ModelResponse(
         id="test-id",
         choices=[
             Choices(
                 finish_reason="stop",
                 index=0,
-                message=Message(
-                    content="Your SSN is 123-45-6789",
-                    role="assistant"
-                )
+                message=Message(content="Your SSN is 123-45-6789", role="assistant"),
             )
         ],
         created=1234567890,
         model="test-model",
-        object="chat.completion"
+        object="chat.completion",
     )
 
     # Mock API response for modifying
@@ -340,17 +309,15 @@ async def test_post_call_modify():
                 "response": {
                     "action": "modify",
                     "modified_text": "Your SSN is [REDACTED]",
-                    "violations": []
+                    "violations": [],
                 }
             }
         },
         status_code=200,
-        request=Request(
-            method="POST", url="https://test.prompt.security/api/protect"
-        ),
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
     )
     mock_response.raise_for_status = lambda: None
-    
+
     with patch.object(guardrail.async_handler, "post", return_value=mock_response):
         result = await guardrail.async_post_call_success_hook(
             data={},
@@ -370,11 +337,9 @@ async def test_file_sanitization():
     """Test file sanitization for images - only calls sanitizeFile API, not protect API"""
     os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
     os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
-    
+
     guardrail = PromptSecurityGuardrail(
-        guardrail_name="test-guard", 
-        event_hook="pre_call", 
-        default_on=True
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
     )
 
     # Create a minimal valid 1x1 PNG image (red pixel)
@@ -383,7 +348,7 @@ async def test_file_sanitization():
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
     )
     encoded_image = base64.b64encode(png_data).decode()
-    
+
     data = {
         "messages": [
             {
@@ -392,11 +357,9 @@ async def test_file_sanitization():
                     {"type": "text", "text": "What's in this image?"},
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{encoded_image}"
-                        }
-                    }
-                ]
+                        "image_url": {"url": f"data:image/png;base64,{encoded_image}"},
+                    },
+                ],
             }
         ]
     }
@@ -416,10 +379,7 @@ async def test_file_sanitization():
         json={
             "status": "done",
             "content": "sanitized_content",
-            "metadata": {
-                "action": "allow",
-                "violations": []
-            }
+            "metadata": {"action": "allow", "violations": []},
         },
         status_code=200,
         request=Request(
@@ -457,11 +417,9 @@ async def test_file_sanitization_block():
     """Test that file sanitization blocks malicious files - only calls sanitizeFile API"""
     os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
     os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
-    
+
     guardrail = PromptSecurityGuardrail(
-        guardrail_name="test-guard", 
-        event_hook="pre_call", 
-        default_on=True
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
     )
 
     # Create a minimal valid 1x1 PNG image (red pixel)
@@ -469,7 +427,7 @@ async def test_file_sanitization_block():
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
     )
     encoded_image = base64.b64encode(png_data).decode()
-    
+
     data = {
         "messages": [
             {
@@ -478,11 +436,9 @@ async def test_file_sanitization_block():
                     {"type": "text", "text": "What's in this image?"},
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{encoded_image}"
-                        }
-                    }
-                ]
+                        "image_url": {"url": f"data:image/png;base64,{encoded_image}"},
+                    },
+                ],
             }
         ]
     }
@@ -504,8 +460,8 @@ async def test_file_sanitization_block():
             "content": "",
             "metadata": {
                 "action": "block",
-                "violations": ["malware_detected", "phishing_attempt"]
-            }
+                "violations": ["malware_detected", "phishing_attempt"],
+            },
         },
         status_code=200,
         request=Request(
@@ -546,11 +502,9 @@ async def test_user_parameter():
     os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
     os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
     os.environ["PROMPT_SECURITY_USER"] = "test-user-123"
-    
+
     guardrail = PromptSecurityGuardrail(
-        guardrail_name="test-guard", 
-        event_hook="pre_call", 
-        default_on=True
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
     )
 
     data = {
@@ -560,28 +514,20 @@ async def test_user_parameter():
     }
 
     mock_response = Response(
-        json={
-            "result": {
-                "prompt": {
-                    "action": "allow"
-                }
-            }
-        },
+        json={"result": {"prompt": {"action": "allow"}}},
         status_code=200,
-        request=Request(
-            method="POST", url="https://test.prompt.security/api/protect"
-        ),
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
     )
     mock_response.raise_for_status = lambda: None
-    
+
     # Track the call to verify user parameter
     call_args = None
-    
+
     async def mock_post(*args, **kwargs):
         nonlocal call_args
         call_args = kwargs
         return mock_response
-    
+
     with patch.object(guardrail.async_handler, "post", side_effect=mock_post):
         await guardrail.async_pre_call_hook(
             data=data,
@@ -608,25 +554,15 @@ async def test_empty_messages():
     os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
 
     guardrail = PromptSecurityGuardrail(
-        guardrail_name="test-guard", 
-        event_hook="pre_call", 
-        default_on=True
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
     )
 
     data = {"messages": []}
 
     mock_response = Response(
-        json={
-            "result": {
-                "prompt": {
-                    "action": "allow"
-                }
-            }
-        },
+        json={"result": {"prompt": {"action": "allow"}}},
         status_code=200,
-        request=Request(
-            method="POST", url="https://test.prompt.security/api/protect"
-        ),
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
     )
     mock_response.raise_for_status = lambda: None
 

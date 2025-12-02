@@ -19,7 +19,7 @@ class WatsonXCredentials(TypedDict):
 class WatsonXAudioTranscriptionRequestBody(TypedDict):
     """
     WatsonX Audio Transcription API request body.
-    
+
     Follows multipart/form-data format for WatsonX Whisper models.
     See: https://cloud.ibm.com/apidocs/watsonx-ai
     """
@@ -64,6 +64,7 @@ class WatsonXAIEndpoint(str, Enum):
 
 class WatsonXModelPattern(str, Enum):
     """Model identifier patterns for WatsonX models"""
+
     GRANITE_CHAT = "granite-chat"
     IBM_MISTRAL = "ibm-mistral"
     IBM_MISTRALAI = "ibm-mistralai"

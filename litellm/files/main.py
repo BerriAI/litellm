@@ -54,7 +54,9 @@ vertex_ai_files_instance = VertexAIFilesHandler()
 async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"
+    ] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -98,7 +100,9 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"]] = None,
+    custom_llm_provider: Optional[
+        Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"]
+    ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -755,7 +759,9 @@ def file_list(
 @client
 async def afile_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm"
+    ] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,

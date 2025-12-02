@@ -857,9 +857,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1046,29 +1046,36 @@ def completion_cost(  # noqa: PLR0915
                             number_of_queries = len(query)
                         elif query is not None:
                             number_of_queries = 1
-                    
+
                     search_model = model or ""
                     if custom_llm_provider and "/" not in search_model:
                         # If model is like "tavily-search", construct "tavily/search" for cost lookup
                         search_model = f"{custom_llm_provider}/search"
-                    
-                    prompt_cost, completion_cost_result = search_provider_cost_per_query(
+
+                    (
+                        prompt_cost,
+                        completion_cost_result,
+                    ) = search_provider_cost_per_query(
                         model=search_model,
                         custom_llm_provider=custom_llm_provider,
                         number_of_queries=number_of_queries,
                         optional_params=optional_params,
                     )
-                    
+
                     # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
                     _final_cost = prompt_cost + completion_cost_result
-                    
+
                     # Apply discount
                     original_cost = _final_cost
-                    _final_cost, discount_percent, discount_amount = _apply_cost_discount(
+                    (
+                        _final_cost,
+                        discount_percent,
+                        discount_amount,
+                    ) = _apply_cost_discount(
                         base_cost=_final_cost,
                         custom_llm_provider=custom_llm_provider,
                     )
-                    
+
                     # Store cost breakdown in logging object if available
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
@@ -1080,7 +1087,7 @@ def completion_cost(  # noqa: PLR0915
                         discount_percent=discount_percent,
                         discount_amount=discount_amount,
                     )
-                    
+
                     return _final_cost
                 elif call_type == CallTypes.arealtime.value and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject

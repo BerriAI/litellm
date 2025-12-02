@@ -68,11 +68,11 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
-        _metadata["error_information"] = (
-            StandardLoggingPayloadSetup.get_error_information(
-                original_exception=original_exception,
-                traceback_str=traceback_str,
-            )
+        _metadata[
+            "error_information"
+        ] = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
+            traceback_str=traceback_str,
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
@@ -80,25 +80,31 @@ class _ProxyDBLogger(CustomLogger):
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
-        
+
         existing_litellm_params = request_data.get("litellm_params", {})
         existing_litellm_metadata = existing_litellm_params.get("metadata", {}) or {}
-        
+
         # Preserve tags from existing metadata
         if existing_litellm_metadata.get("tags"):
             existing_metadata["tags"] = existing_litellm_metadata.get("tags")
-        
+
         request_data["litellm_params"]["proxy_server_request"] = (
-            request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
+            request_data.get("proxy_server_request")
+            or existing_litellm_params.get("proxy_server_request")
+            or {}
         )
         request_data["litellm_params"]["metadata"] = existing_metadata
-        
+
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:
-            request_data["model"] = existing_litellm_params.get("model") or request_data.get("model", "")
+            request_data["model"] = existing_litellm_params.get(
+                "model"
+            ) or request_data.get("model", "")
         if "custom_llm_provider" not in request_data:
-            request_data["custom_llm_provider"] = existing_litellm_params.get("custom_llm_provider") or request_data.get("custom_llm_provider", "")
-        
+            request_data["custom_llm_provider"] = existing_litellm_params.get(
+                "custom_llm_provider"
+            ) or request_data.get("custom_llm_provider", "")
+
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,

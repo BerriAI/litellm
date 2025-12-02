@@ -26,26 +26,23 @@ else:
 class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
     """
     Vertex AI Imagen Image Generation Configuration
-    
+
     Uses predict API for Imagen models on Vertex AI
     Supports models like imagegeneration@006
     """
-    
+
     def __init__(self) -> None:
         BaseImageGenerationConfig.__init__(self)
         VertexLLM.__init__(self)
-    
+
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Imagen API supported parameters
         """
-        return [
-            "n",
-            "size"
-        ]
-    
+        return ["n", "size"]
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -55,7 +52,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
         mapped_params = {}
-        
+
         for k, v in non_default_params.items():
             if k not in optional_params.keys():
                 if k in supported_params:
@@ -67,22 +64,22 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
                     else:
                         mapped_params[k] = v
-        
+
         return mapped_params
-    
+
     def _map_size_to_aspect_ratio(self, size: str) -> str:
         """
         Map OpenAI size format to Imagen aspect ratio format
         """
         aspect_ratio_map = {
             "1024x1024": "1:1",
-            "1792x1024": "16:9", 
+            "1792x1024": "16:9",
             "1024x1792": "9:16",
             "1280x896": "4:3",
-            "896x1280": "3:4"
+            "896x1280": "3:4",
         }
         return aspect_ratio_map.get(size, "1:1")
-    
+
     def _resolve_vertex_project(self) -> Optional[str]:
         return (
             getattr(self, "_vertex_project", None)
@@ -134,11 +131,19 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
         # then fall back to environment variables and other sources
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
-        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
+        vertex_project = (
+            self.safe_get_vertex_ai_project(litellm_params)
+            or self._resolve_vertex_project()
+        )
+        vertex_location = (
+            self.safe_get_vertex_ai_location(litellm_params)
+            or self._resolve_vertex_location()
+        )
 
         if not vertex_project or not vertex_location:
-            raise ValueError("vertex_project and vertex_location are required for Vertex AI")
+            raise ValueError(
+                "vertex_project and vertex_location are required for Vertex AI"
+            )
 
         base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
 
@@ -155,17 +160,23 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_base: Optional[str] = None,
     ) -> dict:
         headers = headers or {}
-        
+
         # If a custom api_base is provided, skip credential validation
         # This allows users to use proxies or mock endpoints without needing Vertex AI credentials
         _api_base = litellm_params.get("api_base") or api_base
         if _api_base is not None:
             return headers
-        
+
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
-        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
+        vertex_project = (
+            self.safe_get_vertex_ai_project(litellm_params)
+            or self._resolve_vertex_project()
+        )
+        vertex_credentials = (
+            self.safe_get_vertex_ai_credentials(litellm_params)
+            or self._resolve_vertex_credentials()
+        )
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -183,22 +194,22 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
     ) -> dict:
         """
         Transform the image generation request to Imagen format
-        
+
         Uses predict API with instances and parameters
         """
         # Default parameters
         default_params = {
             "sampleCount": 1,
         }
-        
+
         # Merge with optional params
         parameters = {**default_params, **optional_params}
-        
+
         request_body = {
             "instances": [{"prompt": prompt}],
             "parameters": parameters,
         }
-        
+
         return request_body
 
     def transform_image_generation_response(
@@ -225,7 +236,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-        
+
         if not model_response.data:
             model_response.data = []
 
@@ -234,10 +245,11 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         for prediction in predictions:
             # Imagen returns images as bytesBase64Encoded
             if "bytesBase64Encoded" in prediction:
-                model_response.data.append(ImageObject(
-                    b64_json=prediction["bytesBase64Encoded"],
-                    url=None,
-                ))
-        
-        return model_response
+                model_response.data.append(
+                    ImageObject(
+                        b64_json=prediction["bytesBase64Encoded"],
+                        url=None,
+                    )
+                )
 
+        return model_response

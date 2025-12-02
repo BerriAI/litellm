@@ -41,7 +41,9 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = mock_api_key
     # Test with dynamic endpoint
-    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
+    config.authenticator.get_api_base.return_value = (
+        "https://api.enterprise.githubcopilot.com"
+    )
 
     # Test with default values
     model = "github_copilot/gpt-4"
@@ -157,19 +159,25 @@ def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
             {"role": "system", "content": "System message."},
             {"role": "user", "content": "User message."},
         ]
-        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
+        out = config._transform_messages(
+            [m.copy() for m in messages], model="github_copilot/gpt-4"
+        )
         assert out[0]["role"] == "assistant"
         assert out[1]["role"] == "user"
 
         # Case 2: Flag is True (conversion does not happen)
         litellm.disable_copilot_system_to_assistant = True
-        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
+        out = config._transform_messages(
+            [m.copy() for m in messages], model="github_copilot/gpt-4"
+        )
         assert out[0]["role"] == "system"
         assert out[1]["role"] == "user"
 
         # Case 3: Flag is False again (conversion happens)
         litellm.disable_copilot_system_to_assistant = False
-        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
+        out = config._transform_messages(
+            [m.copy() for m in messages], model="github_copilot/gpt-4"
+        )
         assert out[0]["role"] == "assistant"
         assert out[1]["role"] == "user"
     finally:
@@ -180,7 +188,7 @@ def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
 def test_x_initiator_header_user_request():
     """Test that user-only messages result in X-Initiator: user header"""
     config = GithubCopilotConfig()
-    
+
     # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
@@ -190,7 +198,7 @@ def test_x_initiator_header_user_request():
         {"role": "system", "content": "You are an assistant."},
         {"role": "user", "content": "Hello!"},
     ]
-    
+
     headers = config.validate_environment(
         headers={},
         model="github_copilot/gpt-4",
@@ -200,14 +208,14 @@ def test_x_initiator_header_user_request():
         api_key=None,
         api_base=None,
     )
-    
+
     assert headers["X-Initiator"] == "user"
 
 
 def test_x_initiator_header_agent_request_with_assistant():
     """Test that messages with assistant role result in X-Initiator: agent header"""
     config = GithubCopilotConfig()
-    
+
     # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
@@ -217,24 +225,24 @@ def test_x_initiator_header_agent_request_with_assistant():
         {"role": "system", "content": "You are an assistant."},
         {"role": "assistant", "content": "I can help you."},
     ]
-    
+
     headers = config.validate_environment(
         headers={},
-        model="github_copilot/gpt-4", 
+        model="github_copilot/gpt-4",
         messages=messages,
         optional_params={},
         litellm_params={},
         api_key=None,
         api_base=None,
     )
-    
+
     assert headers["X-Initiator"] == "agent"
 
 
 def test_x_initiator_header_agent_request_with_tool():
     """Test that messages with tool role result in X-Initiator: agent header"""
     config = GithubCopilotConfig()
-    
+
     # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
@@ -244,25 +252,25 @@ def test_x_initiator_header_agent_request_with_tool():
         {"role": "system", "content": "You are an assistant."},
         {"role": "tool", "content": "Tool response.", "tool_call_id": "123"},
     ]
-    
+
     headers = config.validate_environment(
         headers={},
-        model="github_copilot/gpt-4", 
+        model="github_copilot/gpt-4",
         messages=messages,
         optional_params={},
         litellm_params={},
         api_key=None,
         api_base=None,
     )
-    
+
     assert headers["X-Initiator"] == "agent"
 
 
 def test_x_initiator_header_mixed_messages_with_agent_roles():
     """Test that mixed messages with agent roles (assistant/tool) result in X-Initiator: agent header"""
     config = GithubCopilotConfig()
-    
-    # Mock the authenticator  
+
+    # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
     config.authenticator.get_api_base.return_value = None
@@ -272,25 +280,25 @@ def test_x_initiator_header_mixed_messages_with_agent_roles():
         {"role": "assistant", "content": "Previous response."},
         {"role": "user", "content": "Follow up question."},
     ]
-    
+
     headers = config.validate_environment(
         headers={},
         model="github_copilot/gpt-4",
-        messages=messages, 
+        messages=messages,
         optional_params={},
         litellm_params={},
         api_key=None,
         api_base=None,
     )
-    
+
     assert headers["X-Initiator"] == "agent"
 
 
 def test_x_initiator_header_user_only_messages():
     """Test that user + system only messages result in X-Initiator: user header"""
     config = GithubCopilotConfig()
-    
-    # Mock the authenticator  
+
+    # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
     config.authenticator.get_api_base.return_value = None
@@ -300,31 +308,7 @@ def test_x_initiator_header_user_only_messages():
         {"role": "user", "content": "Hello"},
         {"role": "user", "content": "Follow up question."},
     ]
-    
-    headers = config.validate_environment(
-        headers={},
-        model="github_copilot/gpt-4",
-        messages=messages, 
-        optional_params={},
-        litellm_params={},
-        api_key=None,
-        api_base=None,
-    )
-    
-    assert headers["X-Initiator"] == "user"
 
-
-def test_x_initiator_header_empty_messages():
-    """Test that empty messages result in X-Initiator: user header"""
-    config = GithubCopilotConfig()
-    
-    # Mock the authenticator
-    config.authenticator = MagicMock()
-    config.authenticator.get_api_key.return_value = "gh.test-key-123"
-    config.authenticator.get_api_base.return_value = None
-
-    messages = []
-    
     headers = config.validate_environment(
         headers={},
         model="github_copilot/gpt-4",
@@ -334,14 +318,38 @@ def test_x_initiator_header_empty_messages():
         api_key=None,
         api_base=None,
     )
-    
+
+    assert headers["X-Initiator"] == "user"
+
+
+def test_x_initiator_header_empty_messages():
+    """Test that empty messages result in X-Initiator: user header"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = []
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
     assert headers["X-Initiator"] == "user"
 
 
 def test_x_initiator_header_system_only_messages():
     """Test that system-only messages result in X-Initiator: user header"""
     config = GithubCopilotConfig()
-    
+
     # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
@@ -350,7 +358,7 @@ def test_x_initiator_header_system_only_messages():
     messages = [
         {"role": "system", "content": "You are an assistant."},
     ]
-    
+
     headers = config.validate_environment(
         headers={},
         model="github_copilot/gpt-4",
@@ -360,35 +368,37 @@ def test_x_initiator_header_system_only_messages():
         api_key=None,
         api_base=None,
     )
-    
+
     assert headers["X-Initiator"] == "user"
 
 
 def test_get_supported_openai_params_claude_model():
     """Test that Claude models with extended thinking support have thinking and reasoning parameters."""
     config = GithubCopilotConfig()
-    
+
     # Test Claude 4 model supports thinking and reasoning_effort parameters
     supported_params = config.get_supported_openai_params("claude-sonnet-4-20250514")
     assert "thinking" in supported_params
     assert "reasoning_effort" in supported_params
-    
+
     # Test Claude 3-7 model supports thinking and reasoning_effort parameters
-    supported_params_claude37 = config.get_supported_openai_params("claude-3-7-sonnet-20250219")
+    supported_params_claude37 = config.get_supported_openai_params(
+        "claude-3-7-sonnet-20250219"
+    )
     assert "thinking" in supported_params_claude37
     assert "reasoning_effort" in supported_params_claude37
-    
+
     # Test Claude 3.5 model does NOT support thinking parameters (no extended thinking)
     supported_params_claude35 = config.get_supported_openai_params("claude-3.5-sonnet")
     assert "thinking" not in supported_params_claude35
     assert "reasoning_effort" not in supported_params_claude35
-    
+
     # Test non-Claude model doesn't include thinking parameters but may include reasoning_effort
     supported_params_gpt = config.get_supported_openai_params("gpt-4o")
     assert "thinking" not in supported_params_gpt
     # gpt-4o should NOT have reasoning_effort (not a reasoning model)
     assert "reasoning_effort" not in supported_params_gpt
-    
+
     # Test O-series reasoning models include reasoning_effort but not thinking
     supported_params_o3 = config.get_supported_openai_params("o3-mini")
     assert "thinking" not in supported_params_o3
@@ -399,26 +409,31 @@ def test_get_supported_openai_params_claude_model():
 def test_get_supported_openai_params_case_insensitive():
     """Test that Claude model detection is case-insensitive for models with extended thinking."""
     config = GithubCopilotConfig()
-    
+
     # Test uppercase Claude 4 model with full model name
-    supported_params_upper = config.get_supported_openai_params("CLAUDE-SONNET-4-20250514")
+    supported_params_upper = config.get_supported_openai_params(
+        "CLAUDE-SONNET-4-20250514"
+    )
     assert "thinking" in supported_params_upper
     assert "reasoning_effort" in supported_params_upper
-    
+
     # Test mixed case Claude 3-7 model (has extended thinking) with full model name
-    supported_params_mixed = config.get_supported_openai_params("Claude-3-7-Sonnet-20250219")
+    supported_params_mixed = config.get_supported_openai_params(
+        "Claude-3-7-Sonnet-20250219"
+    )
     assert "thinking" in supported_params_mixed
     assert "reasoning_effort" in supported_params_mixed
-    
+
     # Test that Claude 3.5 models don't have thinking support (case insensitive)
     supported_params_35 = config.get_supported_openai_params("CLAUDE-3.5-SONNET")
     assert "thinking" not in supported_params_35
     assert "reasoning_effort" not in supported_params_35
 
+
 def test_copilot_vision_request_header_with_image():
     """Test that Copilot-Vision-Request header is added when messages contain images"""
     config = GithubCopilotConfig()
-    
+
     # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
@@ -431,12 +446,12 @@ def test_copilot_vision_request_header_with_image():
                 {"type": "text", "text": "What's in this image?"},
                 {
                     "type": "image_url",
-                    "image_url": {"url": "data:image/jpeg;base64,abc123"}
-                }
-            ]
+                    "image_url": {"url": "data:image/jpeg;base64,abc123"},
+                },
+            ],
         }
     ]
-    
+
     headers = config.validate_environment(
         headers={},
         model="github_copilot/gpt-4-vision-preview",
@@ -446,7 +461,7 @@ def test_copilot_vision_request_header_with_image():
         api_key=None,
         api_base=None,
     )
-    
+
     assert headers["Copilot-Vision-Request"] == "true"
     assert headers["X-Initiator"] == "user"
 
@@ -454,7 +469,7 @@ def test_copilot_vision_request_header_with_image():
 def test_copilot_vision_request_header_text_only():
     """Test that Copilot-Vision-Request header is not added for text-only messages"""
     config = GithubCopilotConfig()
-    
+
     # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
@@ -463,7 +478,7 @@ def test_copilot_vision_request_header_text_only():
     messages = [
         {"role": "user", "content": "Just a text message"},
     ]
-    
+
     headers = config.validate_environment(
         headers={},
         model="github_copilot/gpt-4",
@@ -473,7 +488,7 @@ def test_copilot_vision_request_header_text_only():
         api_key=None,
         api_base=None,
     )
-    
+
     assert "Copilot-Vision-Request" not in headers
     assert headers["X-Initiator"] == "user"
 
@@ -481,7 +496,7 @@ def test_copilot_vision_request_header_text_only():
 def test_copilot_vision_request_header_with_type_image_url():
     """Test that Copilot-Vision-Request header is added for content with type: image_url"""
     config = GithubCopilotConfig()
-    
+
     # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
@@ -492,11 +507,14 @@ def test_copilot_vision_request_header_with_type_image_url():
             "role": "user",
             "content": [
                 {"type": "text", "text": "Analyze this image"},
-                {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
-            ]
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/image.jpg"},
+                },
+            ],
         }
     ]
-    
+
     headers = config.validate_environment(
         headers={},
         model="github_copilot/gpt-4-vision-preview",
@@ -506,6 +524,6 @@ def test_copilot_vision_request_header_with_type_image_url():
         api_key=None,
         api_base=None,
     )
-    
+
     assert headers["Copilot-Vision-Request"] == "true"
     assert headers["X-Initiator"] == "user"

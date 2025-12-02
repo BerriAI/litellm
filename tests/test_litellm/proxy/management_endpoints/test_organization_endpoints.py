@@ -156,7 +156,9 @@ async def test_get_organization_daily_activity_admin_param_passing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(monkeypatch):
+async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(
+    monkeypatch,
+):
     """
     Non-admin with no explicit organization_ids should default to orgs they are ORG_ADMIN of.
     """
@@ -220,7 +222,9 @@ async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(
 
 
 @pytest.mark.asyncio
-async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises(monkeypatch):
+async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises(
+    monkeypatch,
+):
     """
     Non-admin requesting an org they aren't ORG_ADMIN for should raise 403.
     """
@@ -268,6 +272,7 @@ async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises
             user_api_key_dict=auth,
         )
     assert exc.value.status_code == 403
+
 
 @pytest.mark.asyncio
 async def test_organization_update_object_permissions_no_existing_permission(

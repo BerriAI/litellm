@@ -566,7 +566,6 @@ def test_sagemaker_config_region():
         "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
         return_value=mock_response,
     ) as mock_post:
-
         response = litellm.completion(
             model="sagemaker/mock-endpoint",
             messages=[{"content": "Hello, world!", "role": "user"}],

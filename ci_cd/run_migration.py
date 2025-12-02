@@ -17,7 +17,9 @@ def create_migration(migration_name: str = None):
     try:
         # Get paths
         root_dir = Path(__file__).parent.parent
-        migrations_dir = root_dir / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+        migrations_dir = (
+            root_dir / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+        )
         schema_path = root_dir / "schema.prisma"
 
         # Create temporary PostgreSQL database

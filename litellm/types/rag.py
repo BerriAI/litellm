@@ -51,7 +51,9 @@ class OpenAIVectorStoreOptions(TypedDict, total=False):
     ttl_days: Optional[int]  # Time-to-live in days for indexed content
 
     # Credentials (loaded from litellm.credential_list if litellm_credential_name is provided)
-    litellm_credential_name: Optional[str]  # Credential name to load from litellm.credential_list
+    litellm_credential_name: Optional[
+        str
+    ]  # Credential name to load from litellm.credential_list
     api_key: Optional[str]  # Direct API key (alternative to litellm_credential_name)
     api_base: Optional[str]  # Direct API base (alternative to litellm_credential_name)
 
@@ -79,13 +81,21 @@ class BedrockVectorStoreOptions(TypedDict, total=False):
     # Bedrock-specific options
     s3_bucket: Optional[str]  # S3 bucket (auto-created if not provided)
     s3_prefix: Optional[str]  # S3 key prefix (default: "data/")
-    embedding_model: Optional[str]  # Embedding model (default: amazon.titan-embed-text-v2:0)
+    embedding_model: Optional[
+        str
+    ]  # Embedding model (default: amazon.titan-embed-text-v2:0)
     data_source_id: Optional[str]  # For existing KB: override auto-detected DS
-    wait_for_ingestion: Optional[bool]  # Wait for completion (default: False - returns immediately)
-    ingestion_timeout: Optional[int]  # Timeout in seconds if wait_for_ingestion=True (default: 300)
+    wait_for_ingestion: Optional[
+        bool
+    ]  # Wait for completion (default: False - returns immediately)
+    ingestion_timeout: Optional[
+        int
+    ]  # Timeout in seconds if wait_for_ingestion=True (default: 300)
 
     # Credentials (loaded from litellm.credential_list if litellm_credential_name is provided)
-    litellm_credential_name: Optional[str]  # Credential name to load from litellm.credential_list
+    litellm_credential_name: Optional[
+        str
+    ]  # Credential name to load from litellm.credential_list
 
     # AWS auth (uses BaseAWSLLM)
     aws_access_key_id: Optional[str]
@@ -117,10 +127,14 @@ class VertexAIVectorStoreOptions(TypedDict, total=False):
     vector_store_id: str  # RAG corpus ID (required for Vertex AI)
 
     # GCP config
-    vertex_project: Optional[str]  # GCP project ID (uses env VERTEXAI_PROJECT if not set)
+    vertex_project: Optional[
+        str
+    ]  # GCP project ID (uses env VERTEXAI_PROJECT if not set)
     vertex_location: Optional[str]  # GCP region (default: us-central1)
     vertex_credentials: Optional[str]  # Path to credentials JSON (uses ADC if not set)
-    gcs_bucket: Optional[str]  # GCS bucket for file uploads (uses env GCS_BUCKET_NAME if not set)
+    gcs_bucket: Optional[
+        str
+    ]  # GCS bucket for file uploads (uses env GCS_BUCKET_NAME if not set)
 
     # Import settings
     wait_for_import: Optional[bool]  # Wait for import to complete (default: True)
@@ -163,9 +177,12 @@ class RAGIngestOptions(TypedDict, total=False):
 
     name: Optional[str]  # Optional pipeline name for logging
     ocr: Optional[RAGIngestOCROptions]  # Optional OCR step
-    chunking_strategy: Optional[RAGChunkingStrategy]  # RecursiveCharacterTextSplitter args
+    chunking_strategy: Optional[
+        RAGChunkingStrategy
+    ]  # RecursiveCharacterTextSplitter args
     embedding: Optional[RAGIngestEmbeddingOptions]  # Embedding model config
     vector_store: RAGIngestVectorStoreOptions  # OpenAI or Bedrock config
+
 
 class RAGIngestResponse(TypedDict, total=False):
     """Response from RAG ingest API."""
@@ -177,7 +194,6 @@ class RAGIngestResponse(TypedDict, total=False):
     error: Optional[str]  # Error message if status is "failed"
 
 
-
 class RAGIngestRequest(BaseModel):
     """Request body for RAG ingest API (for validation)."""
 
@@ -187,4 +203,3 @@ class RAGIngestRequest(BaseModel):
 
     class Config:
         extra = "allow"  # Allow additional fields
-

@@ -27,7 +27,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         self,
         **kwargs,
     ):
-
         # store kwargs as optional_params
         self.optional_params = kwargs
 
@@ -125,7 +124,6 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             is not True
         ):
-
             return
 
         verbose_proxy_logger.debug(
@@ -134,7 +132,6 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         call_type = _infer_call_type(call_type=None, completion_response=response)
         if call_type is None:
-
             return response
 
         if endpoint_guardrail_translation_mappings is None:

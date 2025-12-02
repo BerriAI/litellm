@@ -911,13 +911,13 @@ def convert_to_anthropic_image_obj(
 
 
 def create_anthropic_image_param(
-    image_url_input: Union[str, dict], 
+    image_url_input: Union[str, dict],
     format: Optional[str] = None,
-    is_bedrock_invoke: bool = False
+    is_bedrock_invoke: bool = False,
 ) -> AnthropicMessagesImageParam:
     """
     Create an AnthropicMessagesImageParam from an image URL input.
-    
+
     Supports both URL references (for HTTP/HTTPS URLs) and base64 encoding.
     """
     # Extract URL and format from input
@@ -927,7 +927,7 @@ def create_anthropic_image_param(
         image_url = image_url_input.get("url", "")
         if format is None:
             format = image_url_input.get("format")
-    
+
     # Check if the image URL is an HTTP/HTTPS URL
     if image_url.startswith("http://") or image_url.startswith("https://"):
         # For Bedrock invoke, always convert URLs to base64 (Bedrock invoke doesn't support URLs)
@@ -1070,8 +1070,14 @@ def anthropic_messages_pt_xml(messages: list):
             if isinstance(messages[msg_i]["content"], list):
                 for m in messages[msg_i]["content"]:
                     if m.get("type", "") == "image_url":
-                        format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
-                        image_param = create_anthropic_image_param(m["image_url"], format=format)
+                        format = (
+                            m["image_url"].get("format")
+                            if isinstance(m["image_url"], dict)
+                            else None
+                        )
+                        image_param = create_anthropic_image_param(
+                            m["image_url"], format=format
+                        )
                         # Convert to dict format for XML version
                         source = image_param["source"]
                         if isinstance(source, dict) and source.get("type") == "url":
@@ -1569,7 +1575,11 @@ def convert_to_anthropic_tool_result(
                     )
                 )
             elif content["type"] == "image_url":
-                format = content["image_url"].get("format") if isinstance(content["image_url"], dict) else None
+                format = (
+                    content["image_url"].get("format")
+                    if isinstance(content["image_url"], dict)
+                    else None
+                )
                 anthropic_content_list.append(
                     create_anthropic_image_param(content["image_url"], format=format)
                 )
@@ -1902,11 +1912,17 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
-                            format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
+                            format = (
+                                m["image_url"].get("format")
+                                if isinstance(m["image_url"], dict)
+                                else None
+                            )
                             # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
                             if isinstance(image_url_value, str):
-                                image_url_input: Union[str, dict[str, Any]] = image_url_value
+                                image_url_input: Union[
+                                    str, dict[str, Any]
+                                ] = image_url_value
                             else:
                                 # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
@@ -1916,8 +1932,10 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             # Bedrock invoke models have format: invoke/...
                             is_bedrock_invoke = model.lower().startswith("invoke/")
                             _anthropic_content_element = create_anthropic_image_param(
-                                image_url_input, format=format, is_bedrock_invoke=is_bedrock_invoke
-                            ) 
+                                image_url_input,
+                                format=format,
+                                is_bedrock_invoke=is_bedrock_invoke,
+                            )
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
                                 original_content_element=dict(m),
@@ -3111,14 +3129,18 @@ def _convert_to_bedrock_tool_call_result(
     """
     - 
     """
-    tool_result_content_blocks:List[BedrockToolResultContentBlock] = []
+    tool_result_content_blocks: List[BedrockToolResultContentBlock] = []
     if isinstance(message["content"], str):
-        tool_result_content_blocks.append(BedrockToolResultContentBlock(text=message["content"]))
+        tool_result_content_blocks.append(
+            BedrockToolResultContentBlock(text=message["content"])
+        )
     elif isinstance(message["content"], List):
         content_list = message["content"]
         for content in content_list:
             if content["type"] == "text":
-                tool_result_content_blocks.append(BedrockToolResultContentBlock(text=content["text"]))
+                tool_result_content_blocks.append(
+                    BedrockToolResultContentBlock(text=content["text"])
+                )
             elif content["type"] == "image_url":
                 format: Optional[str] = None
                 if isinstance(content["image_url"], dict):
@@ -3126,12 +3148,14 @@ def _convert_to_bedrock_tool_call_result(
                     format = content["image_url"].get("format")
                 else:
                     image_url = content["image_url"]
-                _block:BedrockContentBlock = BedrockImageProcessor.process_image_sync(
+                _block: BedrockContentBlock = BedrockImageProcessor.process_image_sync(
                     image_url=image_url,
                     format=format,
                 )
                 if "image" in _block:
-                    tool_result_content_blocks.append(BedrockToolResultContentBlock(image=_block["image"]))
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(image=_block["image"])
+                    )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))

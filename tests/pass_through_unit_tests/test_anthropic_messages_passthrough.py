@@ -273,6 +273,7 @@ async def test_anthropic_messages_litellm_router_routing_strategy():
     print(f"Non-streaming response: {json.dumps(response, indent=2)}")
     return response
 
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_fallbacks():
     """
@@ -293,14 +294,15 @@ async def test_anthropic_messages_fallbacks():
                 "litellm_params": {
                     "model": "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
                 },
-            }
+            },
         ],
         fallbacks=[
             {
-                "anthropic/claude-opus-4-20250514": 
-                ["bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"]
+                "anthropic/claude-opus-4-20250514": [
+                    "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+                ]
             }
-        ]
+        ],
     )
 
     # Set up test parameters
@@ -586,40 +588,46 @@ async def test_bedrock_messages_api_header_forwarding():
     """
     Test that headers from kwargs (set by proxy's add_headers_to_llm_call_by_model_group)
     are correctly passed to validate_anthropic_messages_environment for Bedrock Invoke API.
-    
+
     This verifies that forward_client_headers_to_llm_api works for Bedrock Invoke API (Messages API).
-    
-    Issue: When calling Anthropic models via the Messages API, LiteLLM makes a call to 
+
+    Issue: When calling Anthropic models via the Messages API, LiteLLM makes a call to
     Bedrock's Invoke API, and custom headers were not being forwarded, even though
     they worked correctly for Chat Completions API with Bedrock's Converse API.
     """
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.router import GenericLiteLLMParams
-    
+
     handler = BaseLLMHTTPHandler()
-    
+
     # Headers that would be set by the proxy when forward_client_headers_to_llm_api is configured
     custom_headers = {
         "X-Custom-Header": "CustomValue",
         "X-Request-ID": "req-123",
     }
-    
+
     # Mock the provider config
     mock_provider_config = MagicMock()
-    
+
     # We'll check what headers are passed to this method
     mock_provider_config.validate_anthropic_messages_environment.return_value = (
         {"Authorization": "Bearer test"},
-        "https://bedrock-runtime.us-east-1.amazonaws.com/invoke"
+        "https://bedrock-runtime.us-east-1.amazonaws.com/invoke",
     )
-    mock_provider_config.transform_anthropic_messages_request.return_value = {"model": "test"}
+    mock_provider_config.transform_anthropic_messages_request.return_value = {
+        "model": "test"
+    }
     mock_provider_config.get_complete_url.return_value = "https://test.com"
     mock_provider_config.sign_request.return_value = ({}, None)
-    mock_provider_config.transform_anthropic_messages_response.return_value = {"id": "test"}
-    
+    mock_provider_config.transform_anthropic_messages_response.return_value = {
+        "id": "test"
+    }
+
     # Mock HTTP client to prevent actual network calls
-    with unittest.mock.patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client") as mock_get_client:
+    with unittest.mock.patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client"
+    ) as mock_get_client:
         mock_http_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -627,11 +635,11 @@ async def test_bedrock_messages_api_header_forwarding():
         mock_response.text = "{}"
         mock_http_client.post.return_value = mock_response
         mock_get_client.return_value = mock_http_client
-        
+
         # Mock logging object
         mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {}
-        
+
         # Call the handler with headers in kwargs
         try:
             await handler.async_anthropic_messages_handler(
@@ -641,26 +649,29 @@ async def test_bedrock_messages_api_header_forwarding():
                 anthropic_messages_optional_request_params={"max_tokens": 100},
                 custom_llm_provider="bedrock",
                 litellm_params=GenericLiteLLMParams(
-                    api_key="test-key",
-                    aws_region_name="us-east-1"
+                    api_key="test-key", aws_region_name="us-east-1"
                 ),
                 logging_obj=mock_logging_obj,
                 api_key="test-key",
                 stream=False,
-                kwargs={"headers": custom_headers}  # Headers set by proxy
+                kwargs={"headers": custom_headers},  # Headers set by proxy
             )
         except Exception:
             pass  # Ignore errors, we're only checking if headers were passed
-        
+
         # Verify that validate_anthropic_messages_environment was called
         assert mock_provider_config.validate_anthropic_messages_environment.called
-        
+
         # Get the headers that were passed
-        call_args = mock_provider_config.validate_anthropic_messages_environment.call_args
+        call_args = (
+            mock_provider_config.validate_anthropic_messages_environment.call_args
+        )
         passed_headers = call_args[1]["headers"]
-        
+
         # The custom headers from kwargs should be in the passed headers
-        assert "X-Custom-Header" in passed_headers or "x-custom-header" in passed_headers
+        assert (
+            "X-Custom-Header" in passed_headers or "x-custom-header" in passed_headers
+        )
         assert "X-Request-ID" in passed_headers or "x-request-id" in passed_headers
 
 
@@ -823,7 +834,6 @@ async def test_anthropic_messages_bedrock_dynamic_region():
     ), unittest.mock.patch.object(
         BaseAWSLLM, "get_credentials"
     ) as mock_get_credentials:
-
         # Setup mock credentials
         mock_credentials = unittest.mock.MagicMock()
         mock_credentials.access_key = "test_access_key"

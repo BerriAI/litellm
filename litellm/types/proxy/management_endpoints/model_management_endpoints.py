@@ -15,7 +15,9 @@ class UpdateUsefulLinksRequest(BaseModel):
 
 class NewModelGroupRequest(BaseModel):
     access_group: str  # The access group name (e.g., "production-models")
-    model_names: List[str]  # Existing model groups to include (e.g., ["gpt-4", "claude-3"])
+    model_names: List[
+        str
+    ]  # Existing model groups to include (e.g., ["gpt-4", "claude-3"])
 
 
 class NewModelGroupResponse(BaseModel):

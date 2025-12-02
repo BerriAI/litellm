@@ -115,7 +115,7 @@ class TestEncryptResponseId:
             "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
         ) as mock_encrypt:
             mock_encrypt.return_value = "encrypted_base64_value"
-            
+
             with patch.object(
                 responses_id_security, "_get_signing_key", return_value="test-key"
             ):
@@ -139,7 +139,7 @@ class TestEncryptResponseId:
             "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
         ) as mock_encrypt:
             mock_encrypt.return_value = "encrypted_value_456"
-            
+
             with patch.object(
                 responses_id_security, "_get_signing_key", return_value="test-key"
             ):

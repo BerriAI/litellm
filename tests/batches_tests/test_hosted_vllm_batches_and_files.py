@@ -15,9 +15,7 @@ import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)
+sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 
@@ -35,7 +33,7 @@ async def test_hosted_vllm_full_workflow():
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
-    
+
     # Step 1: Create file
     print("\n=== Step 1: Creating file ===")
     file_obj = await litellm.acreate_file(
@@ -45,12 +43,12 @@ async def test_hosted_vllm_full_workflow():
         api_base=SERVER_URL,
         api_key="test-api-key",
     )
-    
+
     print(f"✓ Created file: {file_obj.id}")
     assert file_obj.id is not None
     assert file_obj.object == "file"
     assert file_obj.purpose == "batch"
-    
+
     # Step 2: Create batch
     print("\n=== Step 2: Creating batch ===")
     batch_obj = await litellm.acreate_batch(
@@ -62,7 +60,7 @@ async def test_hosted_vllm_full_workflow():
         api_base=SERVER_URL,
         api_key="test-api-key",
     )
-    
+
     print(f"✓ Created batch: {batch_obj.id}")
     print(f"  Status: {batch_obj.status}")
     print(f"  Input file: {batch_obj.input_file_id}")
@@ -70,7 +68,7 @@ async def test_hosted_vllm_full_workflow():
     assert batch_obj.object == "batch"
     assert batch_obj.input_file_id == file_obj.id
     assert batch_obj.endpoint == "/v1/chat/completions"
-    
+
     # Step 3: Retrieve batch
     print("\n=== Step 3: Retrieving batch ===")
     retrieved_batch = await litellm.aretrieve_batch(
@@ -79,14 +77,14 @@ async def test_hosted_vllm_full_workflow():
         api_base=SERVER_URL,
         api_key="test-api-key",
     )
-    
+
     print(f"✓ Retrieved batch: {retrieved_batch.id}")
     print(f"  Status: {retrieved_batch.status}")
     print(f"  Output file: {retrieved_batch.output_file_id}")
     assert retrieved_batch.id == batch_obj.id
     assert retrieved_batch.object == "batch"
     assert retrieved_batch.input_file_id == file_obj.id
-    
+
     # Step 4: Retrieve file (verify file still accessible)
     print("\n=== Step 4: Retrieving original file ===")
     retrieved_file = await litellm.afile_retrieve(
@@ -95,11 +93,11 @@ async def test_hosted_vllm_full_workflow():
         api_base=SERVER_URL,
         api_key="test-api-key",
     )
-    
+
     print(f"✓ Retrieved file: {retrieved_file.id}")
     print(f"  Filename: {retrieved_file.filename}")
     print(f"  Bytes: {retrieved_file.bytes}")
     assert retrieved_file.id == file_obj.id
     assert retrieved_file.object == "file"
-    
+
     print("\n✅ Full workflow test completed successfully!")

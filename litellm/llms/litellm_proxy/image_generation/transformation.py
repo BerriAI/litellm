@@ -8,6 +8,7 @@ from litellm.secret_managers.main import get_secret_str
 
 class LiteLLMProxyImageGenerationConfig(GPTImageGenerationConfig):
     """Configuration for image generation requests routed through LiteLLM Proxy."""
+
     def validate_environment(
         self,
         headers: dict,

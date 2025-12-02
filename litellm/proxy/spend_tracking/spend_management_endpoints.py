@@ -1722,7 +1722,11 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                     return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
                 except ValueError:
                     continue
-            expected = "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'" if is_v2 else "'YYYY-MM-DD HH:MM:SS'"
+            expected = (
+                "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'"
+                if is_v2
+                else "'YYYY-MM-DD HH:MM:SS'"
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid date format: {date_str}. Expected: {expected}",
@@ -3119,7 +3123,11 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
     user_role = user_api_key_dict.user_role
     user_id = user_api_key_dict.user_id
-    return user_role in (
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-    ) and user_id is not None
+    return (
+        user_role
+        in (
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        )
+        and user_id is not None
+    )

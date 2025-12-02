@@ -13,6 +13,7 @@ import litellm
 
 import asyncio
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:

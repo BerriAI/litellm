@@ -73,9 +73,10 @@ async def get_agents(
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params["is_public"] = (
-                litellm.public_agent_groups is not None
-                and (agent.agent_id in litellm.public_agent_groups)
+            agent.litellm_params[
+                "is_public"
+            ] = litellm.public_agent_groups is not None and (
+                agent.agent_id in litellm.public_agent_groups
             )
 
         return returned_agents

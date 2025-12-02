@@ -108,9 +108,14 @@ class TestGenericGuardrailAPIConfiguration:
             headers={"Authorization": "Bearer test-key"},
             additional_provider_specific_params={"custom_param": "value"},
         )
-        assert guardrail.api_base == "https://api.test.guardrail.com/beta/litellm_basic_guardrail_api"
+        assert (
+            guardrail.api_base
+            == "https://api.test.guardrail.com/beta/litellm_basic_guardrail_api"
+        )
         assert guardrail.headers == {"Authorization": "Bearer test-key"}
-        assert guardrail.additional_provider_specific_params == {"custom_param": "value"}
+        assert guardrail.additional_provider_specific_params == {
+            "custom_param": "value"
+        }
 
     def test_init_with_env_vars(self):
         """Test initialization with environment variables"""
@@ -121,7 +126,10 @@ class TestGenericGuardrailAPIConfiguration:
             },
         ):
             guardrail = GenericGuardrailAPI()
-            assert guardrail.api_base == "https://env.api.guardrail.com/beta/litellm_basic_guardrail_api"
+            assert (
+                guardrail.api_base
+                == "https://env.api.guardrail.com/beta/litellm_basic_guardrail_api"
+            )
 
     def test_init_without_api_base_raises_error(self):
         """Test that initialization without API base raises ValueError"""
@@ -134,14 +142,20 @@ class TestGenericGuardrailAPIConfiguration:
         guardrail = GenericGuardrailAPI(
             api_base="https://api.test.guardrail.com/v1",
         )
-        assert guardrail.api_base == "https://api.test.guardrail.com/v1/beta/litellm_basic_guardrail_api"
+        assert (
+            guardrail.api_base
+            == "https://api.test.guardrail.com/v1/beta/litellm_basic_guardrail_api"
+        )
 
     def test_api_base_not_duplicated(self):
         """Test that endpoint path is not duplicated if already present"""
         guardrail = GenericGuardrailAPI(
             api_base="https://api.test.guardrail.com/beta/litellm_basic_guardrail_api",
         )
-        assert guardrail.api_base == "https://api.test.guardrail.com/beta/litellm_basic_guardrail_api"
+        assert (
+            guardrail.api_base
+            == "https://api.test.guardrail.com/beta/litellm_basic_guardrail_api"
+        )
 
 
 class TestMetadataExtraction:
@@ -180,7 +194,10 @@ class TestMetadataExtraction:
             request_metadata = json_payload["request_data"]
 
             # Verify metadata was extracted from request_data["metadata"]
-            assert request_metadata["user_api_key_hash"] == "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
+            assert (
+                request_metadata["user_api_key_hash"]
+                == "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
+            )
             assert request_metadata["user_api_key_user_id"] == "default_user_id"
             assert request_metadata["user_api_key_user_email"] == "test@example.com"
             assert request_metadata["user_api_key_team_id"] == "test-team"
@@ -192,7 +209,7 @@ class TestMetadataExtraction:
         """Test extracting metadata from output response (litellm_metadata field)"""
         # Create request_data as it would be created by the handler
         user_dict = mock_user_api_key_dict.model_dump()
-        
+
         # Transform to prefixed keys (as done by BaseTranslation)
         litellm_metadata = {}
         for key, value in user_dict.items():
@@ -278,9 +295,7 @@ class TestMetadataExtraction:
             assert request_metadata["user_api_key_user_id"] == "test-user"
 
     @pytest.mark.asyncio
-    async def test_metadata_extraction_empty_when_no_metadata(
-        self, generic_guardrail
-    ):
+    async def test_metadata_extraction_empty_when_no_metadata(self, generic_guardrail):
         """Test metadata extraction returns empty dict when no metadata available"""
         request_data = {"messages": [{"role": "user", "content": "test"}]}
 
@@ -455,8 +470,14 @@ class TestAdditionalParams:
             # Verify API was called with additional params
             call_args = mock_post.call_args
             json_payload = call_args.kwargs["json"]
-            assert json_payload["additional_provider_specific_params"]["custom_threshold"] == 0.8
-            assert json_payload["additional_provider_specific_params"]["enable_feature"] is True
+            assert (
+                json_payload["additional_provider_specific_params"]["custom_threshold"]
+                == 0.8
+            )
+            assert (
+                json_payload["additional_provider_specific_params"]["enable_feature"]
+                is True
+            )
 
 
 class TestErrorHandling:
@@ -501,4 +522,3 @@ class TestErrorHandling:
                 )
 
             assert "Generic Guardrail API failed" in str(exc_info.value)
-

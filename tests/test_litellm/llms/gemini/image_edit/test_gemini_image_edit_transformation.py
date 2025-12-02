@@ -93,7 +93,9 @@ class TestGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-one").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
@@ -105,7 +107,9 @@ class TestGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-two").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-two").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
@@ -146,4 +150,3 @@ class TestGeminiImageEditTransformation:
                 litellm_params=MagicMock(),
                 headers={},
             )
-

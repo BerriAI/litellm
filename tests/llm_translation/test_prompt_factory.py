@@ -213,7 +213,7 @@ def test_create_anthropic_image_param_with_http_url():
     image_param = create_anthropic_image_param(
         "https://example.com/image.jpg", format=None
     )
-    
+
     assert image_param["type"] == "image"
     assert image_param["source"]["type"] == "url"
     assert image_param["source"]["url"] == "https://example.com/image.jpg"
@@ -224,7 +224,7 @@ def test_create_anthropic_image_param_with_https_url():
     image_param = create_anthropic_image_param(
         "https://example.com/image.png", format=None
     )
-    
+
     assert image_param["type"] == "image"
     assert image_param["source"]["type"] == "url"
     assert image_param["source"]["url"] == "https://example.com/image.png"
@@ -235,7 +235,7 @@ def test_create_anthropic_image_param_with_dict_input():
     image_param = create_anthropic_image_param(
         {"url": "https://example.com/image.jpg", "format": "image/jpeg"}, format=None
     )
-    
+
     assert image_param["type"] == "image"
     assert image_param["source"]["type"] == "url"
     assert image_param["source"]["url"] == "https://example.com/image.jpg"
@@ -246,7 +246,7 @@ def test_create_anthropic_image_param_with_base64_data_uri():
     image_param = create_anthropic_image_param(
         "data:image/jpeg;base64,/9j/4AAQSkZJRg==", format=None
     )
-    
+
     assert image_param["type"] == "image"
     assert image_param["source"]["type"] == "base64"
     assert image_param["source"]["media_type"] == "image/jpeg"
@@ -258,7 +258,7 @@ def test_create_anthropic_image_param_with_format_override():
     image_param = create_anthropic_image_param(
         "data:image/jpeg;base64,1234", format="image/png"
     )
-    
+
     assert image_param["type"] == "image"
     assert image_param["source"]["type"] == "base64"
     assert image_param["source"]["media_type"] == "image/png"
@@ -278,19 +278,19 @@ def test_anthropic_messages_pt_with_url_image():
             ],
         }
     ]
-    
+
     result = anthropic_messages_pt(
         messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic"
     )
-    
+
     assert len(result) == 1
     assert result[0]["role"] == "user"
     assert isinstance(result[0]["content"], list)
     assert len(result[0]["content"]) == 2
-    
+
     # Check text content
     assert result[0]["content"][0]["type"] == "text"
-    
+
     # Check image content - should be URL reference, not base64
     assert result[0]["content"][1]["type"] == "image"
     assert result[0]["content"][1]["source"]["type"] == "url"
@@ -311,16 +311,16 @@ def test_anthropic_messages_pt_with_base64_image():
             ],
         }
     ]
-    
+
     result = anthropic_messages_pt(
         messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic"
     )
-    
+
     assert len(result) == 1
     assert result[0]["role"] == "user"
     assert isinstance(result[0]["content"], list)
     assert len(result[0]["content"]) == 2
-    
+
     # Check image content - should be base64, not URL
     assert result[0]["content"][1]["type"] == "image"
     assert result[0]["content"][1]["source"]["type"] == "base64"

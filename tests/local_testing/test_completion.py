@@ -132,7 +132,6 @@ def test_null_role_response():
         assert response.choices[0].message.role == "assistant"
 
 
-
 def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -3083,7 +3082,6 @@ def response_format_tests(response: litellm.ModelResponse):
 async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
     try:
-
         if sync_mode:
             response = completion(
                 model=model,
@@ -3313,7 +3311,6 @@ def test_completion_anyscale_api():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 
 @pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
