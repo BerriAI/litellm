@@ -860,6 +860,7 @@ def mock_completion(
             raise mock_response
         # At this point, mock_response must be a string (all other types have been handled or returned early)
         mock_response = cast(str, mock_response)
+
         if n is None:
             model_response.choices[0].message.content = mock_response  # type: ignore
         else:
@@ -906,6 +907,7 @@ def mock_completion(
                 api_key="my-secret-key",
                 original_response="my-original-response",
             )
+
         return model_response
 
     except Exception as e:
@@ -942,10 +944,16 @@ def responses_api_bridge_check(
     return model_info, model
 
 
-def _should_allow_input_examples(custom_llm_provider: Optional[str], model: str) -> bool:
+def _should_allow_input_examples(
+    custom_llm_provider: Optional[str], model: str
+) -> bool:
     if custom_llm_provider == "anthropic":
         return True
-    if custom_llm_provider == "azure_ai" or custom_llm_provider == "bedrock" or custom_llm_provider == "vertex_ai":
+    if (
+        custom_llm_provider == "azure_ai"
+        or custom_llm_provider == "bedrock"
+        or custom_llm_provider == "vertex_ai"
+    ):
         return "claude" in model.lower()
     return False
 
@@ -961,7 +969,9 @@ def _drop_input_examples_from_tool(tool: dict) -> dict:
     return tool_copy
 
 
-def _drop_input_examples_from_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
+def _drop_input_examples_from_tools(
+    tools: Optional[List[dict]],
+) -> Optional[List[dict]]:
     if tools is None:
         return None
     cleaned_tools: List[dict] = []
@@ -1735,7 +1745,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "Set `api_base` or the AZURE_AI_API_BASE env var."
                     )
                 api_key = AzureFoundryModelInfo.get_api_key(api_key)
-                
+
                 # Ensure the URL ends with /v1/messages for Anthropic
                 if api_base:
                     api_base = api_base.rstrip("/")
@@ -1746,7 +1756,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         else:
                             api_base = api_base + "/anthropic"
                         api_base = api_base + "/v1/messages"
-                
+
                 response = azure_anthropic_chat_completions.completion(
                     model=model,
                     messages=messages,
@@ -5876,9 +5886,7 @@ def speech(  # noqa: PLR0915
     custom_llm_provider: Optional[str] = None,
     aspeech: Optional[bool] = None,
     **kwargs,
-) -> Union[
-    HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
-]:
+) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -5923,7 +5931,9 @@ def speech(  # noqa: PLR0915
             kwargs=kwargs,
         )
 
-    logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
+    logging_obj: LiteLLMLoggingObj = cast(
+        LiteLLMLoggingObj, kwargs.get("litellm_logging_obj")
+    )
     logging_obj.update_environment_variables(
         model=model,
         user=user,
@@ -6111,9 +6121,9 @@ def speech(  # noqa: PLR0915
                 ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY
             ] = query_params
 
-        litellm_params_dict[
-            ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY
-        ] = voice_id
+        litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY] = (
+            voice_id
+        )
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base

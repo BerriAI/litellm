@@ -6,7 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -15,53 +15,16 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+    GenericGuardrailAPIMetadata,
+    GenericGuardrailAPIRequest,
+    GenericGuardrailAPIResponse,
+)
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "generic_guardrail_api"
-
-
-class GenericGuardrailAPIRequest:
-    """Request model for the Generic Guardrail API"""
-
-    def __init__(
-        self,
-        text: str,
-        request_body: Dict[str, Any],
-        additional_provider_specific_params: Optional[Dict[str, Any]] = None,
-    ):
-        self.text = text
-        self.request_body = request_body
-        self.additional_provider_specific_params = (
-            additional_provider_specific_params or {}
-        )
-
-    def to_dict(self) -> dict:
-        return {
-            "text": self.text,
-            "request_body": self.request_body,
-            "additional_provider_specific_params": self.additional_provider_specific_params,
-        }
-
-
-class GenericGuardrailAPIResponse:
-    """Response model for the Generic Guardrail API"""
-
-    def __init__(
-        self,
-        action: str,
-        blocked_reason: Optional[str] = None,
-        text: Optional[str] = None,
-    ):
-        self.action = action
-        self.blocked_reason = blocked_reason
-        self.text = text
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
-        return cls(
-            action=data.get("action", "NONE"),
-            blocked_reason=data.get("blocked_reason"),
-            text=data.get("text"),
-        )
 
 
 class GenericGuardrailAPI(CustomGuardrail):
@@ -130,26 +93,76 @@ class GenericGuardrailAPI(CustomGuardrail):
             "Generic Guardrail API initialized with api_base: %s", self.api_base
         )
 
+    def _extract_user_api_key_metadata(
+        self, request_data: dict
+    ) -> GenericGuardrailAPIMetadata:
+        """
+        Extract user API key metadata from request_data.
+
+        Args:
+            request_data: Request data dictionary that may contain:
+                - metadata (for input requests) with user_api_key_* fields
+                - litellm_metadata (for output responses) with user_api_key_* fields
+
+        Returns:
+            GenericGuardrailAPIMetadata with extracted user information
+        """
+        result_metadata = GenericGuardrailAPIMetadata()
+
+        # Get the source of metadata - try both locations
+        # 1. For output responses: litellm_metadata (set by handlers with prefixed keys)
+        # 2. For input requests: metadata (already present in request_data with prefixed keys)
+        litellm_metadata = request_data.get("litellm_metadata", {})
+        top_level_metadata = request_data.get("metadata", {})
+
+        # Merge both sources, preferring litellm_metadata if both exist
+        metadata_dict = {**top_level_metadata, **litellm_metadata}
+
+        if not metadata_dict:
+            return result_metadata
+
+        # Dynamically iterate through GenericGuardrailAPIMetadata fields
+        # and extract matching fields from the source metadata
+        # Fields in metadata are already prefixed with 'user_api_key_'
+        for field_name in GenericGuardrailAPIMetadata.__annotations__.keys():
+            value = metadata_dict.get(field_name)
+            if value is not None:
+                result_metadata[field_name] = value
+
+        # handle user_api_key_token = user_api_key_hash
+        if metadata_dict.get("user_api_key_token") is not None:
+            result_metadata["user_api_key_hash"] = metadata_dict.get(
+                "user_api_key_token"
+            )
+
+        verbose_proxy_logger.debug(
+            "Generic Guardrail API: Extracted user metadata: %s",
+            {k: v for k, v in result_metadata.items() if v is not None},
+        )
+
+        return result_metadata
+
     async def apply_guardrail(
         self,
-        text: str,
-        language: Optional[str] = None,
-        entities: Optional[List] = None,
-        request_data: Optional[dict] = None,
-    ) -> str:
+        texts: List[str],
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        images: Optional[List[str]] = None,
+    ) -> Tuple[List[str], Optional[List[str]]]:
         """
         Apply the Generic Guardrail API to the given text.
 
         This is the main method that gets called by the framework.
 
         Args:
-            text: The text to check
-            language: Optional language parameter (not used by Generic API)
-            entities: Optional entities parameter (not used by Generic API)
-            request_data: Optional request data dictionary for logging metadata
+            texts: List of texts to check
+            request_data: Request data dictionary containing user_api_key_dict and other metadata
+            input_type: Whether this is a "request" or "response" guardrail
+            images: Optional list of images to check
 
         Returns:
-            The processed text (original or modified)
+            Tuple of (processed texts, processed images)
 
         Raises:
             Exception: If the guardrail blocks the request
@@ -170,23 +183,24 @@ class GenericGuardrailAPI(CustomGuardrail):
         if dynamic_params:
             additional_params.update(dynamic_params)
 
+        # Extract user API key metadata
+        user_metadata = self._extract_user_api_key_metadata(request_data)
+
         # Create request payload
         guardrail_request = GenericGuardrailAPIRequest(
-            text=text,
-            request_body=request_body,
+            litellm_call_id=logging_obj.litellm_call_id if logging_obj else None,
+            litellm_trace_id=logging_obj.litellm_trace_id if logging_obj else None,
+            texts=texts,
+            request_data=user_metadata,
+            images=images,
             additional_provider_specific_params=additional_params,
+            input_type=input_type,
         )
 
         # Prepare headers
         headers = {"Content-Type": "application/json"}
         if self.headers:
             headers.update(self.headers)
-
-        verbose_proxy_logger.debug(
-            "Generic Guardrail API request to %s: %s",
-            self.api_base,
-            {"text_length": len(text), "has_request_body": bool(request_data)},
-        )
 
         try:
             # Make the API request
@@ -218,12 +232,15 @@ class GenericGuardrailAPI(CustomGuardrail):
 
             elif guardrail_response.action == "GUARDRAIL_INTERVENED":
                 # Content was modified by the guardrail
-                if guardrail_response.text:
+                if guardrail_response.texts:
                     verbose_proxy_logger.debug("Generic Guardrail API modified text")
-                    return guardrail_response.text
+                    return guardrail_response.texts, guardrail_response.images
 
             # Action is NONE or no modifications needed
-            return text
+            return (
+                guardrail_response.texts or texts,
+                guardrail_response.images or images,
+            )
 
         except Exception as e:
             # Check if it's already an exception we raised
