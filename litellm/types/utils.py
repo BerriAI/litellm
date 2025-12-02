@@ -999,7 +999,8 @@ class PromptTokensDetailsWrapper(
 
 
 class ServerToolUse(BaseModel):
-    web_search_requests: Optional[int]
+    web_search_requests: Optional[int] = None
+    tool_search_requests: Optional[int] = None
 
 
 class Usage(CompletionUsage):
@@ -2552,6 +2553,7 @@ class LlmProviders(str, Enum):
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"
+    ZAI = "zai"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -2596,6 +2598,7 @@ class LlmProviders(str, Enum):
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
     MOONSHOT = "moonshot"
+    PUBLICAI = "publicai"
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"

@@ -299,8 +299,61 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             "custom_llm_provider", None
         )
 
+        self._extract_mcp_headers_from_params()
+
         # Mark as async iterator
         self.is_async = True
+    
+    def _extract_mcp_headers_from_params(self) -> None:
+        """Extract MCP headers from original request params to pass to tool calls"""
+        from typing import Dict, Optional
+        from starlette.datastructures import Headers
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        
+        # Extract headers from secret_fields in original_request_params
+        raw_headers_from_request: Optional[Dict[str, str]] = None
+        secret_fields = self.original_request_params.get("secret_fields")
+        if secret_fields and isinstance(secret_fields, dict):
+            raw_headers_from_request = secret_fields.get("raw_headers")
+        
+        # Extract MCP-specific headers
+        self.mcp_auth_header: Optional[str] = None
+        self.mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
+        self.oauth2_headers: Optional[Dict[str, str]] = None
+        self.raw_headers: Optional[Dict[str, str]] = raw_headers_from_request
+        
+        if raw_headers_from_request:
+            headers_obj = Headers(raw_headers_from_request)
+            self.mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
+            self.mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            self.oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+        
+        # Also check if headers are provided in tools array (from request body)
+        tools = self.original_request_params.get("tools")
+        if tools:
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("type") == "mcp":
+                    tool_headers = tool.get("headers", {})
+                    if tool_headers and isinstance(tool_headers, dict):
+                        # Merge tool headers into mcp_server_auth_headers
+                        headers_obj_from_tool = Headers(tool_headers)
+                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj_from_tool)
+                        
+                        if tool_mcp_server_auth_headers:
+                            if self.mcp_server_auth_headers is None:
+                                self.mcp_server_auth_headers = {}
+                            # Merge the headers from tool into existing headers
+                            for server_alias, headers_dict in tool_mcp_server_auth_headers.items():
+                                if server_alias not in self.mcp_server_auth_headers:
+                                    self.mcp_server_auth_headers[server_alias] = {}
+                                self.mcp_server_auth_headers[server_alias].update(headers_dict)
+                        
+                        # Also merge raw headers
+                        if self.raw_headers is None:
+                            self.raw_headers = {}
+                        self.raw_headers.update(tool_headers)
 
     def _should_auto_execute_tools(self) -> bool:
         """Check if tools should be auto-executed"""
@@ -511,6 +564,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 tool_server_map=self.tool_server_map,
                 tool_calls=tool_calls,
                 user_api_key_auth=self.user_api_key_auth,
+                mcp_auth_header=self.mcp_auth_header,
+                mcp_server_auth_headers=self.mcp_server_auth_headers,
+                oauth2_headers=self.oauth2_headers,
+                raw_headers=self.raw_headers,
             )
 
             # Create completion events and output_item.done events for tool execution

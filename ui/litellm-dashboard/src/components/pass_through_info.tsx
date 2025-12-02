@@ -19,6 +19,7 @@ import { Eye, EyeOff } from "lucide-react";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
+import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 
 export interface PassThroughInfoProps {
   endpointData: PassThroughEndpoint;
@@ -37,6 +38,7 @@ interface PassThroughEndpoint {
   include_subpath?: boolean;
   cost_per_request?: number;
   auth?: boolean;
+  guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
 }
 
 // Password field component for headers
@@ -68,6 +70,9 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   const [loading, setLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [authEnabled, setAuthEnabled] = useState(initialEndpointData?.auth || false);
+  const [guardrails, setGuardrails] = useState<Record<string, { request_fields?: string[]; response_fields?: string[] } | null>>(
+    initialEndpointData?.guardrails || {}
+  );
   const [form] = Form.useForm();
 
   const handleEndpointUpdate = async (values: any) => {
@@ -92,6 +97,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         include_subpath: values.include_subpath,
         cost_per_request: values.cost_per_request,
         auth: premiumUser ? values.auth : undefined,
+        guardrails: guardrails && Object.keys(guardrails).length > 0 ? guardrails : undefined,
       };
 
       await updatePassThroughEndpoint(accessToken, endpointData.id, updateData);
@@ -214,6 +220,33 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                 </div>
               </Card>
             )}
+
+            {endpointData.guardrails && Object.keys(endpointData.guardrails).length > 0 && (
+              <Card className="mt-6">
+                <div className="flex justify-between items-center">
+                  <Text className="font-medium">Guardrails</Text>
+                  <Badge color="purple">{Object.keys(endpointData.guardrails).length} guardrails configured</Badge>
+                </div>
+                <div className="mt-4 space-y-2">
+                  {Object.entries(endpointData.guardrails).map(([name, settings]) => (
+                    <div key={name} className="p-3 bg-gray-50 rounded">
+                      <div className="font-medium text-sm">{name}</div>
+                      {settings && (settings.request_fields || settings.response_fields) && (
+                        <div className="mt-2 text-xs text-gray-600 space-y-1">
+                          {settings.request_fields && (
+                            <div>Request fields: {settings.request_fields.join(", ")}</div>
+                          )}
+                          {settings.response_fields && (
+                            <div>Response fields: {settings.response_fields.join(", ")}</div>
+                          )}
+                        </div>
+                      )}
+                      {!settings && <div className="text-xs text-gray-600 mt-1">Uses entire payload</div>}
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
           </TabPanel>
 
           {/* Settings Panel (only for admins) */}
@@ -278,6 +311,14 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                         form.setFieldsValue({ auth: checked });
                       }}
                     />
+
+                    <div className="mt-4">
+                      <PassThroughGuardrailsSection
+                        accessToken={accessToken || ""}
+                        value={guardrails}
+                        onChange={setGuardrails}
+                      />
+                    </div>
 
                     <div className="flex justify-end gap-2 mt-6">
                       <Button onClick={() => setIsEditing(false)}>Cancel</Button>
