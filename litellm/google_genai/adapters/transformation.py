@@ -468,7 +468,6 @@ class GoogleGenAIAdapter:
             Dict in Google GenAI generate_content response format
         """
 
-
         # Extract the main response content
         choice = response.choices[0] if response.choices else None
         if not choice:

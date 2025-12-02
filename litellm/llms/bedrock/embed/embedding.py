@@ -603,7 +603,6 @@ class BedrockEmbedding(BaseAWSLLM):
             aws_region_name=aws_region_name,
         )
 
-
         from urllib.parse import quote
 
         # Encode the ARN for use in URL path
@@ -618,9 +617,7 @@ class BedrockEmbedding(BaseAWSLLM):
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
         except ImportError:
-            raise ImportError(
-                "Missing boto3 to call bedrock. Run 'pip install boto3'."
-            )
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         # Create AWSRequest with GET method and encoded URL
         request = AWSRequest(
@@ -629,11 +626,11 @@ class BedrockEmbedding(BaseAWSLLM):
             data=None,  # GET request, no body
             headers=headers,
         )
-        
+
         # Sign the request - SigV4Auth will create canonical string from request URL
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
         sigv4.add_auth(request)
-        
+
         # Prepare the request
         prepped = request.prepare()
 

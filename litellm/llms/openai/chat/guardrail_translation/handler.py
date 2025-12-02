@@ -103,7 +103,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         if isinstance(content, str):
             # Simple string content
-            tasks.append(guardrail_to_apply.apply_guardrail(text=content, request_data=request_data))
+            tasks.append(
+                guardrail_to_apply.apply_guardrail(
+                    text=content, request_data=request_data
+                )
+            )
             task_mappings.append((msg_idx, None))
 
         elif isinstance(content, list):
@@ -112,7 +116,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 text_str = content_item.get("text", None)
                 if text_str is None:
                     continue
-                tasks.append(guardrail_to_apply.apply_guardrail(text=text_str, request_data=request_data))
+                tasks.append(
+                    guardrail_to_apply.apply_guardrail(
+                        text=text_str, request_data=request_data
+                    )
+                )
                 task_mappings.append((msg_idx, int(content_idx)))
 
     async def _apply_guardrail_responses_to_input(
@@ -238,7 +246,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if choice.message.content and isinstance(choice.message.content, str):
             # Simple string content
             tasks.append(
-                guardrail_to_apply.apply_guardrail(text=choice.message.content, request_data=request_data)
+                guardrail_to_apply.apply_guardrail(
+                    text=choice.message.content, request_data=request_data
+                )
             )
             task_mappings.append((choice_idx, None))
 
@@ -247,7 +257,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             for content_idx, content_item in enumerate(choice.message.content):
                 content_text = content_item.get("text")
                 if content_text:
-                    tasks.append(guardrail_to_apply.apply_guardrail(text=content_text, request_data=request_data))
+                    tasks.append(
+                        guardrail_to_apply.apply_guardrail(
+                            text=content_text, request_data=request_data
+                        )
+                    )
                     task_mappings.append((choice_idx, int(content_idx)))
 
     async def _apply_guardrail_responses_to_output(
@@ -272,9 +286,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             if isinstance(content, str) and content_idx_optional is None:
                 # Replace string content with guardrail response
-                cast(Choices, response.choices[choice_idx]).message.content = (
-                    guardrail_response
-                )
+                cast(
+                    Choices, response.choices[choice_idx]
+                ).message.content = guardrail_response
 
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content

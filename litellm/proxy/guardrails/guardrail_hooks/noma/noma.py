@@ -115,9 +115,7 @@ class NomaGuardrail(CustomGuardrail):
         self.api_base = api_base or os.environ.get(
             "NOMA_API_BASE", NomaGuardrail._DEFAULT_API_BASE
         )
-        self.application_id = application_id or os.environ.get(
-            "NOMA_APPLICATION_ID"
-        )
+        self.application_id = application_id or os.environ.get("NOMA_APPLICATION_ID")
         self.default_application_id = "litellm"
 
         if monitor_mode is None:
@@ -559,7 +557,6 @@ class NomaGuardrail(CustomGuardrail):
         data: dict,
         call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
-
         verbose_proxy_logger.debug("Running Noma pre-call hook")
 
         if (

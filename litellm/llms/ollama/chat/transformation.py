@@ -147,6 +147,7 @@ class OllamaChatConfig(BaseConfig):
             "functions",
             "response_format",
             "reasoning_effort",
+            "logprobs"
         ]
 
     def map_openai_params(
@@ -171,6 +172,8 @@ class OllamaChatConfig(BaseConfig):
                 optional_params["repeat_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
+            if param == "logprobs":
+                optional_params["logprobs"] = value
             if (
                 param == "response_format"
                 and isinstance(value, dict)
@@ -227,9 +230,9 @@ class OllamaChatConfig(BaseConfig):
                     litellm.add_function_to_prompt = (
                         True  # so that main.py adds the function call to the prompt
                     )
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.get("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.get("functions")
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
         non_default_params.pop("functions", None)  # causes ollama requests to hang
         return optional_params
@@ -288,6 +291,7 @@ class OllamaChatConfig(BaseConfig):
         function_name = optional_params.pop("function_name", None)
         litellm_params["function_name"] = function_name
         tools = optional_params.pop("tools", None)
+        logprobs = optional_params.pop("logprobs", None)
 
         new_messages = []
         for m in messages:
@@ -350,6 +354,8 @@ class OllamaChatConfig(BaseConfig):
             data["keep_alive"] = keep_alive
         if think is not None:
             data["think"] = think
+        if logprobs is not None:
+            data["logprobs"] = logprobs
 
         return data
 
@@ -379,7 +385,6 @@ class OllamaChatConfig(BaseConfig):
         )
 
         response_json = raw_response.json()
-
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
         response_json_message = response_json.get("message")
@@ -428,7 +433,6 @@ class OllamaChatConfig(BaseConfig):
             model_response.choices[0].message = message  # type: ignore
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-
             _message = litellm.Message(**response_json_message)
             model_response.choices[0].message = _message  # type: ignore
         model_response.created = int(time.time())
@@ -437,6 +441,11 @@ class OllamaChatConfig(BaseConfig):
         completion_tokens = response_json.get(
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),
+        )
+        setattr(
+            model_response,
+            "logprobs",
+            response_json.get("logprobs", None),
         )
         setattr(
             model_response,

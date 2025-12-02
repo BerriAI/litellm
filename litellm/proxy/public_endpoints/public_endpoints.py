@@ -139,7 +139,7 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "proxy",
         "public_endpoints",
-        "provider_create_fields.json"
+        "provider_create_fields.json",
     )
 
     with open(provider_create_fields_path, "r") as f:

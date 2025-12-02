@@ -65,9 +65,10 @@ class IBMWatsonXAudioTranscriptionConfig(
         api_params = _get_api_params(params=optional_params.copy())
 
         # Add version parameter
-        api_version = optional_params.pop(
-            "api_version", None
-        ) or litellm.WATSONX_DEFAULT_API_VERSION
+        api_version = (
+            optional_params.pop("api_version", None)
+            or litellm.WATSONX_DEFAULT_API_VERSION
+        )
         url = f"{url}?version={api_version}"
 
         # Add project_id parameter

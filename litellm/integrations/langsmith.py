@@ -430,9 +430,9 @@ class LangsmithLogger(CustomBatchLogger):
         return log_queue_by_credentials
 
     def _get_sampling_rate_to_use_for_request(self, kwargs: Dict[str, Any]) -> float:
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params", None)
         sampling_rate: float = self.sampling_rate
         if standard_callback_dynamic_params is not None:
             _sampling_rate = standard_callback_dynamic_params.get(
@@ -452,9 +452,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params", None)
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(

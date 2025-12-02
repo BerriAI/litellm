@@ -11,4 +11,5 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
 
     From our test suite - following GPTImageGenerationConfig is working for this model
     """
+
     pass

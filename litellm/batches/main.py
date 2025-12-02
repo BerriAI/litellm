@@ -888,7 +888,6 @@ def cancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
-
         try:
             if model is not None:
                 _, custom_llm_provider, _, _ = get_llm_provider(
@@ -1060,13 +1059,25 @@ def _handle_async_invoke_status(
         # Get output S3 URI safely
         output_s3_uri = ""
         try:
-            output_s3_uri = status_response["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"]
+            output_s3_uri = status_response["outputDataConfig"]["s3OutputDataConfig"][
+                "s3Uri"
+            ]
         except (KeyError, TypeError):
             pass
-        
+
         # Use BedrockBatchesConfig's timestamp parsing method (expects raw AWS status string)
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
-        created_at, in_progress_at, completed_at, failed_at, _, _ = BedrockBatchesConfig()._parse_timestamps_and_status(status_response, aws_status_raw)
+
+        (
+            created_at,
+            in_progress_at,
+            completed_at,
+            failed_at,
+            _,
+            _,
+        ) = BedrockBatchesConfig()._parse_timestamps_and_status(
+            status_response, aws_status_raw
+        )
         result = LiteLLMBatch(
             id=status_response["invocationArn"],
             object="batch",

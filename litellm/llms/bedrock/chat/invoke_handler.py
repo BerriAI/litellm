@@ -1269,9 +1269,7 @@ class AWSEventStreamDecoder:
         dict,
         Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ],
     ]:
@@ -1280,9 +1278,7 @@ class AWSEventStreamDecoder:
         provider_specific_fields: dict = {}
         thinking_blocks: Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None
 
@@ -1295,9 +1291,7 @@ class AWSEventStreamDecoder:
                     response_tool_name=_response_tool_name
                 )
                 self.tool_calls_index = (
-                    0
-                    if self.tool_calls_index is None
-                    else self.tool_calls_index + 1
+                    0 if self.tool_calls_index is None else self.tool_calls_index + 1
                 )
                 tool_use = {
                     "id": start_obj["toolUse"]["toolUseId"],
@@ -1331,9 +1325,7 @@ class AWSEventStreamDecoder:
         Optional[str],
         Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ],
     ]:
@@ -1344,9 +1336,7 @@ class AWSEventStreamDecoder:
         reasoning_content: Optional[str] = None
         thinking_blocks: Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None
 
@@ -1382,8 +1372,16 @@ class AWSEventStreamDecoder:
                 and len(thinking_blocks) > 0
                 and reasoning_content is None
             ):
-                reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
-        return text, tool_use, provider_specific_fields, reasoning_content, thinking_blocks
+                reasoning_content = (
+                    ""  # set to non-empty string to ensure consistency with Anthropic
+                )
+        return (
+            text,
+            tool_use,
+            provider_specific_fields,
+            reasoning_content,
+            thinking_blocks,
+        )
 
     def _handle_converse_stop_event(
         self, index: int
@@ -1431,9 +1429,11 @@ class AWSEventStreamDecoder:
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
                 start_obj = ContentBlockStartEvent(**chunk_data["start"])
-                tool_use, provider_specific_fields, thinking_blocks = (
-                    self._handle_converse_start_event(start_obj)
-                )
+                (
+                    tool_use,
+                    provider_specific_fields,
+                    thinking_blocks,
+                ) = self._handle_converse_start_event(start_obj)
             elif "delta" in chunk_data:
                 delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
                 (

@@ -245,7 +245,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return {}
 
     def _collect_argument_paths(
-        self, value: Any, current_path: str, collected: Dict[str, List[Any]], depth: int = 0
+        self,
+        value: Any,
+        current_path: str,
+        collected: Dict[str, List[Any]],
+        depth: int = 0,
     ) -> None:
         from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 

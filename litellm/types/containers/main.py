@@ -6,12 +6,14 @@ from pydantic import BaseModel
 
 class ExpiresAfter(BaseModel):
     """Container expiration settings."""
+
     anchor: Literal["last_active_at"]
     minutes: int
 
 
 class ContainerObject(BaseModel):
     """Represents a container object."""
+
     id: str
     object: Literal["container"]
     created_at: int
@@ -43,6 +45,7 @@ class ContainerObject(BaseModel):
 
 class DeleteContainerResult(BaseModel):
     """Result of a delete container request."""
+
     id: str
     object: Literal["container.deleted"]
     deleted: bool
@@ -65,6 +68,7 @@ class DeleteContainerResult(BaseModel):
 
 class ContainerListResponse(BaseModel):
     """Response object for list containers request."""
+
     object: Literal["list"]
     data: List[ContainerObject]
     first_id: Optional[str] = None
@@ -90,9 +94,10 @@ class ContainerListResponse(BaseModel):
 class ContainerCreateOptionalRequestParams(TypedDict, total=False):
     """
     TypedDict for Optional parameters supported by OpenAI's container creation API.
-    
+
     Params here: https://platform.openai.com/docs/api-reference/containers/create
     """
+
     expires_after: Optional[Dict[str, Any]]  # ExpiresAfter object
     file_ids: Optional[List[str]]
     extra_headers: Optional[Dict[str, str]]
@@ -102,21 +107,22 @@ class ContainerCreateOptionalRequestParams(TypedDict, total=False):
 class ContainerCreateRequestParams(ContainerCreateOptionalRequestParams, total=False):
     """
     TypedDict for request parameters supported by OpenAI's container creation API.
-    
+
     Params here: https://platform.openai.com/docs/api-reference/containers/create
     """
+
     name: str
 
 
 class ContainerListOptionalRequestParams(TypedDict, total=False):
     """
     TypedDict for Optional parameters supported by OpenAI's container list API.
-    
+
     Params here: https://platform.openai.com/docs/api-reference/containers/list
     """
+
     after: Optional[str]
     limit: Optional[int]
     order: Optional[str]
     extra_headers: Optional[Dict[str, str]]
     extra_query: Optional[Dict[str, str]]
-

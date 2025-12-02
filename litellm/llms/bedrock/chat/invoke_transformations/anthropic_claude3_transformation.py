@@ -61,7 +61,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             drop_params,
         )
 
-
     def transform_request(
         self,
         model: str,
@@ -78,12 +77,12 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if k not in self.aws_authentication_params
         }
         filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
-        
+
         _anthropic_request = AnthropicConfig.transform_request(
             self,
             model=model,
             messages=messages,
-            optional_params=filtered_params, 
+            optional_params=filtered_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -109,9 +108,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
         beta_set.update(auto_betas)
 
-        if (
-            tool_search_used
-            and not (programmatic_tool_calling_used or input_examples_used)
+        if tool_search_used and not (
+            programmatic_tool_calling_used or input_examples_used
         ):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
             if "opus-4" in model.lower() or "opus_4" in model.lower():

@@ -79,7 +79,7 @@ def _map_openai_detail_to_media_resolution(
 
 
 def _process_gemini_image(
-    image_url: str, 
+    image_url: str,
     format: Optional[str] = None,
     media_resolution: Optional[Literal["low", "medium", "high"]] = None,
 ) -> PartType:
@@ -120,7 +120,7 @@ def _process_gemini_image(
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
             if media_resolution is not None:
                 _blob["media_resolution"] = media_resolution
-            
+
             # Convert snake_case keys to camelCase for JSON serialization
             # The TypedDict uses snake_case, but the API expects camelCase
             _blob_dict = dict(_blob)
@@ -128,7 +128,7 @@ def _process_gemini_image(
                 _blob_dict["mediaResolution"] = _blob_dict.pop("media_resolution")
             if "mime_type" in _blob_dict:
                 _blob_dict["mimeType"] = _blob_dict.pop("mime_type")
-            
+
             return PartType(inline_data=cast(BlobType, _blob_dict))
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
@@ -235,16 +235,20 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             element = cast(ChatCompletionImageObject, element)
                             img_element = element
                             format: Optional[str] = None
-                            media_resolution: Optional[Literal["low", "medium", "high"]] = None
+                            media_resolution: Optional[
+                                Literal["low", "medium", "high"]
+                            ] = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
                                 format = img_element["image_url"].get("format")
                                 detail = img_element["image_url"].get("detail")
-                                media_resolution = _map_openai_detail_to_media_resolution(detail)
+                                media_resolution = (
+                                    _map_openai_detail_to_media_resolution(detail)
+                                )
                             else:
                                 image_url = img_element["image_url"]
                             _part = _process_gemini_image(
-                                image_url=image_url, 
+                                image_url=image_url,
                                 format=format,
                                 media_resolution=media_resolution,
                             )
@@ -285,7 +289,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 )
                             try:
                                 _part = _process_gemini_image(
-                                    image_url=passed_file, 
+                                    image_url=passed_file,
                                     format=format,
                                 )
                                 _parts.append(_part)
@@ -296,10 +300,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     )
                                 )
                     user_content.extend(_parts)
-                elif (
-                    _message_content is not None
-                    and isinstance(_message_content, str)
-                ):
+                elif _message_content is not None and isinstance(_message_content, str):
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
 
@@ -367,10 +368,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _parts.append(_part)
 
                     assistant_content.extend(_parts)
-                elif (
-                    _message_content is not None
-                    and isinstance(_message_content, str)
-                ):
+                elif _message_content is not None and isinstance(_message_content, str):
                     assistant_text = _message_content
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
@@ -509,7 +507,9 @@ def _transform_request_body(
                 labels = {k: v for k, v in rm.items() if isinstance(v, str)}
 
         filtered_params = {
-            k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))
+            k: v
+            for k, v in optional_params.items()
+            if _get_equivalent_key(k, set(config_fields))
         }
 
         generation_config: Optional[GenerationConfig] = GenerationConfig(
@@ -558,9 +558,9 @@ def sync_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     (
-    messages,
-    optional_params,
-    cached_content,
+        messages,
+        optional_params,
+        cached_content,
     ) = context_caching_endpoints.check_and_create_cache(
         messages=messages,
         optional_params=optional_params,
@@ -577,7 +577,6 @@ def sync_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
     )
-
 
     return _transform_request_body(
         messages=messages,
@@ -610,9 +609,9 @@ async def async_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     (
-    messages,
-    optional_params,
-    cached_content,
+        messages,
+        optional_params,
+        cached_content,
     ) = await context_caching_endpoints.async_check_and_create_cache(
         messages=messages,
         optional_params=optional_params,

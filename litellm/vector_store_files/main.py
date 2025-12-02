@@ -130,9 +130,7 @@ def create(
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(
-            vector_store_id=vector_store_id, **kwargs
-        )
+        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
         provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
@@ -253,7 +251,9 @@ def list(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[VectorStoreFileListResponse, Coroutine[Any, Any, VectorStoreFileListResponse]]:
+) -> Union[
+    VectorStoreFileListResponse, Coroutine[Any, Any, VectorStoreFileListResponse]
+]:
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
@@ -264,9 +264,7 @@ def list(
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(
-            vector_store_id=vector_store_id, **kwargs
-        )
+        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
         provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
@@ -379,9 +377,7 @@ def retrieve(
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(
-            vector_store_id=vector_store_id, **kwargs
-        )
+        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
         provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
@@ -492,9 +488,7 @@ def retrieve_content(
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(
-            vector_store_id=vector_store_id, **kwargs
-        )
+        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
         provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
@@ -609,9 +603,7 @@ def update(
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(
-            vector_store_id=vector_store_id, **kwargs
-        )
+        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
         provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)
@@ -731,9 +723,7 @@ def delete(
 
         _prepare_registry_credentials(vector_store_id=vector_store_id, kwargs=kwargs)
 
-        litellm_params = GenericLiteLLMParams(
-            vector_store_id=vector_store_id, **kwargs
-        )
+        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
         provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
             provider=LlmProviders(custom_llm_provider)

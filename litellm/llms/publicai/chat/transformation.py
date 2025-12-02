@@ -79,18 +79,18 @@ class PublicAIChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get the supported OpenAI params for PublicAI models
-        
+
         PublicAI limitations:
         - functions parameter is not supported (use tools instead)
         """
         excluded_params: List[str] = ["functions"]
-        
+
         base_openai_params = super().get_supported_openai_params(model=model)
         final_params: List[str] = []
         for param in base_openai_params:
             if param not in excluded_params:
                 final_params.append(param)
-        
+
         return final_params
 
     def map_openai_params(
@@ -111,4 +111,3 @@ class PublicAIChatConfig(OpenAIGPTConfig):
                 optional_params[param] = value
 
         return optional_params
-
