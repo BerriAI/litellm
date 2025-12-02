@@ -473,6 +473,46 @@ jobs:
           EOF
           echo "::endgroup::"
 
+      - name: Check conflicts and trigger resolver
+        if: steps.create-pr.outputs.pr-url != ''
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          set -eu
+
+          echo "::group::Checking PR for conflicts"
+
+          # Wait for GitHub to compute mergeable status
+          sleep 15
+
+          PR_NUMBER=$(echo "${{ steps.create-pr.outputs.pr-url }}" | grep -oE '[0-9]+$')
+          echo "[Sync] Checking PR #${PR_NUMBER} for conflicts..."
+
+          # Get mergeable status (may need retries as GitHub computes it)
+          for i in {1..3}; do
+            MERGEABLE=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json mergeable --jq '.mergeable')
+            if [[ "${MERGEABLE}" != "UNKNOWN" ]]; then
+              break
+            fi
+            echo "[Sync] Waiting for mergeable status (attempt ${i}/3)..."
+            sleep 10
+          done
+
+          echo "[Sync] Mergeable status: ${MERGEABLE}"
+
+          if [[ "${MERGEABLE}" == "CONFLICTING" ]]; then
+            echo "[Sync] ⚠️ PR has conflicts - triggering resolver workflow"
+            gh workflow run carto-upstream-sync-resolver.yml \
+              --repo ${{ github.repository }} \
+              -f pr-number=${PR_NUMBER}
+            echo "[Sync] ✅ Resolver workflow dispatched for PR #${PR_NUMBER}"
+            echo "::notice title=Resolver Triggered::Conflicts detected, resolver workflow started"
+          else
+            echo "[Sync] ✅ PR is clean (status: ${MERGEABLE}) - no resolver needed"
+          fi
+
+          echo "::endgroup::"
+
   ##############################################################################
   # Notify Slack
   ##############################################################################

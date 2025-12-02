@@ -246,27 +246,35 @@ jobs:
     if: needs.security-check.outputs.authorized == 'true' && needs.check-eligibility.outputs.eligible == 'true'
 
     steps:
-      - name: Get PR head branch
+      - name: Get PR branch info
         id: pr-info
         env:
           GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
         run: |
-          # Get head ref based on trigger type
+          # Get head and base refs based on trigger type
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             HEAD_REF="${{ github.event.pull_request.head.ref }}"
+            BASE_REF="${{ github.event.pull_request.base.ref }}"
           else
             # For workflow_dispatch, fetch from PR
             PR_NUMBER="${{ needs.check-eligibility.outputs.pr-number }}"
-            HEAD_REF=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json headRefName --jq '.headRefName')
+            PR_JSON=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json headRefName,baseRefName)
+            HEAD_REF=$(echo "${PR_JSON}" | jq -r '.headRefName')
+            BASE_REF=$(echo "${PR_JSON}" | jq -r '.baseRefName')
           fi
 
           echo "head-ref=${HEAD_REF}" >> $GITHUB_OUTPUT
-          echo "[Resolver] Will checkout branch: ${HEAD_REF}"
+          echo "base-ref=${BASE_REF}" >> $GITHUB_OUTPUT
+          echo "[Resolver] PR: ${HEAD_REF} → ${BASE_REF}"
+          echo "[Resolver] Will checkout ${HEAD_REF} (upstream) and merge ${BASE_REF} (CARTO) into it"
 
-      - name: Checkout repository (base branch - target of PR)
+      # IMPORTANT: Checkout HEAD branch (main) which has upstream commit history
+      # Then merge BASE branch (carto/main) into it to bring CARTO customizations
+      # This preserves upstream commit history in the resulting PR
+      - name: Checkout repository (head branch - upstream with history)
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.pr-info.outputs.base-ref }}
+          ref: ${{ steps.pr-info.outputs.head-ref }}
           fetch-depth: 0
           token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
 
@@ -277,13 +285,19 @@ jobs:
 
       - name: Attempt merge to create conflicts
         run: |
-          echo "::group::Attempting merge of ${{ steps.pr-info.outputs.head-ref }} into ${{ steps.pr-info.outputs.base-ref }}"
+          echo "::group::Merging CARTO customizations into upstream"
+          echo "[Resolver] Strategy: Checkout ${HEAD_REF} (upstream) → merge ${BASE_REF} (CARTO) into it"
+          echo "[Resolver] This preserves upstream commit history in the PR"
 
-          # Fetch the head branch
-          git fetch origin ${{ steps.pr-info.outputs.head-ref }}:${{ steps.pr-info.outputs.head-ref }}
+          HEAD_REF="${{ steps.pr-info.outputs.head-ref }}"
+          BASE_REF="${{ steps.pr-info.outputs.base-ref }}"
 
-          # Attempt merge (will fail if conflicts exist)
-          if git merge ${{ steps.pr-info.outputs.head-ref }} --no-commit --no-ff; then
+          # Fetch the base branch (carto/main with CARTO customizations)
+          git fetch origin ${BASE_REF}:${BASE_REF}
+
+          # Attempt merge of CARTO customizations into upstream
+          # This is the REVERSE of the original PR direction, but preserves history
+          if git merge ${BASE_REF} --no-commit --no-ff; then
             echo "[Resolver] ✅ Clean merge - no conflicts found"
             echo "[Resolver] This PR should be mergeable without Claude's help"
             git merge --abort || true
@@ -342,28 +356,31 @@ jobs:
             ## Branch Strategy & Your Context
 
             ```
-            upstream/main          → BerriAI's development branch (may be unstable)
+            upstream/main          → BerriAI's development branch
                     ↓
-                  main             → Mirrors upstream/main (pure upstream copy)
-                    ↓ (merge with conflicts)
-                carto/main         → Production branch (stable + CARTO mods) < YOU ARE HERE
-                    ↓
-                feature/*          → Development branches
+                  main             → Mirrors upstream/main (has ALL upstream commits) < YOU ARE HERE
+                    ↑ (merge with conflicts)
+                carto/main         → Production branch (CARTO customizations merged IN)
             ```
 
             **What happened:**
-            1. `main` branch was synced from upstream BerriAI/litellm
+            1. `main` branch was synced from upstream BerriAI/litellm (has full commit history)
             2. PR #${{ needs.check-eligibility.outputs.pr-number }} was created: `main → carto/main`
-            3. Merge attempt failed due to conflicts (CARTO customizations vs upstream changes)
-            4. You are now on `carto/main` branch with `main` already merged (in conflicted state)
+            3. To preserve upstream commit history, we REVERSED the merge direction:
+               - Checked out `main` (upstream with full history)
+               - Merged `carto/main` INTO it (bringing CARTO customizations)
+            4. You are now on `main` branch with `carto/main` merged in (in conflicted state)
 
-            **Your task:** Resolve the conflicts and create a resolution PR back to `carto/main`
+            **Your task:** Resolve the conflicts and create a resolution PR to `carto/main`
+
+            **WHY this approach:** This preserves upstream commit history in the final PR.
+            The resolution PR will show ALL upstream commits + your resolution commits.
 
             ## Context
-            - **Current branch**: `carto/main` (with conflicted merge from `main`)
+            - **Current branch**: `main` (upstream, with `carto/main` merged in - conflicted)
             - **Project Guidelines**: See CARTO_CLAUDE.md for detailed conventions
             - **Original PR**: #${{ needs.check-eligibility.outputs.pr-number }} (main → carto/main)
-            - **Your mission**: Resolve conflicts, create PR: `upstream-sync-resolver/{{ needs.check-eligibility.outputs.pr-number }} → carto/main`
+            - **Your mission**: Resolve conflicts, create PR: `upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }} → carto/main`
 
             ## ⚠️ CRITICAL: Resolution Priorities (In Order)
 
@@ -397,9 +414,10 @@ jobs:
             # FIRST: Read CARTO project guidelines
             cat CARTO_CLAUDE.md
 
-            # Verify you're on carto/main with conflicted merge
+            # Verify you're on main (upstream) with carto/main merged in (conflicted)
             git status
             # Should show: "You have unmerged paths" or similar
+            # Branch should be: main (or detached at main)
 
             # List all conflicted files
             git diff --name-only --diff-filter=U
@@ -410,14 +428,18 @@ jobs:
 
             ### Step 2: Understand File-Specific Rules
 
-            **✅ ALWAYS KEEP CARTO VERSION (ours):**
+            **NOTE:** Because we're on `main` and merged `carto/main` INTO it:
+            - **"ours"** = HEAD = main (upstream code)
+            - **"theirs"** = carto/main (CARTO customizations)
+
+            **✅ ALWAYS KEEP CARTO VERSION (theirs / from carto/main):**
             - `.github/workflows/carto_*.yaml` - CARTO workflows
             - `.github/workflows/carto-*.yml` - CARTO workflows
             - `CARTO_*.md` - CARTO documentation
             - `docs/CARTO_*.md` - CARTO documentation
             - Any file with CARTO-specific infrastructure code
 
-            **🔄 ALWAYS ACCEPT UPSTREAM (theirs):**
+            **🔄 ALWAYS ACCEPT UPSTREAM (ours / HEAD):**
             - `pyproject.toml` - Version field (use upstream version)
             - `litellm/llms/**` - LLM provider implementations
             - `litellm/main.py` - Core completion functions
@@ -427,16 +449,16 @@ jobs:
 
             **⚠️ CAREFULLY MERGE BOTH (manual resolution):**
             - `Dockerfile` - Look for `# CARTO:` comments
-              - Keep CARTO sections marked with comments
-              - Accept upstream improvements to base image/dependencies
+              - Keep CARTO sections marked with comments (theirs)
+              - Accept upstream improvements to base image/dependencies (ours)
             - `docker/Dockerfile.non_root` - CARTO customizations
-              - Preserve CARTO user/permissions setup
-              - Accept upstream dependencies/entrypoint improvements
-              - `db_scripts/` - May have CARTO custom scripts
-              - Keep CARTO scripts
-              - Accept upstream schema improvements
+              - Preserve CARTO user/permissions setup (theirs)
+              - Accept upstream dependencies/entrypoint improvements (ours)
+            - `db_scripts/` - May have CARTO custom scripts
+              - Keep CARTO scripts (theirs)
+              - Accept upstream schema improvements (ours)
 
-            ### Step 2: Create Resolution Branch (from conflicted state)
+            ### Step 3: Create Resolution Branch (from conflicted state)
             ```bash
             # Create branch from current conflicted state
             git checkout -b upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }}
@@ -448,16 +470,21 @@ jobs:
 
             1. **Open the file and locate conflict markers:**
                ```
-               <<<<<<< HEAD (current: carto/main with CARTO customizations)
-               [CARTO version - this is what's currently in carto/main]
+               <<<<<<< HEAD (current: main branch - UPSTREAM code)
+               [upstream version - this is the new upstream code]
                =======
-               [upstream version - this is what's coming from main branch]
-               >>>>>>> main (or commit hash - upstream changes)
+               [CARTO version - this is what's coming from carto/main]
+               >>>>>>> carto/main (or commit hash - CARTO customizations)
                ```
 
+               **IMPORTANT:** The markers are REVERSED from typical PRs because we're
+               on `main` and merging `carto/main` INTO it (to preserve upstream history).
+               - HEAD = upstream (main)
+               - Incoming = CARTO (carto/main)
+
             2. **Apply the priority rules above**
-               - Keep CARTO infrastructure customizations
-               - Accept upstream core functionality improvements
+               - Keep CARTO infrastructure customizations (from the >>>>>>> side)
+               - Accept upstream core functionality improvements (from the <<<<<<< side)
                - Manually merge when both are important
 
             3. **Remove ALL conflict markers** (`<<<<<<<`, `=======`, `>>>>>>>`)
@@ -538,6 +565,29 @@ jobs:
               --label "automated" \
               --label "needs-review" \
               --body "$(cat <<'PRBODY'
+            ## ⛔ CRITICAL: MERGE INSTRUCTIONS ⛔
+
+            > **🚨 DO NOT USE "Squash and merge" 🚨**
+            >
+            > You MUST select **"Create a merge commit"** when merging this PR.
+
+            ### Why This Matters
+
+            | Merge Type | Result |
+            |------------|--------|
+            | ✅ **Create a merge commit** | Preserves upstream history, future syncs work correctly |
+            | ❌ Squash and merge | **DESTROYS** upstream history, breaks future syncs |
+            | ❌ Rebase and merge | **DESTROYS** upstream history, breaks future syncs |
+
+            ### What Happens If You Squash
+
+            - 📈 Future sync PRs will show **thousands of extra commits/files**
+            - 🔍 `git bisect` and `git blame` become useless for upstream code
+            - 🔄 Every future sync will look like a massive change
+            - 😱 This ALREADY happened with PR #26 - don't repeat it!
+
+            ---
+
             ## 🔧 Automated Conflict Resolution
 
             This PR resolves merge conflicts in #${{ needs.check-eligibility.outputs.pr-number }}.
@@ -748,6 +798,37 @@ jobs:
           4. Run tests and create PR
           EOF
           )"
+          fi
+
+      - name: Add merge warning comment to resolution PR
+        if: steps.claude-run.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          RESOLUTION_PR_NUMBER=$(gh pr list \
+            --repo ${{ github.repository }} \
+            --head upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }} \
+            --json number --jq '.[0].number' || echo "")
+
+          if [ -n "${RESOLUTION_PR_NUMBER}" ]; then
+            echo "[Resolver] Adding merge warning comment to PR #${RESOLUTION_PR_NUMBER}"
+            gh pr comment ${RESOLUTION_PR_NUMBER} --repo ${{ github.repository }} --body "## ⚠️ REMINDER: Use \"Create a merge commit\" ⚠️
+
+          When you're ready to merge this PR:
+
+          1. Click the **dropdown arrow** next to the merge button
+          2. Select **\"Create a merge commit\"**
+          3. **DO NOT** select \"Squash and merge\" or \"Rebase and merge\"
+
+          This preserves upstream commit history and ensures future syncs work correctly.
+
+          ### Why?
+
+          Using squash/rebase will **destroy** the upstream commit history, causing:
+          - Future syncs to show thousands of extra commits
+          - git bisect and git blame to become useless
+          - This already happened with PR #26 - please don't repeat it!"
+            echo "[Resolver] ✅ Merge warning comment added"
           fi
 
       - name: Close original PR (conflicts now resolved via resolution PR)
