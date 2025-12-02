@@ -10874,8 +10874,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_tool_choice": true
     },
     "ft:gpt-4o-mini-2024-07-18": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -10894,8 +10893,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_tool_choice": true
     },
     "ft:gpt-4.1-2025-04-14": {
         "cache_read_input_token_cost": 7.5e-07,
@@ -10914,9 +10912,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_service_tier": true,
-        "supports_vision": true
+        "supports_tool_choice": true
     },
     "ft:gpt-4.1-mini-2025-04-14": {
         "cache_read_input_token_cost": 2e-07,
@@ -10935,9 +10931,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_service_tier": true,
-        "supports_vision": true
+        "supports_tool_choice": true
     },
     "ft:gpt-4.1-nano-2025-04-14": {
         "cache_read_input_token_cost": 5e-08,
@@ -10956,9 +10950,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_service_tier": true,
-        "supports_vision": true
+        "supports_tool_choice": true
     },
     "ft:o4-mini-2025-04-16": {
         "cache_read_input_token_cost": 1e-06,
@@ -10977,9 +10969,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_service_tier": true,
-        "supports_vision": true
+        "supports_tool_choice": true
     },
     "gemini-1.0-pro": {
         "input_cost_per_character": 1.25e-07,
