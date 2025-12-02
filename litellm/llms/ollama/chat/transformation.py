@@ -171,6 +171,8 @@ class OllamaChatConfig(BaseConfig):
                 optional_params["repeat_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
+            if param == "logprobs" :
+                optional_params["logprobs"] = value
             if (
                 param == "response_format"
                 and isinstance(value, dict)
@@ -288,6 +290,8 @@ class OllamaChatConfig(BaseConfig):
         function_name = optional_params.pop("function_name", None)
         litellm_params["function_name"] = function_name
         tools = optional_params.pop("tools", None)
+        logprobs = optional_params.pop("logprobs", None)
+
 
         new_messages = []
         for m in messages:
@@ -351,6 +355,9 @@ class OllamaChatConfig(BaseConfig):
         if think is not None:
             data["think"] = think
 
+        if logprobs is not None:
+            data["logprobs"] = logprobs
+
         return data
 
     def transform_response(
@@ -381,6 +388,7 @@ class OllamaChatConfig(BaseConfig):
         response_json = raw_response.json()
 
         ## RESPONSE OBJECT
+
         model_response.choices[0].finish_reason = "stop"
         response_json_message = response_json.get("message")
         if response_json_message is not None:
