@@ -313,14 +313,12 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
-        # Check content-type to determine response format
         content_type = raw_response.headers.get("content-type", "")
         
         if "application/json" in content_type:
-            # Response is JSON with timestamps
-            return raw_response.json()
+            json_response = raw_response.json()
+            return json_response
         else:
-            # Response is binary audio
             return HttpxBinaryResponseContent(raw_response)
 
     def get_complete_url(

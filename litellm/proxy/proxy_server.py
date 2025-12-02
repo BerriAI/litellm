@@ -5374,12 +5374,6 @@ async def audio_speech(
         response_cost = hidden_params.get("response_cost", None) or ""
         litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
 
-        # Printing each chunk size
-        async def generate(_response: HttpxBinaryResponseContent):
-            _generator = await _response.aiter_bytes(chunk_size=1024)
-            async for chunk in _generator:
-                yield chunk
-
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             model_id=model_id,
@@ -5393,6 +5387,24 @@ async def audio_speech(
             request_data=data,
             hidden_params=hidden_params,
         )
+
+        # Check if response is a dict (e.g., ElevenLabs with_timestamps returns JSON)
+        if isinstance(response, dict):
+            select_data_generator(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+            )
+            return ORJSONResponse(
+                content=response,
+                headers=custom_headers,
+            )
+
+        # Printing each chunk size for binary audio response
+        async def generate(_response: HttpxBinaryResponseContent):
+            _generator = await _response.aiter_bytes(chunk_size=1024)
+            async for chunk in _generator:
+                yield chunk
 
         select_data_generator(
             response=response,
