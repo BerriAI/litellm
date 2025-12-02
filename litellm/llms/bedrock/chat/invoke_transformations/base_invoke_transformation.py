@@ -258,6 +258,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 litellm_params=litellm_params,
                 headers=headers,
             )
+        elif provider == "openai":
+            # OpenAI imported models use OpenAI Chat Completions format
+            return litellm.AmazonBedrockOpenAIConfig().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         else:
             raise BedrockError(
                 status_code=404,
