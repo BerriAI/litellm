@@ -2618,6 +2618,7 @@ class LlmProviders(str, Enum):
     DATABRICKS = "databricks"
     EMPOWER = "empower"
     GITHUB = "github"
+    RAGFLOW = "ragflow"
     COMPACTIFAI = "compactifai"
     DOCKER_MODEL_RUNNER = "docker_model_runner"
     CUSTOM = "custom"

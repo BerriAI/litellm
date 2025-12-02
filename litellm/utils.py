@@ -7110,6 +7110,8 @@ class ProviderConfigManager:
             return litellm.CompactifAIChatConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotConfig()
+        elif litellm.LlmProviders.RAGFLOW == provider:
+            return litellm.RAGFlowConfig()
         elif (
             litellm.LlmProviders.CUSTOM == provider
             or litellm.LlmProviders.CUSTOM_OPENAI == provider

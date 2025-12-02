@@ -586,6 +586,7 @@ openai_compatible_providers: List = [
     "cometapi",
     "clarifai",
     "docker_model_runner",
+    "ragflow",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
