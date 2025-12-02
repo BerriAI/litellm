@@ -625,6 +625,7 @@ const sidebars = {
         "providers/petals",
         "providers/publicai",
         "providers/predibase",
+        "providers/ragflow",
         "providers/recraft",
         "providers/replicate",
         {

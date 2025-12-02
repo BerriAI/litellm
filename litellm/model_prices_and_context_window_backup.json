@@ -6717,6 +6717,33 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
+    "claude-opus-4-5": {
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "anthropic",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159
+    },
     "claude-sonnet-4-20250514": {
         "deprecation_date": "2026-05-14",
         "cache_creation_input_token_cost": 3.75e-06,
@@ -7824,26 +7851,298 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     "databricks/databricks-claude-3-7-sonnet": {
-        "input_cost_per_token": 2.5e-06,
-        "input_dbu_cost_per_token": 3.571e-05,
+        "input_cost_per_token": 2.9999900000000002e-06,
+        "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "max_tokens": 200000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Claude 3.7 conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.7857e-05,
-        "output_db_cost_per_token": 0.000214286,
-        "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
+        "output_cost_per_token": 1.5000020000000002e-05,
+        "output_dbu_cost_per_token": 0.000214286,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "databricks/databricks-claude-haiku-4-5": {
+        "input_cost_per_token": 1.00002e-06,
+        "input_dbu_cost_per_token": 1.4286e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 200000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 5.00003e-06,
+        "output_dbu_cost_per_token": 7.1429e-05,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "databricks/databricks-claude-opus-4": {
+        "input_cost_per_token": 1.5000020000000002e-05,
+        "input_dbu_cost_per_token": 0.000214286,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 32000,
+        "max_tokens": 200000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 7.500003000000001e-05,
+        "output_dbu_cost_per_token": 0.001071429,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "databricks/databricks-claude-opus-4-1": {
+        "input_cost_per_token": 1.5000020000000002e-05,
+        "input_dbu_cost_per_token": 0.000214286,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 32000,
+        "max_tokens": 200000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 7.500003000000001e-05,
+        "output_dbu_cost_per_token": 0.001071429,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "databricks/databricks-claude-opus-4-5": {
+        "input_cost_per_token": 5.00003e-06,
+        "input_dbu_cost_per_token": 7.1429e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 200000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 2.5000010000000002e-05,
+        "output_dbu_cost_per_token": 0.000357143,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "databricks/databricks-claude-sonnet-4": {
+        "input_cost_per_token": 2.9999900000000002e-06,
+        "input_dbu_cost_per_token": 4.2857e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 200000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 1.5000020000000002e-05,
+        "output_dbu_cost_per_token": 0.000214286,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "databricks/databricks-claude-sonnet-4-1": {
+        "input_cost_per_token": 2.9999900000000002e-06,
+        "input_dbu_cost_per_token": 4.2857e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 200000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 1.5000020000000002e-05,
+        "output_dbu_cost_per_token": 0.000214286,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "databricks/databricks-claude-sonnet-4-5": {
+        "input_cost_per_token": 2.9999900000000002e-06,
+        "input_dbu_cost_per_token": 4.2857e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 200000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 1.5000020000000002e-05,
+        "output_dbu_cost_per_token": 0.000214286,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "databricks/databricks-gemini-2-5-flash": {
+        "input_cost_per_token": 3.0001999999999996e-07,
+        "input_dbu_cost_per_token": 4.285999999999999e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_tokens": 1048576,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 2.49998e-06,
+        "output_dbu_cost_per_token": 3.5714e-05,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "databricks/databricks-gemini-2-5-pro": {
+        "input_cost_per_token": 1.24999e-06,
+        "input_dbu_cost_per_token": 1.7857e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 1048576,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 9.999990000000002e-06,
+        "output_dbu_cost_per_token": 0.000142857,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "databricks/databricks-gemma-3-12b": {
+        "input_cost_per_token": 1.5000999999999998e-07,
+        "input_dbu_cost_per_token": 2.1429999999999996e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32000,
+        "max_tokens": 128000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 5.0001e-07,
+        "output_dbu_cost_per_token": 7.143e-06,
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
+    },
+    "databricks/databricks-gpt-5": {
+        "input_cost_per_token": 1.24999e-06,
+        "input_dbu_cost_per_token": 1.7857e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 400000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 9.999990000000002e-06,
+        "output_dbu_cost_per_token": 0.000142857,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    "databricks/databricks-gpt-5-1": {
+        "input_cost_per_token": 1.24999e-06,
+        "input_dbu_cost_per_token": 1.7857e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 400000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 9.999990000000002e-06,
+        "output_dbu_cost_per_token": 0.000142857,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    "databricks/databricks-gpt-5-mini": {
+        "input_cost_per_token": 2.4997000000000006e-07,
+        "input_dbu_cost_per_token": 3.571e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 400000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 1.9999700000000004e-06,
+        "output_dbu_cost_per_token": 2.8571e-05,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    "databricks/databricks-gpt-5-nano": {
+        "input_cost_per_token": 4.998e-08,
+        "input_dbu_cost_per_token": 7.14e-07,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 400000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 3.9998000000000007e-07,
+        "output_dbu_cost_per_token": 5.714000000000001e-06,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
+    },
+    "databricks/databricks-gpt-oss-120b": {
+        "input_cost_per_token": 1.5000999999999998e-07,
+        "input_dbu_cost_per_token": 2.1429999999999996e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 5.9997e-07,
+        "output_dbu_cost_per_token": 8.571e-06,
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
+    },
+    "databricks/databricks-gpt-oss-20b": {
+        "input_cost_per_token": 7e-08,
+        "input_dbu_cost_per_token": 1e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 3.0001999999999996e-07,
+        "output_dbu_cost_per_token": 4.285999999999999e-06,
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
+    },
     "databricks/databricks-gte-large-en": {
-        "input_cost_per_token": 1.2999e-07,
+        "input_cost_per_token": 1.2999000000000001e-07,
         "input_dbu_cost_per_token": 1.857e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 8192,
@@ -7868,14 +8167,14 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 1.5000300000000002e-06,
         "output_dbu_cost_per_token": 2.1429e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
     "databricks/databricks-llama-4-maverick": {
-        "input_cost_per_token": 5e-06,
-        "input_dbu_cost_per_token": 7.143e-05,
+        "input_cost_per_token": 5.0001e-07,
+        "input_dbu_cost_per_token": 7.143e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
@@ -7884,13 +8183,13 @@
             "notes": "Databricks documentation now provides both DBU costs (_dbu_cost_per_token) and dollar costs(_cost_per_token)."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05,
-        "output_dbu_cost_per_token": 0.00021429,
+        "output_cost_per_token": 1.5000300000000002e-06,
+        "output_dbu_cost_per_token": 2.1429e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
     "databricks/databricks-meta-llama-3-1-405b-instruct": {
-        "input_cost_per_token": 5e-06,
+        "input_cost_per_token": 5.00003e-06,
         "input_dbu_cost_per_token": 7.1429e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 128000,
@@ -7900,14 +8199,29 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.500002e-05,
-        "output_db_cost_per_token": 0.000214286,
+        "output_cost_per_token": 1.5000020000000002e-05,
+        "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
+    "databricks/databricks-meta-llama-3-1-8b-instruct": {
+        "input_cost_per_token": 1.5000999999999998e-07,
+        "input_dbu_cost_per_token": 2.1429999999999996e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 200000,
+        "metadata": {
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+        },
+        "mode": "chat",
+        "output_cost_per_token": 4.5003000000000007e-07,
+        "output_dbu_cost_per_token": 6.429000000000001e-06,
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
+    },
     "databricks/databricks-meta-llama-3-3-70b-instruct": {
-        "input_cost_per_token": 1.00002e-06,
-        "input_dbu_cost_per_token": 1.4286e-05,
+        "input_cost_per_token": 5.0001e-07,
+        "input_dbu_cost_per_token": 7.143e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
@@ -7916,8 +8230,8 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 2.99999e-06,
-        "output_dbu_cost_per_token": 4.2857e-05,
+        "output_cost_per_token": 1.5000300000000002e-06,
+        "output_dbu_cost_per_token": 2.1429e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
@@ -7932,7 +8246,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 2.99999e-06,
+        "output_cost_per_token": 2.9999900000000002e-06,
         "output_dbu_cost_per_token": 4.2857e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
@@ -7948,13 +8262,13 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 9.9902e-07,
+        "output_cost_per_token": 1.00002e-06,
         "output_dbu_cost_per_token": 1.4286e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
     "databricks/databricks-mpt-30b-instruct": {
-        "input_cost_per_token": 9.9902e-07,
+        "input_cost_per_token": 1.00002e-06,
         "input_dbu_cost_per_token": 1.4286e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 8192,
@@ -7964,7 +8278,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 9.9902e-07,
+        "output_cost_per_token": 1.00002e-06,
         "output_dbu_cost_per_token": 1.4286e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
