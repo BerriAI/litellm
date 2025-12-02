@@ -8146,6 +8146,7 @@ async def async_queue_request(
             "method": request.method,
             "headers": dict(request.headers),
             "body": copy.copy(data),  # use copy instead of deepcopy
+            "is_disconnected": request.state.is_disconnected if hasattr(request.state, "is_disconnected") else request.is_disconnected,
         }
 
         verbose_proxy_logger.debug("receiving data: %s", data)
