@@ -17,6 +17,7 @@ from litellm.constants import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     DEFAULT_SSL_CIPHERS,
 )
@@ -798,7 +799,7 @@ class AsyncHTTPHandler:
                     limit=AIOHTTP_CONNECTOR_LIMIT,
                     keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
                     ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
-                    enable_cleanup_closed=True,
+                    enable_cleanup_closed=AIOHTTP_NEEDS_CLEANUP_CLOSED,
                     **connector_kwargs,
                 ),
                 trust_env=trust_env,
