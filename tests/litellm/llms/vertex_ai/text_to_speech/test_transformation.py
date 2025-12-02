@@ -1,13 +1,16 @@
+import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm.llms.vertex_ai.text_to_speech.transformation import (
     VertexAITextToSpeechConfig,
 )
@@ -127,3 +130,61 @@ class TestVertexAITextToSpeechConfig:
 
         assert voice_str is None
         assert voice_dict == voice_input
+
+
+@patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post")
+@patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
+@patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
+def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_post):
+    """
+    Test that litellm.speech(model="vertex_ai/chirp") sends the correct URL and request body
+    """
+    # Mock authentication
+    mock_ensure_token.return_value = ("mock-token", "test-project")
+    mock_get_token.return_value = ("mock-token", "mock-url")
+
+    # Mock HTTP response
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.content = b'{"audioContent": "SGVsbG8gV29ybGQ="}'  # base64 encoded "Hello World"
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"audioContent": "SGVsbG8gV29ybGQ="}
+    mock_post.return_value = mock_response
+
+    litellm.speech(
+        model="vertex_ai/chirp",
+        input="Hello, this is a test",
+        voice="en-US-Chirp3-HD-Charon",
+        vertex_project="test-project",
+        vertex_location="us-central1",
+    )
+
+    # Verify the HTTP call was made
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args.kwargs
+
+    # Verify the URL is the Google Cloud TTS API
+    assert call_kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
+
+    # Verify request body structure
+    assert "data" in call_kwargs
+    request_body = json.loads(call_kwargs["data"])
+
+    # Verify input
+    assert "input" in request_body
+    assert request_body["input"] == {"text": "Hello, this is a test"}
+
+    # Verify voice
+    assert "voice" in request_body
+    assert request_body["voice"]["name"] == "en-US-Chirp3-HD-Charon"
+    assert request_body["voice"]["languageCode"] == "en-US"
+
+    # Verify audioConfig
+    assert "audioConfig" in request_body
+
+    # Verify headers contain authorization
+    assert "headers" in call_kwargs
+    assert "Authorization" in call_kwargs["headers"]
+    assert call_kwargs["headers"]["Authorization"] == "Bearer mock-token"
+
+
