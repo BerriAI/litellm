@@ -12,6 +12,7 @@ import asyncio
 import json
 from datetime import datetime
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncGenerator,
     Dict,
@@ -28,6 +29,9 @@ import aiohttp
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError
@@ -712,6 +716,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         texts: List[str],
         request_data: dict,
         input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
         images: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[List[str]]]:
         """

@@ -7,6 +7,7 @@ to detect and block/mask sensitive content.
 
 import re
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncGenerator,
     Dict,
@@ -23,6 +24,9 @@ from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     BlockedWord,
@@ -303,6 +307,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         texts: List[str],
         request_data: dict,
         input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
         images: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[List[str]]]:
         """

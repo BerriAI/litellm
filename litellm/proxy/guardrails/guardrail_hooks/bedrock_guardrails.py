@@ -14,7 +14,17 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 from fastapi import HTTPException
@@ -40,6 +50,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockRequest,
     BedrockTextContent,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
@@ -1137,6 +1150,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         texts: List[str],
         request_data: dict,
         input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
         images: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[List[str]]]:
         """

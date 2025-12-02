@@ -72,6 +72,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 texts=[input_data],
                 request_data=data,
                 input_type="request",
+                logging_obj=litellm_logging_obj,
             )
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
             verbose_proxy_logger.debug("OpenAI Responses API: Processed string input")
@@ -105,6 +106,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                     request_data=data,
                     input_type="request",
                     images=images_to_check if images_to_check else None,
+                    logging_obj=litellm_logging_obj,
                 )
             )
 
@@ -256,6 +258,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                     request_data=request_data,
                     input_type="response",
                     images=images_to_check if images_to_check else None,
+                    logging_obj=litellm_logging_obj,
                 )
             )
 

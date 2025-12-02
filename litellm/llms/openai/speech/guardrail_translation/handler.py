@@ -54,6 +54,7 @@ class OpenAITextToSpeechHandler(BaseTranslation):
                 texts=[input_text],
                 request_data=data,
                 input_type="request",
+                logging_obj=litellm_logging_obj,
             )
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_text
 

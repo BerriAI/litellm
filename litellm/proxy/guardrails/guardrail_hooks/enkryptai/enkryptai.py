@@ -7,7 +7,17 @@
 
 import os
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx
 
@@ -26,6 +36,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIResponse,
 )
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponseStream
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "enkryptai"
 
@@ -471,6 +484,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         texts: List[str],
         request_data: dict,
         input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
         images: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[List[str]]]:
         """

@@ -57,6 +57,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
                 texts=[prompt],
                 request_data=data,
                 input_type="request",
+                logging_obj=litellm_logging_obj,
             )
             data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
 
@@ -82,6 +83,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
                     texts=texts_to_check,
                     request_data=data,
                     input_type="request",
+                    logging_obj=litellm_logging_obj,
                 )
 
                 # Replace guardrailed texts back
@@ -154,6 +156,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
                 texts=texts_to_check,
                 request_data=request_data,
                 input_type="response",
+                logging_obj=litellm_logging_obj,
             )
 
             # Apply guardrailed texts back to choices

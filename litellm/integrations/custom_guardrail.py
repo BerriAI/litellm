@@ -1,5 +1,16 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union, get_args
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    get_args,
+)
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -20,6 +31,8 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 dc = DualCache()
 
 
@@ -440,6 +453,7 @@ class CustomGuardrail(CustomLogger):
         texts: List[str],
         request_data: dict,
         input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
         images: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[List[str]]]:
         """

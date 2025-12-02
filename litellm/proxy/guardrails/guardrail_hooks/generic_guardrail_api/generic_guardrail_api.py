@@ -6,7 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -20,6 +20,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "generic_guardrail_api"
 
@@ -144,6 +147,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         texts: List[str],
         request_data: dict,
         input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
         images: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[List[str]]]:
         """
@@ -184,6 +188,8 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         # Create request payload
         guardrail_request = GenericGuardrailAPIRequest(
+            litellm_call_id=logging_obj.litellm_call_id if logging_obj else None,
+            litellm_trace_id=logging_obj.litellm_trace_id if logging_obj else None,
             texts=texts,
             request_data=user_metadata,
             images=images,

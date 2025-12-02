@@ -92,6 +92,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
                 texts=[original_text],
                 request_data=request_data,
                 input_type="response",
+                logging_obj=litellm_logging_obj,
             )
             response.text = guardrailed_texts[0] if guardrailed_texts else original_text
 

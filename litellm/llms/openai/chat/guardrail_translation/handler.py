@@ -74,6 +74,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     request_data=data,
                     input_type="request",
                     images=images_to_check if images_to_check else None,
+                    logging_obj=litellm_logging_obj,
                 )
             )
 
@@ -223,6 +224,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     request_data=request_data,
                     input_type="response",
                     images=images_to_check if images_to_check else None,
+                    logging_obj=litellm_logging_obj,
                 )
             )
 

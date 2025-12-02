@@ -45,12 +45,18 @@ class GenericGuardrailAPIRequest:
     """Request model for the Generic Guardrail API"""
 
     input_type: Literal["request", "response"]
+    litellm_call_id: Optional[str]  # the call id of the individual LLM call
+    litellm_trace_id: Optional[
+        str
+    ]  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
 
     def __init__(
         self,
         texts: List[str],
         request_data: GenericGuardrailAPIMetadata,
         input_type: Literal["request", "response"],
+        litellm_call_id: Optional[str],
+        litellm_trace_id: Optional[str],
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         images: Optional[List[str]] = None,
     ):
@@ -61,6 +67,8 @@ class GenericGuardrailAPIRequest:
         )
         self.images = images
         self.input_type = input_type
+        self.litellm_call_id = litellm_call_id
+        self.litellm_trace_id = litellm_trace_id
 
     def to_dict(self) -> dict:
         return {
@@ -69,6 +77,8 @@ class GenericGuardrailAPIRequest:
             "images": self.images,
             "additional_provider_specific_params": self.additional_provider_specific_params,
             "input_type": self.input_type,
+            "litellm_call_id": self.litellm_call_id,
+            "litellm_trace_id": self.litellm_trace_id,
         }
 
 

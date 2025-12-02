@@ -56,6 +56,7 @@ class OpenAIImageGenerationHandler(BaseTranslation):
                 texts=[prompt],
                 request_data=data,
                 input_type="request",
+                logging_obj=litellm_logging_obj,
             )
             data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
 

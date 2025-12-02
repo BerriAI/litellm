@@ -122,6 +122,7 @@ class PassThroughEndpointHandler(BaseTranslation):
             texts=[text_to_check],
             request_data=data,
             input_type="request",
+            logging_obj=litellm_logging_obj,
         )
 
         return data
@@ -181,6 +182,7 @@ class PassThroughEndpointHandler(BaseTranslation):
             texts=[text_to_check],
             request_data=request_data,
             input_type="response",
+            logging_obj=litellm_logging_obj,
         )
 
         return response

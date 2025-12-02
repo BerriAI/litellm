@@ -53,6 +53,7 @@ class CohereRerankHandler(BaseTranslation):
                 texts=[query],
                 request_data=data,
                 input_type="request",
+                logging_obj=litellm_logging_obj,
             )
             data["query"] = guardrailed_texts[0] if guardrailed_texts else query
 
