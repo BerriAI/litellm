@@ -147,6 +147,7 @@ class OllamaChatConfig(BaseConfig):
             "functions",
             "response_format",
             "reasoning_effort",
+            "logprobs",
         ]
 
     def map_openai_params(
@@ -445,6 +446,11 @@ class OllamaChatConfig(BaseConfig):
         completion_tokens = response_json.get(
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),
+        )
+        setattr(
+            model_response,
+            "logprobs",
+            response_json.get("logprobs", None),
         )
         setattr(
             model_response,
