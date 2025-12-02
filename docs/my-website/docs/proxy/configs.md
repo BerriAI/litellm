@@ -576,7 +576,7 @@ custom_tokenizer:
 
 ```yaml
 general_settings: 
-  database_connection_pool_limit: 100 # sets connection pool for prisma client to postgres db at 100
+  database_connection_pool_limit: 10 # sets connection pool for prisma client to postgres db (default: 10, recommended: 10-20)
   database_connection_timeout: 60 # sets a 60s timeout for any connection call to the db 
 ```
 

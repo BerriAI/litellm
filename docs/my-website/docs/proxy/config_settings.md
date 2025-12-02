@@ -113,7 +113,7 @@ general_settings:
 
   # Database Settings
   database_url: string
-  database_connection_pool_limit: 0  # default 100
+  database_connection_pool_limit: 0  # default 10
   database_connection_timeout: 0  # default 60s
   allow_requests_on_db_unavailable: boolean  # if true, will allow requests that can not connect to the DB to verify Virtual Key to still work 
 
