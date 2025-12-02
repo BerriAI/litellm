@@ -514,31 +514,34 @@ jobs:
           WORKFLOW_RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           # Build message based on what happened
-          CONTEXT_NOTE="\n\n_LiteLLM is the unified LLM proxy for 100+ providers used by CARTO for all AI features_"
-
+          # Using bash $'...' syntax to properly interpret \n as newlines
           case "${NEEDS_SYNC}:${PR_EXISTS}" in
             true:false)
               if [[ -n "${NEW_PR_URL}" ]]; then
                 if [[ "${HAS_NEW_RELEASE}" == "true" ]]; then
-                  MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - New release ${NEW_VERSION} detected\n\n*Action Required:* Review and merge sync PR\n• PR: ${NEW_PR_URL}\n• Commits: ${COMMITS_BEHIND} behind upstream${CONTEXT_NOTE}"
+                  # Extract clean version from NEW_VERSION (remove v prefix and -stable suffix)
+                  NEW_VERSION_CLEAN=$(echo "${NEW_VERSION}" | sed -E 's/^v//; s/-stable$//')
+                  MESSAGE=$':white_check_mark: *LiteLLM Upstream Sync*\n\n*Version Upgrade:* `v'"${CURRENT_VERSION}"$'` → `v'"${NEW_VERSION_CLEAN}"$'`\n\n*Action Required:* Review and merge sync PR\n\n• PR: '"${NEW_PR_URL}"$'\n\n_LiteLLM is the unified LLM proxy for 100+ providers used by CARTO for all AI features_'
                 else
-                  MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - PR created\n\n*Action Required:* Review and merge sync PR\n• PR: ${NEW_PR_URL}\n• Commits: carto/main was ${COMMITS_BEHIND} commits behind${CONTEXT_NOTE}"
+                  MESSAGE=$':white_check_mark: *LiteLLM Upstream Sync*\n\n*PR Created*\n\n*Action Required:* Review and merge sync PR\n\n• PR: '"${NEW_PR_URL}"$'\n• Commits: '"${COMMITS_BEHIND}"$' behind\n\n_LiteLLM is the unified LLM proxy for 100+ providers used by CARTO for all AI features_'
                 fi
               else
-                MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow error (PR URL missing)\n<${WORKFLOW_RUN_URL}|View workflow run>"
+                MESSAGE=$':x: *LiteLLM Upstream Sync*\n\n*Workflow Error:* PR URL missing\n\n<'"${WORKFLOW_RUN_URL}"$'|View workflow run>'
               fi
               ;;
             true:true)
-              MESSAGE=":information_source: *LiteLLM Upstream Sync* - PR already exists\n\n*Status:* Existing PR is ${COMMITS_BEHIND} commits behind upstream\n• PR: ${EXISTING_PR_URL}${CONTEXT_NOTE}"
+              # Extract clean version from NEW_VERSION
+              NEW_VERSION_CLEAN=$(echo "${NEW_VERSION}" | sed -E 's/^v//; s/-stable$//')
+              MESSAGE=$':information_source: *LiteLLM Upstream Sync*\n\n*PR Already Exists*\n\n*Version:* `v'"${CURRENT_VERSION}"$'` → `v'"${NEW_VERSION_CLEAN}"$'`\n\n• PR: '"${EXISTING_PR_URL}"$'\n\n_LiteLLM is the unified LLM proxy for 100+ providers used by CARTO for all AI features_'
               ;;
             false:*)
-              MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - Up to date\n\ncarto/main is fully synced with upstream${CONTEXT_NOTE}"
+              MESSAGE=$':white_check_mark: *LiteLLM Upstream Sync*\n\n*Status:* Up to date\n\n`carto/main` is fully synced with upstream\n\n_LiteLLM is the unified LLM proxy for 100+ providers used by CARTO for all AI features_'
               ;;
             *)
               if [[ "${SYNC_STATUS}" == "failure" ]]; then
-                MESSAGE=":x: *LiteLLM Upstream Sync* - Sync failed\n\n*Action Required:* Check workflow logs\n<${WORKFLOW_RUN_URL}|View workflow run>"
+                MESSAGE=$':x: *LiteLLM Upstream Sync*\n\n*Sync Failed*\n\n*Action Required:* Check workflow logs\n\n<'"${WORKFLOW_RUN_URL}"$'|View workflow run>'
               else
-                MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow error\n\n*Action Required:* Check workflow logs\n<${WORKFLOW_RUN_URL}|View workflow run>"
+                MESSAGE=$':x: *LiteLLM Upstream Sync*\n\n*Workflow Error*\n\n*Action Required:* Check workflow logs\n\n<'"${WORKFLOW_RUN_URL}"$'|View workflow run>'
               fi
               ;;
           esac
