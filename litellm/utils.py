@@ -7289,6 +7289,8 @@ class ProviderConfigManager:
             return litellm.SnowflakeEmbeddingConfig()
         elif litellm.LlmProviders.COMETAPI == provider:
             return litellm.CometAPIEmbeddingConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            return litellm.GithubCopilotEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
             from litellm.llms.sagemaker.embedding.transformation import (
                 SagemakerEmbeddingConfig,
@@ -7384,6 +7386,12 @@ class ProviderConfigManager:
             )
 
             return IBMWatsonXAudioTranscriptionConfig()
+        elif litellm.LlmProviders.OVHCLOUD == provider:
+            from litellm.llms.ovhcloud.audio_transcription.transformation import (
+                OVHCloudAudioTranscriptionConfig,
+            )
+
+            return OVHCloudAudioTranscriptionConfig()
         return None
 
     @staticmethod

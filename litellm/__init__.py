@@ -1378,6 +1378,7 @@ from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
 )
+from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig
 from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig

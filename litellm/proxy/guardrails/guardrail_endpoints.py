@@ -1162,9 +1162,9 @@ async def get_provider_specific_params():
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
-    tool_permission_fields[
-        "ui_friendly_name"
-    ] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    tool_permission_fields["ui_friendly_name"] = (
+        ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    )
 
     # Return the provider-specific parameters
     provider_params = {
@@ -1203,10 +1203,10 @@ async def apply_guardrail(
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        active_guardrail: Optional[
-            CustomGuardrail
-        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-            guardrail_name=request.guardrail_name
+        active_guardrail: Optional[CustomGuardrail] = (
+            GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+                guardrail_name=request.guardrail_name
+            )
         )
         if active_guardrail is None:
             raise HTTPException(
@@ -1215,9 +1215,12 @@ async def apply_guardrail(
             )
 
         response_text = await active_guardrail.apply_guardrail(
-            text=request.text, language=request.language, entities=request.entities
+            texts=[request.text],
+            request_data={},
+            input_type="request",
+            images=None,
         )
 
-        return ApplyGuardrailResponse(response_text=response_text)
+        return ApplyGuardrailResponse(response_text=response_text[0][0])
     except Exception as e:
         raise handle_exception_on_proxy(e)

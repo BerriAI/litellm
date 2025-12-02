@@ -556,6 +556,7 @@ openai_compatible_providers: List = [
     "perplexity",
     "xinference",
     "xai",
+    "zai",
     "together_ai",
     "fireworks_ai",
     "empower",

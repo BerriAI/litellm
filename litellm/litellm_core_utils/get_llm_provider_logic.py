@@ -664,6 +664,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.XAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "zai":
+        api_base = (
+            api_base
+            or get_secret_str("ZAI_API_BASE")
+            or "https://api.z.ai/api/paas/v4"
+        )
+        dynamic_api_key = api_key or get_secret_str("ZAI_API_KEY")
     elif custom_llm_provider == "together_ai":
         api_base = (
             api_base
