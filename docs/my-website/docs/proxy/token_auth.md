@@ -338,6 +338,58 @@ general_settings:
     team_allowed_routes: ["/v1/chat/completions"] # 👈 Set accepted routes
 ```
 
+### Allowing other provider routes for Teams
+
+To enable team JWT tokens to access Anthropic-style endpoints such as `/v1/messages`, update `team_allowed_routes` in your `litellm_jwtauth` configuration. `team_allowed_routes` supports the following values:
+
+- Named route groups from `LiteLLMRoutes` (e.g., `openai_routes`, `anthropic_routes`, `info_routes`, `mapped_pass_through_routes`).
+
+Below is a quick reference for the route groups you can use and example representative routes from each group. If you need the exhaustive list, see the `LiteLLMRoutes` enum in `litellm/proxy/_types.py` for the authoritative list.
+
+| Route Group | What it contains | Representative routes |
+|-------------|------------------|-----------------------|
+| `openai_routes` | OpenAI-compatible REST endpoints (chat, completion, embeddings, images, responses, models, etc.) | `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/images/generations`, `/v1/models` |
+| `anthropic_routes` | Anthropic-style endpoints (`/v1/messages` and related) | `/v1/messages`, `/v1/messages/count_tokens`, `/v1/skills` |
+| `mapped_pass_through_routes` | Provider-specific pass-through route prefixes (e.g., Anthropic when proxied via `/anthropic`). Use with `mapped_pass_through_routes` for provider wildcard mapping | `/anthropic/*`, `/vertex-ai/*`, `/bedrock/*` |
+| `passthrough_routes_wildcard` | Wildcard mapping for providers (e.g., `/anthropic/*`) - precomputed wildcard list used by the proxy | `/anthropic/*`, `/vllm/*` |
+| `google_routes` | Google-specific (e.g., Vertex / Batching endpoints) | `/v1beta/models/{model_name}:generateContent` |
+| `mcp_routes` | Internal MCP management endpoints | `/mcp/tools`, `/mcp/tools/call` |
+| `info_routes` | Read-only & info endpoints used by the UI | `/key/info`, `/team/info`, `/v1/models` |
+| `management_routes` | Admin-only management endpoints (create/update/delete user/team/model) | `/team/new`, `/key/generate`, `/model/new` |
+| `spend_tracking_routes` | Budget/spend related endpoints | `/spend/logs`, `/spend/keys` |
+| `public_routes` | Public and unauthenticated endpoints | `/`, `/routes`, `/.well-known/litellm-ui-config` |
+
+Note: `llm_api_routes` is the union of OpenAI, Anthropic, Google, pass-through and other LLM routes (`openai_routes + anthropic_routes + google_routes + mapped_pass_through_routes + passthrough_routes_wildcard + apply_guardrail_routes + mcp_routes + litellm_native_routes`).
+
+Defaults (what the proxy uses if you don't override them in `litellm_jwtauth`):
+
+- `admin_jwt_scope`: `litellm_proxy_admin`
+- `admin_allowed_routes` (default): `management_routes`, `spend_tracking_routes`, `global_spend_tracking_routes`, `info_routes` 
+- `team_allowed_routes` (default): `openai_routes`, `info_routes` 
+- `public_allowed_routes` (default): `public_routes`
+
+
+Example: Allow team JWTs to call Anthropic `/v1/messages` (either by route group or by explicit route string):
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    team_ids_jwt_field: "team_ids"
+    team_allowed_routes: ["openai_routes", "info_routes", "anthropic_routes"]
+```
+
+Or selectively allow the exact Anthropic message endpoint only:
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    team_ids_jwt_field: "team_ids"
+    team_allowed_routes: ["/v1/messages", "info_routes"]
+```
+
+
 ### Caching Public Keys 
 
 Control how long public keys are cached for (in seconds).
