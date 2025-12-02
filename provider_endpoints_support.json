@@ -734,6 +734,22 @@
         "ocr": true
       }
     },
+    "vertex_ai/chirp": {
+      "display_name": "Google - Vertex AI Chirp3 HD (`vertex_ai/chirp`)",
+      "url": "https://docs.litellm.ai/docs/providers/vertex_speech",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "gemini": {
       "display_name": "Google AI Studio - Gemini (`gemini`)",
       "url": "https://docs.litellm.ai/docs/providers/gemini",
