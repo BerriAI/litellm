@@ -310,7 +310,7 @@ async def _create_user_if_not_exists(
 
         new_user_request = NewUserRequest(
             user_id=user_id,
-            user_email=user_id,  # We don't have email from group membership
+            user_email=None,  # We don't have email from group membership
             user_alias=None,
             teams=[],  # Teams will be added separately
             metadata={"created_via": created_via},
