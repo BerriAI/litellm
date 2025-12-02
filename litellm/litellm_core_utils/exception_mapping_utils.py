@@ -929,14 +929,16 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             litellm_debug_info=extra_information,
                             exception_status_code=original_exception.status_code,
                         )
-            elif custom_llm_provider in ("oci", "oci_generative_ai", "oracle", "oracle_cloud"):
+            elif custom_llm_provider in (
+                "oci", "oci_generative_ai", "oracle", "oracle_cloud"
+            ):
                 # Try to parse an OCI-style JSON error body
                 oci_err = None
                 try:
                     oci_err = json.loads(error_str)
                 except Exception:
                     # If not pure JSON, try looser extraction
-                    oci_err = {} 
+                    oci_err = {}
                 # Extract fields commonly present in OCI error payloads
                 oci_status = (
                     getattr(original_exception, "status_code", None)
@@ -966,7 +968,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     # Create a Response so the raised error carries the correct status
                     _response = httpx.Response(
                         status_code=oci_status,
-                        request=httpx.Request(method="POST", url="https://inference.generativeai.oci.oraclecloud.com"),
+                        request=httpx.Request(
+                            method="POST", 
+                            url="https://inference.generativeai.oci.oraclecloud.com"
+                        ),
                         content=str(error_str).encode("utf-8"),
                     )
 
@@ -974,8 +979,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 if not oci_status and ("throttled" in error_str.lower() or "request limit" in error_str.lower()):
                     oci_status = 429
 
-                # Map OCI status to LiteLLM exceptions (consistent with other providers) <source_id data="1" title="exception_mapping_utils.py" />
-                if oci_status == 400 or oci_status == 406 or oci_status == 413 or oci_status == 415 or oci_status == 422 or oci_status == 424:
+                # Map OCI status to LiteLLM exceptions (consistent with other providers) 
+                # <source_id data="1" title="exception_mapping_utils.py" />
+                bad_oci_request_statuses = (400, 406, 413, 415, 422, 424)
+                if oci_status in bad_oci_request_statuses:
                     raise BadRequestError(
                         message=f"{exception_provider} - {oci_message}",
                         llm_provider=custom_llm_provider,
@@ -992,7 +999,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                     )
                 elif oci_status == 404:
-                    raise NotFoundError(  # if NotFoundError exists in your litellm version; otherwise use BadRequestError
+                    # if NotFoundError exists in your litellm version; 
+                    # otherwise use BadRequestError
+                    raise NotFoundError(  
                         message=f"{exception_provider}: Not Found - {oci_message}",
                         llm_provider=custom_llm_provider,
                         model=model,
@@ -1000,7 +1009,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                     )
                 elif oci_status == 409:
-                    raise ConflictError(  # if ConflictError not available, fall back to BadRequestError
+                    # if ConflictError not available, fall back to BadRequestError
+                    raise ConflictError(
                         message=f"{exception_provider}: Conflict - {oci_message}",
                         llm_provider=custom_llm_provider,
                         model=model,
@@ -1064,7 +1074,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider=custom_llm_provider,
                         model=model,
                         litellm_debug_info=extra_information,
-                        request=httpx.Request(method="POST", url="https://inference.generativeai.oci.oraclecloud.com"),
+                        request=httpx.Request(
+                            method="POST", 
+                            url="https://inference.generativeai.oci.oraclecloud.com"
+                        ),
                     )
             elif custom_llm_provider == "bedrock":
                 if (
