@@ -228,7 +228,8 @@ def get_logging_payload(  # noqa: PLR0915
     if call_type in ["ocr", "aocr"]:
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
     else:
-        usage = cast(dict, response_obj).get("usage", None) or {}
+        # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
+        usage = response_obj_dict.get("usage", None) or {}
         if isinstance(usage, litellm.Usage):
             usage = dict(usage)
 
@@ -380,6 +381,7 @@ def get_logging_payload(  # noqa: PLR0915
             model=kwargs.get("model", "") or "",
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
+            organization_id=metadata.get("user_api_key_org_id") or "",
             metadata=safe_dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),

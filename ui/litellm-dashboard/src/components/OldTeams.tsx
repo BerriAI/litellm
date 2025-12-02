@@ -30,8 +30,7 @@ import {
   Text,
   TextInput,
 } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Select as Select2, Tooltip, Typography } from "antd";
-import { AlertTriangleIcon, XIcon } from "lucide-react";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import { fetchTeams } from "./common_components/fetch_teams";
@@ -77,6 +76,7 @@ interface EditTeamModalProps {
 }
 
 import { updateExistingKeys } from "@/utils/dataUtils";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { Member, teamCreateCall, v2TeamListCall } from "./networking";
 
 interface TeamInfo {
@@ -1139,11 +1139,22 @@ const Teams: React.FC<TeamProps> = ({
                         </Tooltip>
                       </span>
                     }
+                    rules={[
+                      {
+                        required: true,
+                        message: "Please select at least one model",
+                      },
+                    ]}
                     name="models"
                   >
                     <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-                      <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                        All Proxy Models
+                      {(isProxyAdminRole(userRole || "") || userModels.includes("all-proxy-models")) && (
+                        <Select2.Option key="all-proxy-models" value="all-proxy-models">
+                          All Proxy Models
+                        </Select2.Option>
+                      )}
+                      <Select2.Option key="no-default-models" value="no-default-models">
+                        No Default Models
                       </Select2.Option>
                       {modelsToPick.map((model) => (
                         <Select2.Option key={model} value={model}>
