@@ -100,7 +100,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Extract the SSO configuration check logic into a separate function for reuse
   const checkSSOConfiguration = async () => {
-    if (accessToken && premiumUser) {
+    if (accessToken) {
       try {
         const ssoData = await getSSOSettings(accessToken);
         console.log("SSO data:", ssoData);

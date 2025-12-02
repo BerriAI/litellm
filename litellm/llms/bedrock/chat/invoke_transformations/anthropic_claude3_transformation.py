@@ -103,7 +103,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             model=model,
             optional_params=optional_params,
             computer_tool_used=self.is_computer_tool_used(tools),
-            prompt_caching_set=self.is_cache_control_set(messages),
+            prompt_caching_set=False, 
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
         )
