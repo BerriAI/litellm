@@ -344,15 +344,29 @@ audio = litellm.speech(
     # ElevenLabs-specific parameters (passed directly):
     model_id="eleven_multilingual_v2",           # Optional: Override model
     voice_settings={                             # Optional: Voice customization
-        "stability": 0.5,
-        "similarity_boost": 0.75,
-        "speed": 1.0
+        "stability": 0.5,                        # 0.0-1.0: Higher = more consistent, lower = more expressive
+        "similarity_boost": 0.75,                # 0.0-1.0: Higher = closer to original voice
+        "style": 0.0,                            # 0.0-1.0: Style exaggeration (v2 models only)
+        "use_speaker_boost": True,               # Boost voice clarity and similarity
+        "speed": 1.0                             # 0.25-4.0: Speech speed multiplier
     },
     pronunciation_dictionary_locators=[         # Optional: Custom pronunciation
            {"pronunciation_dictionary_id": "dict_123", "version_id": "v1"}
     ],
 )
 ```
+
+### Voice Settings Reference
+
+For more details, see the [ElevenLabs Voice Settings API ↗](https://elevenlabs.io/docs/api-reference/voices/settings/get).
+
+| Parameter | Type | Range | Description |
+|-----------|------|-------|-------------|
+| `stability` | float | 0.0-1.0 | Controls voice consistency. Higher = more stable/predictable, lower = more expressive/variable. Corresponds to "Stability" slider in the web app |
+| `similarity_boost` | float | 0.0-1.0 | Controls how closely the generated voice matches the original. Higher = more similar. Corresponds to "Clarity + Similarity Enhancement" in the web app |
+| `style` | float | 0.0-1.0 | Style exaggeration. Only available for `eleven_multilingual_v2` and `eleven_turbo_v2` models |
+| `use_speaker_boost` | bool | true/false | Enhances voice clarity and target speaker similarity. May increase latency |
+| `speed` | float | 0.25-1.2 | Speech speed multiplier. 1.0 = normal speed, <1.2 = slower, >1.2 = faster |
 
 ### Text-to-Speech with Timestamps (ElevenLabs-specific)
 
@@ -371,7 +385,7 @@ os.environ["ELEVENLABS_API_KEY"] = "your-elevenlabs-api-key"
 
 # Request audio with timestamps
 response = litellm.speech(
-    model="elevenlabs/eleven_multilingual_v2",
+    model="elevenlabs/elevenlabs_turbo_v2",
     input="Hello world, this is a test.",
     voice="alloy",
     with_timestamps=True,  # Enable timestamps
@@ -424,7 +438,7 @@ curl http://localhost:4000/v1/audio/speech \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "elevenlabs-tts",
+    "model": "elevenlabs_turbo_v2",
     "input": "Hello world, this is a test.",
     "voice": "alloy",
     "with_timestamps": true
@@ -529,9 +543,11 @@ curl http://localhost:4000/v1/audio/speech \
           {"pronunciation_dictionary_id": "dict_123", "version_id": "v1"}
       ],
       "voice_settings": {
-        "speed": 1.1,
         "stability": 0.5,
-        "similarity_boost": 0.75
+        "similarity_boost": 0.75,
+        "style": 0.0,
+        "use_speaker_boost": true,
+        "speed": 1.2
       }
     }
   }' \
@@ -556,9 +572,11 @@ response = client.audio.speech.create(
                {"pronunciation_dictionary_id": "dict_123", "version_id": "v1"}
         ],
         "voice_settings": {
-            "speed": 1.1,
             "stability": 0.5,
-            "similarity_boost": 0.75
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "use_speaker_boost": True,
+            "speed": 1.2
         }
     }
 )
