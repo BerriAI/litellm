@@ -124,7 +124,7 @@ export interface PromptSpec {
   prompt_info: PromptInfo;
   created_at?: string;
   updated_at?: string;
-  version?: number;  // Explicit version number for version history
+  version?: number; // Explicit version number for version history
 }
 
 export interface PromptTemplateBase {
@@ -7414,7 +7414,11 @@ interface RegisterMcpOAuthClientPayload {
   token_endpoint_auth_method?: string;
 }
 
-export const registerMcpOAuthClient = async (accessToken: string, serverId: string, payload: RegisterMcpOAuthClientPayload) => {
+export const registerMcpOAuthClient = async (
+  accessToken: string,
+  serverId: string,
+  payload: RegisterMcpOAuthClientPayload,
+) => {
   const base = getProxyBaseUrl();
   const normalizedServerId = encodeURIComponent(serverId.trim());
   const url = `${base}/v1/mcp/server/oauth/${normalizedServerId}/register`;
@@ -7424,7 +7428,7 @@ export const registerMcpOAuthClient = async (accessToken: string, serverId: stri
     headers: {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
+      Accept: "application/json, text/event-stream",
     },
     body: JSON.stringify(payload),
   });
@@ -7968,4 +7972,59 @@ const deriveErrorMessage = (errorData: any): string => {
     errorData?.error ||
     JSON.stringify(errorData)
   );
+};
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  success: boolean;
+  redirectUrl?: string;
+}
+
+export const loginCall = async (username: string, password: string): Promise<LoginResponse> => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const loginUrl = proxyBaseUrl ? `${proxyBaseUrl}/login` : "/login";
+
+  const formData = new FormData();
+  formData.append("username", username);
+  formData.append("password", password);
+
+  const response = await fetch(loginUrl, {
+    method: "POST",
+    body: formData,
+    credentials: "include",
+    redirect: "manual",
+  });
+
+  // Handle redirect status codes (301, 302, 303, 307, 308)
+  if (response.status >= 300 && response.status < 400) {
+    const redirectUrl = response.headers.get("Location");
+
+    if (!redirectUrl) {
+      throw new Error("Login redirect missing Location header");
+    }
+
+    return {
+      success: true,
+      redirectUrl,
+    };
+  }
+
+  if (response.ok) {
+    return {
+      success: true,
+      redirectUrl: "/uia/",
+    };
+  }
+
+  // Otherwise, try to extract an error
+  let errorText = "Invalid username or password";
+  try {
+    errorText = await response.text();
+  } catch {}
+
+  throw new Error(errorText || "Login failed");
 };
