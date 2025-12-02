@@ -6,10 +6,11 @@ from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, cast, o
 import httpx
 
 import litellm
-from litellm import Logging, client, exception_type, get_litellm_params
+from litellm import client, exception_type, get_litellm_params
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
@@ -19,6 +20,8 @@ from litellm.llms.custom_llm import CustomLLM
 
 #################### Initialize provider clients ####################
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
+from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
+
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -26,7 +29,6 @@ from litellm.main import (
     bedrock_image_generation,
     openai_chat_completions,
     openai_image_variations,
-    vertex_image_generation,
 )
 
 ###########################################
@@ -36,7 +38,6 @@ from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
-    FileTypes,
     LlmProviders,
     all_litellm_params,
 )
@@ -343,11 +344,17 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
             litellm.LlmProviders.FAL_AI,
+            litellm.LlmProviders.RUNWAYML,
+            litellm.LlmProviders.VERTEX_AI,
         ):
             if image_generation_config is None:
                 raise ValueError(
                     f"image generation config is not supported for {custom_llm_provider}"
                 )
+
+            # Resolve api_base from litellm.api_base if not explicitly provided
+            _api_base = api_base or litellm.api_base
+            litellm_params_dict["api_base"] = _api_base
 
             return llm_http_handler.image_generation_handler(
                 api_key=api_key,
@@ -399,6 +406,8 @@ def image_generation(  # noqa: PLR0915
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            # Forward OpenAI organization if present (set by proxy pre-call utils)
+            organization: Optional[str] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -408,6 +417,7 @@ def image_generation(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 optional_params=optional_params,
                 model_response=model_response,
+                organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
             )
@@ -425,46 +435,6 @@ def image_generation(  # noqa: PLR0915
                 client=client,
                 api_base=api_base,
                 api_key=api_key,
-            )
-        elif custom_llm_provider == "vertex_ai":
-            vertex_ai_project = (
-                optional_params.pop("vertex_project", None)
-                or optional_params.pop("vertex_ai_project", None)
-                or litellm.vertex_project
-                or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_ai_location = (
-                optional_params.pop("vertex_location", None)
-                or optional_params.pop("vertex_ai_location", None)
-                or litellm.vertex_location
-                or get_secret_str("VERTEXAI_LOCATION")
-            )
-            vertex_credentials = (
-                optional_params.pop("vertex_credentials", None)
-                or optional_params.pop("vertex_ai_credentials", None)
-                or get_secret_str("VERTEXAI_CREDENTIALS")
-            )
-
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("VERTEXAI_API_BASE")
-                or get_secret_str("VERTEX_API_BASE")
-            )
-
-            model_response = vertex_image_generation.image_generation(
-                model=model,
-                prompt=prompt,
-                timeout=timeout,
-                logging_obj=litellm_logging_obj,
-                optional_params=optional_params,
-                model_response=model_response,
-                vertex_project=vertex_ai_project,
-                vertex_location=vertex_ai_location,
-                vertex_credentials=vertex_credentials,
-                aimg_generation=aimg_generation,
-                api_base=api_base,
-                client=client,
             )
         elif (
             custom_llm_provider in litellm._custom_providers

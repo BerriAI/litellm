@@ -24,8 +24,15 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
-from litellm.constants import LENGTH_OF_LITELLM_GENERATED_KEY, UI_SESSION_TOKEN_TEAM_ID
+from litellm.constants import (
+    LENGTH_OF_LITELLM_GENERATED_KEY,
+    LITELLM_PROXY_ADMIN_NAME,
+    UI_SESSION_TOKEN_TEAM_ID,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy._experimental.mcp_server.db import (
+    rotate_mcp_server_credentials_master_key,
+)
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
@@ -998,6 +1005,7 @@ async def generate_key_fn(
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
@@ -1299,7 +1307,6 @@ async def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest],
     existing_key_row: LiteLLM_VerificationToken,
 ):
-
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
@@ -1449,6 +1456,7 @@ async def update_key_fn(
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -2523,6 +2531,13 @@ async def _rotate_master_key(
                     where={"param_name": "environment_variables"},
                     data={"param_value": jsonify_object(encrypted_env_vars)},
                 )
+
+    # 4. process MCP server table
+    await rotate_mcp_server_credentials_master_key(
+        prisma_client=prisma_client,
+        touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        new_master_key=new_master_key,
+    )
 
 
 def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:

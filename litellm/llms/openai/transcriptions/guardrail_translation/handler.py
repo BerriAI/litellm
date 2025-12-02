@@ -5,7 +5,7 @@ This module provides guardrail translation support for OpenAI's audio transcript
 The handler processes the output transcribed text (input is audio, so no text to guardrail).
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -30,6 +30,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
     ) -> Any:
         """
         Process input - not applicable for audio transcription.
@@ -54,6 +55,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         self,
         response: "TranscriptionResponse",
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
     ) -> Any:
         """
         Process output transcription by applying guardrails to transcribed text.

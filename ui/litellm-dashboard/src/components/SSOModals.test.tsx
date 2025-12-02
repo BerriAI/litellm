@@ -83,7 +83,7 @@ describe("SSOModals", () => {
     fireEvent.change(emailInput, { target: { value: "test@example.com" } });
 
     // Fill in an invalid URL
-    const urlInput = getByLabelText("PROXY BASE URL");
+    const urlInput = getByLabelText("Proxy Base URL");
     fireEvent.change(urlInput, { target: { value: "invalid-url" } });
 
     // Submit the form
@@ -119,7 +119,7 @@ describe("SSOModals", () => {
       );
     };
 
-    const { getByLabelText, getByText, container } = render(<TestWrapper />);
+    const { getByLabelText, getByText, findByText, container } = render(<TestWrapper />);
 
     // Find and interact with the SSO provider select
     const ssoProviderSelect = container.querySelector("#sso_provider");
@@ -137,17 +137,16 @@ describe("SSOModals", () => {
     fireEvent.change(emailInput, { target: { value: "test@example.com" } });
 
     // Fill in a URL with trailing slash
-    const urlInput = getByLabelText("PROXY BASE URL") as HTMLInputElement;
+    const urlInput = getByLabelText("Proxy Base URL") as HTMLInputElement;
     fireEvent.change(urlInput, { target: { value: "https://example.com/" } });
 
     // Submit the form
     const saveButton = getByText("Save");
     fireEvent.click(saveButton);
 
-    // Check for validation error
-    await waitFor(() => {
-      expect(getByText("URL must not end with a trailing slash")).toBeInTheDocument();
-    });
+    // Check for validation error using findByText for async rendering
+    const errorMessage = await findByText("URL must not end with a trailing slash", {}, { timeout: 5000 });
+    expect(errorMessage).toBeInTheDocument();
   });
 
   it("should allow typing https:// without interfering with slashes", async () => {
@@ -171,7 +170,7 @@ describe("SSOModals", () => {
 
     const { getByLabelText } = render(<TestWrapper />);
 
-    const urlInput = getByLabelText("PROXY BASE URL") as HTMLInputElement;
+    const urlInput = getByLabelText("Proxy Base URL") as HTMLInputElement;
 
     // Simulate user typing "https://"
     fireEvent.change(urlInput, { target: { value: "h" } });
@@ -219,7 +218,7 @@ describe("SSOModals", () => {
       );
     };
 
-    const { getByLabelText, getByText, queryByText, container } = render(<TestWrapper />);
+    const { getByLabelText, getByText, queryByText, container, findByText } = render(<TestWrapper />);
 
     // Find and interact with the SSO provider select
     const ssoProviderSelect = container.querySelector("#sso_provider");
@@ -237,17 +236,16 @@ describe("SSOModals", () => {
     fireEvent.change(emailInput, { target: { value: "test@example.com" } });
 
     // Fill in an incomplete URL like "http:"
-    const urlInput = getByLabelText("PROXY BASE URL");
+    const urlInput = getByLabelText("Proxy Base URL");
     fireEvent.change(urlInput, { target: { value: "http:" } });
 
     // Submit the form
     const saveButton = getByText("Save");
     fireEvent.click(saveButton);
 
-    // Check that only the URL format error appears
-    await waitFor(() => {
-      expect(getByText("URL must start with http:// or https://")).toBeInTheDocument();
-    });
+    // Check that only the URL format error appears (use findByText for async rendering)
+    const errorMessage = await findByText("URL must start with http:// or https://", {}, { timeout: 3000 });
+    expect(errorMessage).toBeInTheDocument();
 
     // Verify the trailing slash error does NOT appear
     expect(queryByText("URL must not end with a trailing slash")).not.toBeInTheDocument();

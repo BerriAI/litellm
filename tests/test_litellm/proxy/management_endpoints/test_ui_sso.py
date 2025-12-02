@@ -533,6 +533,75 @@ def test_apply_user_info_values_to_sso_user_defined_values_with_models():
     assert sso_user_defined_values["models"] == ["no-default-models"]
 
 
+def test_apply_user_info_values_sso_role_takes_precedence():
+    """
+    Test that SSO role takes precedence over DB role.
+    
+    When Microsoft SSO returns a user_role, it should be used instead of the role stored in the database.
+    This ensures SSO is the authoritative source for user roles.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import (
+        apply_user_info_values_to_sso_user_defined_values,
+    )
+
+    user_info = LiteLLM_UserTable(
+        user_id="123",
+        user_email="test@example.com",
+        user_role="internal_user_viewer",
+        models=["model-1"],
+    )
+
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
+        "user_id": "456",
+        "user_email": "test@example.com",
+        "user_role": "proxy_admin_viewer",
+        "max_budget": None,
+        "budget_duration": None,
+    }
+
+    sso_user_defined_values = apply_user_info_values_to_sso_user_defined_values(
+        user_info=user_info,
+        user_defined_values=user_defined_values,
+    )
+
+    assert sso_user_defined_values is not None
+    assert sso_user_defined_values["user_id"] == "123"
+    assert sso_user_defined_values["user_role"] == "proxy_admin_viewer"
+    assert sso_user_defined_values["models"] == ["model-1"]
+
+
+def test_get_user_email_and_id_extracts_microsoft_role():
+    """
+    Test that _get_user_email_and_id_from_result extracts user_role from Microsoft SSO.
+    
+    This ensures Microsoft SSO roles (from app_roles in id_token) are properly
+    extracted and converted from enum to string.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    result = CustomOpenID(
+        id="test-user-id",
+        email="test@example.com",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=["team-1"],
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+
+    parsed = SSOAuthenticationHandler._get_user_email_and_id_from_result(
+        result=result,
+        generic_client_id=None,
+    )
+
+    assert parsed.get("user_email") == "test@example.com"
+    assert parsed.get("user_id") == "test-user-id"
+    assert parsed.get("user_role") == "proxy_admin_viewer"
+
+
 @pytest.mark.asyncio
 async def test_get_user_info_from_db():
     """
@@ -1392,22 +1461,41 @@ class TestCLIKeyRegenerationFlow:
     """Test the end-to-end CLI key regeneration flow"""
 
     @pytest.mark.asyncio
-    async def test_cli_sso_callback_regenerate_existing_key(self):
-        """Test CLI SSO callback regenerating an existing key"""
+    async def test_cli_sso_callback_stores_session(self):
+        """Test CLI SSO callback stores session data in cache for JWT generation"""
+        from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
 
         # Mock request
         mock_request = MagicMock(spec=Request)
 
         # Test data
-        existing_key = "sk-existing-key-123"
-        new_key = "sk-new-key-456"
+        session_key = "sk-session-456"
+        
+        # Mock user info
+        mock_user_info = LiteLLM_UserTable(
+            user_id="test-user-123",
+            user_role="internal_user",
+            teams=["team1", "team2"],
+            models=["gpt-4"]
+        )
 
-        # Mock the regenerate helper function
+        # Mock SSO result
+        mock_sso_result = {
+            "user_email": "test@example.com",
+            "user_id": "test-user-123"
+        }
+
+        # Mock cache
+        mock_cache = MagicMock()
+        
         with patch(
-            "litellm.proxy.management_endpoints.ui_sso._regenerate_cli_key"
-        ) as mock_regenerate, patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+            return_value=mock_user_info
+        ), patch(
             "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ), patch(
             "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
             return_value="<html>Success</html>",
@@ -1415,46 +1503,65 @@ class TestCLIKeyRegenerationFlow:
 
             # Act
             result = await cli_sso_callback(
-                request=mock_request, key=new_key, existing_key=existing_key
+                request=mock_request, key=session_key, existing_key=None, result=mock_sso_result
             )
 
-            # Assert
-            mock_regenerate.assert_called_once_with(
-                existing_key=existing_key, new_key=new_key, user_id=None
-            )
+            # Assert - verify session was stored in cache
+            mock_cache.set_cache.assert_called_once()
+            call_args = mock_cache.set_cache.call_args
+            
+            # Verify cache key format
+            assert "cli_sso_session:" in call_args.kwargs["key"]
+            assert session_key in call_args.kwargs["key"]
+            
+            # Verify session data structure
+            session_data = call_args.kwargs["value"]
+            assert session_data["user_id"] == "test-user-123"
+            assert session_data["user_role"] == "internal_user"
+            assert session_data["teams"] == ["team1", "team2"]
+            assert session_data["models"] == ["gpt-4"]
+            
+            # Verify TTL
+            assert call_args.kwargs["ttl"] == 600  # 10 minutes
+            
             assert result.status_code == 200
-            assert "Success" in result.body.decode()
+            # Verify response contains success message (response is HTML)
+            assert result.body is not None
 
     @pytest.mark.asyncio
-    async def test_cli_sso_callback_create_new_key(self):
-        """Test CLI SSO callback creating a new key when no existing key provided"""
-        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
-
-        # Mock request
-        mock_request = MagicMock(spec=Request)
+    async def test_cli_poll_key_returns_teams_for_selection(self):
+        """Test CLI poll endpoint returns teams for user selection when multiple teams exist"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
 
         # Test data
-        new_key = "sk-new-key-789"
+        session_key = "sk-session-789"
+        session_data = {
+            "user_id": "test-user-456",
+            "user_role": "internal_user",
+            "teams": ["team-a", "team-b", "team-c"],
+            "models": ["gpt-4"]
+        }
 
-        # Mock the create helper function
+        # Mock cache
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = session_data
+        
         with patch(
-            "litellm.proxy.management_endpoints.ui_sso._create_new_cli_key"
-        ) as mock_create, patch(
-            "litellm.proxy.proxy_server.prisma_client", MagicMock()
-        ), patch(
-            "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
-            return_value="<html>Success</html>",
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ):
 
-            # Act
-            result = await cli_sso_callback(
-                request=mock_request, key=new_key, existing_key=None
-            )
+            # Act - First poll without team_id
+            result = await cli_poll_key(key_id=session_key, team_id=None)
 
-            # Assert
-            mock_create.assert_called_once_with(key=new_key, user_id=None)
-            assert result.status_code == 200
-            assert "Success" in result.body.decode()
+            # Assert - should return teams list for selection
+            assert result["status"] == "ready"
+            assert result["requires_team_selection"] is True
+            assert result["user_id"] == "test-user-456"
+            assert result["teams"] == ["team-a", "team-b", "team-c"]
+            assert "key" not in result  # JWT should not be generated yet
+            
+            # Verify session was NOT deleted
+            mock_cache.delete_cache.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_auth_callback_routes_to_cli_with_existing_key(self):
@@ -1543,40 +1650,65 @@ class TestCLIKeyRegenerationFlow:
             assert "https://test.litellm.ai/sso/callback" == redirect_url
 
     @pytest.mark.asyncio
-    async def test_cli_sso_callback_regenerate_vs_create_flow(self):
-        """Test CLI SSO callback calls regenerate_key_fn when existing_key provided, generate_key_helper_fn when not"""
-        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+    async def test_cli_poll_key_generates_jwt_with_team(self):
+        """Test CLI poll endpoint generates JWT when team_id is provided"""
+        from litellm.proxy._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
 
-        mock_request = MagicMock(spec=Request)
+        # Test data
+        session_key = "sk-session-999"
+        selected_team = "team-b"
+        session_data = {
+            "user_id": "test-user-789",
+            "user_role": "internal_user",
+            "teams": ["team-a", "team-b", "team-c"],
+            "models": ["gpt-4"],
+            "user_email": "test@example.com"
+        }
+        
+        # Mock user info
+        mock_user_info = LiteLLM_UserTable(
+            user_id="test-user-789",
+            user_role="internal_user",
+            teams=["team-a", "team-b", "team-c"],
+            models=["gpt-4"]
+        )
 
+        # Mock cache
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = session_data
+        
+        mock_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token"
+        
         with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn"
-        ) as mock_regenerate, patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
-        ) as mock_generate, patch(
-            "litellm.proxy._types.UserAPIKeyAuth.get_litellm_cli_user_api_key_auth"
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
         ), patch(
-            "litellm.proxy.proxy_server.prisma_client", MagicMock()
-        ), patch(
-            "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
-            return_value="<html>Success</html>",
-        ):
+            "litellm.proxy.proxy_server.prisma_client"
+        ) as mock_prisma, patch(
+            "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+            return_value=mock_jwt_token
+        ) as mock_get_jwt:
+            
+            # Mock the user lookup
+            mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user_info)
 
-            # Test regeneration path
-            await cli_sso_callback(
-                mock_request, key="sk-new-123", existing_key="sk-existing-456"
-            )
-            mock_regenerate.assert_called_once()
-            mock_generate.assert_not_called()
+            # Act - Second poll with team_id
+            result = await cli_poll_key(key_id=session_key, team_id=selected_team)
 
-            # Reset mocks
-            mock_regenerate.reset_mock()
-            mock_generate.reset_mock()
-
-            # Test creation path
-            await cli_sso_callback(mock_request, key="sk-new-789", existing_key=None)
-            mock_regenerate.assert_not_called()
-            mock_generate.assert_called_once()
+            # Assert - should return JWT
+            assert result["status"] == "ready"
+            assert result["key"] == mock_jwt_token
+            assert result["user_id"] == "test-user-789"
+            assert result["team_id"] == selected_team
+            assert result["teams"] == ["team-a", "team-b", "team-c"]
+            
+            # Verify JWT was generated with correct team
+            mock_get_jwt.assert_called_once()
+            jwt_call_args = mock_get_jwt.call_args
+            assert jwt_call_args.kwargs["team_id"] == selected_team
+            
+            # Verify session was deleted after JWT generation
+            mock_cache.delete_cache.assert_called_once()
 
 
 class TestGetAppRolesFromIdToken:
@@ -2001,6 +2133,35 @@ class TestProcessSSOJWTAccessToken:
             assert result.team_ids == []
 
 
+@pytest.mark.asyncio
+async def test_get_ui_settings_includes_api_doc_base_url():
+    """Ensure the UI settings endpoint surfaces the optional API doc override."""
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
+
+    mock_request = Request(
+        scope={
+            "type": "http",
+            "headers": [],
+            "method": "GET",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": "/sso/get/ui_settings",
+            "query_string": b"",
+        }
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "LITELLM_UI_API_DOC_BASE_URL": "https://custom.docs",
+        },
+    ):
+        response = await get_ui_settings(mock_request)
+        assert response["LITELLM_UI_API_DOC_BASE_URL"] == "https://custom.docs"
+
+
 class TestGenericResponseConvertorNestedAttributes:
     """Test generic_response_convertor with nested attribute paths"""
 
@@ -2076,6 +2237,227 @@ class TestGenericResponseConvertorNestedAttributes:
                 result.last_name == "Doe"
             )  # Can't access "attributes.family_name" with .get()
             assert result.display_name == "user-sub-123"  # Top-level attribute works
+
+
+class TestGetGenericSSORedirectParams:
+    """Test _get_generic_sso_redirect_params state parameter priority handling"""
+
+    def test_state_priority_cli_state_provided(self):
+        """
+        Test that CLI state takes highest priority when provided
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        cli_state = "litellm-session-token:sk-test123"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": "env_state_value"}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=cli_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == cli_state
+            assert code_verifier is None  # PKCE not enabled by default
+
+    def test_state_priority_env_variable_when_no_cli_state(self):
+        """
+        Test that GENERIC_CLIENT_STATE environment variable is used when CLI state is not provided
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        env_state = "custom_env_state_value"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": env_state}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=None,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == env_state
+            assert code_verifier is None
+
+    def test_state_priority_generated_uuid_fallback(self):
+        """
+        Test that a UUID is generated when neither CLI state nor env variable is provided
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange - no CLI state and no env variable
+        with patch.dict(os.environ, {}, clear=False):
+            # Remove GENERIC_CLIENT_STATE if it exists
+            os.environ.pop("GENERIC_CLIENT_STATE", None)
+            
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=None,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert "state" in redirect_params
+            assert redirect_params["state"] is not None
+            assert len(redirect_params["state"]) == 32  # UUID hex is 32 chars
+            assert code_verifier is None
+
+    def test_state_with_pkce_enabled(self):
+        """
+        Test that PKCE parameters are generated when GENERIC_CLIENT_USE_PKCE is enabled
+        """
+        import base64
+        import hashlib
+
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        test_state = "test_state_123"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=test_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert state
+            assert redirect_params["state"] == test_state
+            
+            # Assert PKCE parameters
+            assert code_verifier is not None
+            assert len(code_verifier) == 43  # Standard PKCE verifier length
+            assert "code_challenge" in redirect_params
+            assert "code_challenge_method" in redirect_params
+            assert redirect_params["code_challenge_method"] == "S256"
+            
+            # Verify code_challenge is correctly derived from code_verifier
+            expected_challenge_bytes = hashlib.sha256(
+                code_verifier.encode("utf-8")
+            ).digest()
+            expected_challenge = (
+                base64.urlsafe_b64encode(expected_challenge_bytes)
+                .decode("utf-8")
+                .rstrip("=")
+            )
+            assert redirect_params["code_challenge"] == expected_challenge
+
+    def test_state_with_pkce_disabled(self):
+        """
+        Test that PKCE parameters are NOT generated when GENERIC_CLIENT_USE_PKCE is false
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        test_state = "test_state_456"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "false"}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=test_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == test_state
+            assert code_verifier is None
+            assert "code_challenge" not in redirect_params
+            assert "code_challenge_method" not in redirect_params
+
+    def test_state_priority_cli_state_overrides_env_with_pkce(self):
+        """
+        Test that CLI state takes priority over env variable even when PKCE is enabled
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        cli_state = "cli_state_priority"
+        env_state = "env_state_should_not_be_used"
+        
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": env_state,
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=cli_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == cli_state  # CLI state takes priority
+            assert redirect_params["state"] != env_state
+            
+            # PKCE should still be generated
+            assert code_verifier is not None
+            assert "code_challenge" in redirect_params
+            assert "code_challenge_method" in redirect_params
+
+    def test_empty_string_state_uses_env_variable(self):
+        """
+        Test that empty string state is treated as None and uses env variable
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        env_state = "env_state_for_empty_cli"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": env_state}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state="",  # Empty string
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert - empty string is falsy, so env variable should be used
+            # Note: This tests current implementation behavior
+            # If empty string should be treated differently, implementation needs update
+            assert redirect_params["state"] == env_state
+
+    def test_multiple_calls_generate_different_uuids(self):
+        """
+        Test that multiple calls without state generate different UUIDs
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange - no state provided
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GENERIC_CLIENT_STATE", None)
+            
+            # Act
+            params1, _ = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                state=None,
+                generic_authorization_endpoint="https://auth.example.com/authorize",
+            )
+            params2, _ = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                state=None,
+                generic_authorization_endpoint="https://auth.example.com/authorize",
+            )
+
+            # Assert
+            assert params1["state"] != params2["state"]
+            assert len(params1["state"]) == 32
+            assert len(params2["state"]) == 32
 
 
 class TestPKCEFunctionality:

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { testMCPToolsListRequest } from "../components/networking";
+import { AUTH_TYPE } from "@/components/mcp_tools/types";
 
 interface MCPServerConfig {
   server_id?: string;
@@ -9,10 +10,17 @@ interface MCPServerConfig {
   auth_type?: string;
   mcp_info?: any;
   static_headers?: Record<string, string>;
+  credentials?: {
+    auth_value?: string;
+    client_id?: string;
+    client_secret?: string;
+    scopes?: string[];
+  };
 }
 
 interface UseTestMCPConnectionProps {
   accessToken: string | null;
+  oauthAccessToken?: string | null;
   formValues: Record<string, any>;
   enabled?: boolean; // Optional flag to enable/disable auto-fetching
 }
@@ -29,6 +37,7 @@ interface UseTestMCPConnectionReturn {
 
 export const useTestMCPConnection = ({
   accessToken,
+  oauthAccessToken,
   formValues,
   enabled = true,
 }: UseTestMCPConnectionProps): UseTestMCPConnectionReturn => {
@@ -38,12 +47,24 @@ export const useTestMCPConnection = ({
   const [hasShownSuccessMessage, setHasShownSuccessMessage] = useState(false);
 
   // Check if we have the minimum required fields to fetch tools
-  const canFetchTools = !!(formValues.url && formValues.transport && formValues.auth_type && accessToken);
+  const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2;
+  const canFetchTools = !!(
+    formValues.url &&
+    formValues.transport &&
+    formValues.auth_type &&
+    accessToken &&
+    (!requiresOAuthToken || oauthAccessToken)
+  );
 
   const staticHeadersKey = JSON.stringify(formValues.static_headers ?? {});
+  const credentialsKey = JSON.stringify(formValues.credentials ?? {});
 
   const fetchTools = async () => {
     if (!accessToken || !formValues.url) {
+      return;
+    }
+
+    if (requiresOAuthToken && !oauthAccessToken) {
       return;
     }
 
@@ -74,6 +95,29 @@ export const useTestMCPConnection = ({
             )
           : {} as Record<string, string>;
 
+      const credentials =
+        formValues.credentials && typeof formValues.credentials === "object"
+          ? Object.entries(formValues.credentials).reduce(
+              (acc: Record<string, any>, [key, value]) => {
+                if (value === undefined || value === null || value === "") {
+                  return acc;
+                }
+                if (key === "scopes") {
+                  if (Array.isArray(value)) {
+                    const normalizedScopes = value.filter((scope) => scope != null && scope !== "");
+                    if (normalizedScopes.length > 0) {
+                      acc[key] = normalizedScopes;
+                    }
+                  }
+                } else {
+                  acc[key] = value;
+                }
+                return acc;
+              },
+              {},
+            )
+          : undefined;
+
       const mcpServerConfig: MCPServerConfig = {
         server_id: formValues.server_id || "",
         server_name: formValues.server_name || "",
@@ -84,7 +128,11 @@ export const useTestMCPConnection = ({
         static_headers: staticHeaders,
       };
 
-      const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig);
+      if (credentials && Object.keys(credentials).length > 0) {
+        mcpServerConfig.credentials = credentials;
+      }
+
+      const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig, oauthAccessToken);
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
@@ -126,7 +174,17 @@ export const useTestMCPConnection = ({
       clearTools();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formValues.url, formValues.transport, formValues.auth_type, accessToken, enabled, canFetchTools, staticHeadersKey]);
+  }, [
+    formValues.url,
+    formValues.transport,
+    formValues.auth_type,
+    accessToken,
+    enabled,
+    oauthAccessToken,
+    canFetchTools,
+    staticHeadersKey,
+    credentialsKey,
+  ]);
 
   return {
     tools,
