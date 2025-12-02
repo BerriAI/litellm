@@ -793,14 +793,12 @@ class AsyncHTTPHandler:
         verbose_logger.debug(
             "NEW SESSION: Creating new ClientSession (no shared session provided)"
         )
-        # Build connector kwargs with proper limits to prevent memory leaks
         transport_connector_kwargs = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
             "enable_cleanup_closed": True,
             **connector_kwargs,
         }
-        # Only set limits if not unlimited (0 means unlimited in aiohttp)
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:

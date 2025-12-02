@@ -627,33 +627,23 @@ async def proxy_shutdown_event():
 
 
 async def _initialize_shared_aiohttp_session():
-    """Initialize shared aiohttp session for connection reuse.
-    
-    Configures connection pooling with limits to prevent memory leaks from
-    unbounded connection growth. The _wrap_create_connection function in aiohttp
-    can accumulate connections if limits are not set.
-    """
+    """Initialize shared aiohttp session for connection reuse with connection limits."""
     try:
         from aiohttp import ClientSession, TCPConnector
 
-        # Create connector with connection pooling settings optimized for long-lived connections
-        # Use limit_per_host to prevent unbounded connection growth per host
-        # This addresses memory leaks where _wrap_create_connection accumulates connections
         connector_kwargs = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
-            "enable_cleanup_closed": True,  # Automatically cleanup closed connections
+            "enable_cleanup_closed": True,
         }
-        # Only set limits if not unlimited (0 means unlimited in aiohttp)
-        # Default limits (300 total, 50 per host) prevent memory leaks
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
             connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
         
         connector = TCPConnector(**connector_kwargs)
-
         session = ClientSession(connector=connector)
+        
         verbose_proxy_logger.info(
             f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)}, "
             f"limit={AIOHTTP_CONNECTOR_LIMIT}, limit_per_host={AIOHTTP_CONNECTOR_LIMIT_PER_HOST})"

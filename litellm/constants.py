@@ -99,16 +99,8 @@ RUNWAYML_POLLING_TIMEOUT = int(
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
-# Aiohttp connection pooling constants
-# Default to 300 total connections, 50 per host to prevent memory leaks
+# Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
-# 
-# Performance notes:
-# - These limits prevent unbounded connection growth (memory leak fix)
-# - Connections are reused efficiently, so 50 per host supports many concurrent requests
-# - If you see connection pool exhaustion, increase these values or set to 0 (unlimited)
-# - Typical use: 50 per host is sufficient for most workloads (LLM calls are longer-lived)
-# - High-traffic scenarios: Consider 100-200 per host if you have 100+ concurrent requests per provider
 AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 300))
 AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 50))
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
