@@ -633,11 +633,14 @@ async def test_datadog_message_redaction():
 
 def test_datadog_agent_configuration():
     """
-    Test that DataDog logger correctly configures agent endpoint when DD_AGENT_HOST is set
+    Test that DataDog logger correctly configures agent endpoint when LITELLM_DD_AGENT_HOST is set.
+    
+    Note: We use LITELLM_DD_AGENT_HOST instead of DD_AGENT_HOST to avoid conflicts
+    with ddtrace which automatically sets DD_AGENT_HOST for APM tracing.
     """
     test_env = {
-        "DD_AGENT_HOST": "localhost",
-        "DD_AGENT_PORT": "10518",
+        "LITELLM_DD_AGENT_HOST": "localhost",
+        "LITELLM_DD_AGENT_PORT": "10518",
     }
     
     # Remove DD_SITE and DD_API_KEY to verify they're not required for agent mode
