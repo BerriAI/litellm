@@ -24825,6 +24825,15 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true
     },
+    "vertex_ai/chirp": {
+        "input_cost_per_character": 30e-06,
+        "litellm_provider": "vertex_ai",
+        "mode": "audio_speech",
+        "source": "https://cloud.google.com/text-to-speech/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "vertex_ai/claude-3-5-haiku": {
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
