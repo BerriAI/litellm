@@ -31,9 +31,11 @@ class VertexAIModelRoute(str, Enum):
     PARTNER_MODELS = "partner_models"
     GEMINI = "gemini"
     GEMMA = "gemma"
+    BGE = "bge"
     MODEL_GARDEN = "model_garden"
     NON_GEMINI = "non_gemini"
 
+VERTEX_AI_MODEL_ROUTES = [f"{route.value}/" for route in VertexAIModelRoute]
 
 def get_vertex_ai_model_route(
     model: str, litellm_params: Optional[dict] = None
@@ -81,7 +83,11 @@ def get_vertex_ai_model_route(
     # Check for partner models (llama, mistral, claude, etc.)
     if VertexAIPartnerModels.is_vertex_partner_model(model=model):
         return VertexAIModelRoute.PARTNER_MODELS
-
+    
+    # Check for BGE models
+    if "bge/" in model or "bge" in model.lower():
+        return VertexAIModelRoute.BGE
+    
     # Check for gemma models
     if "gemma/" in model:
         return VertexAIModelRoute.GEMMA
@@ -144,6 +150,71 @@ all_gemini_url_modes = Literal[
 ]
 
 
+def get_vertex_base_model_name(model: str) -> str:
+    """
+    Strip routing prefixes from model name for PSC/endpoint URL construction.
+    
+    Patterns like "bge/", "gemma/", "openai/" are used for internal routing but 
+    should not appear in the actual endpoint URL. Routing prefixes are derived
+    from VertexAIModelRoute enum values.
+    
+    Args:
+        model: The model name with potential prefix (e.g., "bge/123456", "gemma/gemma-3-12b-it")
+        
+    Returns:
+        str: The model name without routing prefix (e.g., "123456", "gemma-3-12b-it")
+        
+    Examples:
+        >>> get_vertex_base_model_name("bge/378943383978115072")
+        "378943383978115072"
+        
+        >>> get_vertex_base_model_name("gemma/gemma-3-12b-it")
+        "gemma-3-12b-it"
+        
+        >>> get_vertex_base_model_name("openai/gpt-oss-120b")
+        "gpt-oss-120b"
+        
+        >>> get_vertex_base_model_name("1234567890")
+        "1234567890"
+    """
+    # Derive routing prefixes from VertexAIModelRoute enum
+    # Map specific routes to their prefixes (some routes like PARTNER_MODELS, GEMINI don't have prefixes)
+    
+    
+    for route in VERTEX_AI_MODEL_ROUTES:
+        if model.startswith(route):
+            return model.replace(route, "", 1)
+    
+    return model
+
+
+def _get_embedding_url(
+    model: str,
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    vertex_api_version: Literal["v1", "v1beta1"],
+) -> Tuple[str, str]:
+    """
+    Get URL for embedding models.
+    
+    Handles special patterns:
+    - bge/endpoint_id -> strips to endpoint_id for endpoints/ routing
+    - numeric model -> routes to endpoints/
+    - regular model -> routes to publishers/google/models/
+    """
+    endpoint = "predict"
+    
+    # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
+    model = get_vertex_base_model_name(model=model)
+    
+    url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+    if model.isdigit():
+        # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
+        url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+    
+    return url, endpoint
+
+
 def _get_vertex_url(
     mode: all_gemini_url_modes,
     model: str,
@@ -156,6 +227,7 @@ def _get_vertex_url(
     endpoint: Optional[str] = None
 
     model = litellm.VertexGeminiConfig.get_model_for_vertex_ai_url(model=model)
+    
     if mode == "chat":
         ### SET RUNTIME ENDPOINT ###
         endpoint = "generateContent"
@@ -180,11 +252,12 @@ def _get_vertex_url(
             if stream is True:
                 url += "?alt=sse"
     elif mode == "embedding":
-        endpoint = "predict"
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
-        if model.isdigit():
-            # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+        return _get_embedding_url(
+            model=model,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_api_version=vertex_api_version,
+        )
     elif mode == "image_generation":
         endpoint = "predict"
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
