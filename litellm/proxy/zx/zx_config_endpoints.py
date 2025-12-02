@@ -122,10 +122,20 @@ async def create_or_get_user_key(
     tags=["ZX"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def zx_job(request: Request, start_date: str | None = None, end_date: str | None = None):
+async def zx_job(request: Request, start_date: str | None = None, end_date: str | None = None, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),):
     """
     定时任务
     """
+
+    if user_api_key_dict.user_role is None or LitellmUserRoles.PROXY_ADMIN not in user_api_key_dict.user_role:
+        return HTMLResponse(status_code=400, content="""
+<!doctype html>
+<html lang="en">
+    <body>
+        No admin access
+    </body>
+</html>
+""")
 
     from . import zx_job
     _ = await zx_job.ai_usage_to_nocobase(start_date, end_date)
