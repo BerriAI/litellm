@@ -1901,6 +1901,7 @@ async def _virtual_key_max_budget_check(
             max_budget=valid_token.max_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
+            organization_id=valid_token.org_id,
             user_email=user_email,
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
@@ -1947,6 +1948,7 @@ async def _virtual_key_soft_budget_check(
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
             team_alias=valid_token.team_alias,
+            organization_id=valid_token.org_id,
             user_email=None,
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
@@ -1985,6 +1987,7 @@ async def _team_max_budget_check(
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
                 event_group=Litellm_EntityType.TEAM,
             )
             asyncio.create_task(
@@ -2031,7 +2034,10 @@ async def _organization_max_budget_check(
             user_api_key_cache=user_api_key_cache,
         )
 
-        if org_table is not None and org_table.spend >= valid_token.organization_max_budget:
+        if (
+            org_table is not None
+            and org_table.spend >= valid_token.organization_max_budget
+        ):
             # Trigger budget alert
             call_info = CallInfo(
                 token=valid_token.token,
@@ -2040,6 +2046,7 @@ async def _organization_max_budget_check(
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
                 event_group=Litellm_EntityType.ORGANIZATION,
             )
             asyncio.create_task(
