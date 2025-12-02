@@ -73,6 +73,9 @@ bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
 )
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+    AmazonBedrockOpenAIConfig,
+)
 
 converse_config = AmazonConverseConfig()
 
@@ -401,6 +404,10 @@ class BedrockLLM(BaseAWSLLM):
             prompt = prompt_factory(
                 model=model, messages=messages, custom_llm_provider="bedrock"
             )
+        elif provider == "openai":
+            # OpenAI uses messages directly, no prompt conversion needed
+            # Return empty prompt as it won't be used
+            prompt = ""
         elif provider == "cohere":
             prompt, chat_history = cohere_message_pt(messages=messages)
         else:
@@ -578,6 +585,30 @@ class BedrockLLM(BaseAWSLLM):
                 )
             elif provider == "meta" or provider == "llama":
                 outputText = completion_response["generation"]
+            elif provider == "openai":
+                # OpenAI imported models use OpenAI Chat Completions format
+                if "choices" in completion_response and len(completion_response["choices"]) > 0:
+                    choice = completion_response["choices"][0]
+                    if "message" in choice:
+                        outputText = choice["message"].get("content")
+                    elif "text" in choice:  # fallback for completion format
+                        outputText = choice["text"]
+                    
+                    # Set finish reason
+                    if "finish_reason" in choice:
+                        model_response.choices[0].finish_reason = map_finish_reason(
+                            choice["finish_reason"]
+                        )
+                    
+                    # Set usage if available
+                    if "usage" in completion_response:
+                        usage = completion_response["usage"]
+                        _usage = litellm.Usage(
+                            prompt_tokens=usage.get("prompt_tokens", 0),
+                            completion_tokens=usage.get("completion_tokens", 0),
+                            total_tokens=usage.get("total_tokens", 0),
+                        )
+                        setattr(model_response, "usage", _usage)
             elif provider == "mistral":
                 outputText = completion_response["outputs"][0]["text"]
                 model_response.choices[0].finish_reason = completion_response[
@@ -895,6 +926,20 @@ class BedrockLLM(BaseAWSLLM):
                 ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                     inference_params[k] = v
             data = json.dumps({"prompt": prompt, **inference_params})
+        elif provider == "openai":
+            ## OpenAI imported models use OpenAI Chat Completions format (messages-based)
+            # Use AmazonBedrockOpenAIConfig for proper OpenAI transformation
+            openai_config = AmazonBedrockOpenAIConfig()
+            supported_params = openai_config.get_supported_openai_params(model=model)
+            
+            # Filter to only supported OpenAI params
+            filtered_params = {
+                k: v for k, v in inference_params.items() 
+                if k in supported_params
+            }
+            
+            # OpenAI uses messages format, not prompt
+            data = json.dumps({"messages": messages, **filtered_params})
         else:
             ## LOGGING
             logging_obj.pre_call(
