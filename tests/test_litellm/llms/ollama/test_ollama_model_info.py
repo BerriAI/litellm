@@ -101,7 +101,9 @@ class TestOllamaModelInfo:
         assert models == []
         # Ensure correct endpoint was called
         assert calls and calls[0].endswith("/api/tags")
-        assert call_headers and call_headers[0] == {'Authorization': 'Bearer test_api_key'}
+        assert call_headers and call_headers[0] == {
+            "Authorization": "Bearer test_api_key"
+        }
 
     def test_get_models_from_list_response(self, monkeypatch):
         """

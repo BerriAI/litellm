@@ -218,7 +218,6 @@ class LoggingCallbackManager:
                 callback=callback, parent_list=parent_list
             )
         elif isinstance(callback, CustomLogger):
-
             self._add_custom_logger_to_list(
                 custom_logger=callback,
                 parent_list=parent_list,

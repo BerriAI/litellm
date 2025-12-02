@@ -336,7 +336,9 @@ class TestOpenAIResponsesAPIConfig:
             )
 
             assert isinstance(result, ImageGenerationPartialImageEvent)
-            assert result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+            assert (
+                result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+            )
             assert result.partial_image_index == idx
             assert result.b64_json == chunk["b64_json"]
 

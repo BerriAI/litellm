@@ -25,11 +25,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     def is_model_gpt_5_codex_model(cls, model: str) -> bool:
         """Check if the model is specifically a GPT-5 Codex variant."""
         return "gpt-5-codex" in model
-    
+
     @classmethod
     def is_model_gpt_5_1_model(cls, model: str) -> bool:
         """Check if the model is a gpt-5.1 variant.
-        
+
         gpt-5.1 supports temperature when reasoning_effort="none",
         unlike gpt-5 which only supports temperature=1.
         """
@@ -79,13 +79,14 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
                 is_gpt_5_1 = self.is_model_gpt_5_1_model(model)
-                reasoning_effort = (
-                    non_default_params.get("reasoning_effort") 
-                    or optional_params.get("reasoning_effort")
-                )
-                
+                reasoning_effort = non_default_params.get(
+                    "reasoning_effort"
+                ) or optional_params.get("reasoning_effort")
+
                 # gpt-5.1 supports any temperature when reasoning_effort="none" (or not specified, as it defaults to "none")
-                if is_gpt_5_1 and (reasoning_effort == "none" or reasoning_effort is None):
+                if is_gpt_5_1 and (
+                    reasoning_effort == "none" or reasoning_effort is None
+                ):
                     optional_params["temperature"] = temperature_value
                 elif temperature_value == 1:
                     optional_params["temperature"] = temperature_value

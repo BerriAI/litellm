@@ -15,7 +15,6 @@ from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
 
 @patch("litellm.proxy.proxy_server.premium_user", True)
 class TestEnterpriseRouteChecks:
-
     @patch.object(EnterpriseRouteChecks, "is_management_routes_disabled")
     @patch("litellm.proxy.auth.route_checks.RouteChecks.is_management_route")
     def test_should_call_route_management_disabled(

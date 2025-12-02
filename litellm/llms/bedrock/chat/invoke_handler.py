@@ -587,19 +587,22 @@ class BedrockLLM(BaseAWSLLM):
                 outputText = completion_response["generation"]
             elif provider == "openai":
                 # OpenAI imported models use OpenAI Chat Completions format
-                if "choices" in completion_response and len(completion_response["choices"]) > 0:
+                if (
+                    "choices" in completion_response
+                    and len(completion_response["choices"]) > 0
+                ):
                     choice = completion_response["choices"][0]
                     if "message" in choice:
                         outputText = choice["message"].get("content")
                     elif "text" in choice:  # fallback for completion format
                         outputText = choice["text"]
-                    
+
                     # Set finish reason
                     if "finish_reason" in choice:
                         model_response.choices[0].finish_reason = map_finish_reason(
                             choice["finish_reason"]
                         )
-                    
+
                     # Set usage if available
                     if "usage" in completion_response:
                         usage = completion_response["usage"]
@@ -931,13 +934,12 @@ class BedrockLLM(BaseAWSLLM):
             # Use AmazonBedrockOpenAIConfig for proper OpenAI transformation
             openai_config = AmazonBedrockOpenAIConfig()
             supported_params = openai_config.get_supported_openai_params(model=model)
-            
+
             # Filter to only supported OpenAI params
             filtered_params = {
-                k: v for k, v in inference_params.items() 
-                if k in supported_params
+                k: v for k, v in inference_params.items() if k in supported_params
             }
-            
+
             # OpenAI uses messages format, not prompt
             data = json.dumps({"messages": messages, **filtered_params})
         else:
@@ -1314,9 +1316,7 @@ class AWSEventStreamDecoder:
         dict,
         Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ],
     ]:
@@ -1325,9 +1325,7 @@ class AWSEventStreamDecoder:
         provider_specific_fields: dict = {}
         thinking_blocks: Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None
 
@@ -1340,9 +1338,7 @@ class AWSEventStreamDecoder:
                     response_tool_name=_response_tool_name
                 )
                 self.tool_calls_index = (
-                    0
-                    if self.tool_calls_index is None
-                    else self.tool_calls_index + 1
+                    0 if self.tool_calls_index is None else self.tool_calls_index + 1
                 )
                 tool_use = {
                     "id": start_obj["toolUse"]["toolUseId"],
@@ -1376,9 +1372,7 @@ class AWSEventStreamDecoder:
         Optional[str],
         Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ],
     ]:
@@ -1389,9 +1383,7 @@ class AWSEventStreamDecoder:
         reasoning_content: Optional[str] = None
         thinking_blocks: Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None
 
@@ -1427,8 +1419,16 @@ class AWSEventStreamDecoder:
                 and len(thinking_blocks) > 0
                 and reasoning_content is None
             ):
-                reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
-        return text, tool_use, provider_specific_fields, reasoning_content, thinking_blocks
+                reasoning_content = (
+                    ""  # set to non-empty string to ensure consistency with Anthropic
+                )
+        return (
+            text,
+            tool_use,
+            provider_specific_fields,
+            reasoning_content,
+            thinking_blocks,
+        )
 
     def _handle_converse_stop_event(
         self, index: int
@@ -1476,9 +1476,11 @@ class AWSEventStreamDecoder:
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
                 start_obj = ContentBlockStartEvent(**chunk_data["start"])
-                tool_use, provider_specific_fields, thinking_blocks = (
-                    self._handle_converse_start_event(start_obj)
-                )
+                (
+                    tool_use,
+                    provider_specific_fields,
+                    thinking_blocks,
+                ) = self._handle_converse_start_event(start_obj)
             elif "delta" in chunk_data:
                 delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
                 (

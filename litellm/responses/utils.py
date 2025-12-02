@@ -369,22 +369,28 @@ class ResponsesAPIRequestUtils:
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
-        
+
         # Extract headers from secret_fields which contains the original request headers
         raw_headers_from_request: Optional[Dict[str, str]] = None
         if secret_fields and isinstance(secret_fields, dict):
             raw_headers_from_request = secret_fields.get("raw_headers")
-        
+
         # Extract MCP-specific headers using MCPRequestHandler methods
         mcp_auth_header: Optional[str] = None
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
         oauth2_headers: Optional[Dict[str, str]] = None
-        
+
         if raw_headers_from_request:
             headers_obj = Headers(raw_headers_from_request)
-            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
-            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
-            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
+                headers_obj
+            )
+            mcp_server_auth_headers = (
+                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            )
+            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(
+                headers_obj
+            )
 
         if tools:
             for tool in tools:
@@ -394,21 +400,35 @@ class ResponsesAPIRequestUtils:
                         # Merge tool headers into mcp_server_auth_headers
                         # Extract server-specific headers from tool.headers
                         headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj_from_tool)
+                        tool_mcp_server_auth_headers = (
+                            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                                headers_obj_from_tool
+                            )
+                        )
                         if tool_mcp_server_auth_headers:
                             if mcp_server_auth_headers is None:
                                 mcp_server_auth_headers = {}
                             # Merge the headers from tool into existing headers
-                            for server_alias, headers_dict in tool_mcp_server_auth_headers.items():
+                            for (
+                                server_alias,
+                                headers_dict,
+                            ) in tool_mcp_server_auth_headers.items():
                                 if server_alias not in mcp_server_auth_headers:
                                     mcp_server_auth_headers[server_alias] = {}
-                                mcp_server_auth_headers[server_alias].update(headers_dict)
+                                mcp_server_auth_headers[server_alias].update(
+                                    headers_dict
+                                )
                         # Also merge raw headers (non-prefixed headers from tool.headers)
                         if raw_headers_from_request is None:
                             raw_headers_from_request = {}
                         raw_headers_from_request.update(tool_headers)
-        
-        return mcp_auth_header, mcp_server_auth_headers, oauth2_headers, raw_headers_from_request
+
+        return (
+            mcp_auth_header,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers_from_request,
+        )
 
 
 class ResponseAPILoggingUtils:

@@ -13,8 +13,14 @@ class TestCloudZeroHourlyExport:
     async def test_hourly_export(self):
         spend_mock_data = pl.LazyFrame(
             {
-                "id": ["09327a4f-fa99-4613-86c5-23efb03640b1", "c7bcec65-0d76-4126-93b6-50fea1cdd2b"],
-                "user_id": ["069e8205-8f55-44fd-870b-0c036cab600c", "069e8205-8f55-44fd-870b-0c036cab600c"],
+                "id": [
+                    "09327a4f-fa99-4613-86c5-23efb03640b1",
+                    "c7bcec65-0d76-4126-93b6-50fea1cdd2b",
+                ],
+                "user_id": [
+                    "069e8205-8f55-44fd-870b-0c036cab600c",
+                    "069e8205-8f55-44fd-870b-0c036cab600c",
+                ],
                 "date": ["2025-11-01", "2025-11-01"],
                 "api_key": [
                     "c1465c9a821f420927b3d81972323fb516745bc93a4a54ceca0ce6ddf6100c39",
@@ -46,12 +52,16 @@ class TestCloudZeroHourlyExport:
             {
                 "team_id": ["a3d6b0bb-098f-4260-81d6-fabae695b622"],
                 "key_alias": ["key_1"],
-                "token": ["c1465c9a821f420927b3d81972323fb516745bc93a4a54ceca0ce6ddf6100c39"],
+                "token": [
+                    "c1465c9a821f420927b3d81972323fb516745bc93a4a54ceca0ce6ddf6100c39"
+                ],
             }
         )
 
         with (
-            patch.object(LiteLLMDatabase, "_ensure_prisma_client") as mock_prisma_client_getter,
+            patch.object(
+                LiteLLMDatabase, "_ensure_prisma_client"
+            ) as mock_prisma_client_getter,
             patch.object(CloudZeroStreamer, "send_batched") as send_batched_mock,
             patch("litellm.integrations.cloudzero.cloudzero.datetime") as mock_datetime,
         ):

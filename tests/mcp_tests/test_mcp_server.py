@@ -104,9 +104,9 @@ async def test_mcp_server_manager_https_server():
         assert tools[0].name == f"{expected_prefix}-gmail_send_email"
 
         # Manually set up the tool mapping for the call_tool test
-        mcp_server_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
-            expected_prefix
-        )
+        mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            "gmail_send_email"
+        ] = expected_prefix
         mcp_server_manager.tool_name_to_mcp_server_name_mapping[
             f"{expected_prefix}-gmail_send_email"
         ] = expected_prefix
@@ -274,9 +274,9 @@ async def test_mcp_http_transport_call_tool_mock():
         )
 
         # Manually set up tool mapping (normally done by list_tools)
-        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
-            "test_http_server"
-        )
+        test_manager.tool_name_to_mcp_server_name_mapping[
+            "gmail_send_email"
+        ] = "test_http_server"
 
         # Call the tool
         result = await test_manager.call_tool(
@@ -340,9 +340,9 @@ async def test_mcp_http_transport_call_tool_error_mock():
         )
 
         # Manually set up tool mapping
-        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
-            "test_http_server"
-        )
+        test_manager.tool_name_to_mcp_server_name_mapping[
+            "gmail_send_email"
+        ] = "test_http_server"
 
         # Call the tool with invalid data
         result = await test_manager.call_tool(
@@ -789,7 +789,11 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id"]
         )
-        mock_manager.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else mock_server_2
+        mock_manager.get_mcp_server_by_id = (
+            lambda server_id: mock_server_1
+            if server_id == "server1_id"
+            else mock_server_2
+        )
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
 
         with patch(
@@ -811,7 +815,11 @@ async def test_get_tools_from_mcp_servers():
             mock_manager_2.get_allowed_mcp_servers = AsyncMock(
                 return_value=["server1_id", "server2_id"]
             )
-            mock_manager_2.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else mock_server_2
+            mock_manager_2.get_mcp_server_by_id = (
+                lambda server_id: mock_server_1
+                if server_id == "server1_id"
+                else mock_server_2
+            )
             mock_manager_2._get_tools_from_server = AsyncMock(
                 side_effect=lambda server, mcp_auth_header=None, extra_headers=None, add_prefix=False: (
                     [mock_tool_1] if server.server_id == "server1_id" else [mock_tool_2]
@@ -839,7 +847,11 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id", "server3_id"]
         )
-        mock_manager.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else (mock_server_2 if server_id == "server2_id" else mock_server_3)
+        mock_manager.get_mcp_server_by_id = (
+            lambda server_id: mock_server_1
+            if server_id == "server1_id"
+            else (mock_server_2 if server_id == "server2_id" else mock_server_3)
+        )
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
 
         with patch(
@@ -982,15 +994,15 @@ async def test_mcp_server_manager_access_groups_from_config():
     # Should find config_server for group-a, both for group-b, other_server for group-c
     import asyncio
 
-    server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-a"
-    ])
-    server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-b"
-    ])
-    server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-c"
-    ])
+    server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+        ["group-a"]
+    )
+    server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+        ["group-b"]
+    )
+    server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+        ["group-c"]
+    )
     assert any(config_server.server_id == sid for sid in server_ids_a)
     assert set(server_ids_b) == set(
         [

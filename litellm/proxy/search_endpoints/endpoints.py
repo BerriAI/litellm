@@ -126,28 +126,31 @@ async def search(
     # Read request body
     body = await request.body()
     data = orjson.loads(body)
-    
+
     # If search_tool_name is provided in URL path, use it (takes precedence over body)
     if search_tool_name is not None:
         data["search_tool_name"] = search_tool_name
 
     if "search_tool_name" in data and data["search_tool_name"]:
         data["model"] = data["search_tool_name"]
-        
+
         if llm_router is not None and hasattr(llm_router, "search_tools"):
             search_tool_name_value = data["search_tool_name"]
             matching_tools = [
-                tool for tool in llm_router.search_tools
+                tool
+                for tool in llm_router.search_tools
                 if tool.get("search_tool_name") == search_tool_name_value
             ]
-            
+
             if matching_tools:
                 search_tool = matching_tools[0]
-                search_provider = search_tool.get("litellm_params", {}).get("search_provider")
-                
+                search_provider = search_tool.get("litellm_params", {}).get(
+                    "search_provider"
+                )
+
                 if search_provider:
                     data["custom_llm_provider"] = search_provider
-                
+
                 if "metadata" not in data:
                     data["metadata"] = {}
                 data["metadata"]["model_group"] = search_tool_name_value
@@ -180,4 +183,3 @@ async def search(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-

@@ -35,7 +35,7 @@ def prisma_client():
     database_url = os.getenv("DATABASE_URL")
     if database_url is None:
         pytest.skip("DATABASE_URL not set")
-    
+
     modified_url = append_query_params(database_url, params)
     os.environ["DATABASE_URL"] = modified_url
 
@@ -46,9 +46,7 @@ def prisma_client():
         database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
     )
 
-    proxy_server.litellm_proxy_budget_name = (
-        f"litellm-proxy-budget-{time.time()}"
-    )
+    proxy_server.litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     proxy_server.user_custom_key_generate = None
 
     return prisma_client
@@ -58,7 +56,7 @@ def prisma_client():
 async def test_search_api_logging_and_cost_tracking(prisma_client):
     """
     Test that search API requests are logged with correct fields and cost tracking.
-    
+
     Verifies:
     1. Search request creates a spend log entry
     2. call_type is set to "asearch"
@@ -74,7 +72,7 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
     # Setup router with search tool
     search_tool_name = "tavily-search"
     search_provider = "tavily"
-    
+
     router = Router(model_list=[])
     router.search_tools = [
         {
@@ -84,15 +82,17 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
             },
         }
     ]
-    
+
     setattr(litellm.proxy.proxy_server, "llm_router", router)
 
     # Generate a test API key
-    from litellm.proxy.management_endpoints.key_management_endpoints import generate_key_fn
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
     from litellm.proxy._types import GenerateKeyRequest
 
     from litellm.proxy._types import LitellmUserRoles
-    
+
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
         api_key="sk-1234",
@@ -112,7 +112,7 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
         url="https://example.com",
         snippet="Test snippet",
     )
-    
+
     mock_search_response = SearchResponse(
         object="search",
         results=[mock_search_result],
@@ -129,7 +129,7 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
 
         # Call the track_cost_callback directly to simulate what happens after a search
         proxy_db_logger = _ProxyDBLogger()
-        
+
         # Simulate the kwargs that would be passed from the search endpoint
         request_id = "search_test_123"
         kwargs = {
@@ -151,7 +151,7 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
             },
             "response_cost": 0.008,  # Mock cost for tavily search
         }
-        
+
         # Set id on the response object
         mock_search_response.id = request_id
 
@@ -191,7 +191,10 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
         # API key should be hashed (either the generated key or the one from metadata)
         assert spend_log.api_key != ""  # Should be populated
         # Note: user field may be empty if not set in the request, but user_id should be in metadata
-        assert spend_log.metadata.get("user_api_key_user_id") == user_id or spend_log.user == user_id
+        assert (
+            spend_log.metadata.get("user_api_key_user_id") == user_id
+            or spend_log.user == user_id
+        )
 
         print(f"✅ Search API logging test passed!")
         print(f"   - call_type: {spend_log.call_type}")
@@ -199,4 +202,3 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
         print(f"   - custom_llm_provider: {spend_log.custom_llm_provider}")
         print(f"   - model_group: {spend_log.model_group}")
         print(f"   - spend: {spend_log.spend}")
-

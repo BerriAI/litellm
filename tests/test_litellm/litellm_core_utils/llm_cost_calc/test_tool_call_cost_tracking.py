@@ -185,9 +185,8 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
                 finish_reason="stop",
                 index=0,
                 message=Message(
-                    content="Test response with grounding",
-                    role="assistant"
-                )
+                    content="Test response with grounding", role="assistant"
+                ),
             )
         ],
         created=1234567890,
@@ -202,9 +201,8 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
         completion_tokens=100,
         total_tokens=111,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=11,
-            web_search_requests=1  # This should trigger grounding cost
-        )
+            text_tokens=11, web_search_requests=1  # This should trigger grounding cost
+        ),
     )
     response.usage = usage
 
@@ -228,9 +226,9 @@ def test_azure_assistant_features_integrated_cost_tracking():
     # Force use of local model cost map for CI/CD consistency
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    
+
     model = "azure/gpt-4o"
-    
+
     # Test with multiple Azure assistant features
     standard_built_in_tools_params = StandardBuiltInToolsParams(
         vector_store_usage={"storage_gb": 1.0, "days": 10},
@@ -245,10 +243,10 @@ def test_azure_assistant_features_integrated_cost_tracking():
         custom_llm_provider="azure",
         standard_built_in_tools_params=standard_built_in_tools_params,
     )
-    
+
     # Should calculate costs for:
     # - Vector store: 1.0 * 10 * 0.1 = $1.00
-    # - Computer use: (1000/1000 * 3.0) + (500/1000 * 12.0) = $9.00  
+    # - Computer use: (1000/1000 * 3.0) + (500/1000 * 12.0) = $9.00
     # - Code interpreter: 2 * 0.03 = $0.06
     # Total: $10.06
     expected_cost = 1.0 + 9.0 + 0.06

@@ -28,7 +28,6 @@ async def mock_request(*args, **kwargs):
 
 
 def remove_rerank_route(app):
-
     for route in app.routes:
         if route.path == "/v1/rerank" and "POST" in route.methods:
             app.routes.remove(route)
@@ -209,7 +208,9 @@ async def test_pass_through_endpoint_rpm_limit(
     mock_api_keys = [f"sk-test-{uuid.uuid4().hex}" for _ in range(num_users)]
 
     for mock_api_key in mock_api_keys:
-        cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
+        cache_value = UserAPIKeyAuth(
+            token=hash_token(mock_api_key), rpm_limit=rpm_limit
+        )
         user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
 
     _json_data = {
@@ -246,8 +247,12 @@ async def test_pass_through_endpoint_rpm_limit(
         first_user_responses = responses[requests_to_make:]
         second_user_responses = responses[:requests_to_make]
 
-        first_user_status_codes = sorted([response.status_code for response in first_user_responses])
-        second_user_status_codes = sorted([response.status_code for response in second_user_responses])
+        first_user_status_codes = sorted(
+            [response.status_code for response in first_user_responses]
+        )
+        second_user_status_codes = sorted(
+            [response.status_code for response in second_user_responses]
+        )
 
         expected_status_codes.sort()
         assert first_user_status_codes == expected_status_codes
@@ -309,7 +314,9 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
     mock_api_keys = [f"sk-test-{uuid.uuid4().hex}" for _ in range(2)]
 
     for mock_api_key in mock_api_keys:
-        cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
+        cache_value = UserAPIKeyAuth(
+            token=hash_token(mock_api_key), rpm_limit=rpm_limit
+        )
         user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
 
     _json_data = {
@@ -342,8 +349,12 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
         first_user_responses.append(first_user_response)
         second_user_responses.append(second_user_response)
 
-    first_user_status_codes = sorted([response.status_code for response in first_user_responses])
-    second_user_status_codes = sorted([response.status_code for response in second_user_responses])
+    first_user_status_codes = sorted(
+        [response.status_code for response in first_user_responses]
+    )
+    second_user_status_codes = sorted(
+        [response.status_code for response in second_user_responses]
+    )
 
     expected_status_codes.sort()
     assert first_user_status_codes == expected_status_codes
@@ -379,7 +390,6 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
     )
 
     try:
-
         mock_api_key = "sk-my-test-key"
         cache_value = UserAPIKeyAuth(
             token=hash_token(mock_api_key), rpm_limit=rpm_limit
@@ -478,7 +488,6 @@ async def test_pass_through_endpoint_bing(client, monkeypatch):
     captured_requests = []
 
     async def mock_bing_request(*args, **kwargs):
-
         captured_requests.append((args, kwargs))
         mock_response = httpx.Response(
             200,

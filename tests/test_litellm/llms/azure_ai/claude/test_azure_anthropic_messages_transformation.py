@@ -59,7 +59,9 @@ class TestAzureAnthropicMessagesConfig:
             assert result["x-api-key"] == "test-api-key"
             assert "api-key" not in result
 
-    def test_validate_anthropic_messages_environment_converts_api_key_to_x_api_key(self):
+    def test_validate_anthropic_messages_environment_converts_api_key_to_x_api_key(
+        self,
+    ):
         """Test that api-key header is converted to x-api-key"""
         config = AzureAnthropicMessagesConfig()
         headers = {}
@@ -231,11 +233,10 @@ class TestAzureAnthropicMessagesConfig:
         config = AzureAnthropicMessagesConfig()
         model = "claude-sonnet-4-5"
         params = config.get_supported_anthropic_messages_params(model)
-        
+
         assert "messages" in params
         assert "model" in params
         assert "max_tokens" in params
         assert "temperature" in params
         assert "tools" in params
         assert "tool_choice" in params
-

@@ -63,9 +63,9 @@ class RedisUpdateBuffer:
         """
         from litellm.proxy.proxy_server import general_settings
 
-        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
-            general_settings.get("use_redis_transaction_buffer", False)
-        )
+        _use_redis_transaction_buffer: Optional[
+            Union[bool, str]
+        ] = general_settings.get("use_redis_transaction_buffer", False)
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
         if _use_redis_transaction_buffer is None:
@@ -343,7 +343,7 @@ class RedisUpdateBuffer:
 
     async def get_all_daily_org_spend_update_transactions_from_redis_buffer(
         self,
-    ) -> Optional[Dict[str, DailyOrganizationSpendTransaction]]: 
+    ) -> Optional[Dict[str, DailyOrganizationSpendTransaction]]:
         """
         Gets all the daily organization spend update transactions from Redis
         """
@@ -359,7 +359,7 @@ class RedisUpdateBuffer:
             json.loads(transaction) for transaction in list_of_transactions
         ]
         return cast(
-            Dict[str, DailyOrganizationSpendTransaction], 
+            Dict[str, DailyOrganizationSpendTransaction],
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),

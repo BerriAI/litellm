@@ -108,7 +108,11 @@ def test_openai_embedding_3():
     "model, api_base, api_key",
     [
         # ("azure/text-embedding-ada-002", None, None),
-        ("together_ai/BAAI/bge-base-en-v1.5", None, None),  # Updated to current Together AI embedding model
+        (
+            "together_ai/BAAI/bge-base-en-v1.5",
+            None,
+            None,
+        ),  # Updated to current Together AI embedding model
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -366,7 +370,6 @@ def _openai_mock_response(*args, **kwargs):
 
 
 def test_openai_azure_embedding_optional_arg():
-
     with patch.object(
         openai.resources.embeddings.Embeddings,
         "create",
@@ -381,11 +384,11 @@ def test_openai_azure_embedding_optional_arg():
         )
 
         mock_client.assert_called_once_with(
-            model="test", 
-            input=["test"], 
-            extra_body={"azure_ad_token": "test"}, 
-            timeout=600, 
-            extra_headers={"X-Stainless-Raw-Response": "true"}
+            model="test",
+            input=["test"],
+            extra_body={"azure_ad_token": "test"},
+            timeout=600,
+            extra_headers={"X-Stainless-Raw-Response": "true"},
         )
         # Verify azure_ad_token is passed in extra_body, not as a direct parameter
         assert "azure_ad_token" not in mock_client.call_args.kwargs
@@ -839,7 +842,7 @@ def test_watsonx_embeddings(monkeypatch):
     monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
 
     client = HTTPHandler()
-    
+
     # Track the actual request made
     captured_request = {}
 
@@ -848,7 +851,7 @@ def test_watsonx_embeddings(monkeypatch):
         captured_request["url"] = url
         captured_request["headers"] = kwargs.get("headers", {})
         captured_request["data"] = kwargs.get("data")
-        
+
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
@@ -871,10 +874,12 @@ def test_watsonx_embeddings(monkeypatch):
 
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
-        
+
         # Verify the request was made correctly
         assert "Authorization" in captured_request["headers"]
-        assert captured_request["headers"]["Authorization"] == "Bearer mock-watsonx-token"
+        assert (
+            captured_request["headers"]["Authorization"] == "Bearer mock-watsonx-token"
+        )
         assert "us-south.ml.cloud.ibm.com" in captured_request["url"]
     except litellm.RateLimitError as e:
         pass
@@ -895,7 +900,6 @@ async def test_watsonx_aembeddings(monkeypatch):
     client = AsyncHTTPHandler()
 
     def mock_async_client(*args, **kwargs):
-
         mocked_client = MagicMock()
 
         async def mock_send(request, *args, stream: bool = False, **kwags):
@@ -1192,7 +1196,6 @@ def test_cohere_img_embeddings(input, input_type):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_embedding_with_extra_headers(sync_mode):
-
     input = ["hello world"]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
@@ -1284,9 +1287,7 @@ def test_jina_ai_img_embeddings(input_data, expected_payload_input):
 
         # Call the function we want to test
         try:
-            litellm.embedding(
-                model="jina_ai/jina-embeddings-v4", input=input_data
-            )
+            litellm.embedding(model="jina_ai/jina-embeddings-v4", input=input_data)
         except Exception as e:
             pytest.fail(
                 f"litellm.embedding call failed with an unexpected exception: {e}"

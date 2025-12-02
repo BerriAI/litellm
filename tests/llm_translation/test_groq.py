@@ -12,6 +12,7 @@ import pytest
 from base_llm_unit_tests import BaseLLMChatTest
 from litellm.llms.groq.chat.transformation import GroqChatConfig
 
+
 class TestGroq(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {
@@ -25,7 +26,10 @@ class TestGroq(BaseLLMChatTest):
     def test_tool_call_with_empty_enum_property(self):
         pass
 
-    @pytest.mark.parametrize("model", ["groq/qwen/qwen3-32b", "groq/openai/gpt-oss-20b", "groq/openai/gpt-oss-120b"])
+    @pytest.mark.parametrize(
+        "model",
+        ["groq/qwen/qwen3-32b", "groq/openai/gpt-oss-20b", "groq/openai/gpt-oss-120b"],
+    )
     def test_reasoning_effort_in_supported_params(self, model):
         """Test that reasoning_effort is in the list of supported parameters for Groq"""
         supported_params = GroqChatConfig().get_supported_openai_params(model=model)

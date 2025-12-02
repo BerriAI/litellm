@@ -1840,11 +1840,13 @@ async def test_aasync_call_with_key_over_model_budget(
         # Manually trigger the budget limiter callback to avoid event loop issues with logging worker
         # This ensures the spend is tracked immediately without relying on async background tasks
         import time
-        
+
         # Create a mock kwargs object that the callback expects (StandardLoggingPayload is a TypedDict, so use dict)
         mock_kwargs = {
             "standard_logging_object": {
-                "response_cost": getattr(response, "_hidden_params", {}).get("response_cost", 0.0001),  # Use actual cost or small fallback
+                "response_cost": getattr(response, "_hidden_params", {}).get(
+                    "response_cost", 0.0001
+                ),  # Use actual cost or small fallback
                 "model": request_model,
                 "metadata": {
                     "user_api_key_hash": hash_token(generated_key),
@@ -1857,7 +1859,7 @@ async def test_aasync_call_with_key_over_model_budget(
                 }
             },
         }
-        
+
         # Call the budget limiter callback directly to ensure spend is recorded
         await model_max_budget_limiter.async_log_success_event(
             kwargs=mock_kwargs,
@@ -1865,7 +1867,7 @@ async def test_aasync_call_with_key_over_model_budget(
             start_time=time.time(),
             end_time=time.time(),
         )
-        
+
         # Small delay to ensure cache write completes
         await asyncio.sleep(0.5)
 
@@ -1887,7 +1889,7 @@ async def test_aasync_call_with_key_over_model_budget(
             should_pass is False
         ), f"This should have failed!. They key crossed it's budget for model={request_model}. {e}"
         traceback.print_exc()
-        
+
         # Handle both ProxyException and other exceptions (like RuntimeError from event loop)
         if isinstance(e, ProxyException):
             error_detail = e.message
@@ -1899,7 +1901,10 @@ async def test_aasync_call_with_key_over_model_budget(
             error_detail = str(e)
             # If it's an event loop error, the test should still be considered as passing
             # since the budget check likely happened before the event loop issue
-            if "event loop" in error_detail.lower() or "RuntimeError" in type(e).__name__:
+            if (
+                "event loop" in error_detail.lower()
+                or "RuntimeError" in type(e).__name__
+            ):
                 print(f"Test passed with event loop cleanup error: {error_detail}")
             else:
                 # Re-raise if it's an unexpected exception
@@ -2115,10 +2120,7 @@ async def test_view_spend_per_key(prisma_client):
     await litellm.proxy.proxy_server.prisma_client.connect()
     try:
         # First create a key to ensure there's data to query
-        request = GenerateKeyRequest(
-            models=["gpt-3.5-turbo"],
-            max_budget=100
-        )
+        request = GenerateKeyRequest(models=["gpt-3.5-turbo"], max_budget=100)
         key = await generate_key_fn(
             request,
             user_api_key_dict=UserAPIKeyAuth(
@@ -2128,11 +2130,11 @@ async def test_view_spend_per_key(prisma_client):
             ),
         )
         print(f"Created test key: {key.key}")
-        
+
         # Now query spend
         key_by_spend = await spend_key_fn()
         assert type(key_by_spend) == list
-        
+
         # The list might be empty if no spend has been recorded yet - that's okay
         if len(key_by_spend) > 0:
             first_key = key_by_spend[0]
@@ -2144,7 +2146,9 @@ async def test_view_spend_per_key(prisma_client):
         print(f"Got Exception: {e}")
         # If it's a 400 error with empty message, it might be an empty database - that's okay
         error_str = str(e)
-        if "400" in error_str and ("error" in error_str.lower() or not error_str.strip()):
+        if "400" in error_str and (
+            "error" in error_str.lower() or not error_str.strip()
+        ):
             print("Empty database or no spend data - test passes")
         else:
             pytest.fail(f"Got unexpected exception {e}")
@@ -3779,9 +3783,15 @@ async def test_user_api_key_auth_db_unavailable_not_allowed():
 
 
 @pytest.mark.asyncio
-@mock.patch("litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_write_secret")
-@mock.patch("litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_read_secret")
-@mock.patch("litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_delete_secret")
+@mock.patch(
+    "litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_write_secret"
+)
+@mock.patch(
+    "litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_read_secret"
+)
+@mock.patch(
+    "litellm.secret_managers.aws_secret_manager_v2.AWSSecretsManagerV2.async_delete_secret"
+)
 async def test_key_generate_with_secret_manager_call(
     mock_delete_secret, mock_read_secret, mock_write_secret, prisma_client
 ):
@@ -3829,10 +3839,10 @@ async def test_key_generate_with_secret_manager_call(
     spend = 100
     max_budget = 400
     models = ["fake-openai-endpoint"]
-    
+
     # Mock write_secret to return success
     mock_write_secret.return_value = None
-    
+
     new_key = await generate_key_fn(
         data=GenerateKeyRequest(
             key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
@@ -3864,7 +3874,7 @@ async def test_key_generate_with_secret_manager_call(
 
     # Mock delete_secret to return success
     mock_delete_secret.return_value = None
-    
+
     # delete the key
     await delete_key_fn(
         data=KeyRequest(keys=[generated_key]),

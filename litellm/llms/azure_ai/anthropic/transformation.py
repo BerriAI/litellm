@@ -50,12 +50,12 @@ class AzureAnthropicConfig(AnthropicConfig):
             # Set api_key if provided and not already set
             if api_key and not litellm_params_obj.api_key:
                 litellm_params_obj.api_key = api_key
-        
+
         # Use Azure authentication logic
         headers = BaseAzureLLM._base_validate_azure_environment(
             headers=headers, litellm_params=litellm_params_obj
         )
-        
+
         # Azure Anthropic uses x-api-key header (not api-key)
         # Convert api-key to x-api-key if present
         if "api-key" in headers and "x-api-key" not in headers:
@@ -114,9 +114,8 @@ class AzureAnthropicConfig(AnthropicConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Remove extra_body if present (Azure Anthropic doesn't support it)
         data.pop("extra_body", None)
-        
-        return data
 
+        return data

@@ -276,9 +276,7 @@ class TestVertexAIImagenImageGenerationConfig:
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "predictions": [
-                {"bytesBase64Encoded": "base64_encoded_image_data"}
-            ]
+            "predictions": [{"bytesBase64Encoded": "base64_encoded_image_data"}]
         }
         mock_response.headers = {}
 
@@ -355,9 +353,7 @@ class TestGetVertexAIImageGenerationConfig:
         config = get_vertex_ai_image_generation_config("imagen-4.0-generate-001")
         assert isinstance(config, VertexAIImagenImageGenerationConfig)
 
-        config = get_vertex_ai_image_generation_config(
-            "vertex_ai/imagegeneration@006"
-        )
+        config = get_vertex_ai_image_generation_config("vertex_ai/imagegeneration@006")
         assert isinstance(config, VertexAIImagenImageGenerationConfig)
 
     def test_get_non_gemini_model_config(self):
@@ -450,4 +446,3 @@ class TestVertexAIImageGenerationIntegration:
         assert "us-central1" in url
         assert "imagegeneration@006" in url
         assert "predict" in url
-

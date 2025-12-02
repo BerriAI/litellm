@@ -157,7 +157,7 @@ async def test_update_daily_spend_sorting():
     upsert_calls = []
     for i in range(50):
         daily_spend_transactions[f"test_key_{i}"] = {
-            "user_id": f"user{60-i}", # user60 ... user11, reverse order
+            "user_id": f"user{60-i}",  # user60 ... user11, reverse order
             "date": "2024-01-01",
             "api_key": "test-api-key",
             "model": "gpt-4",
@@ -169,43 +169,45 @@ async def test_update_daily_spend_sorting():
             "successful_requests": 1,
             "failed_requests": 0,
         }
-        upsert_calls.append(call(
-            where={
-                "user_id_date_api_key_model_custom_llm_provider": {
-                    "user_id": f"user{i+11}", # user11 ... user60, sorted order
-                    "date": "2024-01-01",
-                    "api_key": "test-api-key",
-                    "model": "gpt-4",
-                    "custom_llm_provider": "openai",
-                    "mcp_namespaced_tool_name": "",
-                }
-            },
-            data={
-                "create": {
-                    "user_id": f"user{i+11}",
-                    "date": "2024-01-01",
-                    "api_key": "test-api-key",
-                    "model": "gpt-4",
-                    "model_group": None,
-                    "mcp_namespaced_tool_name": "",
-                    "custom_llm_provider": "openai",
-                    "prompt_tokens": 10,
-                    "completion_tokens": 20,
-                    "spend": 0.1,
-                    "api_requests": 1,
-                    "successful_requests": 1,
-                    "failed_requests": 0,
+        upsert_calls.append(
+            call(
+                where={
+                    "user_id_date_api_key_model_custom_llm_provider": {
+                        "user_id": f"user{i+11}",  # user11 ... user60, sorted order
+                        "date": "2024-01-01",
+                        "api_key": "test-api-key",
+                        "model": "gpt-4",
+                        "custom_llm_provider": "openai",
+                        "mcp_namespaced_tool_name": "",
+                    }
                 },
-                "update": {
-                    "prompt_tokens": {"increment": 10},
-                    "completion_tokens": {"increment": 20},
-                    "spend": {"increment": 0.1},
-                    "api_requests": {"increment": 1},
-                    "successful_requests": {"increment": 1},
-                    "failed_requests": {"increment": 0},
+                data={
+                    "create": {
+                        "user_id": f"user{i+11}",
+                        "date": "2024-01-01",
+                        "api_key": "test-api-key",
+                        "model": "gpt-4",
+                        "model_group": None,
+                        "mcp_namespaced_tool_name": "",
+                        "custom_llm_provider": "openai",
+                        "prompt_tokens": 10,
+                        "completion_tokens": 20,
+                        "spend": 0.1,
+                        "api_requests": 1,
+                        "successful_requests": 1,
+                        "failed_requests": 0,
+                    },
+                    "update": {
+                        "prompt_tokens": {"increment": 10},
+                        "completion_tokens": {"increment": 20},
+                        "spend": {"increment": 0.1},
+                        "api_requests": {"increment": 1},
+                        "successful_requests": {"increment": 1},
+                        "failed_requests": {"increment": 0},
+                    },
                 },
-            },
-        ))
+            )
+        )
 
     # Call the method
     await DBSpendUpdateWriter._update_daily_spend(
@@ -227,9 +229,9 @@ async def test_update_daily_spend_sorting():
 async def test_update_daily_spend_with_none_values_in_sorting_fields():
     """
     Test that _update_daily_spend handles None values in sorting fields correctly.
-    
+
     This test ensures that when fields like date, api_key, model, or custom_llm_provider
-    are None, the sorting doesn't crash with TypeError: '<' not supported between 
+    are None, the sorting doesn't crash with TypeError: '<' not supported between
     instances of 'NoneType' and 'str'.
     """
     # Setup
@@ -447,6 +449,7 @@ async def test_update_tag_db_without_prisma_client():
 
     assert writer.spend_update_queue.add_update.call_count == 0
 
+
 @pytest.mark.asyncio
 async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_id():
     """
@@ -456,7 +459,7 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
     writer = DBSpendUpdateWriter()
     mock_prisma = MagicMock()
     mock_prisma.get_request_status = MagicMock(return_value="success")
-    
+
     request_id = "test-request-id-123"
     payload = {
         "request_id": request_id,
@@ -484,13 +487,15 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
 
     # Should be called twice (once for each tag)
     assert writer.daily_tag_spend_update_queue.add_update.call_count == 2
-    
+
     # Check that request_id is included in both transactions
     for call in writer.daily_tag_spend_update_queue.add_update.call_args_list:
         transaction_dict = call[1]["update"]
         # Each transaction should have one key with the format tag_date_api_key_model_provider
         for key, transaction in transaction_dict.items():
-            assert transaction["request_id"] == request_id, f"request_id should be {request_id} but got {transaction.get('request_id')}"
+            assert (
+                transaction["request_id"] == request_id
+            ), f"request_id should be {request_id} but got {transaction.get('request_id')}"
 
 
 @pytest.mark.asyncio

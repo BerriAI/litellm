@@ -476,7 +476,6 @@ class TestListMCPServers:
                     assert server.alias == "Allowed Zapier MCP"
                     assert server.url == "https://actions.zapier.com/mcp/sse"
 
-
     @pytest.mark.asyncio
     async def test_fetch_single_mcp_server_redacts_credentials(self):
         mock_server = generate_mock_mcp_server_db_record(

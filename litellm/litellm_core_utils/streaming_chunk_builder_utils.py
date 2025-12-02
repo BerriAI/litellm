@@ -18,7 +18,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     Usage,
-    ServerToolUse
+    ServerToolUse,
 )
 from litellm.utils import print_verbose, token_counter
 
@@ -117,9 +117,9 @@ class ChunkProcessor:
         self, tool_call_chunks: List[Dict[str, Any]]
     ) -> List[ChatCompletionMessageToolCall]:
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
-        tool_call_map: Dict[int, Dict[str, Any]] = (
-            {}
-        )  # Map to store tool calls by index
+        tool_call_map: Dict[
+            int, Dict[str, Any]
+        ] = {}  # Map to store tool calls by index
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
@@ -158,14 +158,21 @@ class ChunkProcessor:
                             tool_call_map[index]["arguments"].append(
                                 tool_call.function.arguments
                             )
-                    
+
                     # Preserve provider_specific_fields from streaming chunks
                     provider_fields = None
-                    if hasattr(tool_call, "provider_specific_fields") and tool_call.provider_specific_fields:
+                    if (
+                        hasattr(tool_call, "provider_specific_fields")
+                        and tool_call.provider_specific_fields
+                    ):
                         provider_fields = tool_call.provider_specific_fields
-                    elif hasattr(tool_call, "function") and hasattr(tool_call.function, "provider_specific_fields") and tool_call.function.provider_specific_fields:
+                    elif (
+                        hasattr(tool_call, "function")
+                        and hasattr(tool_call.function, "provider_specific_fields")
+                        and tool_call.function.provider_specific_fields
+                    ):
                         provider_fields = tool_call.function.provider_specific_fields
-                    
+
                     if provider_fields:
                         # Merge provider_specific_fields if multiple chunks have them
                         if tool_call_map[index]["provider_specific_fields"] is None:
@@ -180,24 +187,26 @@ class ChunkProcessor:
             tool_call_data = tool_call_map[index]
             if tool_call_data["id"] and tool_call_data["name"]:
                 combined_arguments = "".join(tool_call_data["arguments"]) or "{}"
-                
+
                 # Build function - provider_specific_fields should be on tool_call level, not function level
                 function = Function(
                     arguments=combined_arguments,
                     name=tool_call_data["name"],
                 )
-                
+
                 # Prepare params for ChatCompletionMessageToolCall
                 tool_call_params = {
                     "id": tool_call_data["id"],
                     "function": function,
                     "type": tool_call_data["type"] or "function",
                 }
-                
+
                 # Add provider_specific_fields if present (for thought signatures in Gemini 3)
                 if tool_call_data.get("provider_specific_fields"):
-                    tool_call_params["provider_specific_fields"] = tool_call_data["provider_specific_fields"]
-                
+                    tool_call_params["provider_specific_fields"] = tool_call_data[
+                        "provider_specific_fields"
+                    ]
+
                 tool_call = ChatCompletionMessageToolCall(**tool_call_params)
                 tool_calls_list.append(tool_call)
 
@@ -419,7 +428,7 @@ class ChunkProcessor:
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
-        
+
         server_tool_use: Optional[ServerToolUse] = None
         web_search_requests: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
@@ -464,7 +473,10 @@ class ChunkProcessor:
                     completion_tokens_details = usage_chunk_dict[
                         "completion_tokens_details"
                     ]
-                if hasattr(usage_chunk, 'server_tool_use') and usage_chunk.server_tool_use is not None:
+                if (
+                    hasattr(usage_chunk, "server_tool_use")
+                    and usage_chunk.server_tool_use is not None
+                ):
                     server_tool_use = usage_chunk.server_tool_use
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
@@ -524,12 +536,12 @@ class ChunkProcessor:
         web_search_requests: Optional[int] = calculated_usage_per_chunk[
             "web_search_requests"
         ]
-        completion_tokens_details: Optional[CompletionTokensDetails] = (
-            calculated_usage_per_chunk["completion_tokens_details"]
-        )
-        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = (
-            calculated_usage_per_chunk["prompt_tokens_details"]
-        )
+        completion_tokens_details: Optional[
+            CompletionTokensDetails
+        ] = calculated_usage_per_chunk["completion_tokens_details"]
+        prompt_tokens_details: Optional[
+            PromptTokensDetailsWrapper
+        ] = calculated_usage_per_chunk["prompt_tokens_details"]
 
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(
@@ -563,8 +575,10 @@ class ChunkProcessor:
             )  # for anthropic
         if completion_tokens_details is not None:
             if isinstance(completion_tokens_details, CompletionTokensDetails):
-                returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper(
-                    **completion_tokens_details.model_dump()
+                returned_usage.completion_tokens_details = (
+                    CompletionTokensDetailsWrapper(
+                        **completion_tokens_details.model_dump()
+                    )
                 )
             else:
                 returned_usage.completion_tokens_details = completion_tokens_details

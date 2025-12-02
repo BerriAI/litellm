@@ -47,7 +47,7 @@ services = Union[
         "datadog",
         "generic_api",
         "arize",
-        "sqs"
+        "sqs",
     ],
     str,
 ]
@@ -119,7 +119,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog",
             "generic_api",
             "arize",
-            "sqs"
+            "sqs",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -202,6 +202,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             )
         elif service == "sqs":
             from litellm.integrations.sqs import SQSLogger
+
             sqs_logger = SQSLogger()
             response = await sqs_logger.async_health_check()
             return {
@@ -847,7 +848,9 @@ async def health_readiness():
         try:
             from litellm.proxy.proxy_server import _license_check  # type: ignore
 
-            license_available: bool = _license_check.is_premium() if _license_check else False
+            license_available: bool = (
+                _license_check.is_premium() if _license_check else False
+            )
             license_expiration: Optional[str] = None
 
             if getattr(_license_check, "airgapped_license_data", None):
@@ -863,7 +866,9 @@ async def health_readiness():
             }
         except Exception:
             # fail closed: don't let license check break readiness
-            license_metadata = {"license": {"has_license": False, "expiration_date": None}}
+            license_metadata = {
+                "license": {"has_license": False, "expiration_date": None}
+            }
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected

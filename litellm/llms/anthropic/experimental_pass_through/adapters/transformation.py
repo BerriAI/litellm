@@ -130,16 +130,17 @@ class LiteLLMAnthropicMessagesAdapter:
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
-    def _extract_signature_from_tool_call(
-        self, tool_call: Any
-    ) -> Optional[str]:
+    def _extract_signature_from_tool_call(self, tool_call: Any) -> Optional[str]:
         """
         Extract signature from a tool call's provider_specific_fields.
         Only checks provider_specific_fields, not thinking blocks.
         """
         signature = None
-        
-        if hasattr(tool_call, "provider_specific_fields") and tool_call.provider_specific_fields:
+
+        if (
+            hasattr(tool_call, "provider_specific_fields")
+            and tool_call.provider_specific_fields
+        ):
             if "thought_signature" in tool_call.provider_specific_fields:
                 signature = tool_call.provider_specific_fields["thought_signature"]
         elif (
@@ -147,8 +148,10 @@ class LiteLLMAnthropicMessagesAdapter:
             and tool_call.function.provider_specific_fields
         ):
             if "thought_signature" in tool_call.function.provider_specific_fields:
-                signature = tool_call.function.provider_specific_fields["thought_signature"]
-        
+                signature = tool_call.function.provider_specific_fields[
+                    "thought_signature"
+                ]
+
         return signature
 
     def _extract_signature_from_tool_use_content(
@@ -161,7 +164,6 @@ class LiteLLMAnthropicMessagesAdapter:
         if provider_specific_fields:
             return provider_specific_fields.get("signature")
         return None
-
 
     def translatable_anthropic_params(self) -> List:
         """
@@ -301,14 +303,23 @@ class LiteLLMAnthropicMessagesAdapter:
                                     "name": content.get("name", ""),
                                     "arguments": json.dumps(content.get("input", {})),
                                 }
-                                signature = self._extract_signature_from_tool_use_content(content)
-                                
+                                signature = (
+                                    self._extract_signature_from_tool_use_content(
+                                        content
+                                    )
+                                )
+
                                 if signature:
                                     provider_specific_fields: Dict[str, Any] = (
-                                        function_chunk.get("provider_specific_fields") or {}
+                                        function_chunk.get("provider_specific_fields")
+                                        or {}
                                     )
-                                    provider_specific_fields["thought_signature"] = signature
-                                    function_chunk["provider_specific_fields"] = provider_specific_fields
+                                    provider_specific_fields[
+                                        "thought_signature"
+                                    ] = signature
+                                    function_chunk[
+                                        "provider_specific_fields"
+                                    ] = provider_specific_fields
 
                                 tool_calls.append(
                                     ChatCompletionAssistantToolCall(
@@ -451,10 +462,10 @@ class LiteLLMAnthropicMessagesAdapter:
         if "tool_choice" in anthropic_message_request:
             tool_choice = anthropic_message_request["tool_choice"]
             if tool_choice:
-                new_kwargs["tool_choice"] = (
-                    self.translate_anthropic_tool_choice_to_openai(
-                        tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
-                    )
+                new_kwargs[
+                    "tool_choice"
+                ] = self.translate_anthropic_tool_choice_to_openai(
+                    tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
                 )
         ## CONVERT TOOLS
         if "tools" in anthropic_message_request:
@@ -498,7 +509,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return None
 
-    def _translate_openai_content_to_anthropic(self, choices: List[Choices]) -> List[
+    def _translate_openai_content_to_anthropic(
+        self, choices: List[Choices]
+    ) -> List[
         Union[
             AnthropicResponseContentBlockText,
             AnthropicResponseContentBlockToolUse,
@@ -556,11 +569,11 @@ class LiteLLMAnthropicMessagesAdapter:
                 for tool_call in choice.message.tool_calls:
                     # Extract signature from provider_specific_fields only
                     signature = self._extract_signature_from_tool_call(tool_call)
-                    
+
                     provider_specific_fields = {}
                     if signature:
                         provider_specific_fields["signature"] = signature
-                    
+
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
                         id=tool_call.id,
@@ -573,7 +586,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     )
                     # Add provider_specific_fields if signature is present
                     if provider_specific_fields:
-                        tool_use_block.provider_specific_fields = provider_specific_fields
+                        tool_use_block.provider_specific_fields = (
+                            provider_specific_fields
+                        )
                     new_content.append(tool_use_block)
             # Handle text content
             elif choice.message.content is not None:
@@ -682,7 +697,6 @@ class LiteLLMAnthropicMessagesAdapter:
             ContentThinkingSignatureBlockDelta,
         ],
     ]:
-
         text: str = ""
         reasoning_content: str = ""
         reasoning_signature: str = ""

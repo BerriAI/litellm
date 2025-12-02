@@ -1060,7 +1060,10 @@ class Usage(CompletionUsage):
 
             # Auto-calculate text_tokens only if provider didn't set it explicitly
             # Formula: text_tokens = completion_tokens - reasoning_tokens - image_tokens - audio_tokens
-            if _completion_tokens_details.text_tokens is None and completion_tokens is not None:
+            if (
+                _completion_tokens_details.text_tokens is None
+                and completion_tokens is not None
+            ):
                 calculated_text_tokens = completion_tokens - reasoning_tokens
 
                 # Subtract other modality tokens if present

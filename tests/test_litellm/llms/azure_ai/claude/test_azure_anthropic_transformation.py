@@ -116,9 +116,7 @@ class TestAzureAnthropicConfig:
             "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
-            with patch.object(
-                config, "get_anthropic_headers", return_value={}
-            ):
+            with patch.object(config, "get_anthropic_headers", return_value={}):
                 result = config.validate_environment(
                     headers=headers,
                     model=model,
@@ -168,8 +166,15 @@ class TestAzureAnthropicConfig:
         with patch(
             "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
         ) as mock_validate:
-            mock_validate.return_value = {"api-key": "test-api-key", "anthropic-version": "2024-01-01"}
-            with patch.object(config, "get_anthropic_headers", return_value={"anthropic-version": "2024-01-01"}):
+            mock_validate.return_value = {
+                "api-key": "test-api-key",
+                "anthropic-version": "2024-01-01",
+            }
+            with patch.object(
+                config,
+                "get_anthropic_headers",
+                return_value={"anthropic-version": "2024-01-01"},
+            ):
                 result = config.validate_environment(
                     headers=headers,
                     model=model,
@@ -183,11 +188,10 @@ class TestAzureAnthropicConfig:
     def test_inherits_anthropic_config_methods(self):
         """Test that AzureAnthropicConfig inherits methods from AnthropicConfig"""
         config = AzureAnthropicConfig()
-        
+
         # Test that it has AnthropicConfig methods
         assert hasattr(config, "get_anthropic_headers")
         assert hasattr(config, "is_cache_control_set")
         assert hasattr(config, "is_computer_tool_used")
         assert hasattr(config, "transform_request")
         assert hasattr(config, "transform_response")
-

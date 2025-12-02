@@ -450,7 +450,10 @@ class TestOpenAIResponsesHandlerEdgeCases:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "List content"},
-                        {"type": "image_url", "image_url": {"url": "http://example.com"}},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "http://example.com"},
+                        },
                     ],
                     "type": "message",
                 },
@@ -492,4 +495,3 @@ class TestOpenAIResponsesHandlerEdgeCases:
 
         # Should skip processing and return unchanged
         assert result == response
-

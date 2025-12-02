@@ -41,5 +41,3 @@ class TestRAGOpenAI(BaseRAGTest):
         if search_response.get("data") and len(search_response["data"]) > 0:
             return search_response
         return None
-
-    

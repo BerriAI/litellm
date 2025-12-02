@@ -61,7 +61,9 @@ class BaseResponsesAPIStreamingIterator:
                 "litellm_params", {}
             ),
         )
-        _model_info: Dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        _model_info: Dict = (
+            litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        )
         self._hidden_params = {
             "model_id": _model_info.get("id", None),
             "api_base": _api_base,
@@ -130,10 +132,10 @@ class BaseResponsesAPIStreamingIterator:
                             )
                             if usage_obj is not None:
                                 try:
-                                    cost: Optional[float] = (
-                                        self.logging_obj._response_cost_calculator(
-                                            result=response_obj
-                                        )
+                                    cost: Optional[
+                                        float
+                                    ] = self.logging_obj._response_cost_calculator(
+                                        result=response_obj
                                     )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
@@ -208,11 +210,12 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in async context"""
         # Create a deep copy for logging to avoid modifying the response object that will be returned to the user
-        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens) 
+        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
         # to chat completion format (prompt_tokens/completion_tokens) for internal logging
         import copy
+
         logging_response = copy.deepcopy(self.completed_response)
-        
+
         asyncio.create_task(
             self.logging_obj.async_success_handler(
                 result=logging_response,
@@ -284,11 +287,12 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in sync context"""
         # Create a deep copy for logging to avoid modifying the response object that will be returned to the user
-        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens) 
+        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
         # to chat completion format (prompt_tokens/completion_tokens) for internal logging
         import copy
+
         logging_response = copy.deepcopy(self.completed_response)
-        
+
         run_async_function(
             async_function=self.logging_obj.async_success_handler,
             result=logging_response,
@@ -358,9 +362,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Add cost to usage object if include_cost_in_streaming_usage is True
         if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-            usage_obj: Optional[ResponseAPIUsage] = getattr(
-                transformed, "usage", None
-            )
+            usage_obj: Optional[ResponseAPIUsage] = getattr(transformed, "usage", None)
             if usage_obj is not None:
                 try:
                     cost: Optional[float] = logging_obj._response_cost_calculator(

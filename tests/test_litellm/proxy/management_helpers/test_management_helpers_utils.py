@@ -299,30 +299,32 @@ async def test_attach_object_permission_to_dict_with_object_permission_id():
     Test that attach_object_permission_to_dict correctly attaches object_permission
     when object_permission_id is present and found in database.
     """
-    from litellm.proxy.management_helpers.object_permission_utils import attach_object_permission_to_dict
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        attach_object_permission_to_dict,
+    )
 
     # Setup test data
     test_object_permission_id = "test_perm_123"
     test_data_dict = {
         "user_id": "test_user_456",
         "object_permission_id": test_object_permission_id,
-        "other_field": "other_value"
+        "other_field": "other_value",
     }
-    
+
     expected_object_permission = {
         "object_permission_id": test_object_permission_id,
         "vector_stores": ["store1", "store2"],
         "assistants": ["assistant1"],
-        "models": ["gpt-4", "claude-3"]
+        "models": ["gpt-4", "claude-3"],
     }
 
     # Mock the prisma client
     mock_prisma_client = AsyncMock()
-    
+
     # Mock the object permission response
     mock_object_permission = MagicMock()
     mock_object_permission.model_dump.return_value = expected_object_permission
-    
+
     # Mock the database query
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
         return_value=mock_object_permission
@@ -330,8 +332,7 @@ async def test_attach_object_permission_to_dict_with_object_permission_id():
 
     # Call the function
     result = await attach_object_permission_to_dict(
-        data_dict=test_data_dict,
-        prisma_client=mock_prisma_client
+        data_dict=test_data_dict, prisma_client=mock_prisma_client
     )
 
     # Verify the result
@@ -353,21 +354,19 @@ async def test_attach_object_permission_to_dict_without_object_permission_id():
     Test that attach_object_permission_to_dict returns the original dict unchanged
     when object_permission_id is not present.
     """
-    from litellm.proxy.management_helpers.object_permission_utils import attach_object_permission_to_dict
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        attach_object_permission_to_dict,
+    )
 
     # Setup test data without object_permission_id
-    test_data_dict = {
-        "user_id": "test_user_456",
-        "other_field": "other_value"
-    }
+    test_data_dict = {"user_id": "test_user_456", "other_field": "other_value"}
 
     # Mock the prisma client
     mock_prisma_client = AsyncMock()
 
     # Call the function
     result = await attach_object_permission_to_dict(
-        data_dict=test_data_dict,
-        prisma_client=mock_prisma_client
+        data_dict=test_data_dict, prisma_client=mock_prisma_client
     )
 
     # Verify the result is unchanged
@@ -384,19 +383,21 @@ async def test_attach_object_permission_to_dict_object_permission_not_found():
     Test that attach_object_permission_to_dict returns the original dict unchanged
     when object_permission_id is present but not found in database.
     """
-    from litellm.proxy.management_helpers.object_permission_utils import attach_object_permission_to_dict
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        attach_object_permission_to_dict,
+    )
 
     # Setup test data
     test_object_permission_id = "test_perm_123"
     test_data_dict = {
         "user_id": "test_user_456",
         "object_permission_id": test_object_permission_id,
-        "other_field": "other_value"
+        "other_field": "other_value",
     }
 
     # Mock the prisma client
     mock_prisma_client = AsyncMock()
-    
+
     # Mock the database query to return None (not found)
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
         return_value=None
@@ -404,8 +405,7 @@ async def test_attach_object_permission_to_dict_object_permission_not_found():
 
     # Call the function
     result = await attach_object_permission_to_dict(
-        data_dict=test_data_dict,
-        prisma_client=mock_prisma_client
+        data_dict=test_data_dict, prisma_client=mock_prisma_client
     )
 
     # Verify the result is unchanged
@@ -424,30 +424,34 @@ async def test_attach_object_permission_to_dict_with_dict_method():
     Test that attach_object_permission_to_dict handles object permissions that use .dict() method
     instead of .model_dump() method.
     """
-    from litellm.proxy.management_helpers.object_permission_utils import attach_object_permission_to_dict
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        attach_object_permission_to_dict,
+    )
 
     # Setup test data
     test_object_permission_id = "test_perm_123"
     test_data_dict = {
         "user_id": "test_user_456",
         "object_permission_id": test_object_permission_id,
-        "other_field": "other_value"
+        "other_field": "other_value",
     }
-    
+
     expected_object_permission = {
         "object_permission_id": test_object_permission_id,
         "vector_stores": ["store1"],
-        "assistants": []
+        "assistants": [],
     }
 
     # Mock the prisma client
     mock_prisma_client = AsyncMock()
-    
+
     # Mock the object permission response that uses .dict() method
     mock_object_permission = MagicMock()
-    mock_object_permission.model_dump.side_effect = AttributeError("No model_dump method")
+    mock_object_permission.model_dump.side_effect = AttributeError(
+        "No model_dump method"
+    )
     mock_object_permission.dict.return_value = expected_object_permission
-    
+
     # Mock the database query
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
         return_value=mock_object_permission
@@ -455,8 +459,7 @@ async def test_attach_object_permission_to_dict_with_dict_method():
 
     # Call the function
     result = await attach_object_permission_to_dict(
-        data_dict=test_data_dict,
-        prisma_client=mock_prisma_client
+        data_dict=test_data_dict, prisma_client=mock_prisma_client
     )
 
     # Verify the result
@@ -473,19 +476,20 @@ async def test_attach_object_permission_to_dict_with_none_prisma_client():
     """
     Test that attach_object_permission_to_dict raises ValueError when prisma_client is None.
     """
-    from litellm.proxy.management_helpers.object_permission_utils import attach_object_permission_to_dict
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        attach_object_permission_to_dict,
+    )
 
     # Setup test data
     test_data_dict = {
         "user_id": "test_user_456",
-        "object_permission_id": "test_perm_123"
+        "object_permission_id": "test_perm_123",
     }
 
     # Call the function with None prisma_client
     with pytest.raises(ValueError, match="Prisma client not found"):
         await attach_object_permission_to_dict(
-            data_dict=test_data_dict,
-            prisma_client=None  # type: ignore
+            data_dict=test_data_dict, prisma_client=None  # type: ignore
         )
 
 
@@ -494,7 +498,9 @@ async def test_attach_object_permission_to_dict_with_empty_dict():
     """
     Test that attach_object_permission_to_dict handles empty dictionaries correctly.
     """
-    from litellm.proxy.management_helpers.object_permission_utils import attach_object_permission_to_dict
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        attach_object_permission_to_dict,
+    )
 
     # Setup empty test data
     test_data_dict = {}
@@ -504,8 +510,7 @@ async def test_attach_object_permission_to_dict_with_empty_dict():
 
     # Call the function
     result = await attach_object_permission_to_dict(
-        data_dict=test_data_dict,
-        prisma_client=mock_prisma_client
+        data_dict=test_data_dict, prisma_client=mock_prisma_client
     )
 
     # Verify the result is unchanged
@@ -521,13 +526,15 @@ async def test_attach_object_permission_to_dict_with_none_object_permission_id()
     """
     Test that attach_object_permission_to_dict handles None object_permission_id correctly.
     """
-    from litellm.proxy.management_helpers.object_permission_utils import attach_object_permission_to_dict
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        attach_object_permission_to_dict,
+    )
 
     # Setup test data with None object_permission_id
     test_data_dict = {
         "user_id": "test_user_456",
         "object_permission_id": None,
-        "other_field": "other_value"
+        "other_field": "other_value",
     }
 
     # Mock the prisma client
@@ -535,8 +542,7 @@ async def test_attach_object_permission_to_dict_with_none_object_permission_id()
 
     # Call the function
     result = await attach_object_permission_to_dict(
-        data_dict=test_data_dict,
-        prisma_client=mock_prisma_client
+        data_dict=test_data_dict, prisma_client=mock_prisma_client
     )
 
     # Verify the result is unchanged

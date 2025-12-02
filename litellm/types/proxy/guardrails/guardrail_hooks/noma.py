@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from .base import GuardrailConfigModel
 
+
 class NomaGuardrailConfigModel(GuardrailConfigModel):
     api_key: Optional[str] = Field(
         default=None,

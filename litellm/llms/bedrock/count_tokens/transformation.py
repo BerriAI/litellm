@@ -92,7 +92,10 @@ class BedrockCountTokensConfig(BaseAWSLLM):
                 system_messages.append({"text": message.get("content", "")})
             else:
                 # Transform message content to Bedrock format
-                transformed_message: Dict[str, Any] = {"role": message.get("role"), "content": []}
+                transformed_message: Dict[str, Any] = {
+                    "role": message.get("role"),
+                    "content": [],
+                }
 
                 # Handle content - ensure it's in the correct array format
                 content = message.get("content", "")

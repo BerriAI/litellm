@@ -5,26 +5,22 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../../../../..")
+)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # Mock responses for different embedding models
-titan_embedding_response = {
-    "embedding": [0.1, 0.2, 0.3],
-    "inputTextTokenCount": 10
-}
+titan_embedding_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
 
-cohere_embedding_response = {
-    "embeddings": [[0.1, 0.2, 0.3]],
-    "inputTextTokenCount": 10
-}
+cohere_embedding_response = {"embeddings": [[0.1, 0.2, 0.3]], "inputTextTokenCount": 10}
 
 twelvelabs_embedding_response = {
     "embedding": [0.1, 0.2, 0.3],
     "embeddingOption": "visual-text",
     "startSec": 0.0,
-    "endSec": 1.0
+    "endSec": 1.0,
 }
 
 # Test data
@@ -40,8 +36,16 @@ test_image_base64 = "data:image/png,test_image_base64_data"
         ("bedrock/amazon.titan-embed-image-v1", "image", titan_embedding_response),
         ("bedrock/cohere.embed-english-v3", "text", cohere_embedding_response),
         ("bedrock/cohere.embed-multilingual-v3", "text", cohere_embedding_response),
-        ("bedrock/twelvelabs.marengo-embed-2-7-v1:0", "text", twelvelabs_embedding_response),
-        ("bedrock/twelvelabs.marengo-embed-2-7-v1:0", "image", twelvelabs_embedding_response),
+        (
+            "bedrock/twelvelabs.marengo-embed-2-7-v1:0",
+            "text",
+            twelvelabs_embedding_response,
+        ),
+        (
+            "bedrock/twelvelabs.marengo-embed-2-7-v1:0",
+            "image",
+            twelvelabs_embedding_response,
+        ),
     ],
 )
 def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_response):
@@ -66,18 +70,18 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
             "client": client,
             "aws_region_name": "us-east-1",
             "aws_bedrock_runtime_endpoint": "https://bedrock-runtime.us-east-1.amazonaws.com",
-            "api_key": test_api_key
+            "api_key": test_api_key,
         }
-        
+
         # Add input_type parameter for TwelveLabs Marengo models (maps to inputType)
         if "twelvelabs.marengo-embed" in model:
             kwargs["input_type"] = input_type
-            
+
         response = litellm.embedding(**kwargs)
 
         assert isinstance(response, litellm.EmbeddingResponse)
-        assert isinstance(response.data[0]['embedding'], list)
-        assert len(response.data[0]['embedding']) == 3  # Based on mock response
+        assert isinstance(response.data[0]["embedding"], list)
+        assert len(response.data[0]["embedding"]) == 3  # Based on mock response
 
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert "Authorization" in headers
@@ -90,15 +94,17 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
         ("bedrock/amazon.titan-embed-text-v1", "text", titan_embedding_response),
     ],
 )
-def test_bedrock_embedding_with_env_variable_bearer_token(model, input_type, embed_response):
+def test_bedrock_embedding_with_env_variable_bearer_token(
+    model, input_type, embed_response
+):
     """Test embedding functionality with bearer token from environment variable"""
     litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "env-bearer-token-12345"
-    
-    with patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": test_api_key}), \
-         patch.object(client, "post") as mock_post:
-        
+
+    with patch.dict(
+        os.environ, {"AWS_BEARER_TOKEN_BEDROCK": test_api_key}
+    ), patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = json.dumps(embed_response)
@@ -140,11 +146,11 @@ async def test_async_bedrock_embedding_with_bearer_token():
             client=client,
             aws_region_name="us-west-2",
             aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-west-2.amazonaws.com",
-            api_key=test_api_key
+            api_key=test_api_key,
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
-        
+
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert "Authorization" in headers
         assert headers["Authorization"] == f"Bearer {test_api_key}"
@@ -155,7 +161,9 @@ def test_bedrock_embedding_with_sigv4():
     litellm.set_verbose = True
     model = "bedrock/amazon.titan-embed-text-v1"
 
-    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding.embeddings") as mock_bedrock_embed:
+    with patch(
+        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding.embeddings"
+    ) as mock_bedrock_embed:
         mock_embedding_response = litellm.EmbeddingResponse()
         mock_embedding_response.data = [{"embedding": [0.1, 0.2, 0.3]}]
         mock_bedrock_embed.return_value = mock_embedding_response
@@ -178,10 +186,7 @@ def test_bedrock_titan_v2_encoding_format_float():
     model = "bedrock/amazon.titan-embed-text-v2:0"
 
     # Mock response with embeddingsByType for binary format (addressing issue #14680)
-    titan_v2_response = {
-        "embedding": [0.1, 0.2, 0.3],
-        "inputTextTokenCount": 10
-    }
+    titan_v2_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -197,12 +202,12 @@ def test_bedrock_titan_v2_encoding_format_float():
             client=client,
             aws_region_name="us-east-1",
             aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
-            api_key=test_api_key
+            api_key=test_api_key,
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
-        assert isinstance(response.data[0]['embedding'], list)
-        assert len(response.data[0]['embedding']) == 3
+        assert isinstance(response.data[0]["embedding"], list)
+        assert len(response.data[0]["embedding"]) == 3
 
         # Verify that the request contains embeddingTypes: ["float"] instead of encoding_format
         request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
@@ -223,7 +228,7 @@ def test_bedrock_titan_v2_encoding_format_base64():
         "embeddingsByType": {
             "binary": "YmluYXJ5X2VtYmVkZGluZ19kYXRh"  # base64 encoded binary data
         },
-        "inputTextTokenCount": 10
+        "inputTextTokenCount": 10,
     }
 
     with patch.object(client, "post") as mock_post:
@@ -240,7 +245,7 @@ def test_bedrock_titan_v2_encoding_format_base64():
             client=client,
             aws_region_name="us-east-1",
             aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
-            api_key=test_api_key
+            api_key=test_api_key,
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
@@ -259,10 +264,7 @@ def test_twelvelabs_input_type_parameter_mapping():
     model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
 
     twelvelabs_response = {
-        "data": [{
-            "embedding": [0.1, 0.2, 0.3],
-            "inputTextTokenCount": 10
-        }]
+        "data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]
     }
 
     with patch.object(client, "post") as mock_post:
@@ -280,12 +282,12 @@ def test_twelvelabs_input_type_parameter_mapping():
             aws_region_name="us-east-1",
             aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
             api_key=test_api_key,
-            input_type="text"  # New parameter that should map to inputType
+            input_type="text",  # New parameter that should map to inputType
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
-        assert isinstance(response.data[0]['embedding'], list)
-        assert len(response.data[0]['embedding']) == 3
+        assert isinstance(response.data[0]["embedding"], list)
+        assert len(response.data[0]["embedding"]) == 3
 
         # Verify that the request contains inputType (mapped from input_type)
         request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
@@ -321,13 +323,13 @@ def test_twelvelabs_input_type_parameter_mapping_async_invoke():
             aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
             api_key=test_api_key,
             output_s3_uri="s3://test-bucket/async-invoke-output/",
-            input_type="text"  # New parameter that should map to inputType
+            input_type="text",  # New parameter that should map to inputType
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
-        assert hasattr(response, '_hidden_params')
+        assert hasattr(response, "_hidden_params")
         assert response._hidden_params is not None
-        assert hasattr(response._hidden_params, '_invocation_arn')
+        assert hasattr(response._hidden_params, "_invocation_arn")
 
         # Verify that the request contains inputType in modelInput (mapped from input_type)
         request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
@@ -342,16 +344,13 @@ def test_twelvelabs_missing_input_type_error():
     litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
-    
+
     # Test TwelveLabs model - should default to 'text' when input_type is missing
     twelvelabs_model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
     twelvelabs_response = {
-        "data": [{
-            "embedding": [0.1, 0.2, 0.3],
-            "inputTextTokenCount": 10
-        }]
+        "data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]
     }
-    
+
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
@@ -369,22 +368,19 @@ def test_twelvelabs_missing_input_type_error():
             api_key=test_api_key
             # No input_type parameter - should default to "text"
         )
-        
+
         # Verify the response is successful
         assert isinstance(response, litellm.EmbeddingResponse)
-        
+
         # Verify that the request contains inputType: "text" by default
         request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
         assert "inputType" in request_body
         assert request_body["inputType"] == "text"
-    
+
     # Test Amazon Titan model - should NOT throw error (input_type not required)
     titan_model = "bedrock/amazon.titan-embed-text-v1"
-    titan_response = {
-        "embedding": [0.1, 0.2, 0.3],
-        "inputTextTokenCount": 10
-    }
-    
+    titan_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
+
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
@@ -402,7 +398,7 @@ def test_twelvelabs_missing_input_type_error():
             api_key=test_api_key
             # No input_type parameter - should work fine
         )
-        
+
         # Should succeed without input_type
         assert isinstance(response, litellm.EmbeddingResponse)
 
@@ -418,30 +414,30 @@ def test_twelvelabs_missing_input_type_error():
 def test_bedrock_embedding_header_forwarding(model, embed_response):
     """
     Test that custom headers are correctly forwarded to Bedrock embedding API calls.
-    
+
     This test verifies the fix for the issue where headers configured via
     forward_client_headers_to_llm_api were not being passed to Bedrock embedding provider.
-    
+
     Relevant Issue: https://github.com/BerriAI/litellm/pull/16042
     """
     litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
-    
+
     # Headers that would be set by the proxy when forwarding client headers
     custom_headers = {
         "X-Custom-Header": "CustomValue",
         "X-BYOK-Token": "secret-token",
         "Extra-Header": "foobar",
     }
-    
+
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = json.dumps(embed_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
-        
+
         try:
             # Call embedding with custom headers via kwargs
             # This simulates what the proxy does when forward_client_headers_to_llm_api is set
@@ -454,16 +450,16 @@ def test_bedrock_embedding_header_forwarding(model, embed_response):
                 aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
                 api_key=test_api_key,
             )
-            
+
             assert isinstance(response, litellm.EmbeddingResponse)
-            
+
             # Verify that the request was made
             assert mock_post.called, "HTTP client post should be called"
-            
+
             # Get the actual call arguments
             call_kwargs = mock_post.call_args.kwargs
             headers = call_kwargs.get("headers", {})
-            
+
             # Verify our custom headers are present in the request headers
             # Note: AWS SigV4 signing may modify header names to lowercase
             for header_key, header_value in custom_headers.items():
@@ -476,10 +472,10 @@ def test_bedrock_embedding_header_forwarding(model, embed_response):
                     f"Header {header_key} should be in request headers. "
                     f"Found headers: {list(headers.keys())}"
                 )
-                
+
             print(f"✓ Test passed for {model}")
             print(f"  Headers correctly forwarded: {list(headers.keys())}")
-            
+
         except Exception as e:
             pytest.fail(f"Failed to forward headers to {model}: {str(e)}")
 
@@ -487,7 +483,7 @@ def test_bedrock_embedding_header_forwarding(model, embed_response):
 def test_bedrock_embedding_extra_headers_and_headers_merge():
     """
     Test that both extra_headers and headers parameters are correctly merged for Bedrock embeddings.
-    
+
     This ensures that headers from kwargs (forwarded by proxy) and extra_headers
     (passed explicitly) are both included in the final headers sent to the provider.
     """
@@ -495,26 +491,23 @@ def test_bedrock_embedding_extra_headers_and_headers_merge():
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/amazon.titan-embed-text-v1"
-    
+
     # Headers from proxy (via kwargs["headers"])
     proxy_headers = {"X-Forwarded-Header": "ProxyValue"}
-    
+
     # Explicit extra_headers
     explicit_headers = {"X-Explicit-Header": "ExplicitValue"}
-    
+
     # Mock response
-    embed_response = {
-        "embedding": [0.1, 0.2, 0.3],
-        "inputTextTokenCount": 10
-    }
-    
+    embed_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
+
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = json.dumps(embed_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
-        
+
         try:
             response = litellm.embedding(
                 model=model,
@@ -526,12 +519,12 @@ def test_bedrock_embedding_extra_headers_and_headers_merge():
                 aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
                 api_key=test_api_key,
             )
-            
+
             assert isinstance(response, litellm.EmbeddingResponse)
-            
+
             call_kwargs = mock_post.call_args.kwargs
             headers = call_kwargs.get("headers", {})
-            
+
             # Both sets of headers should be present
             # Note: AWS SigV4 signing may modify header names to lowercase
             proxy_header_found = any(
@@ -541,7 +534,7 @@ def test_bedrock_embedding_extra_headers_and_headers_merge():
                 "Proxy forwarded header should be present. "
                 f"Found headers: {list(headers.keys())}"
             )
-            
+
             explicit_header_found = any(
                 k.lower() == "x-explicit-header" for k in headers.keys()
             )
@@ -549,10 +542,10 @@ def test_bedrock_embedding_extra_headers_and_headers_merge():
                 "Explicitly passed header should be present. "
                 f"Found headers: {list(headers.keys())}"
             )
-            
+
             print("✓ Both header sources correctly merged and forwarded")
             print(f"  Final headers: {list(headers.keys())}")
-            
+
         except Exception as e:
             pytest.fail(f"Failed to merge and forward headers: {str(e)}")
 
@@ -569,13 +562,10 @@ def test_bedrock_cohere_v4_embedding_response_parsing():
 
     # Mock response for Cohere v4 with multiple embedding types
     cohere_v4_response = {
-        "embeddings": {
-            "float": [[0.1, 0.2, 0.3]],
-            "int8": [[1, 2, 3]]
-        },
+        "embeddings": {"float": [[0.1, 0.2, 0.3]], "int8": [[1, 2, 3]]},
         "response_type": "embeddings_by_type",
         "id": "test-id",
-        "texts": ["test input"]
+        "texts": ["test input"],
     }
 
     with patch.object(client, "post") as mock_post:
@@ -591,20 +581,20 @@ def test_bedrock_cohere_v4_embedding_response_parsing():
             client=client,
             aws_region_name="us-east-1",
             aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
-            api_key=test_api_key
+            api_key=test_api_key,
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
-        
+
         # Verify we get two embedding objects back (one for float, one for int8)
         assert len(response.data) == 2
-        
+
         # Check first embedding (float)
-        assert response.data[0]['object'] == 'embedding'
-        assert response.data[0]['embedding'] == [0.1, 0.2, 0.3]
-        assert response.data[0]['type'] == 'float'
-        
+        assert response.data[0]["object"] == "embedding"
+        assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+        assert response.data[0]["type"] == "float"
+
         # Check second embedding (int8)
-        assert response.data[1]['object'] == 'embedding'
-        assert response.data[1]['embedding'] == [1, 2, 3]
-        assert response.data[1]['type'] == 'int8'
+        assert response.data[1]["object"] == "embedding"
+        assert response.data[1]["embedding"] == [1, 2, 3]
+        assert response.data[1]["type"] == "int8"

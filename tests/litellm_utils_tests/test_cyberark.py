@@ -13,7 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from litellm._uuid import uuid
 
 # Set up environment variables for testing
-os.environ["CYBERARK_API_KEY"] = "2syke5r262b6je2f4et1x3jptmry3frfx83t65e6417zad632e5qq8a"
+os.environ[
+    "CYBERARK_API_KEY"
+] = "2syke5r262b6je2f4et1x3jptmry3frfx83t65e6417zad632e5qq8a"
 os.environ["CYBERARK_API_BASE"] = "http://0.0.0.0:8080"
 os.environ["CYBERARK_ACCOUNT"] = "default"
 os.environ["CYBERARK_USERNAME"] = "admin"
@@ -29,16 +31,15 @@ def create_mock_response(status_code: int, text: str = ""):
     mock_response.status_code = status_code
     mock_response.text = text
     mock_response.raise_for_status = MagicMock()
-    
+
     if status_code >= 400:
         import httpx
+
         error = httpx.HTTPStatusError(
-            message=f"HTTP {status_code}",
-            request=MagicMock(),
-            response=mock_response
+            message=f"HTTP {status_code}", request=MagicMock(), response=mock_response
         )
         mock_response.raise_for_status.side_effect = error
-    
+
     return mock_response
 
 
@@ -102,7 +103,7 @@ async def test_cyberark_write_and_read_secret():
 async def test_cyberark_rotate_secret():
     """
     Test key rotation in CyberArk Conjur using mocked HTTP requests.
-    
+
     This test simulates what happens when a virtual key is rotated:
     1. Write initial secret with alias (like sk-1234)
     2. Rotate to new value (like sk-12359)
@@ -128,29 +129,29 @@ async def test_cyberark_rotate_secret():
         mock_sync_client.post.return_value = create_mock_response(
             status_code=200, text="mock-token"
         )
-        
+
         # Sync reads return the current value from our simulated storage
         def get_mock_sync_read_response(*args, **kwargs):
             return create_mock_response(status_code=200, text=current_value["value"])
-        
+
         mock_sync_client.get.side_effect = get_mock_sync_read_response
 
         # Mock async httpx client (for async writes and reads)
         mock_async_client = AsyncMock()
-        
+
         # Async writes update the current value
         async def mock_async_post(*args, **kwargs):
             content = kwargs.get("content", "")
             if content:
                 current_value["value"] = content
             return create_mock_response(status_code=201, text="")
-        
+
         mock_async_client.post.side_effect = mock_async_post
-        
+
         # Async reads also return the current value
         async def get_mock_async_read_response(*args, **kwargs):
             return create_mock_response(status_code=200, text=current_value["value"])
-        
+
         mock_async_client.get.side_effect = get_mock_async_read_response
 
         with patch(
@@ -192,7 +193,7 @@ async def test_cyberark_rotate_secret():
             # Step 3: Verify the secret now returns the NEW value
             rotated_read = cyberark_manager.sync_read_secret(secret_name=secret_alias)
             print(f"4. After rotation, read value: {rotated_read}")
-            
+
             # This is the key assertion: after rotation, reading should return the NEW value
             assert rotated_read is not None
             assert rotated_read == rotated_key_value
@@ -205,7 +206,7 @@ async def test_cyberark_rotate_secret():
 async def test_cyberark_rotate_secret_with_new_alias():
     """
     Test key rotation with a new alias using mocked HTTP requests.
-    
+
     This simulates rotating a key and changing its alias at the same time:
     1. Write secret with alias-v1
     2. Rotate to alias-v2 with new value
@@ -233,7 +234,7 @@ async def test_cyberark_rotate_secret_with_new_alias():
         mock_sync_client.post.return_value = create_mock_response(
             status_code=200, text="mock-token"
         )
-        
+
         # Mock sync reads to return from our store
         def get_mock_sync_read(*args, **kwargs):
             url = args[0] if args else kwargs.get("url", "")
@@ -242,27 +243,27 @@ async def test_cyberark_rotate_secret_with_new_alias():
                 if secret_name in url:
                     return create_mock_response(status_code=200, text=secret_val)
             return create_mock_response(status_code=404, text="Not found")
-        
+
         mock_sync_client.get.side_effect = get_mock_sync_read
 
         # Mock async httpx client (for async writes and reads)
         mock_async_client = AsyncMock()
-        
+
         # Mock async write to update our store
         async def mock_async_post(*args, **kwargs):
             url = args[0] if args else kwargs.get("url", "")
             content = kwargs.get("content", "")
-            
+
             # Extract secret name from URL and store the value
             if old_alias in url:
                 secrets_store[old_alias] = content
             elif new_alias in url:
                 secrets_store[new_alias] = content
-            
+
             return create_mock_response(status_code=201, text="")
-        
+
         mock_async_client.post.side_effect = mock_async_post
-        
+
         # Mock async reads to return from our store
         async def get_mock_async_read(*args, **kwargs):
             url = args[0] if args else kwargs.get("url", "")
@@ -271,7 +272,7 @@ async def test_cyberark_rotate_secret_with_new_alias():
                 if secret_name in url:
                     return create_mock_response(status_code=200, text=secret_val)
             return create_mock_response(status_code=404, text="Not found")
-        
+
         mock_async_client.get.side_effect = get_mock_async_read
 
         with patch(
@@ -316,4 +317,3 @@ async def test_cyberark_rotate_secret_with_new_alias():
 
             print(f"\n✅ Alias rotation successful: {old_alias} → {new_alias}")
             print(f"   Note: Old alias still exists in CyberArk (expected behavior)")
-

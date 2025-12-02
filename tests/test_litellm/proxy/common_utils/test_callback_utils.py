@@ -36,5 +36,8 @@ def test_normalize_callback_names_none_returns_empty_list():
 
 
 def test_normalize_callback_names_lowercases_strings():
-    assert normalize_callback_names(["SQS", "S3", "CUSTOM_CALLBACK"]) == ["sqs", "s3", "custom_callback"]
-
+    assert normalize_callback_names(["SQS", "S3", "CUSTOM_CALLBACK"]) == [
+        "sqs",
+        "s3",
+        "custom_callback",
+    ]

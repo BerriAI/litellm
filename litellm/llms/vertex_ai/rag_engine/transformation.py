@@ -120,9 +120,7 @@ class VertexAIRAGTransformation(VertexBase):
 
         return {
             "import_rag_files_config": {
-                "gcs_source": {
-                    "uris": [gcs_uri]
-                },
+                "gcs_source": {"uris": [gcs_uri]},
                 "rag_file_transformation_config": transformation_config,
             }
         }
@@ -152,4 +150,3 @@ class VertexAIRAGTransformation(VertexBase):
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
-

@@ -186,7 +186,7 @@ async def common_checks(
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
-    
+
     # 6.1 [OPTIONAL] If 'reject_clientside_metadata_tags' enabled - reject request if it has client-side 'metadata.tags'
     if (
         general_settings.get("reject_clientside_metadata_tags", None) is not None
@@ -471,53 +471,51 @@ async def get_default_end_user_budget(
 ) -> Optional[LiteLLM_BudgetTable]:
     """
     Fetches the default end user budget from the database if litellm.max_end_user_budget_id is configured.
-    
+
     This budget is applied to end users who don't have an explicit budget_id set.
     Results are cached for performance.
-    
+
     Args:
         prisma_client: Database client instance
         user_api_key_cache: Cache for storing/retrieving budget data
         parent_otel_span: Optional OpenTelemetry span for tracing
-        
+
     Returns:
         LiteLLM_BudgetTable if configured and found, None otherwise
     """
     if prisma_client is None or litellm.max_end_user_budget_id is None:
         return None
-    
+
     cache_key = f"default_end_user_budget:{litellm.max_end_user_budget_id}"
-    
+
     # Check cache first
     cached_budget = await user_api_key_cache.async_get_cache(key=cache_key)
     if cached_budget is not None:
         return LiteLLM_BudgetTable(**cached_budget)
-    
+
     # Fetch from database
     try:
         budget_record = await prisma_client.db.litellm_budgettable.find_unique(
             where={"budget_id": litellm.max_end_user_budget_id}
         )
-        
+
         if budget_record is None:
             verbose_proxy_logger.warning(
                 f"Default end user budget not found in database: {litellm.max_end_user_budget_id}"
             )
             return None
-        
+
         # Cache the budget for 60 seconds
         await user_api_key_cache.async_set_cache(
-            key=cache_key, 
+            key=cache_key,
             value=budget_record.dict(),
             ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
-        
+
         return LiteLLM_BudgetTable(**budget_record.dict())
-        
+
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error fetching default end user budget: {str(e)}"
-        )
+        verbose_proxy_logger.error(f"Error fetching default end user budget: {str(e)}")
         return None
 
 
@@ -529,38 +527,38 @@ async def _apply_default_budget_to_end_user(
 ) -> LiteLLM_EndUserTable:
     """
     Helper function to apply default budget to end user if they don't have a budget assigned.
-    
+
     Args:
         end_user_obj: The end user object to potentially apply default budget to
         prisma_client: Database client instance
         user_api_key_cache: Cache for storing/retrieving data
         parent_otel_span: Optional OpenTelemetry span for tracing
-        
+
     Returns:
         Updated end user object with default budget applied if applicable
     """
     # If end user already has a budget assigned, no need to apply default
     if end_user_obj.litellm_budget_table is not None:
         return end_user_obj
-    
+
     # If no default budget configured, return as-is
     if litellm.max_end_user_budget_id is None:
         return end_user_obj
-    
+
     # Fetch and apply default budget
     default_budget = await get_default_end_user_budget(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         parent_otel_span=parent_otel_span,
     )
-    
+
     if default_budget is not None:
         # Apply default budget to end user object
         end_user_obj.litellm_budget_table = default_budget
         verbose_proxy_logger.debug(
             f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
         )
-    
+
     return end_user_obj
 
 
@@ -570,20 +568,20 @@ def _check_end_user_budget(
 ) -> None:
     """
     Check if end user is within their budget limit.
-    
+
     Args:
         end_user_obj: The end user object to check
         route: The request route
-        
+
     Raises:
         litellm.BudgetExceededError: If end user has exceeded their budget
     """
     if route in LiteLLMRoutes.info_routes.value:
         return
-    
+
     if end_user_obj.litellm_budget_table is None:
         return
-    
+
     end_user_budget = end_user_obj.litellm_budget_table.max_budget
     if end_user_budget is not None and end_user_obj.spend > end_user_budget:
         raise litellm.BudgetExceededError(
@@ -604,8 +602,8 @@ async def get_end_user_object(
 ) -> Optional[LiteLLM_EndUserTable]:
     """
     Returns end user object from database or cache.
-    
-    If end user exists but has no budget_id, applies the default budget 
+
+    If end user exists but has no budget_id, applies the default budget
     (if configured via litellm.max_end_user_budget_id).
 
     Args:
@@ -615,7 +613,7 @@ async def get_end_user_object(
         route: The request route
         parent_otel_span: Optional OpenTelemetry span for tracing
         proxy_logging_obj: Optional proxy logging object
-        
+
     Returns:
         LiteLLM_EndUserTable if found, None otherwise
     """
@@ -624,14 +622,14 @@ async def get_end_user_object(
 
     if end_user_id is None:
         return None
-    
+
     _key = "end_user_id:{}".format(end_user_id)
 
     # Check cache first
     cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
         return_obj = LiteLLM_EndUserTable(**cached_user_obj)
-        
+
         # Apply default budget if needed
         return_obj = await _apply_default_budget_to_end_user(
             end_user_obj=return_obj,
@@ -639,10 +637,10 @@ async def get_end_user_object(
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
         )
-        
+
         # Check budget limits
         _check_end_user_budget(end_user_obj=return_obj, route=route)
-        
+
         return return_obj
 
     # Fetch from database
@@ -657,7 +655,7 @@ async def get_end_user_object(
 
         # Convert to LiteLLM_EndUserTable object
         _response = LiteLLM_EndUserTable(**response.dict())
-        
+
         # Apply default budget if needed
         _response = await _apply_default_budget_to_end_user(
             end_user_obj=_response,
@@ -665,18 +663,17 @@ async def get_end_user_object(
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
         )
-        
+
         # Save to cache (always store as dict for consistency)
         await user_api_key_cache.async_set_cache(
-            key="end_user_id:{}".format(end_user_id), 
-            value=_response.dict()
+            key="end_user_id:{}".format(end_user_id), value=_response.dict()
         )
-        
+
         # Check budget limits
         _check_end_user_budget(end_user_obj=_response, route=route)
 
         return _response
-        
+
     except Exception as e:
         if isinstance(e, litellm.BudgetExceededError):
             raise e
@@ -716,7 +713,6 @@ async def get_tag_objects_batch(
 
     tag_objects = {}
     uncached_tags = []
-    
 
     # Try to get all tags from cache first
     for tag_name in tag_names:
@@ -1107,7 +1103,6 @@ async def _cache_management_object(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-
     await user_api_key_cache.async_set_cache(
         key=key,
         value=value,
@@ -1382,11 +1377,11 @@ class ExperimentalUIJWTToken:
     ) -> str:
         """
         Generate a JWT token for CLI authentication with 24-hour expiration.
-        
+
         Args:
             user_info: User information from the database
             team_id: Team ID for the user (optional, uses user's team if available)
-            
+
         Returns:
             Encrypted JWT token string
         """

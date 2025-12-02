@@ -53,7 +53,9 @@ class ArizePhoenixLogger:
 
         if collector_endpoint:
             # Parse the endpoint to determine protocol
-            if collector_endpoint.startswith("grpc://") or (":4317" in collector_endpoint and "/v1/traces" not in collector_endpoint):
+            if collector_endpoint.startswith("grpc://") or (
+                ":4317" in collector_endpoint and "/v1/traces" not in collector_endpoint
+            ):
                 endpoint = collector_endpoint
                 protocol = "otlp_grpc"
             else:

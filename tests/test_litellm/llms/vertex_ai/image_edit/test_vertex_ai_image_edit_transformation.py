@@ -100,7 +100,9 @@ class TestVertexAIGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-one").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
@@ -256,18 +258,25 @@ class TestVertexAIImagenImageEditTransformation:
         # Second should be MASK reference
         assert reference_images[1]["referenceType"] == "REFERENCE_TYPE_MASK"
         assert "maskImageConfig" in reference_images[1]
-        assert reference_images[1]["maskImageConfig"]["maskMode"] == "MASK_MODE_USER_PROVIDED"
+        assert (
+            reference_images[1]["maskImageConfig"]["maskMode"]
+            == "MASK_MODE_USER_PROVIDED"
+        )
 
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Imagen"""
         response_payload = {
             "predictions": [
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode("utf-8"),
+                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode(
+                        "utf-8"
+                    ),
                     "mimeType": "image/png",
                 },
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode("utf-8"),
+                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode(
+                        "utf-8"
+                    ),
                     "mimeType": "image/png",
                 },
             ]
@@ -317,5 +326,7 @@ class TestVertexAIImagenImageEditTransformation:
         assert self.config._read_all_bytes(bio) == b"test_bytesio"
 
         # Test with bytearray
-        assert self.config._read_all_bytes(bytearray(b"test_bytearray")) == b"test_bytearray"
-
+        assert (
+            self.config._read_all_bytes(bytearray(b"test_bytearray"))
+            == b"test_bytearray"
+        )

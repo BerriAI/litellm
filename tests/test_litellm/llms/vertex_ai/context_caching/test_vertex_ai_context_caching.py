@@ -795,7 +795,11 @@ class TestVertexAIGlobalLocation:
         caching = ContextCachingEndpoints()
 
         # Mock the _check_custom_proxy to return the URL unchanged
-        with patch.object(caching, '_check_custom_proxy', side_effect=lambda **kwargs: (kwargs.get('auth_header'), kwargs.get('url'))):
+        with patch.object(
+            caching,
+            "_check_custom_proxy",
+            side_effect=lambda **kwargs: (kwargs.get("auth_header"), kwargs.get("url")),
+        ):
             auth_header, url = caching._get_token_and_url_context_caching(
                 gemini_api_key=None,
                 custom_llm_provider="vertex_ai",
@@ -808,13 +812,19 @@ class TestVertexAIGlobalLocation:
             # Assert correct URL format for global
             expected_url = "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/cachedContents"
             assert url == expected_url, f"Expected {expected_url}, got {url}"
-            assert "global-aiplatform" not in url, "URL should not contain 'global-aiplatform' prefix"
+            assert (
+                "global-aiplatform" not in url
+            ), "URL should not contain 'global-aiplatform' prefix"
 
     def test_regional_location_url_construction_v1(self):
         """Test that regional location uses correct URL (with location prefix) for v1 API."""
         caching = ContextCachingEndpoints()
 
-        with patch.object(caching, '_check_custom_proxy', side_effect=lambda **kwargs: (kwargs.get('auth_header'), kwargs.get('url'))):
+        with patch.object(
+            caching,
+            "_check_custom_proxy",
+            side_effect=lambda **kwargs: (kwargs.get("auth_header"), kwargs.get("url")),
+        ):
             auth_header, url = caching._get_token_and_url_context_caching(
                 gemini_api_key=None,
                 custom_llm_provider="vertex_ai",
@@ -832,7 +842,11 @@ class TestVertexAIGlobalLocation:
         """Test that global location uses correct URL for v1beta1 API."""
         caching = ContextCachingEndpoints()
 
-        with patch.object(caching, '_check_custom_proxy', side_effect=lambda **kwargs: (kwargs.get('auth_header'), kwargs.get('url'))):
+        with patch.object(
+            caching,
+            "_check_custom_proxy",
+            side_effect=lambda **kwargs: (kwargs.get("auth_header"), kwargs.get("url")),
+        ):
             auth_header, url = caching._get_token_and_url_context_caching(
                 gemini_api_key=None,
                 custom_llm_provider="vertex_ai_beta",
@@ -845,4 +859,6 @@ class TestVertexAIGlobalLocation:
             # Assert correct URL format for global with beta API
             expected_url = "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/cachedContents"
             assert url == expected_url, f"Expected {expected_url}, got {url}"
-            assert "global-aiplatform" not in url, "URL should not contain 'global-aiplatform' prefix"
+            assert (
+                "global-aiplatform" not in url
+            ), "URL should not contain 'global-aiplatform' prefix"

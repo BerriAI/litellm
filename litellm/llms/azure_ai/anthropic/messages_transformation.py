@@ -114,4 +114,3 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             api_base = api_base + "/v1/messages"
 
         return api_base
-

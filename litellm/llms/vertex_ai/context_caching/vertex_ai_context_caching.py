@@ -76,7 +76,6 @@ class ContextCachingEndpoints(VertexBase):
             else:
                 url = f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
 
-
         return self._check_custom_proxy(
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
@@ -117,7 +116,7 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
         )
         try:
             ## LOGGING
@@ -170,7 +169,7 @@ class ContextCachingEndpoints(VertexBase):
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_auth_header: Optional[str]
+        vertex_auth_header: Optional[str],
     ) -> Optional[str]:
         """
         Checks if content already cached.
@@ -189,7 +188,7 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
         )
         try:
             ## LOGGING
@@ -277,7 +276,7 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
         )
 
         headers = {
@@ -312,7 +311,7 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
         )
         if google_cache_name:
             return non_cached_messages, optional_params, google_cache_name
@@ -409,7 +408,7 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
         )
 
         headers = {
@@ -441,7 +440,7 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
         )
 
         if google_cache_name:

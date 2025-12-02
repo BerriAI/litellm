@@ -166,9 +166,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         # Use provided api_base or fall back to authenticator's base or default
         api_base = (
-            api_base
-            or self.authenticator.get_api_base()
-            or GITHUB_COPILOT_API_BASE
+            api_base or self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
         )
 
         # Remove trailing slashes
@@ -270,7 +268,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Check arrays
         if isinstance(value, list):
             return any(
-                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth)
+                self._contains_vision_content(
+                    item, depth=depth + 1, max_depth=max_depth
+                )
                 for item in value
             )
 
@@ -286,7 +286,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Check content field recursively
         if "content" in value and isinstance(value["content"], list):
             return any(
-                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth)
+                self._contains_vision_content(
+                    item, depth=depth + 1, max_depth=max_depth
+                )
                 for item in value["content"]
             )
 

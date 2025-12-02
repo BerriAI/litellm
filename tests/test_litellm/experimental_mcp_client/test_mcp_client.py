@@ -39,6 +39,7 @@ class TestMCPClient:
         with pytest.raises(
             ValueError, match="stdio_config is required for stdio transport"
         ):
+
             async def _noop(session):
                 return None
 

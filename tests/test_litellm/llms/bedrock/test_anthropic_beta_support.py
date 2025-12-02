@@ -43,7 +43,9 @@ class TestAnthropicBetaHeaderSupport:
 
     def test_get_anthropic_beta_from_headers_whitespace(self):
         """Test header extraction handles whitespace correctly."""
-        headers = {"anthropic-beta": " context-1m-2025-08-07 , computer-use-2024-10-22 "}
+        headers = {
+            "anthropic-beta": " context-1m-2025-08-07 , computer-use-2024-10-22 "
+        }
         result = get_anthropic_beta_from_headers(headers)
         assert result == ["context-1m-2025-08-07", "computer-use-2024-10-22"]
 
@@ -51,51 +53,58 @@ class TestAnthropicBetaHeaderSupport:
         """Test that Invoke API transformation includes anthropic_beta in request."""
         config = AmazonAnthropicClaudeConfig()
         headers = {"anthropic-beta": "context-1m-2025-08-07,computer-use-2024-10-22"}
-        
+
         result = config.transform_request(
             model="anthropic.claude-3-5-sonnet-20241022-v2:0",
             messages=[{"role": "user", "content": "Test"}],
             optional_params={},
             litellm_params={},
-            headers=headers
+            headers=headers,
         )
-        
+
         assert "anthropic_beta" in result
         # Beta flags are stored as sets, so order may vary
-        assert set(result["anthropic_beta"]) == {"context-1m-2025-08-07", "computer-use-2024-10-22"}
+        assert set(result["anthropic_beta"]) == {
+            "context-1m-2025-08-07",
+            "computer-use-2024-10-22",
+        }
 
     def test_converse_transformation_anthropic_beta(self):
         """Test that Converse API transformation includes anthropic_beta in additionalModelRequestFields."""
         config = AmazonConverseConfig()
-        headers = {"anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"}
-        
+        headers = {
+            "anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"
+        }
+
         result = config._transform_request_helper(
             model="anthropic.claude-3-5-sonnet-20241022-v2:0",
             system_content_blocks=[],
             optional_params={},
             messages=[{"role": "user", "content": "Test"}],
-            headers=headers
+            headers=headers,
         )
-        
+
         assert "additionalModelRequestFields" in result
         additional_fields = result["additionalModelRequestFields"]
         assert "anthropic_beta" in additional_fields
         # Sort both arrays before comparing to avoid flakiness from ordering differences
-        assert sorted(additional_fields["anthropic_beta"]) == sorted(["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"])
+        assert sorted(additional_fields["anthropic_beta"]) == sorted(
+            ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"]
+        )
 
     def test_messages_transformation_anthropic_beta(self):
         """Test that Messages API transformation includes anthropic_beta in request."""
         config = AmazonAnthropicClaudeMessagesConfig()
         headers = {"anthropic-beta": "output-128k-2025-02-19"}
-        
+
         result = config.transform_anthropic_messages_request(
             model="anthropic.claude-3-5-sonnet-20241022-v2:0",
             messages=[{"role": "user", "content": "Test"}],
             anthropic_messages_optional_request_params={"max_tokens": 100},
             litellm_params={},
-            headers=headers
+            headers=headers,
         )
-        
+
         assert "anthropic_beta" in result
         # Sort both arrays before comparing to avoid flakiness from ordering differences
         assert sorted(result["anthropic_beta"]) == sorted(["output-128k-2025-02-19"])
@@ -104,28 +113,28 @@ class TestAnthropicBetaHeaderSupport:
         """Test that user anthropic_beta headers work with computer use tools."""
         config = AmazonConverseConfig()
         headers = {"anthropic-beta": "context-1m-2025-08-07"}
-        
+
         # Computer use tools should automatically add computer-use-2024-10-22
         tools = [
             {
                 "type": "computer_20241022",
                 "name": "computer",
                 "display_width_px": 1024,
-                "display_height_px": 768
+                "display_height_px": 768,
             }
         ]
-        
+
         result = config._transform_request_helper(
             model="anthropic.claude-3-5-sonnet-20241022-v2:0",
             system_content_blocks=[],
             optional_params={"tools": tools},
             messages=[{"role": "user", "content": "Test"}],
-            headers=headers
+            headers=headers,
         )
-        
+
         additional_fields = result["additionalModelRequestFields"]
         betas = additional_fields["anthropic_beta"]
-        
+
         # Should contain both user-provided and auto-added beta headers
         assert "context-1m-2025-08-07" in betas
         assert "computer-use-2024-10-22" in betas
@@ -135,15 +144,15 @@ class TestAnthropicBetaHeaderSupport:
         """Test that transformations work correctly when no anthropic_beta headers are provided."""
         config = AmazonConverseConfig()
         headers = {}
-        
+
         result = config._transform_request_helper(
             model="anthropic.claude-3-5-sonnet-20241022-v2:0",
             system_content_blocks=[],
             optional_params={},
             messages=[{"role": "user", "content": "Test"}],
-            headers=headers
+            headers=headers,
         )
-        
+
         additional_fields = result.get("additionalModelRequestFields", {})
         assert "anthropic_beta" not in additional_fields
 
@@ -156,33 +165,33 @@ class TestAnthropicBetaHeaderSupport:
             "token-efficient-tools-2025-02-19",
             "interleaved-thinking-2025-05-14",
             "output-128k-2025-02-19",
-            "dev-full-thinking-2025-05-14"
+            "dev-full-thinking-2025-05-14",
         ]
-        
+
         config = AmazonAnthropicClaudeConfig()
         headers = {"anthropic-beta": ",".join(supported_features)}
-        
+
         result = config.transform_request(
             model="anthropic.claude-3-5-sonnet-20241022-v2:0",
             messages=[{"role": "user", "content": "Test"}],
             optional_params={},
             litellm_params={},
-            headers=headers
+            headers=headers,
         )
-        
+
         assert "anthropic_beta" in result
         # Beta flags are stored as sets, so order may vary
         assert set(result["anthropic_beta"]) == set(supported_features)
 
     def test_prompt_caching_no_beta_header_messages_api(self):
         """Test that prompt caching (cache_control) does NOT add prompt-caching-2024-07-31 beta header for Bedrock.
-        
+
         Bedrock recognizes prompt caching via the request body (cache_control field),
         not through beta headers. This test verifies the fix.
         """
         config = AmazonAnthropicClaudeMessagesConfig()
         headers = {}
-        
+
         # Messages with cache_control set (prompt caching enabled)
         messages = [
             {
@@ -191,20 +200,20 @@ class TestAnthropicBetaHeaderSupport:
                     {
                         "type": "text",
                         "text": "Hello",
-                        "cache_control": {"type": "ephemeral"}
+                        "cache_control": {"type": "ephemeral"},
                     }
-                ]
+                ],
             }
         ]
-        
+
         result = config.transform_anthropic_messages_request(
             model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             anthropic_messages_optional_request_params={"max_tokens": 100},
             litellm_params={},
-            headers=headers
+            headers=headers,
         )
-        
+
         # Verify prompt-caching-2024-07-31 is NOT in anthropic_beta
         if "anthropic_beta" in result:
             assert "prompt-caching-2024-07-31" not in result["anthropic_beta"], (
@@ -217,13 +226,13 @@ class TestAnthropicBetaHeaderSupport:
 
     def test_prompt_caching_no_beta_header_chat_api(self):
         """Test that prompt caching (cache_control) does NOT add prompt-caching-2024-07-31 beta header for Bedrock Chat API.
-        
+
         Bedrock recognizes prompt caching via the request body (cache_control field),
         not through beta headers. This test verifies the fix.
         """
         config = AmazonAnthropicClaudeConfig()
         headers = {}
-        
+
         # Messages with cache_control set (prompt caching enabled)
         messages = [
             {
@@ -232,20 +241,20 @@ class TestAnthropicBetaHeaderSupport:
                     {
                         "type": "text",
                         "text": "Hello",
-                        "cache_control": {"type": "ephemeral"}
+                        "cache_control": {"type": "ephemeral"},
                     }
-                ]
+                ],
             }
         ]
-        
+
         result = config.transform_request(
             model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             optional_params={},
             litellm_params={},
-            headers=headers
+            headers=headers,
         )
-        
+
         # Verify prompt-caching-2024-07-31 is NOT in anthropic_beta
         if "anthropic_beta" in result:
             assert "prompt-caching-2024-07-31" not in result["anthropic_beta"], (
@@ -260,7 +269,7 @@ class TestAnthropicBetaHeaderSupport:
         """Test that prompt caching doesn't interfere with other valid beta headers."""
         config = AmazonAnthropicClaudeMessagesConfig()
         headers = {"anthropic-beta": "context-1m-2025-08-07"}
-        
+
         # Messages with cache_control set
         messages = [
             {
@@ -269,20 +278,20 @@ class TestAnthropicBetaHeaderSupport:
                     {
                         "type": "text",
                         "text": "Hello",
-                        "cache_control": {"type": "ephemeral"}
+                        "cache_control": {"type": "ephemeral"},
                     }
-                ]
+                ],
             }
         ]
-        
+
         result = config.transform_anthropic_messages_request(
             model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             anthropic_messages_optional_request_params={"max_tokens": 100},
             litellm_params={},
-            headers=headers
+            headers=headers,
         )
-        
+
         # Should have the user-provided beta header but NOT prompt-caching
         if "anthropic_beta" in result:
             assert "context-1m-2025-08-07" in result["anthropic_beta"]

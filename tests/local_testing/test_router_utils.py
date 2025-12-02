@@ -127,7 +127,6 @@ def test_update_kwargs_before_fallbacks_unit_test():
 )
 @pytest.mark.asyncio
 async def test_update_kwargs_before_fallbacks(call_type):
-
     router = Router(
         model_list=[
             {
@@ -485,7 +484,9 @@ def test_router_get_deployment_credentials_with_provider():
     )
 
     # Test getting credentials by model_id
-    credentials = router.get_deployment_credentials_with_provider(model_id="openai-deployment-1")
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai-deployment-1"
+    )
     assert credentials is not None
     assert credentials["api_key"] == "sk-test-123"
     assert credentials["custom_llm_provider"] == "openai"
@@ -498,7 +499,9 @@ def test_router_get_deployment_credentials_with_provider():
     assert credentials2["custom_llm_provider"] == "anthropic"
 
     # Test with non-existent model
-    credentials3 = router.get_deployment_credentials_with_provider(model_id="non-existent")
+    credentials3 = router.get_deployment_credentials_with_provider(
+        model_id="non-existent"
+    )
     assert credentials3 is None
 
 

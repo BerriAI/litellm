@@ -400,7 +400,7 @@ class BaseAWSLLM:
         if "nova" in model.lower():
             if "nova" in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
                 return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, "nova")
-        
+
         # Handle regional models like us.twelvelabs.marengo-embed-2-7-v1:0
         if "." in model:
             parts = model.split(".")
@@ -946,7 +946,9 @@ class BaseAWSLLM:
         return endpoint_url, proxy_endpoint_url
 
     def _select_default_endpoint_url(
-        self, endpoint_type: Optional[Literal["runtime", "agent", "agentcore"]], aws_region_name: str
+        self,
+        endpoint_type: Optional[Literal["runtime", "agent", "agentcore"]],
+        aws_region_name: str,
     ) -> str:
         """
         Select the default endpoint url based on the endpoint type

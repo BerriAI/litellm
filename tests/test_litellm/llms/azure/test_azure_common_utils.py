@@ -563,7 +563,9 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         or call_type == CallTypes.avideo_remix
     ):
         # Skip video call types as they don't use Azure SDK client initialization
-        pytest.skip(f"Skipping {call_type.value} because Azure video calls don't use initialize_azure_sdk_client")
+        pytest.skip(
+            f"Skipping {call_type.value} because Azure video calls don't use initialize_azure_sdk_client"
+        )
     elif (
         call_type == CallTypes.alist_containers
         or call_type == CallTypes.aretrieve_container
@@ -571,10 +573,21 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         or call_type == CallTypes.adelete_container
     ):
         # Skip container call types as they're not supported for Azure (only OpenAI)
-        pytest.skip(f"Skipping {call_type.value} because Azure doesn't support container operations")
-    elif call_type == CallTypes.avector_store_file_create or call_type == CallTypes.avector_store_file_list or call_type == CallTypes.avector_store_file_retrieve or call_type == CallTypes.avector_store_file_content or call_type == CallTypes.avector_store_file_update or call_type == CallTypes.avector_store_file_delete:
+        pytest.skip(
+            f"Skipping {call_type.value} because Azure doesn't support container operations"
+        )
+    elif (
+        call_type == CallTypes.avector_store_file_create
+        or call_type == CallTypes.avector_store_file_list
+        or call_type == CallTypes.avector_store_file_retrieve
+        or call_type == CallTypes.avector_store_file_content
+        or call_type == CallTypes.avector_store_file_update
+        or call_type == CallTypes.avector_store_file_delete
+    ):
         # Skip vector store file call types as they're not supported for Azure (only OpenAI)
-        pytest.skip(f"Skipping {call_type.value} because Azure doesn't support vector store file operations")
+        pytest.skip(
+            f"Skipping {call_type.value} because Azure doesn't support vector store file operations"
+        )
     # Mock the initialize_azure_sdk_client function
     with patch(patch_target) as mock_init_azure:
         # Also mock async_function_with_fallbacks to prevent actual API calls
@@ -1422,43 +1435,44 @@ def test_token_provider_raises_exception(setup_mocks):
 
 def test_get_azure_ad_token_provider_with_default_azure_credential():
     """
-    Test that get_azure_ad_token_provider correctly uses DefaultAzureCredential 
+    Test that get_azure_ad_token_provider correctly uses DefaultAzureCredential
     when explicitly specified as the credential type. This verifies that the function
     can dynamically instantiate DefaultAzureCredential and return a working token provider.
     """
     # Mock Azure identity classes
-    with patch('azure.identity.DefaultAzureCredential') as mock_default_cred, \
-         patch('azure.identity.get_bearer_token_provider') as mock_token_provider:
-        
+    with patch("azure.identity.DefaultAzureCredential") as mock_default_cred, patch(
+        "azure.identity.get_bearer_token_provider"
+    ) as mock_token_provider:
         # Configure mocks
         mock_credential_instance = MagicMock()
         mock_default_cred.return_value = mock_credential_instance
         mock_token_provider.return_value = lambda: "test-default-azure-token"
-        
+
         # Test with DefaultAzureCredential specified explicitly
         token_provider = get_azure_ad_token_provider(
             azure_scope="https://cognitiveservices.azure.com/.default",
-            azure_credential=AzureCredentialType.DefaultAzureCredential
+            azure_credential=AzureCredentialType.DefaultAzureCredential,
         )
-        
+
         # Verify DefaultAzureCredential was instantiated
         mock_default_cred.assert_called_once_with()
-        
+
         # Verify get_bearer_token_provider was called with the right parameters
         mock_token_provider.assert_called_once_with(
-            mock_credential_instance, 
-            "https://cognitiveservices.azure.com/.default"
+            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
         )
-        
+
         # Verify the returned token provider works
         token = token_provider()
         assert token == "test-default-azure-token"
 
 
-def test_get_azure_ad_token_fallback_to_default_azure_credential(setup_mocks, monkeypatch):
+def test_get_azure_ad_token_fallback_to_default_azure_credential(
+    setup_mocks, monkeypatch
+):
     """
-    Test that get_azure_ad_token falls back to DefaultAzureCredential when the 
-    service principal method fails but token refresh is enabled. This tests the 
+    Test that get_azure_ad_token falls back to DefaultAzureCredential when the
+    service principal method fails but token refresh is enabled. This tests the
     complete fallback flow from service principal to DefaultAzureCredential.
     """
     # Clear environment variables that might interfere
@@ -1474,7 +1488,7 @@ def test_get_azure_ad_token_fallback_to_default_azure_credential(setup_mocks, mo
     # Enable token refresh
     setup_mocks["litellm"].enable_azure_ad_token_refresh = True
 
-    # Configure get_azure_ad_token_provider to fail first (service principal) 
+    # Configure get_azure_ad_token_provider to fail first (service principal)
     # but succeed on second call (DefaultAzureCredential)
     def mock_token_provider_side_effect(*args, **kwargs):
         # If called with azure_credential=DefaultAzureCredential, return a working provider
@@ -1500,19 +1514,22 @@ def test_get_azure_ad_token_fallback_to_default_azure_credential(setup_mocks, mo
     # 1. First with just azure_scope (service principal attempt)
     # 2. Second with azure_credential=DefaultAzureCredential (fallback)
     assert setup_mocks["token_provider"].call_count == 2
-    
+
     # Verify the calls were made with expected parameters
     calls = setup_mocks["token_provider"].call_args_list
-    
+
     # First call should be service principal attempt (no azure_credential)
     first_call_kwargs = calls[0][1]
     assert "azure_scope" in first_call_kwargs
     assert first_call_kwargs.get("azure_credential") is None
-    
+
     # Second call should be DefaultAzureCredential attempt
     second_call_kwargs = calls[1][1]
     assert "azure_scope" in second_call_kwargs
-    assert second_call_kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential
+    assert (
+        second_call_kwargs.get("azure_credential")
+        == AzureCredentialType.DefaultAzureCredential
+    )
 
     # Verify the token is what we expect from our DefaultAzureCredential mock
     assert token == "mock-default-azure-credential-token"

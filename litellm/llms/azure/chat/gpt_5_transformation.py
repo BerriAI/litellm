@@ -35,10 +35,9 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         drop_params: bool,
         api_version: str = "",
     ) -> dict:
-        reasoning_effort_value = (
-            non_default_params.get("reasoning_effort")
-            or optional_params.get("reasoning_effort")
-        )
+        reasoning_effort_value = non_default_params.get(
+            "reasoning_effort"
+        ) or optional_params.get("reasoning_effort")
 
         if reasoning_effort_value == "none":
             if litellm.drop_params is True or (

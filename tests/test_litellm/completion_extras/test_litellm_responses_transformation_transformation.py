@@ -18,15 +18,12 @@ def test_transform_response_format_to_text_format_json_schema():
             "name": "person_schema",
             "schema": {
                 "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "age": {"type": "integer"}
-                },
+                "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
                 "required": ["name", "age"],
-                "additionalProperties": False
+                "additionalProperties": False,
             },
-            "strict": True
-        }
+            "strict": True,
+        },
     }
 
     # Convert to Responses API format
@@ -47,9 +44,7 @@ def test_transform_response_format_to_text_format_json_object():
     """Test conversion of response_format with json_object to text.format"""
     handler = LiteLLMResponsesTransformationHandler()
 
-    response_format = {
-        "type": "json_object"
-    }
+    response_format = {"type": "json_object"}
 
     result = handler._transform_response_format_to_text_format(response_format)
 
@@ -62,9 +57,7 @@ def test_transform_response_format_to_text_format_text():
     """Test conversion of response_format with text to text.format"""
     handler = LiteLLMResponsesTransformationHandler()
 
-    response_format = {
-        "type": "text"
-    }
+    response_format = {"type": "text"}
 
     result = handler._transform_response_format_to_text_format(response_format)
 
@@ -99,13 +92,13 @@ def test_transform_request_with_response_format():
                     "type": "object",
                     "properties": {
                         "name": {"type": "string"},
-                        "age": {"type": "integer"}
+                        "age": {"type": "integer"},
                     },
                     "required": ["name", "age"],
-                    "additionalProperties": False
+                    "additionalProperties": False,
                 },
-                "strict": True
-            }
+                "strict": True,
+            },
         }
     }
 

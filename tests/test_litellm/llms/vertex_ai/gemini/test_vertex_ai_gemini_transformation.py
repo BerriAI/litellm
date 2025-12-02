@@ -120,17 +120,13 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
-
 def test_metadata_to_labels_vertex_only():
     """Test that metadata->labels conversion only happens for Vertex AI"""
     messages = [{"role": "user", "content": "test"}]
     optional_params = {}
     litellm_params = {
         "metadata": {
-            "requester_metadata": {
-                "user": "john_doe",
-                "project": "test-project"
-            }
+            "requester_metadata": {"user": "john_doe", "project": "test-project"}
         }
     }
 
@@ -161,15 +157,10 @@ def test_metadata_to_labels_vertex_only():
 def test_empty_content_handling():
     """Test that empty content strings are properly handled in Gemini message transformation"""
     # Test with empty content in user message
-    messages = [
-        {
-            "content": "",
-            "role": "user"
-        }
-    ]
-    
+    messages = [{"content": "", "role": "user"}]
+
     contents = _gemini_convert_messages_with_history(messages=messages)
-    
+
     # Verify that the content was properly transformed
     assert len(contents) == 1
     assert contents[0]["role"] == "user"
@@ -187,7 +178,7 @@ def test_thought_signature_extraction_from_response():
 
     # Test case: Single function call with thought signature
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-    
+
     parts_with_signature = [
         HttpxPartType(
             functionCall={
@@ -219,15 +210,21 @@ def test_thought_signature_parallel_function_calls():
     from litellm.types.llms.vertex_ai import HttpxPartType
 
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-    
+
     # Parallel function calls - only first has signature
     parts_parallel = [
         HttpxPartType(
-            functionCall={"name": "get_current_temperature", "args": {"location": "Paris"}},
+            functionCall={
+                "name": "get_current_temperature",
+                "args": {"location": "Paris"},
+            },
             thoughtSignature=test_signature,  # First FC has signature
         ),
         HttpxPartType(
-            functionCall={"name": "get_current_temperature", "args": {"location": "London"}},
+            functionCall={
+                "name": "get_current_temperature",
+                "args": {"location": "London"},
+            },
             # Second FC has no signature (parallel call)
         ),
     ]
@@ -244,7 +241,9 @@ def test_thought_signature_parallel_function_calls():
     assert "provider_specific_fields" in tools[0]
     assert tools[0]["provider_specific_fields"]["thought_signature"] == test_signature
     # Second tool call should not have thought signature
-    assert "provider_specific_fields" not in tools[1] or "thought_signature" not in tools[1].get("provider_specific_fields", {})
+    assert "provider_specific_fields" not in tools[
+        1
+    ] or "thought_signature" not in tools[1].get("provider_specific_fields", {})
 
 
 def test_thought_signature_preservation_in_conversion():
@@ -254,7 +253,7 @@ def test_thought_signature_preservation_in_conversion():
     )
 
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-    
+
     # Assistant message with tool calls containing thought signatures
     assistant_message = {
         "role": "assistant",
@@ -292,7 +291,7 @@ def test_thought_signature_preservation_in_conversion():
     assert "function_call" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
     assert gemini_parts[0]["thoughtSignature"] == test_signature
-    
+
     # Verify second function call part does not have thought signature
     assert "function_call" in gemini_parts[1]
     assert "thoughtSignature" not in gemini_parts[1]
@@ -306,7 +305,7 @@ def test_thought_signature_sequential_function_calls():
 
     signature_1 = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
     signature_2 = "DifferentSignatureForSecondCall1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    
+
     # Sequential function calls - each has its own signature
     # This simulates a multi-step conversation where each step has a signature
     assistant_message_step1 = {
@@ -353,7 +352,7 @@ def test_thought_signature_sequential_function_calls():
     # Verify each step preserves its own signature
     assert len(gemini_parts_step1) == 1
     assert gemini_parts_step1[0]["thoughtSignature"] == signature_1
-    
+
     assert len(gemini_parts_step2) == 1
     assert gemini_parts_step2[0]["thoughtSignature"] == signature_2
 
@@ -366,7 +365,7 @@ def test_thought_signature_with_function_call_mode():
     from litellm.types.llms.vertex_ai import HttpxPartType
 
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-    
+
     parts_with_signature = [
         HttpxPartType(
             functionCall={
@@ -426,9 +425,11 @@ def test_dummy_signature_added_for_gemini_3_conversation_history():
     assert len(gemini_parts) == 1
     assert "function_call" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
-    
+
     # Verify it's the expected dummy signature (base64 encoded "skip_thought_signature_validator")
-    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode(
+        "utf-8"
+    )
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
 
 
@@ -474,7 +475,7 @@ def test_dummy_signature_not_added_when_signature_exists():
     )
 
     real_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-    
+
     # Assistant message with existing thought signature
     assistant_message_with_signature = {
         "role": "assistant",
@@ -534,7 +535,9 @@ def test_dummy_signature_with_function_call_mode():
     assert len(gemini_parts) == 1
     assert "function_call" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
-    
+
     # Verify it's the expected dummy signature
-    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode(
+        "utf-8"
+    )
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy

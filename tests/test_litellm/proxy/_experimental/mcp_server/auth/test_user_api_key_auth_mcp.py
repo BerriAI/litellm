@@ -1061,21 +1061,21 @@ async def test_get_team_object_permission_with_already_loaded_permission():
         mcp_access_groups=["group1"],
         vector_stores=["store1"],
     )
-    
+
     # Create mock team object with object_permission already loaded
     mock_team_obj = LiteLLM_TeamTable(
         team_id="team-123",
         object_permission=mock_object_permission,
         object_permission_id="perm-123",
     )
-    
+
     # Create mock user auth
     mock_user_auth = UserAPIKeyAuth(
         api_key="test-key",
         user_id="test-user",
         team_id="team-123",
     )
-    
+
     # Mock get_team_object to return our team with loaded permission
     # Also need to mock prisma_client from proxy_server
     mock_prisma = MagicMock()
@@ -1083,26 +1083,24 @@ async def test_get_team_object_permission_with_already_loaded_permission():
         "litellm.proxy.proxy_server.prisma_client",
         mock_prisma,
     ):
-        with patch(
-            "litellm.proxy.auth.auth_checks.get_team_object"
-        ) as mock_get_team:
+        with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
             with patch(
                 "litellm.proxy.auth.auth_checks.get_object_permission"
             ) as mock_get_perm:
                 mock_get_team.return_value = mock_team_obj
-                
+
                 # Call the method
                 result = await MCPRequestHandler._get_team_object_permission(
                     mock_user_auth
                 )
-                
+
                 # Assert we got the object permission
                 assert result == mock_object_permission
                 assert result.mcp_servers == ["server1", "server2"]
-                
+
                 # Verify get_team_object was called
                 mock_get_team.assert_called_once()
-                
+
                 # Verify get_object_permission was NOT called (since it was already loaded)
                 mock_get_perm.assert_not_called()
 
@@ -1122,21 +1120,21 @@ async def test_get_team_object_permission_fetches_from_db_when_not_loaded():
         mcp_access_groups=["group2"],
         vector_stores=["store2"],
     )
-    
+
     # Create mock team object WITHOUT object_permission loaded (but has ID)
     mock_team_obj = LiteLLM_TeamTable(
         team_id="team-456",
         object_permission=None,
         object_permission_id="perm-456",
     )
-    
+
     # Create mock user auth
     mock_user_auth = UserAPIKeyAuth(
         api_key="test-key",
         user_id="test-user",
         team_id="team-456",
     )
-    
+
     # Mock the methods
     # Also need to mock prisma_client from proxy_server
     mock_prisma = MagicMock()
@@ -1144,27 +1142,25 @@ async def test_get_team_object_permission_fetches_from_db_when_not_loaded():
         "litellm.proxy.proxy_server.prisma_client",
         mock_prisma,
     ):
-        with patch(
-            "litellm.proxy.auth.auth_checks.get_team_object"
-        ) as mock_get_team:
+        with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
             with patch(
                 "litellm.proxy.auth.auth_checks.get_object_permission"
             ) as mock_get_perm:
                 mock_get_team.return_value = mock_team_obj
                 mock_get_perm.return_value = mock_object_permission
-                
+
                 # Call the method
                 result = await MCPRequestHandler._get_team_object_permission(
                     mock_user_auth
                 )
-                
+
                 # Assert we got the object permission
                 assert result == mock_object_permission
                 assert result.mcp_servers == ["server3", "server4"]
-                
+
                 # Verify get_team_object was called
                 mock_get_team.assert_called_once()
-                
+
                 # Verify get_object_permission WAS called (since it wasn't loaded)
                 mock_get_perm.assert_called_once_with(
                     object_permission_id="perm-456",
@@ -1190,14 +1186,14 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
         mcp_access_groups=["dev-group"],
         vector_stores=[],
     )
-    
+
     # Create mock user auth
     mock_user_auth = UserAPIKeyAuth(
         api_key="test-key",
         user_id="test-user",
         team_id="team-789",
     )
-    
+
     # Mock the helper methods
     with patch.object(
         MCPRequestHandler, "_get_team_object_permission"
@@ -1207,13 +1203,16 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
         ) as mock_get_access_group_servers:
             # Configure mocks
             mock_get_team_perm.return_value = mock_object_permission
-            mock_get_access_group_servers.return_value = ["group-server1", "group-server2"]
-            
+            mock_get_access_group_servers.return_value = [
+                "group-server1",
+                "group-server2",
+            ]
+
             # Call the method
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
                 mock_user_auth
             )
-            
+
             # Assert the result contains both direct and access group servers
             assert set(result) == {
                 "direct-server1",
@@ -1221,10 +1220,10 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
                 "group-server1",
                 "group-server2",
             }
-            
+
             # Verify _get_team_object_permission was called (the helper we fixed)
             mock_get_team_perm.assert_called_once_with(mock_user_auth)
-            
+
             # Verify access groups were resolved
             mock_get_access_group_servers.assert_called_once_with(["dev-group"])
 
@@ -1241,20 +1240,20 @@ async def test_get_allowed_mcp_servers_for_team_with_no_object_permission():
         user_id="test-user",
         team_id="team-no-perm",
     )
-    
+
     # Mock the helper to return None (no object permission)
     with patch.object(
         MCPRequestHandler, "_get_team_object_permission"
     ) as mock_get_team_perm:
         mock_get_team_perm.return_value = None
-        
+
         # Call the method
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
             mock_user_auth
         )
-        
+
         # Assert empty list is returned
         assert result == []
-        
+
         # Verify the helper was called
         mock_get_team_perm.assert_called_once_with(mock_user_auth)

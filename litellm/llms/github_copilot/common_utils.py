@@ -15,6 +15,7 @@ USER_AGENT = f"GitHubCopilotChat/{COPILOT_VERSION}"
 API_VERSION = "2025-04-01"
 GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
 
+
 class GithubCopilotError(BaseLLMException):
     def __init__(
         self,

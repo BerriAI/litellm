@@ -28,9 +28,10 @@ else:
 class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     """
     Vertex AI Gemini Image Edit Configuration
-    
+
     Uses generateContent API for Gemini models on Vertex AI
     """
+
     SUPPORTED_PARAMS: List[str] = ["size"]
 
     def __init__(self) -> None:
@@ -118,7 +119,9 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         vertex_location = self._resolve_vertex_location()
 
         if not vertex_project or not vertex_location:
-            raise ValueError("vertex_project and vertex_location are required for Vertex AI")
+            raise ValueError(
+                "vertex_project and vertex_location are required for Vertex AI"
+            )
 
         # Use the model name as provided, handling vertex_ai prefix
         model_name = model
@@ -146,23 +149,20 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             raise ValueError("Vertex AI Gemini image edit requires at least one image.")
 
         # Correct format for Vertex AI Gemini image editing
-        contents = {
-            "role": "USER",
-            "parts": inline_parts + [{"text": prompt}]
-        }
+        contents = {"role": "USER", "parts": inline_parts + [{"text": prompt}]}
 
         request_body: Dict[str, Any] = {"contents": contents}
 
         # Generation config with proper structure for image editing
-        generation_config: Dict[str, Any] = {
-            "response_modalities": ["IMAGE"]
-        }
+        generation_config: Dict[str, Any] = {"response_modalities": ["IMAGE"]}
 
         # Add image-specific configuration
         image_config: Dict[str, Any] = {}
         if "aspectRatio" in image_edit_optional_request_params:
-            image_config["aspect_ratio"] = image_edit_optional_request_params["aspectRatio"]
-        
+            image_config["aspect_ratio"] = image_edit_optional_request_params[
+                "aspectRatio"
+            ]
+
         if image_config:
             generation_config["image_config"] = image_config
 
@@ -170,7 +170,9 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         payload: Any = json.dumps(request_body)
         empty_files = cast(RequestFiles, [])
-        return cast(Tuple[Dict[str, Any], Optional[RequestFiles]], (payload, empty_files))
+        return cast(
+            Tuple[Dict[str, Any], Optional[RequestFiles]], (payload, empty_files)
+        )
 
     def transform_image_edit_response(
         self,

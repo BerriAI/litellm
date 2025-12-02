@@ -19,7 +19,9 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
-    from ...base_llm.containers.transformation import BaseContainerConfig as _BaseContainerConfig
+    from ...base_llm.containers.transformation import (
+        BaseContainerConfig as _BaseContainerConfig,
+    )
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseContainerConfig = _BaseContainerConfig
@@ -31,15 +33,13 @@ else:
 
 
 class OpenAIContainerConfig(BaseContainerConfig):
-    """Configuration class for OpenAI container API.
-    """
+    """Configuration class for OpenAI container API."""
 
     def __init__(self):
         super().__init__()
 
     def get_supported_openai_params(self) -> list:
-        """Get the list of supported OpenAI parameters for container API.
-        """
+        """Get the list of supported OpenAI parameters for container API."""
         return [
             "name",
             "expires_after",
@@ -78,8 +78,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        """Get the complete URL for OpenAI container API.
-        """
+        """Get the complete URL for OpenAI container API."""
         if api_base is None:
             api_base = "https://api.openai.com/v1"
 
@@ -92,11 +91,11 @@ class OpenAIContainerConfig(BaseContainerConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
-        """Transform the container creation request for OpenAI API.
-        """
+        """Transform the container creation request for OpenAI API."""
         # Remove extra_headers from optional params as they're handled separately
         container_create_optional_request_params = {
-            k: v for k, v in container_create_optional_request_params.items()
+            k: v
+            for k, v in container_create_optional_request_params.items()
             if k not in ["extra_headers"]
         }
 
@@ -113,8 +112,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ContainerObject:
-        """Transform the OpenAI container creation response.
-        """
+        """Transform the OpenAI container creation response."""
         response_data = raw_response.json()
 
         # Transform the response data
@@ -127,12 +125,17 @@ class OpenAIContainerConfig(BaseContainerConfig):
             sessions=1,
             provider="openai",
         )
-        
-        if not hasattr(container_obj, "_hidden_params") or container_obj._hidden_params is None:
+
+        if (
+            not hasattr(container_obj, "_hidden_params")
+            or container_obj._hidden_params is None
+        ):
             container_obj._hidden_params = {}
         if "additional_headers" not in container_obj._hidden_params:
             container_obj._hidden_params["additional_headers"] = {}
-        container_obj._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = container_cost
+        container_obj._hidden_params["additional_headers"][
+            "llm_provider-x-litellm-response-cost"
+        ] = container_cost
 
         return container_obj
 
@@ -147,7 +150,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         extra_query: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """Transform the container list request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - GET /v1/containers
         """
@@ -174,8 +177,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ContainerListResponse:
-        """Transform the OpenAI container list response.
-        """
+        """Transform the OpenAI container list response."""
         response_data = raw_response.json()
 
         # Transform the response data
@@ -190,8 +192,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[str, Dict]:
-        """Transform the OpenAI container retrieve request.
-        """
+        """Transform the OpenAI container retrieve request."""
         # For container retrieve, we just need to construct the URL
         url = f"{api_base.rstrip('/')}/{container_id}"
 
@@ -205,8 +206,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ContainerObject:
-        """Transform the OpenAI container retrieve response.
-        """
+        """Transform the OpenAI container retrieve response."""
         response_data = raw_response.json()
         # Transform the response data
         container_obj = ContainerObject(**response_data)  # type: ignore[arg-type]
@@ -221,7 +221,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Transform the container delete request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - DELETE /v1/containers/{container_id}
         """
@@ -238,8 +238,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> DeleteContainerResult:
-        """Transform the OpenAI container delete response.
-        """
+        """Transform the OpenAI container delete response."""
         response_data = raw_response.json()
 
         # Transform the response data
@@ -248,7 +247,10 @@ class OpenAIContainerConfig(BaseContainerConfig):
         return delete_result
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers],
+        self,
+        error_message: str,
+        status_code: int,
+        headers: Union[dict, httpx.Headers],
     ) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
 
@@ -257,4 +259,3 @@ class OpenAIContainerConfig(BaseContainerConfig):
             message=error_message,
             headers=headers,
         )
-

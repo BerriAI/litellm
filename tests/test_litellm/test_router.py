@@ -1719,7 +1719,10 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     )
 
     assert credentials is not None
-    assert credentials["aws_bedrock_runtime_endpoint"] == "https://bedrock-runtime.us-east-1.amazonaws.com"
+    assert (
+        credentials["aws_bedrock_runtime_endpoint"]
+        == "https://bedrock-runtime.us-east-1.amazonaws.com"
+    )
     assert credentials["aws_access_key_id"] == "test-access-key"
     assert credentials["aws_secret_access_key"] == "test-secret-key"
     assert credentials["aws_region_name"] == "us-east-1"

@@ -68,14 +68,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
-            guardrailed_texts, guardrailed_images = (
-                await guardrail_to_apply.apply_guardrail(
-                    texts=texts_to_check,
-                    request_data=data,
-                    input_type="request",
-                    images=images_to_check if images_to_check else None,
-                    logging_obj=litellm_logging_obj,
-                )
+            (
+                guardrailed_texts,
+                guardrailed_images,
+            ) = await guardrail_to_apply.apply_guardrail(
+                texts=texts_to_check,
+                request_data=data,
+                input_type="request",
+                images=images_to_check if images_to_check else None,
+                logging_obj=litellm_logging_obj,
             )
 
             # Step 3: Map guardrail responses back to original message structure
@@ -218,14 +219,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
-            guardrailed_texts, guardrailed_images = (
-                await guardrail_to_apply.apply_guardrail(
-                    texts=texts_to_check,
-                    request_data=request_data,
-                    input_type="response",
-                    images=images_to_check if images_to_check else None,
-                    logging_obj=litellm_logging_obj,
-                )
+            (
+                guardrailed_texts,
+                guardrailed_images,
+            ) = await guardrail_to_apply.apply_guardrail(
+                texts=texts_to_check,
+                request_data=request_data,
+                input_type="response",
+                images=images_to_check if images_to_check else None,
+                logging_obj=litellm_logging_obj,
             )
 
             # Step 3: Map guardrail responses back to original response structure
@@ -317,9 +319,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             if isinstance(content, str) and content_idx_optional is None:
                 # Replace string content with guardrail response
-                cast(Choices, response.choices[choice_idx]).message.content = (
-                    guardrail_response
-                )
+                cast(
+                    Choices, response.choices[choice_idx]
+                ).message.content = guardrail_response
 
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content

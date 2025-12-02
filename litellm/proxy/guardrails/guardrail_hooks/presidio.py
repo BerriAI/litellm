@@ -412,9 +412,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if messages is None:
                 return data
             tasks = []
-            task_mappings: List[Tuple[int, Optional[int]]] = (
-                []
-            )  # Track (message_index, content_index) for each task
+            task_mappings: List[
+                Tuple[int, Optional[int]]
+            ] = []  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -515,9 +515,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
-            task_mappings: List[Tuple[int, Optional[int]]] = (
-                []
-            )  # Track (message_index, content_index) for each task
+            task_mappings: List[
+                Tuple[int, Optional[int]]
+            ] = []  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
