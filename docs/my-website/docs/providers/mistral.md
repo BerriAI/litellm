@@ -147,7 +147,10 @@ All models listed here https://docs.mistral.ai/platform/endpoints are supported.
 | Model Name     | Function Call                                                | Reasoning Support |
 |----------------|--------------------------------------------------------------|-------------------|
 | Mistral Small  | `completion(model="mistral/mistral-small-latest", messages)` | No |
+| **Mistral Small 3.1**  | `completion(model="mistral/mistral-small-3-1-24b-instruct", messages)` | No |
+| **Mistral Small 3.2**  | `completion(model="mistral/mistral-small-3-2-24b-instruct", messages)` | No |
 | Mistral Medium | `completion(model="mistral/mistral-medium-latest", messages)`| No |
+| **Mistral Medium 3**  | `completion(model="mistral/mistral-medium-3", messages)`| No |
 | Mistral Large 2  | `completion(model="mistral/mistral-large-2407", messages)` | No |
 | Mistral Large Latest  | `completion(model="mistral/mistral-large-latest", messages)` | No |
 | **Magistral Small**  | `completion(model="mistral/magistral-small-2506", messages)` | Yes |
