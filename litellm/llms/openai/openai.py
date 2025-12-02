@@ -1429,6 +1429,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: Union[float, httpx.Timeout],
         aspeech: Optional[bool] = None,
         client=None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> HttpxBinaryResponseContent:
         if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
@@ -1443,6 +1444,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 max_retries=max_retries,
                 timeout=timeout,
                 client=client,
+                shared_session=shared_session,
             )  # type: ignore
 
         openai_client = self._get_openai_client(
@@ -1452,6 +1454,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             timeout=timeout,
             max_retries=max_retries,
             client=client,
+            shared_session=shared_session,
         )
 
         response = cast(OpenAI, openai_client).audio.speech.create(
@@ -1475,6 +1478,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
         client=None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> HttpxBinaryResponseContent:
         openai_client = cast(
             AsyncOpenAI,
@@ -1485,6 +1489,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 client=client,
+                shared_session=shared_session,
             ),
         )
 

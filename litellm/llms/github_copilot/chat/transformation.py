@@ -6,7 +6,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
 
 from ..authenticator import Authenticator
-from ..common_utils import GetAPIKeyError
+from ..common_utils import GetAPIKeyError, GITHUB_COPILOT_API_BASE
 
 
 class GithubCopilotConfig(OpenAIConfig):
@@ -59,7 +59,7 @@ class GithubCopilotConfig(OpenAIConfig):
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
         dynamic_api_base = (
-            self.authenticator.get_api_base() or self.GITHUB_COPILOT_API_BASE
+            self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
         )
         try:
             dynamic_api_key = self.authenticator.get_api_key()
