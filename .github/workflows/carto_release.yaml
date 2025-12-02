@@ -104,102 +104,118 @@ jobs:
           echo "upstream_version=${UPSTREAM_VERSION}" >> $GITHUB_OUTPUT
           echo "Detected upstream version: ${UPSTREAM_VERSION}"
 
-      - name: Get latest CARTO tag for this upstream version
+      - name: Get latest CARTO tag (new format)
         id: get-latest-tag
         run: |
-          # Get all tags matching the pattern carto-v{upstream_version}-*
-          UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
-          PREFIX="carto-v${UPSTREAM_VERSION}-"
-
-          # Get the latest tag with this prefix
-          LATEST_TAG=$(git tag -l "${PREFIX}*" | sort -V | tail -n 1)
+          # Search for new format tags: v{upstream}-carto.X.Y.Z
+          # Example: v1.79.1-carto.1.7.1
+          LATEST_TAG=$(git tag -l "v*-carto.*" | sort -V | tail -n 1)
 
           if [ -z "$LATEST_TAG" ]; then
-            echo "No existing tags found for ${PREFIX}, starting with 0.0.0"
+            echo "No new-format tags found - this is the FIRST release with new versioning"
+            echo "Will analyze all CARTO commits to calculate initial version"
             echo "latest_tag=" >> $GITHUB_OUTPUT
             echo "current_version=0.0.0" >> $GITHUB_OUTPUT
           else
+            echo "Found latest tag: ${LATEST_TAG}"
             echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
-            # Extract the semver part (everything after the prefix)
-            CURRENT_VERSION="${LATEST_TAG#${PREFIX}}"
-            echo "current_version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
-            echo "Found latest tag: ${LATEST_TAG} (version: ${CURRENT_VERSION})"
+
+            # Extract CARTO version for display (format: v1.79.1-carto.1.7.1 → 1.7.1)
+            CARTO_VERSION=$(echo "$LATEST_TAG" | sed -E 's/.*-carto\.([0-9]+\.[0-9]+\.[0-9]+)/\1/')
+            echo "current_version=${CARTO_VERSION}" >> $GITHUB_OUTPUT
+            echo "Current CARTO version: ${CARTO_VERSION}"
           fi
 
-      - name: Prepare semver config with dynamic prefix
+      - name: Auto-detect bump type from commits
+        id: semver
         if: github.event.inputs.bump_type == 'auto'
         run: |
           UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
-          cat > semver_dynamic.yaml << EOF
-          bump:
-            major:
-              - "BREAKING CHANGE:"
-              - "breaking:"
-              - "major:"
-            minor:
-              - "feat:"
-              - "feature:"
-            patch:
-              - "fix:"
-              - "bugfix:"
-              - "patch:"
-              - "chore:"
-              - "docs:"
-              - "refactor:"
-          default: patch
-          tag_prefix: "carto-v${UPSTREAM_VERSION}-"
-          EOF
-          cat semver_dynamic.yaml
+          LATEST_TAG="${{ steps.get-latest-tag.outputs.latest_tag }}"
 
-      - name: Calculate next version with semver-generator
-        id: semver
-        if: github.event.inputs.bump_type == 'auto'
-        uses: lukaszraczylo/semver-generator@1.12.379
-        with:
-          config_file: semver_dynamic.yaml
-          repository_local: true
-          github_username: ${{ github.actor }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          echo "::group::Analyzing commits for version bump"
 
-      - name: Calculate next version (manual or auto)
+          # Get commit range to analyze
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No previous tag found - analyzing last 30 commits"
+            COMMITS=$(git log --oneline --no-merges -30)
+          else
+            echo "Analyzing commits since ${LATEST_TAG}"
+            COMMITS=$(git log ${LATEST_TAG}..HEAD --oneline --no-merges)
+          fi
+
+          # Count commits by type
+          BREAKING_COUNT=$(echo "$COMMITS" | grep -iE "^[a-f0-9]+ (BREAKING CHANGE:|breaking:|major:)" | wc -l || echo 0)
+          FEAT_COUNT=$(echo "$COMMITS" | grep -iE "^[a-f0-9]+ (feat:|feature:)" | wc -l || echo 0)
+          FIX_COUNT=$(echo "$COMMITS" | grep -iE "^[a-f0-9]+ (fix:|bugfix:)" | wc -l || echo 0)
+
+          # Determine bump type
+          if [ "$BREAKING_COUNT" -gt 0 ]; then
+            BUMP_TYPE="major"
+            echo "🔴 Detected $BREAKING_COUNT breaking changes → MAJOR bump"
+          elif [ "$FEAT_COUNT" -gt 0 ]; then
+            BUMP_TYPE="minor"
+            echo "🟡 Detected $FEAT_COUNT features → MINOR bump"
+          elif [ "$FIX_COUNT" -gt 0 ]; then
+            BUMP_TYPE="patch"
+            echo "🟢 Detected $FIX_COUNT fixes → PATCH bump"
+          else
+            BUMP_TYPE="patch"
+            echo "⚪ No conventional commits detected → Default PATCH bump"
+          fi
+
+          echo "bump_type=${BUMP_TYPE}" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+      - name: Calculate next CARTO version
         id: calc-version
         run: |
           UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
-          BUMP_TYPE="${{ github.event.inputs.bump_type }}"
+          LATEST_TAG="${{ steps.get-latest-tag.outputs.latest_tag }}"
 
-          if [ "$BUMP_TYPE" = "auto" ]; then
-            # Use semver-generator output
-            NEXT_VERSION="${{ steps.semver.outputs.semantic_version }}"
-            echo "Auto-detected version from commits: ${NEXT_VERSION}"
+          echo "::group::Calculating CARTO version"
+
+          # Make script executable
+          chmod +x .github/scripts/calculate_carto_version.sh
+
+          # Calculate new version using script
+          RELEASE_TAG=$(./.github/scripts/calculate_carto_version.sh "${LATEST_TAG}" "${UPSTREAM_VERSION}")
+
+          echo "Calculated release tag: ${RELEASE_TAG}"
+
+          # Extract CARTO version from tag for display
+          CARTO_VERSION=$(echo "$RELEASE_TAG" | sed -E 's/.*-carto\.([0-9]+\.[0-9]+\.[0-9]+)/\1/')
+
+          # Detect if this is an upstream sync (first release for this upstream version)
+          if [ -z "$LATEST_TAG" ]; then
+            echo "First release for upstream v${UPSTREAM_VERSION} - this is an upstream sync"
+            IS_UPSTREAM_SYNC="true"
+            PREVIOUS_UPSTREAM="unknown"
           else
-            # Manual bump
-            CURRENT="${{ steps.get-latest-tag.outputs.current_version }}"
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-
-            case "$BUMP_TYPE" in
-              major)
-                MAJOR=$((MAJOR + 1))
-                MINOR=0
-                PATCH=0
-                ;;
-              minor)
-                MINOR=$((MINOR + 1))
-                PATCH=0
-                ;;
-              patch)
-                PATCH=$((PATCH + 1))
-                ;;
-            esac
-
-            NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
-            echo "Manual bump (${BUMP_TYPE}): ${NEXT_VERSION}"
+            # Extract upstream version from previous tag
+            PREVIOUS_UPSTREAM=$(echo "$LATEST_TAG" | sed -E 's/v([0-9]+\.[0-9]+\.[0-9]+)-carto\..*/\1/')
+            if [ "$PREVIOUS_UPSTREAM" != "$UPSTREAM_VERSION" ]; then
+              echo "Upstream version changed: ${PREVIOUS_UPSTREAM} → ${UPSTREAM_VERSION}"
+              echo "This is an upstream sync release"
+              IS_UPSTREAM_SYNC="true"
+            else
+              echo "Same upstream version: ${UPSTREAM_VERSION}"
+              echo "This is a CARTO-only release"
+              IS_UPSTREAM_SYNC="false"
+            fi
           fi
 
-          RELEASE_TAG="carto-v${UPSTREAM_VERSION}-${NEXT_VERSION}"
-
-          echo "next_version=${NEXT_VERSION}" >> $GITHUB_OUTPUT
+          # Output variables
           echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
-          echo "Release tag: ${RELEASE_TAG}"
+          echo "carto_version=${CARTO_VERSION}" >> $GITHUB_OUTPUT
+          echo "is_upstream_sync=${IS_UPSTREAM_SYNC}" >> $GITHUB_OUTPUT
+          echo "previous_upstream=${PREVIOUS_UPSTREAM}" >> $GITHUB_OUTPUT
+
+          echo "::endgroup::"
+
+          echo "📦 Release tag: ${RELEASE_TAG}"
+          echo "   CARTO version: ${CARTO_VERSION}"
+          echo "   Upstream sync: ${IS_UPSTREAM_SYNC}"
 
       - name: Generate intelligent release notes with Claude
         id: release-notes
@@ -210,28 +226,55 @@ jobs:
           show_full_output: false
           claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 50 --allowed-tools Read,Bash,Grep,Glob"
           prompt: |
-            # Intelligent Release Notes Generation
+            # Intelligent Release Notes Generation with Upstream Sync Detection
 
             ## Your Task
-            Generate product-focused release notes for LiteLLM CARTO fork that ONLY include changes relevant to end-users and product functionality.
+            Generate product-focused release notes for LiteLLM CARTO fork that separates CARTO-specific changes from upstream LiteLLM improvements.
 
             ## Context
-            - **Upstream Version**: ${{ steps.detect-upstream.outputs.upstream_version }}
-            - **Previous Tag**: Find it with: `git tag -l "carto-v${{ steps.detect-upstream.outputs.upstream_version }}-*" | sort -V | tail -n 1`
+            - **Current Upstream Version**: ${{ steps.detect-upstream.outputs.upstream_version }}
+            - **Is Upstream Sync**: ${{ steps.calc-version.outputs.is_upstream_sync }}
+            - **Previous Upstream Version**: ${{ steps.calc-version.outputs.previous_upstream }}
+            - **CARTO Version**: ${{ steps.calc-version.outputs.carto_version }}
+            - **Release Tag**: ${{ steps.calc-version.outputs.release_tag }}
             - **Output File**: `release_notes.md` (create this file)
 
-            ## Step 1: Find Commits to Analyze
-            ```bash
-            # Get the latest CARTO tag for this upstream version
-            UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
-            LATEST_TAG=$(git tag -l "carto-v${UPSTREAM_VERSION}-*" | sort -V | tail -n 1)
+            ## Step 1: Determine Release Type
 
-            if [ -z "$LATEST_TAG" ]; then
-              # First release - get last 30 commits
-              git log --oneline --no-merges -30
+            **Upstream Sync:** ${{ steps.calc-version.outputs.is_upstream_sync }}
+
+            ```bash
+            if [ "${{ steps.calc-version.outputs.is_upstream_sync }}" = "true" ]; then
+              echo "🔄 UPSTREAM SYNC DETECTED"
+              echo "From: v${{ steps.calc-version.outputs.previous_upstream }}"
+              echo "To: v${{ steps.detect-upstream.outputs.upstream_version }}"
+
+              # Get upstream releases between versions
+              echo "Fetching upstream releases..."
+              gh release list --repo BerriAI/litellm --limit 50 | \
+                grep "stable" | \
+                head -10
             else
-              # Get commits since last tag
-              git log ${LATEST_TAG}..HEAD --oneline --no-merges
+              echo "📝 Regular CARTO release (not an upstream sync)"
+            fi
+            ```
+
+            ## Step 2: Analyze CARTO Commits
+
+            Find the last CARTO release tag and analyze commits since then:
+
+            ```bash
+            # Get last CARTO release tag
+            LAST_TAG=$(git tag -l "v*-carto.*" | sort -V | tail -n 1)
+
+            if [ -n "$LAST_TAG" ]; then
+              echo "Analyzing CARTO commits since ${LAST_TAG}..."
+              git log ${LAST_TAG}..HEAD --oneline --no-merges | \
+                grep -vE "(sync:|Merge|merge upstream)"
+            else
+              echo "First CARTO release - analyzing recent commits..."
+              git log --oneline --no-merges -30 | \
+                grep -vE "(sync:|Merge|merge upstream)"
             fi
             ```
 
@@ -265,7 +308,55 @@ jobs:
 
             ## Step 4: Generate Markdown Release Notes
 
-            Create `release_notes.md` with this structure:
+            **IF UPSTREAM SYNC DETECTED** (first release for this upstream version), use this structure:
+
+            ```markdown
+            ## 🚀 CARTO Release for LiteLLM v${{ steps.detect-upstream.outputs.upstream_version }}
+
+            **Base Version:** LiteLLM v${{ steps.detect-upstream.outputs.upstream_version }} (synced from v{previous_version})
+
+            ### 🔄 Upstream Sync
+
+            This release includes a **major upstream sync** from LiteLLM v{previous} to v{current}.
+
+            **Upstream Releases Included:**
+            - [v{version}-stable](link) ({date}) - [Brief summary of key changes]
+            - [v{version}-stable](link) ({date}) - [Brief summary of key changes]
+
+            **Compare Upstream Changes:**
+            - [v{previous}-stable...v{current}-stable](comparison_link)
+
+            **Key Upstream Improvements:**
+            - **Category**: Brief description of major upstream changes
+            - **Category**: Another major upstream improvement
+            - *For full upstream changes, see the links above*
+
+            **Sync Strategy:**
+            - ✅ Preserved all CARTO customizations
+            - ✅ Accepted all upstream core improvements
+            - ✅ Resolved conflicts favoring CARTO infrastructure + upstream functionality
+
+            ### ✨ CARTO-Specific Features
+            - [Only CARTO-developed features, if any]
+            - *Or: No CARTO-specific features in this release*
+
+            ### 🐛 CARTO-Specific Bug Fixes
+            - [Only CARTO-developed fixes, if any]
+            - *Or: No CARTO-specific fixes in this release*
+
+            ### 🔒 Security
+            - [CARTO-specific security changes, if any]
+            - *Or: No CARTO-specific security changes. All upstream security fixes included.*
+
+            ### ⚠️ Breaking Changes
+            - [CARTO-specific breaking changes, if any]
+            - *Or: No CARTO-specific breaking changes. See upstream release notes for upstream breaking changes.*
+
+            ---
+            *This release includes upstream sync + X CARTO-specific changes. Infrastructure and CI changes are not listed.*
+            ```
+
+            **IF REGULAR CARTO RELEASE** (not first release for this upstream version), use this structure:
 
             ```markdown
             ## 🚀 CARTO Release for LiteLLM v${{ steps.detect-upstream.outputs.upstream_version }}
@@ -273,34 +364,62 @@ jobs:
             **Base Version:** LiteLLM v${{ steps.detect-upstream.outputs.upstream_version }}
 
             ### ✨ Features
-            - [Brief description of feature - explain what it does for users, not technical commit details]
-            - [Another feature]
+            - [Brief description of feature]
 
             ### 🐛 Bug Fixes
-            - [Brief description of fix - explain what issue was resolved]
-            - [Another fix]
+            - [Brief description of fix]
 
             ### 🔒 Security
             - [If any security-related changes]
 
             ### ⚠️ Breaking Changes
-            - [If any breaking changes - explain impact and migration path]
+            - [If any breaking changes]
 
             ---
             *This release includes X product-relevant changes. Infrastructure and CI changes are not listed here.*
             ```
 
             ## Important Guidelines
+
+            ### General Guidelines
             1. **Be concise but clear**: Each bullet should explain WHAT changed and WHY it matters to users
             2. **Group related changes**: If multiple commits fix the same issue, combine into one bullet
             3. **Skip internal details**: Don't mention workflow files, CI configs, documentation updates for maintainers
             4. **Add context**: Transform raw commit messages into user-friendly descriptions
             5. **Empty sections**: If no features/fixes, write "No changes in this category"
 
-            ## Example Transformation
-            ❌ BAD (raw commit): "fix: cherry-pick upstream metadata None check [sc-521238]"
-            ✅ GOOD (user-friendly): "Fixed crash when LiteLLM proxy encounters null metadata in provider responses"
+            ### Upstream Sync Guidelines
+            6. **Separate CARTO from upstream**: Clearly distinguish CARTO-developed changes from upstream improvements
+            7. **Summarize upstream changes**: Don't list every upstream commit - provide high-level categories (e.g., "New provider support", "Performance improvements")
+            8. **Link to upstream releases**: Always include links to upstream release notes for full details
+            9. **Highlight key upstream features**: Mention 2-3 most important upstream improvements that affect users
+            10. **Cherry-picks**: If CARTO cherry-picked specific upstream fixes before the sync, mention them in CARTO-Specific section
 
+            ## Example Transformations
+
+            ### Upstream Sync Example:
+            ❌ BAD: "Merged upstream v1.79.1"
+            ✅ GOOD:
+            ```
+            ### 🔄 Upstream Sync
+            This release includes a major upstream sync from LiteLLM v1.75.2 to v1.79.1.
+
+            **Upstream Releases Included:**
+            - [v1.78.5-stable](link) (2025-10-26) - Performance improvements and bug fixes
+            - [v1.79.0-stable](link) (2025-11-01) - New provider support for Anthropic Claude 3.5
+            - [v1.79.1-stable](link) (2025-11-08) - Security updates and stability improvements
+
+            **Key Upstream Improvements:**
+            - **New Providers**: Added support for Anthropic Claude 3.5 Sonnet and Haiku models
+            - **Performance**: 30% faster response times for streaming endpoints
+            - **Bug Fixes**: Resolved 45+ issues including token counting accuracy and rate limiting
+            ```
+
+            ### CARTO-Specific Change Example:
+            ❌ BAD (raw commit): "fix: cherry-pick upstream metadata None check [sc-521238]"
+            ✅ GOOD (user-friendly): "Fixed crash when LiteLLM proxy encounters null metadata in Vertex AI provider responses (cherry-picked from upstream)"
+
+            ### Exclusion Example:
             ❌ BAD (should exclude): "feat: create separate CI fixer workflow with upstream test check"
             ✅ GOOD (excluded): Not included in release notes (CI infrastructure change)
 
@@ -385,3 +504,100 @@ jobs:
           echo "- ✅ Actor authorization verified" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Claude Code used read-only tools" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Rate limited (max 50 turns, 20-min timeout)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify Slack of new release
+        if: success()
+        env:
+          SLACK_CHANNEL: "C09K0M5MP7V" # cartodb-ops
+        run: |
+          set -eu
+
+          echo "::group::Preparing Slack notification"
+
+          # Check if SLACK_KEY secret is configured
+          if [[ -z "${{ secrets.SLACK_KEY }}" ]]; then
+            echo "::warning::SLACK_KEY secret not configured - skipping notification"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Prepare notification data
+          RELEASE_TAG="${{ steps.calc-version.outputs.release_tag }}"
+          CARTO_VERSION="${{ steps.calc-version.outputs.carto_version }}"
+          UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
+          IS_UPSTREAM_SYNC="${{ steps.calc-version.outputs.is_upstream_sync }}"
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}"
+          DOCKER_IMAGE="ghcr.io/${{ github.repository }}-non_root:carto-stable"
+
+          # Determine release type
+          if [ "$IS_UPSTREAM_SYNC" = "true" ]; then
+            PREVIOUS_UPSTREAM="${{ steps.calc-version.outputs.previous_upstream }}"
+            TYPE_LABEL="Upstream Sync (v${PREVIOUS_UPSTREAM} → v${UPSTREAM_VERSION})"
+            EMOJI=":arrows_counterclockwise:"
+          else
+            TYPE_LABEL="CARTO Customization"
+            EMOJI=":rocket:"
+          fi
+
+          # Build Slack message with context
+          MESSAGE="${EMOJI} *LiteLLM CARTO Release* - ${RELEASE_TAG}
+
+          *Release Details:*
+          - Type: ${TYPE_LABEL}
+          - CARTO Version: ${CARTO_VERSION}
+          - Upstream Base: LiteLLM v${UPSTREAM_VERSION}
+          - Release Notes: ${RELEASE_URL}
+          - Docker Image: ${DOCKER_IMAGE}"
+
+          echo "[Slack] Sending notification to channel ${SLACK_CHANNEL}"
+          echo "::endgroup::"
+
+          echo "::group::Posting to Slack"
+
+          # Retry logic (up to 3 attempts)
+          SUCCESS=false
+          for attempt in 1 2 3; do
+            echo "[Slack] Attempt ${attempt}/3..."
+
+            # Send to Slack API
+            RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -F "text=${MESSAGE}" \
+              -F "channel=${SLACK_CHANNEL}" \
+              -H "Authorization: Bearer ${{ secrets.SLACK_KEY }}" \
+              -X POST https://slack.com/api/chat.postMessage)
+
+            # Extract HTTP code and body
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | head -n-1)
+
+            echo "[Slack] HTTP ${HTTP_CODE}"
+            echo "[Slack] Response: ${BODY}"
+
+            # Check if successful
+            if [ "$HTTP_CODE" = "200" ]; then
+              # Check Slack API response
+              if echo "$BODY" | grep -q '"ok":true'; then
+                echo "✅ [Slack] Release notification sent successfully"
+                SUCCESS=true
+                break
+              else
+                ERROR=$(echo "$BODY" | grep -o '"error":"[^"]*"' || echo "unknown error")
+                echo "⚠️ [Slack] Slack API error: ${ERROR}"
+              fi
+            else
+              echo "⚠️ [Slack] HTTP error: ${HTTP_CODE}"
+            fi
+
+            # Wait before retry
+            if [ $attempt -lt 3 ]; then
+              echo "[Slack] Retrying in 5 seconds..."
+              sleep 5
+            fi
+          done
+
+          if [ "$SUCCESS" = "false" ]; then
+            echo "::error::Failed to send Slack notification after 3 attempts"
+            echo "::notice::Check SLACK_KEY secret and channel permissions"
+          fi
+
+          echo "::endgroup::"

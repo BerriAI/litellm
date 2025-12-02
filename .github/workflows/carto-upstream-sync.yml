@@ -132,57 +132,64 @@ jobs:
           set -eu
 
           echo "::group::Syncing main branch with upstream"
-          echo "[Sync] main should be a mirror of upstream - attempting merge with conflict resolution"
+          echo "[Sync] main should be a mirror of upstream - merging with proper history preservation"
 
           # Add upstream remote
           git remote add upstream https://github.com/BerriAI/litellm.git || true
           git fetch upstream --tags
 
-          # Try merge first (git-friendly approach)
-          echo "[Sync] Attempting merge with -X theirs strategy..."
-          if git merge upstream/main --no-edit -X theirs -m "sync: merge upstream/main for ${NEW_VERSION}
+          # Merge upstream/main while preserving upstream commit history
+          echo "[Sync] Merging upstream/main with -X theirs strategy (preserves commit history)..."
+
+          # Use merge strategy that accepts all upstream changes on conflict
+          # This preserves the full commit history with original SHAs
+          git merge upstream/main --no-edit -X theirs -m "sync: merge upstream/main for ${NEW_VERSION}
 
           Automatic sync from upstream BerriAI/litellm
           Preparing for ${NEW_VERSION} release
 
-          Strategy: Accept all upstream changes (main is a mirror)"; then
-            echo "[Sync] ✅ Merge successful"
+          Strategy: Merge with history preservation (main mirrors upstream)"
+
+          if [ $? -eq 0 ]; then
+            echo "[Sync] ✅ Merge successful with preserved history"
           else
-            # Merge failed - abort and use reset as fallback
-            echo "[Sync] ⚠️ Merge failed, using reset fallback (main is a mirror)"
-            git merge --abort || true
+            # If -X theirs still has conflicts, use more aggressive approach
+            echo "[Sync] ⚠️ Conflicts detected, resolving by accepting all upstream changes..."
 
-            # Store old commit for reference
-            OLD_COMMIT=$(git rev-parse HEAD)
-            echo "[Sync] Old HEAD: ${OLD_COMMIT}"
+            # Get list of conflicted files
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
 
-            # Reset to upstream (mirror strategy)
-            git reset --hard upstream/main
+            if [ -n "$CONFLICTS" ]; then
+              echo "[Sync] Resolving conflicts in files:"
+              echo "$CONFLICTS"
 
-            # Create merge commit for history
-            git commit --allow-empty -m "sync: merge upstream/main for ${NEW_VERSION}
+              # For each conflicted file, accept upstream version
+              echo "$CONFLICTS" | while read -r file; do
+                echo "  - Accepting upstream version of: $file"
+                git checkout --theirs "$file"
+                git add "$file"
+              done
+
+              # Complete the merge commit
+              git commit --no-edit -m "sync: merge upstream/main for ${NEW_VERSION}
 
           Automatic sync from upstream BerriAI/litellm
           Preparing for ${NEW_VERSION} release
 
-          Strategy: Reset to upstream (merge conflicts required mirror reset)
-          Previous HEAD: ${OLD_COMMIT}"
+          Strategy: Merge with manual conflict resolution (accepted all upstream changes)"
+
+              echo "[Sync] ✅ Conflicts resolved, merge completed with preserved history"
+            else
+              echo "[Sync] ❌ Merge failed with no conflicts detected - manual intervention needed"
+              exit 1
+            fi
           fi
 
-          # Push to origin/main
+          # Push to origin/main (should always be fast-forward with proper merge)
           echo "[Sync] Pushing updated main branch to origin..."
+          git push origin main
 
-          # Check if we need force push
-          if git merge-base --is-ancestor origin/main HEAD; then
-            # Fast-forward possible, normal push
-            git push origin main
-          else
-            # Force push needed (from reset fallback)
-            echo "[Sync] Using force-with-lease (reset was used)"
-            git push origin main --force-with-lease
-          fi
-
-          echo "[Sync] ✅ main branch synced successfully"
+          echo "[Sync] ✅ main branch synced successfully with preserved upstream commit history"
           echo "::endgroup::"
 
   ##############################################################################
@@ -482,7 +489,7 @@ jobs:
     steps:
       - name: Send Slack notification
         env:
-          SLACK_CHANNEL: "C3W6342EN" # infrastructure-dev
+          SLACK_CHANNEL: "C09K0M5MP7V" # cartodb-ops
           HAS_NEW_RELEASE: ${{ needs.check-new-release.outputs.has-new-release }}
           NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
           NEEDS_SYNC: ${{ needs.check-carto-main-sync.outputs.needs-sync }}
@@ -507,29 +514,31 @@ jobs:
           WORKFLOW_RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           # Build message based on what happened
+          CONTEXT_NOTE="\n\n_LiteLLM is the unified LLM proxy for 100+ providers used by CARTO for all AI features_"
+
           case "${NEEDS_SYNC}:${PR_EXISTS}" in
             true:false)
               if [[ -n "${NEW_PR_URL}" ]]; then
                 if [[ "${HAS_NEW_RELEASE}" == "true" ]]; then
-                  MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - New release ${NEW_VERSION} detected\n• PR created: ${NEW_PR_URL}\n• Commits: ${COMMITS_BEHIND} behind"
+                  MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - New release ${NEW_VERSION} detected\n\n*Action Required:* Review and merge sync PR\n• PR: ${NEW_PR_URL}\n• Commits: ${COMMITS_BEHIND} behind upstream${CONTEXT_NOTE}"
                 else
-                  MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - PR created (carto/main was ${COMMITS_BEHIND} commits behind)\n${NEW_PR_URL}"
+                  MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - PR created\n\n*Action Required:* Review and merge sync PR\n• PR: ${NEW_PR_URL}\n• Commits: carto/main was ${COMMITS_BEHIND} commits behind${CONTEXT_NOTE}"
                 fi
               else
                 MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow error (PR URL missing)\n<${WORKFLOW_RUN_URL}|View workflow run>"
               fi
               ;;
             true:true)
-              MESSAGE=":information_source: *LiteLLM Upstream Sync* - PR already exists (${COMMITS_BEHIND} commits behind)\n${EXISTING_PR_URL}"
+              MESSAGE=":information_source: *LiteLLM Upstream Sync* - PR already exists\n\n*Status:* Existing PR is ${COMMITS_BEHIND} commits behind upstream\n• PR: ${EXISTING_PR_URL}${CONTEXT_NOTE}"
               ;;
             false:*)
-              MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - carto/main is up to date with main"
+              MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - Up to date\n\ncarto/main is fully synced with upstream${CONTEXT_NOTE}"
               ;;
             *)
               if [[ "${SYNC_STATUS}" == "failure" ]]; then
-                MESSAGE=":x: *LiteLLM Upstream Sync* - Failed to sync main branch with upstream\n<${WORKFLOW_RUN_URL}|View workflow run>"
+                MESSAGE=":x: *LiteLLM Upstream Sync* - Sync failed\n\n*Action Required:* Check workflow logs\n<${WORKFLOW_RUN_URL}|View workflow run>"
               else
-                MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow encountered an error\n<${WORKFLOW_RUN_URL}|View workflow run>"
+                MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow error\n\n*Action Required:* Check workflow logs\n<${WORKFLOW_RUN_URL}|View workflow run>"
               fi
               ;;
           esac
@@ -538,10 +547,58 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Posting to Slack"
-          curl -F "text=${MESSAGE}" \
-            -F "channel=${SLACK_CHANNEL}" \
-            -H "Authorization: Bearer ${{ secrets.SLACK_KEY }}" \
-            -X POST https://slack.com/api/chat.postMessage
 
-          echo "[Slack] Notification sent successfully"
+          # Check if SLACK_KEY secret is configured
+          if [[ -z "${{ secrets.SLACK_KEY }}" ]]; then
+            echo "::warning::SLACK_KEY secret not configured - skipping notification"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Retry logic (up to 3 attempts)
+          SUCCESS=false
+          for attempt in 1 2 3; do
+            echo "[Slack] Attempt ${attempt}/3..."
+
+            # Send to Slack API
+            RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -F "text=${MESSAGE}" \
+              -F "channel=${SLACK_CHANNEL}" \
+              -H "Authorization: Bearer ${{ secrets.SLACK_KEY }}" \
+              -X POST https://slack.com/api/chat.postMessage)
+
+            # Extract HTTP code and body
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | head -n-1)
+
+            echo "[Slack] HTTP ${HTTP_CODE}"
+            echo "[Slack] Response: ${BODY}"
+
+            # Check if successful
+            if [ "$HTTP_CODE" = "200" ]; then
+              # Check Slack API response
+              if echo "$BODY" | grep -q '"ok":true'; then
+                echo "✅ [Slack] Notification sent successfully"
+                SUCCESS=true
+                break
+              else
+                ERROR=$(echo "$BODY" | grep -o '"error":"[^"]*"' || echo "unknown error")
+                echo "⚠️ [Slack] Slack API error: ${ERROR}"
+              fi
+            else
+              echo "⚠️ [Slack] HTTP error: ${HTTP_CODE}"
+            fi
+
+            # Wait before retry
+            if [ $attempt -lt 3 ]; then
+              echo "[Slack] Retrying in 5 seconds..."
+              sleep 5
+            fi
+          done
+
+          if [ "$SUCCESS" = "false" ]; then
+            echo "::error::Failed to send Slack notification after 3 attempts"
+            echo "::notice::Check SLACK_KEY secret and channel permissions"
+          fi
+
           echo "::endgroup::"
