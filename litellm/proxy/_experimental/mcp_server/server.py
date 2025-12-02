@@ -6,7 +6,7 @@ LiteLLM MCP Server Routes
 import asyncio
 import contextlib
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast
 
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
@@ -72,7 +72,13 @@ if MCP_AVAILABLE:
         auth_context_var,
     )
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from mcp.types import CallToolResult, EmbeddedResource, ImageContent, Prompt, TextContent
+    from mcp.types import (
+        CallToolResult,
+        EmbeddedResource,
+        ImageContent,
+        Prompt,
+        TextContent,
+    )
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
@@ -234,7 +240,7 @@ if MCP_AVAILABLE:
     @server.call_tool()
     async def mcp_server_tool_call(
         name: str, arguments: Dict[str, Any] | None
-    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
+    ) -> CallToolResult:
         """
         Call a specific tool with the provided arguments
 
@@ -1259,7 +1265,7 @@ if MCP_AVAILABLE:
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
             local_content = await _handle_local_mcp_tool(name, arguments)
-            response = CallToolResult(content=local_content, isError=False)
+            response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)
         # Primary and recommended way to use external MCP servers
@@ -1294,7 +1300,9 @@ if MCP_AVAILABLE:
                 local_content = await _handle_local_mcp_tool(
                     original_tool_name, arguments
                 )
-                response = CallToolResult(content=local_content, isError=False)
+                response = CallToolResult(
+                    content=cast(Any, local_content), isError=False
+                )
 
         #########################################################
         # Post MCP Tool Call Hook
