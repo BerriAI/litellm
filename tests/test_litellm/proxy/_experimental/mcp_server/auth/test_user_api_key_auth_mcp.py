@@ -1047,9 +1047,9 @@ def test_get_mcp_server_auth_headers_from_headers(headers, expected_result):
 
 
 @pytest.mark.asyncio
-async def test_get_team_object_permission_with_already_loaded_permission():
+async def test_get_team_object_permissions_with_already_loaded_permission():
     """
-    Test that _get_team_object_permission returns the already loaded object_permission
+    Test that _get_team_object_permissions returns the already loaded object_permission
     from the team object without making an additional DB call.
     """
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
@@ -1092,13 +1092,13 @@ async def test_get_team_object_permission_with_already_loaded_permission():
                 mock_get_team.return_value = mock_team_obj
                 
                 # Call the method
-                result = await MCPRequestHandler._get_team_object_permission(
+                result = await MCPRequestHandler._get_team_object_permissions(
                     mock_user_auth
                 )
                 
                 # Assert we got the object permission
-                assert result == mock_object_permission
-                assert result.mcp_servers == ["server1", "server2"]
+                assert result == [mock_object_permission]
+                assert result[0].mcp_servers == ["server1", "server2"]
                 
                 # Verify get_team_object was called
                 mock_get_team.assert_called_once()
@@ -1108,9 +1108,9 @@ async def test_get_team_object_permission_with_already_loaded_permission():
 
 
 @pytest.mark.asyncio
-async def test_get_team_object_permission_fetches_from_db_when_not_loaded():
+async def test_get_team_object_permissions_fetches_from_db_when_not_loaded():
     """
-    Test that _get_team_object_permission fetches from DB when object_permission
+    Test that _get_team_object_permissions fetches from DB when object_permission
     is not loaded but object_permission_id exists.
     """
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
@@ -1154,31 +1154,31 @@ async def test_get_team_object_permission_fetches_from_db_when_not_loaded():
                 mock_get_perm.return_value = mock_object_permission
                 
                 # Call the method
-                result = await MCPRequestHandler._get_team_object_permission(
+                result = await MCPRequestHandler._get_team_object_permissions(
                     mock_user_auth
                 )
                 
                 # Assert we got the object permission
-                assert result == mock_object_permission
-                assert result.mcp_servers == ["server3", "server4"]
+                assert result == [mock_object_permission]
+                assert result[0].mcp_servers == ["server3", "server4"]
                 
                 # Verify get_team_object was called
                 mock_get_team.assert_called_once()
                 
                 # Verify get_object_permission WAS called (since it wasn't loaded)
-                mock_get_perm.assert_called_once_with(
-                    object_permission_id="perm-456",
-                    prisma_client=mock.ANY,
-                    user_api_key_cache=mock.ANY,
-                    parent_otel_span=mock_user_auth.parent_otel_span,
-                    proxy_logging_obj=mock.ANY,
-                )
+            mock_get_perm.assert_called_once_with(
+                object_permission_id="perm-456",
+                prisma_client=mock.ANY,
+                user_api_key_cache=mock.ANY,
+                parent_otel_span=mock_user_auth.parent_otel_span,
+                proxy_logging_obj=mock.ANY,
+            )
 
 
 @pytest.mark.asyncio
 async def test_get_allowed_mcp_servers_for_team_uses_helper():
     """
-    Test that _get_allowed_mcp_servers_for_team properly uses _get_team_object_permission
+    Test that _get_allowed_mcp_servers_for_team properly uses _get_team_object_permissions
     helper which handles both loaded and unloaded object_permission cases.
     """
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
@@ -1200,13 +1200,13 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
     
     # Mock the helper methods
     with patch.object(
-        MCPRequestHandler, "_get_team_object_permission"
+        MCPRequestHandler, "_get_team_object_permissions"
     ) as mock_get_team_perm:
         with patch.object(
             MCPRequestHandler, "_get_mcp_servers_from_access_groups"
         ) as mock_get_access_group_servers:
             # Configure mocks
-            mock_get_team_perm.return_value = mock_object_permission
+            mock_get_team_perm.return_value = [mock_object_permission]
             mock_get_access_group_servers.return_value = ["group-server1", "group-server2"]
             
             # Call the method
@@ -1222,7 +1222,7 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
                 "group-server2",
             }
             
-            # Verify _get_team_object_permission was called (the helper we fixed)
+            # Verify _get_team_object_permissions was called (the helper we fixed)
             mock_get_team_perm.assert_called_once_with(mock_user_auth)
             
             # Verify access groups were resolved
@@ -1244,9 +1244,9 @@ async def test_get_allowed_mcp_servers_for_team_with_no_object_permission():
     
     # Mock the helper to return None (no object permission)
     with patch.object(
-        MCPRequestHandler, "_get_team_object_permission"
+        MCPRequestHandler, "_get_team_object_permissions"
     ) as mock_get_team_perm:
-        mock_get_team_perm.return_value = None
+        mock_get_team_perm.return_value = []
         
         # Call the method
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(

@@ -5,7 +5,13 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_TeamTable, SpecialHeaders, UserAPIKeyAuth
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamTable,
+    SpecialHeaders,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -373,10 +379,65 @@ class MCPRequestHandler:
         return None
 
     @staticmethod
-    async def _get_team_object_permission(
+    async def _get_effective_team_ids(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ):
-        """Helper to get team object_permission from cache or DB."""
+    ) -> List[str]:
+        """
+        Resolve the real team ids for a request.
+
+        UI session tokens (team_id = UI_SESSION_TOKEN_TEAM_ID) don't carry the actual
+        team membership on the token, so look up the user and cache the resolved ids.
+        """
+        if (
+            user_api_key_auth is None
+            or user_api_key_auth.team_id is None
+            or user_api_key_auth.team_id == ""
+        ):
+            return []
+
+        # If this isn't a UI session token, just return the provided team id
+        if user_api_key_auth.team_id != UI_SESSION_TOKEN_TEAM_ID:
+            return [user_api_key_auth.team_id]
+
+        if not user_api_key_auth.user_id:
+            return []
+
+        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if prisma_client is None:
+            return []
+
+        try:
+            user_obj = await get_user_object(
+                user_id=user_api_key_auth.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_logger.warning(
+                "Failed to load user teams for UI session token: %s", e
+            )
+            return []
+
+        if user_obj is None or not user_obj.teams:
+            return []
+
+        resolved_team_ids = list(dict.fromkeys(user_obj.teams))  # preserve order
+        return resolved_team_ids
+
+    @staticmethod
+    async def _get_team_object_permissions(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[LiteLLM_ObjectPermissionTable]:
+        """Helper to get all team object permissions from cache or DB."""
         from litellm.proxy.auth.auth_checks import (
             get_object_permission,
             get_team_object,
@@ -387,36 +448,57 @@ class MCPRequestHandler:
             user_api_key_cache,
         )
 
-        if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
-            return None
+        if not user_api_key_auth or not prisma_client:
+            return []
 
-        # First get the team object (which may have object_permission already loaded)
-        team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
-            team_id=user_api_key_auth.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=user_api_key_auth.parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+        team_ids = await MCPRequestHandler._get_effective_team_ids(user_api_key_auth)
+        if not team_ids:
+            return []
 
-        if not team_obj:
-            return None
+        object_permissions: List[LiteLLM_ObjectPermissionTable] = []
+        seen_permission_ids: Set[str] = set()
 
-        # Already loaded
-        if team_obj.object_permission:
-            return team_obj.object_permission
+        for team_id in team_ids:
+            try:
+                team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_auth.parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except Exception as e:
+                verbose_logger.warning(
+                    "Failed to get team object for team_id=%s: %s", team_id, e
+                )
+                continue
 
-        # Need to fetch from DB using object_permission_id
-        if team_obj.object_permission_id:
-            return await get_object_permission(
-                object_permission_id=team_obj.object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_auth.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            if not team_obj:
+                continue
 
-        return None
+            object_permission: Optional[
+                LiteLLM_ObjectPermissionTable
+            ] = team_obj.object_permission
+
+            if object_permission is None and team_obj.object_permission_id:
+                object_permission = await get_object_permission(
+                    object_permission_id=team_obj.object_permission_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_auth.parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+
+            if object_permission is None:
+                continue
+
+            if object_permission.object_permission_id in seen_permission_ids:
+                continue
+
+            seen_permission_ids.add(object_permission.object_permission_id)
+            object_permissions.append(object_permission)
+
+        return object_permissions
 
     @staticmethod
     async def get_allowed_tools_for_server(
@@ -442,7 +524,7 @@ class MCPRequestHandler:
             key_obj_perm = await MCPRequestHandler._get_key_object_permission(
                 user_api_key_auth
             )
-            team_obj_perm = await MCPRequestHandler._get_team_object_permission(
+            team_obj_perms = await MCPRequestHandler._get_team_object_permissions(
                 user_api_key_auth
             )
 
@@ -452,11 +534,21 @@ class MCPRequestHandler:
                 if key_obj_perm and key_obj_perm.mcp_tool_permissions
                 else None
             )
-            team_tools = (
-                team_obj_perm.mcp_tool_permissions.get(server_id)
-                if team_obj_perm and team_obj_perm.mcp_tool_permissions
-                else None
-            )
+            team_tools: Optional[List[str]] = None
+            if team_obj_perms:
+                aggregated_tools: Optional[Set[str]] = None
+                for team_obj_perm in team_obj_perms:
+                    if (
+                        team_obj_perm.mcp_tool_permissions
+                        and server_id in team_obj_perm.mcp_tool_permissions
+                    ):
+                        tools = team_obj_perm.mcp_tool_permissions.get(server_id)
+                        if tools:
+                            if aggregated_tools is None:
+                                aggregated_tools = set()
+                            aggregated_tools.update(tools)
+                if aggregated_tools is not None:
+                    team_tools = list(aggregated_tools)
 
             # Apply same inheritance logic as get_allowed_mcp_servers
             if team_tools:
@@ -579,38 +671,43 @@ class MCPRequestHandler:
         """
         Get allowed MCP servers for a team.
 
-        Uses the helper _get_team_object_permission which:
-        1. First checks if object_permission is already loaded on the team
-        2. If not, fetches from DB using object_permission_id if it exists
+        Uses _get_team_object_permissions internally to load every team object's permission
         """
         if user_api_key_auth is None:
             return []
 
-        if user_api_key_auth.team_id is None:
+        team_ids = await MCPRequestHandler._get_effective_team_ids(user_api_key_auth)
+        if not team_ids:
             return []
 
         try:
-            # Use the helper method that properly handles fetching from DB if needed
-            object_permissions = await MCPRequestHandler._get_team_object_permission(
+            object_permissions = await MCPRequestHandler._get_team_object_permissions(
                 user_api_key_auth
             )
 
-            if object_permissions is None:
+            if not object_permissions:
                 return []
 
-            # Get direct MCP servers
-            direct_mcp_servers = object_permissions.mcp_servers or []
+            direct_mcp_servers: Set[str] = set()
+            access_groups: Set[str] = set()
 
-            # Get MCP servers from access groups
-            access_group_servers = (
-                await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                    object_permissions.mcp_access_groups or []
+            for permission in object_permissions:
+                if permission.mcp_servers:
+                    direct_mcp_servers.update(permission.mcp_servers)
+                if permission.mcp_access_groups:
+                    access_groups.update(permission.mcp_access_groups)
+
+            access_group_servers: List[str] = []
+            if access_groups:
+                access_group_servers = (
+                    await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                        list(access_groups)
+                    )
                 )
-            )
 
-            # Combine both lists
-            all_servers = direct_mcp_servers + access_group_servers
-            return list(set(all_servers))
+            all_servers = set(direct_mcp_servers)
+            all_servers.update(access_group_servers)
+            return list(all_servers)
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get allowed MCP servers for team: {str(e)}"
@@ -760,40 +857,27 @@ class MCPRequestHandler:
         """
         Get MCP access groups for the team
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
-
         if user_api_key_auth is None:
             return []
 
-        if user_api_key_auth.team_id is None:
-            return []
-
-        if prisma_client is None:
-            verbose_logger.debug("prisma_client is None")
+        team_ids = await MCPRequestHandler._get_effective_team_ids(user_api_key_auth)
+        if not team_ids:
             return []
 
         try:
-            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
-                team_id=user_api_key_auth.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_auth.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
+            object_permissions = await MCPRequestHandler._get_team_object_permissions(
+                user_api_key_auth
             )
-            if team_obj is None:
-                verbose_logger.debug("team_obj is None")
+
+            if not object_permissions:
                 return []
 
-            object_permissions = team_obj.object_permission
-            if object_permissions is None:
-                return []
+            access_groups: Set[str] = set()
+            for permission in object_permissions:
+                if permission.mcp_access_groups:
+                    access_groups.update(permission.mcp_access_groups)
 
-            return object_permissions.mcp_access_groups or []
+            return list(access_groups)
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get MCP access groups for team: {str(e)}"
