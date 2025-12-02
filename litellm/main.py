@@ -6324,8 +6324,18 @@ async def ahealth_check(
 
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
+        
+        custom_llm_provider_param = model_params.get("custom_llm_provider", None)
+        api_base_param = model_params.get("api_base", None)
+        api_key_param = model_params.get("api_key", None)
 
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider_param,
+            api_base=api_base_param,
+            api_key=api_key_param
+        )
+
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
