@@ -126,6 +126,62 @@ response = client.chat.completions.create(
 
 See [mock_bedrock_guardrail_server.py](https://github.com/BerriAI/litellm/blob/main/cookbook/mock_guardrail_server/mock_bedrock_guardrail_server.py) for a complete reference implementation.
 
+### Testing with cURL
+
+```bash
+curl -X POST https://your-guardrail-api.com/beta/litellm_basic_guardrail_api \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "texts": [
+      "Hello, can you help me with this task?"
+    ],
+    "images": null,
+    "request_data": {
+      "user_api_key_hash": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+      "user_api_key_alias": "production-key",
+      "user_api_key_user_id": "user_12345",
+      "user_api_key_user_email": "user@example.com",
+      "user_api_key_team_id": "team_67890",
+      "user_api_key_team_alias": "engineering-team",
+      "user_api_key_end_user_id": "end_user_abc",
+      "user_api_key_org_id": "org_xyz"
+    },
+    "input_type": "request",
+    "litellm_call_id": "chatcmpl-123456789",
+    "litellm_trace_id": "trace-abc-def-ghi",
+    "additional_provider_specific_params": {
+      "threshold": 0.8,
+      "language": "en"
+    }
+  }'
+```
+
+**Example Response (NONE):**
+```json
+{
+  "action": "NONE"
+}
+```
+
+**Example Response (BLOCKED):**
+```json
+{
+  "action": "BLOCKED",
+  "blocked_reason": "Content violates policy: contains prohibited terms"
+}
+```
+
+**Example Response (GUARDRAIL_INTERVENED):**
+```json
+{
+  "action": "GUARDRAIL_INTERVENED",
+  "texts": [
+    "Hello, can you help me with [REDACTED]?"
+  ]
+}
+```
+
 **Minimal FastAPI example:**
 
 ```python
