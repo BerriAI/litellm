@@ -26882,6 +26882,95 @@
         "supports_vision": true,
         "supports_web_search": true
     },
+    "zai/glm-4.6": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.2e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing"
+    },
+    "zai/glm-4.5": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.2e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing"
+    },
+    "zai/glm-4.5v": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 1.8e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "source": "https://docs.z.ai/guides/overview/pricing"
+    },
+    "zai/glm-4.5-x": {
+        "input_cost_per_token": 2.2e-06,
+        "output_cost_per_token": 8.9e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing"
+    },
+    "zai/glm-4.5-air": {
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 1.1e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing"
+    },
+    "zai/glm-4.5-airx": {
+        "input_cost_per_token": 1.1e-06,
+        "output_cost_per_token": 4.5e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing"
+    },
+    "zai/glm-4-32b-0414-128k": {
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 1e-07,
+        "litellm_provider": "zai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing"
+    },
+    "zai/glm-4.5-flash": {
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "litellm_provider": "zai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing"
+    },
     "vertex_ai/search_api": {
         "input_cost_per_query": 1.5e-03,
         "litellm_provider": "vertex_ai",
