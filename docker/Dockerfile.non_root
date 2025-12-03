@@ -1,6 +1,6 @@
 # Base images
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
 
 # -----------------
 # Builder Stage
@@ -11,28 +11,18 @@ WORKDIR /app
 # Install build dependencies including Node.js for UI build
 USER root
 RUN apk add --no-cache \
+    python3 \
+    py3-pip \
     clang \
-    clang-dev \
     llvm \
-    llvm-dev \
     lld \
     gcc \
-    g++ \
     linux-headers \
     build-base \
     bash \
     nodejs \
     npm \
-    openssl-dev \
-    libffi-dev \
-    musl-dev \
-    pkgconfig \
-    cmake \
-    make \
-    coreutils \
-    perl \
-    zlib-dev \
-  && pip install --no-cache-dir --upgrade pip build wheel setuptools cython
+  && pip install --no-cache-dir --upgrade pip build
 
 # Copy project files
 COPY . .
@@ -70,19 +60,9 @@ RUN cd /tmp/litellm_ui && \
 RUN cd /app/ui/litellm-dashboard && rm -rf ./out
 
 # Build package and wheel dependencies
-# Set compiler environment variables for grpcio compilation
-ENV CC=clang \
-    CXX=clang++ \
-    GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1 \
-    GRPC_PYTHON_DISABLE_LIBC_COMPATIBILITY=1 \
-    GRPC_PYTHON_BUILD_WITH_CYTHON=1 \
-    PIP_PREFER_BINARY=1 \
-    CFLAGS="-Wno-error" \
-    CXXFLAGS="-Wno-error"
-
 RUN rm -rf dist/* && python -m build && \
   pip install dist/*.whl && \
-  pip wheel --no-cache-dir --wheel-dir=/wheels/ --prefer-binary -r requirements.txt
+  pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # -----------------
 # Runtime Stage
@@ -93,7 +73,7 @@ WORKDIR /app
 # Install runtime dependencies
 USER root
 RUN apk upgrade --no-cache && \
-  apk add --no-cache bash libstdc++ ca-certificates openssl supervisor
+  apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor
 
 # Copy only necessary artifacts from builder stage for runtime
 COPY . .
