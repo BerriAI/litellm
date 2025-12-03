@@ -18,7 +18,43 @@ from litellm.proxy._types import (
     ProxyException,
     hash_token,
 )
-from litellm.proxy.auth.login_utils import LoginResult, authenticate_user
+from litellm.proxy.auth.login_utils import (
+    LoginResult,
+    authenticate_user,
+    get_ui_credentials,
+)
+
+
+def test_get_ui_credentials_prefers_explicit_password():
+    """The configured UI password should be returned when available."""
+    with patch.dict(
+        os.environ,
+        {"UI_USERNAME": "test-admin", "UI_PASSWORD": "secure-pass"},
+        clear=True,
+    ):
+        username, password = get_ui_credentials(master_key="sk-123")
+
+    assert username == "test-admin"
+    assert password == "secure-pass"
+
+
+def test_get_ui_credentials_can_use_master_key():
+    """Master key should be used as password when UI_PASSWORD is missing."""
+    with patch.dict(os.environ, {"UI_USERNAME": "fallback-admin"}, clear=True):
+        username, password = get_ui_credentials(master_key="fallback-key")
+
+    assert username == "fallback-admin"
+    assert password == "fallback-key"
+
+
+def test_get_ui_credentials_requires_password():
+    """Missing UI password and master key results in error."""
+    with patch.dict(os.environ, {}, clear=True):
+        with pytest.raises(ProxyException) as exc_info:
+            get_ui_credentials(master_key=None)
+
+    assert exc_info.value.type == ProxyErrorTypes.auth_error
+    assert exc_info.value.code == "500"
 
 
 @pytest.mark.asyncio
