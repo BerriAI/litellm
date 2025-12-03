@@ -20,6 +20,9 @@ from typing import (
     Literal,
     get_args,
     TYPE_CHECKING,
+    Tuple,
+    overload,
+    Type,
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
@@ -174,6 +177,7 @@ _known_custom_logger_compatible_callbacks: List = list(
 callbacks: List[
     Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
 ] = []
+callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
@@ -531,6 +535,7 @@ featherless_ai_models: Set = set()
 palm_models: Set = set()
 groq_models: Set = set()
 azure_models: Set = set()
+azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
@@ -551,6 +556,7 @@ deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
 moonshot_models: Set = set()
+publicai_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -735,6 +741,8 @@ def add_known_models():
             groq_models.add(key)
         elif value.get("litellm_provider") == "azure":
             azure_models.add(key)
+        elif value.get("litellm_provider") == "azure_anthropic":
+            azure_anthropic_models.add(key)
         elif value.get("litellm_provider") == "anyscale":
             anyscale_models.add(key)
         elif value.get("litellm_provider") == "cerebras":
@@ -775,6 +783,8 @@ def add_known_models():
             dashscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
             moonshot_models.add(key)
+        elif value.get("litellm_provider") == "publicai":
+            publicai_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -874,6 +884,7 @@ model_list = list(
     | palm_models
     | groq_models
     | azure_models
+    | azure_anthropic_models
     | anyscale_models
     | cerebras_models
     | galadriel_models
@@ -892,6 +903,7 @@ model_list = list(
     | elevenlabs_models
     | dashscope_models
     | moonshot_models
+    | publicai_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -963,6 +975,7 @@ models_by_provider: dict = {
     "palm": palm_models,
     "groq": groq_models,
     "azure": azure_models | azure_text_models,
+    "azure_anthropic": azure_anthropic_models,
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
@@ -984,6 +997,7 @@ models_by_provider: dict = {
     "heroku": heroku_models,
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
+    "publicai": publicai_models,
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
@@ -1040,8 +1054,6 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 openai_video_generation_models = ["sora-2"]
 
 from .timeout import timeout
-from .cost_calculator import completion_cost
-from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
@@ -1114,6 +1126,7 @@ from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
+from .llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -1222,8 +1235,14 @@ from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation imp
 from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import (
     AmazonTitanConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import (
+    AmazonTwelveLabsPegasusConfig,
+)
 from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+    AmazonBedrockOpenAIConfig,
 )
 
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
@@ -1241,6 +1260,9 @@ from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
+)
+from .llms.bedrock.embed.amazon_nova_transformation import (
+    AmazonNovaEmbeddingConfig,
 )
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
@@ -1272,6 +1294,8 @@ from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
+from .llms.anthropic.skills.transformation import AnthropicSkillsConfig
+from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
 from .llms.gradient_ai.chat.transformation import GradientAIConfig
 
@@ -1347,14 +1371,19 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.watsonx.audio_transcription.transformation import (
+    IBMWatsonXAudioTranscriptionConfig,
+)
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
 )
+from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig
 from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
+from .llms.publicai.chat.transformation import PublicAIChatConfig
 from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
 from .llms.oci.chat.transformation import OCIChatConfig
@@ -1368,6 +1397,18 @@ from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
 from .main import *  # type: ignore
+
+# Skills API
+from .skills.main import (
+    create_skill,
+    acreate_skill,
+    list_skills,
+    alist_skills,
+    get_skill,
+    aget_skill,
+    delete_skill,
+    adelete_skill,
+)
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
@@ -1405,8 +1446,19 @@ from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
+from .skills.main import (
+    create_skill,
+    acreate_skill,
+    list_skills,
+    alist_skills,
+    get_skill,
+    aget_skill,
+    delete_skill,
+    adelete_skill,
+)
 from .containers.main import *
 from .ocr.main import *
+from .rag.main import *
 from .search.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
@@ -1426,7 +1478,6 @@ from .vector_store_files.main import (
     update as vector_store_file_update,
 )
 from .scheduler import *
-from .cost_calculator import response_cost_calculator, cost_per_token
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
@@ -1442,6 +1493,9 @@ from .vector_stores.vector_store_registry import (
 
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
+
+### RAG ###
+from . import rag
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
@@ -1481,3 +1535,70 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_gitlab_config
     global_gitlab_config = config
+
+
+# Lazy loading system for heavy modules to reduce initial import time and memory usage
+def _lazy_import_cost_calculator(name: str) -> Any:
+    """Lazy import for cost_calculator functions."""
+    from .cost_calculator import (
+        completion_cost as _completion_cost,
+        cost_per_token as _cost_per_token,
+        response_cost_calculator as _response_cost_calculator,
+    )
+    
+    _cost_functions = {
+        "completion_cost": _completion_cost,
+        "cost_per_token": _cost_per_token,
+        "response_cost_calculator": _response_cost_calculator,
+    }
+    
+    func = _cost_functions[name]
+    globals()[name] = func
+    return func
+
+
+def _lazy_import_litellm_logging(name: str) -> Any:
+    """Lazy import for litellm_logging module."""
+    try:
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as _Logging,
+            modify_integration as _modify_integration,
+        )
+        
+        _logging_objects = {
+            "Logging": _Logging,
+            "modify_integration": _modify_integration,
+        }
+        
+        obj = _logging_objects[name]
+        globals()[name] = obj
+        return obj
+    except Exception as e:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}. "
+            f"Lazy import failed: {e}"
+        ) from e
+
+
+_LAZY_LOAD_REGISTRY: Dict[str, Callable[[str], Any]] = {
+    "completion_cost": _lazy_import_cost_calculator,
+    "cost_per_token": _lazy_import_cost_calculator,
+    "response_cost_calculator": _lazy_import_cost_calculator,
+    "Logging": _lazy_import_litellm_logging,
+    "modify_integration": _lazy_import_litellm_logging,
+}
+
+
+if TYPE_CHECKING:
+    cost_per_token: Callable[..., Tuple[float, float]]
+    completion_cost: Callable[..., float]
+    response_cost_calculator: Any
+    modify_integration: Any
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for cost_calculator and litellm_logging functions."""
+    if name in _LAZY_LOAD_REGISTRY:
+        return _LAZY_LOAD_REGISTRY[name](name)
+    
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

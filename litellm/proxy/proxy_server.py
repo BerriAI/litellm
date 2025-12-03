@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Dict,
     List,
     Literal,
@@ -32,6 +33,7 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_KEEPALIVE_TIMEOUT,
     AIOHTTP_TTL_DNS_CACHE,
+    AUDIO_SPEECH_CHUNK_SIZE,
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
@@ -190,6 +192,9 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
+from litellm.proxy.anthropic_endpoints.skills_endpoints import (
+    router as anthropic_skills_router,
+)
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     get_team_object,
@@ -283,7 +288,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -337,7 +344,9 @@ from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -355,6 +364,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
+from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
@@ -390,6 +400,9 @@ from litellm.proxy.utils import (
     update_spend,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
+from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    router as vector_store_management_router,
+)
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     router as vector_store_files_router,
 )
@@ -428,7 +441,9 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+)
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -1074,7 +1089,6 @@ llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
 general_settings: dict = {}
 config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
-callback_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
@@ -1231,6 +1245,9 @@ def cost_tracking():
     global prisma_client
     if prisma_client is not None:
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
+        litellm.logging_callback_manager.add_litellm_async_success_callback(
+            _ProxyDBLogger()
+        )
 
 
 async def update_cache(  # noqa: PLR0915
@@ -2001,6 +2018,16 @@ class ProxyConfig:
             )
             print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
 
+            # Handle os.environ/ variables in litellm_params
+            litellm_params = search_tool.get("litellm_params", {})
+            if litellm_params:
+                for k, v in litellm_params.items():
+                    if isinstance(v, str) and v.startswith("os.environ/"):
+                        _v = v.replace("os.environ/", "")
+                        v = get_secret(_v)
+                        litellm_params[k] = v
+                search_tool["litellm_params"] = litellm_params
+
             # Cast to SearchToolTypedDict for type safety
             try:
                 search_tool_typed: SearchToolTypedDict = SearchToolTypedDict(**search_tool)  # type: ignore
@@ -2054,7 +2081,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval, config_passthrough_endpoints
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -2062,6 +2089,8 @@ class ProxyConfig:
 
         ## Callback settings
         callback_settings = config.get("callback_settings", {})
+        if callback_settings:
+            litellm.callback_settings = callback_settings
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", None)
@@ -3752,6 +3781,7 @@ class ProxyConfig:
     async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
         """
         Initialize search tools from database into the router on startup.
+        Only updates router if there are tools in the database, otherwise preserves config-loaded tools.
         """
         global llm_router
 
@@ -3769,17 +3799,24 @@ class ProxyConfig:
                 f"Loading {len(search_tools)} search tool(s) from database into router"
             )
 
-            if llm_router is not None:
-                # Add search tools to the router
-                await SearchAPIRouter.update_router_search_tools(
-                    router_instance=llm_router, search_tools=search_tools
-                )
-                verbose_proxy_logger.info(
-                    f"Successfully loaded {len(search_tools)} search tool(s) into router"
-                )
+            # Only update router if there are tools in the database
+            # This prevents overwriting config-loaded tools with an empty list
+            if len(search_tools) > 0:
+                if llm_router is not None:
+                    # Add search tools to the router
+                    await SearchAPIRouter.update_router_search_tools(
+                        router_instance=llm_router, search_tools=search_tools
+                    )
+                    verbose_proxy_logger.info(
+                        f"Successfully loaded {len(search_tools)} search tool(s) into router"
+                    )
+                else:
+                    verbose_proxy_logger.debug(
+                        "Router not initialized yet, search tools will be added when router is created"
+                    )
             else:
                 verbose_proxy_logger.debug(
-                    "Router not initialized yet, search tools will be added when router is created"
+                    "No search tools found in database, keeping config-loaded search tools (if any)"
                 )
 
         except Exception as e:
@@ -4052,7 +4089,8 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        str_so_far = ""
+        # Use a list to accumulate response segments to avoid O(n^2) string concatenation
+        str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
@@ -4068,12 +4106,12 @@ async def async_data_generator(
                 user_api_key_dict=user_api_key_dict,
                 response=chunk,
                 data=request_data,
-                str_so_far=str_so_far,
+                str_so_far="".join(str_so_far_parts),
             )
 
             if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                 response_str = litellm.get_response_string(response_obj=chunk)
-                str_so_far += response_str
+                str_so_far_parts.append(response_str)
 
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
@@ -5267,6 +5305,18 @@ async def moderations(
             )
 
 
+async def _audio_speech_chunk_generator(
+    _response: HttpxBinaryResponseContent,
+) -> AsyncGenerator[bytes, None]:
+    # chunk_size has a big impact on latency, it can't be too small or too large
+    # too small: latency is high
+    # too large: latency is low, but memory usage is high
+    # 8192 is a good compromise
+    _generator = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
+    async for chunk in _generator:
+        yield chunk
+
+
 @router.post(
     "/v1/audio/speech",
     dependencies=[Depends(user_api_key_auth)],
@@ -5312,7 +5362,7 @@ async def audio_speech(
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
+            user_api_key_dict=user_api_key_dict, data=data, call_type="aspeech"
         )
 
         ## ROUTE TO CORRECT ENDPOINT ##
@@ -5339,12 +5389,6 @@ async def audio_speech(
         response_cost = hidden_params.get("response_cost", None) or ""
         litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
 
-        # Printing each chunk size
-        async def generate(_response: HttpxBinaryResponseContent):
-            _generator = await _response.aiter_bytes(chunk_size=1024)
-            async for chunk in _generator:
-                yield chunk
-
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             model_id=model_id,
@@ -5359,21 +5403,20 @@ async def audio_speech(
             hidden_params=hidden_params,
         )
 
-        select_data_generator(
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            request_data=data,
-        )
         # Determine media type based on model type
         media_type = "audio/mpeg"  # Default for OpenAI TTS
         request_model = data.get("model", "")
-        if "gemini" in request_model.lower() and (
-            "tts" in request_model.lower() or "preview-tts" in request_model.lower()
-        ):
-            media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
+        if request_model:
+            request_model_lower = request_model.lower()
+            if "gemini" in request_model_lower and (
+                "tts" in request_model_lower or "preview-tts" in request_model_lower
+            ):
+                media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
 
         return StreamingResponse(
-            generate(response), media_type=media_type, headers=custom_headers  # type: ignore
+            _audio_speech_chunk_generator(response), # type: ignore[arg-type]
+            media_type=media_type,
+            headers=custom_headers,  # type: ignore
         )
 
     except Exception as e:
@@ -5456,6 +5499,7 @@ async def audio_transcriptions(
         file_object = io.BytesIO(file_content)
         file_object.name = file.filename
         data["file"] = file_object
+
         try:
             ### CALL HOOKS ### - modify incoming data / reject request before calling the model
             data = await proxy_logging_obj.pre_call_hook(
@@ -5473,7 +5517,7 @@ async def audio_transcriptions(
             )
             response = await llm_call
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise e
         finally:
             file_object.close()  # close the file read in by io library
 
@@ -10129,17 +10173,20 @@ app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
+app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)
 app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(vector_store_router)
+app.include_router(vector_store_management_router)
 app.include_router(vector_store_files_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
 app.include_router(anthropic_router)
+app.include_router(anthropic_skills_router)
 app.include_router(google_router)
 app.include_router(langfuse_router)
 app.include_router(pass_through_router)
