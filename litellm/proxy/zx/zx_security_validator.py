@@ -1,6 +1,7 @@
 import os
 import hmac
 import hashlib
+import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Header, status
@@ -35,7 +36,8 @@ class SecurityValidator:
                 raise ValueError(f"Invalid format for {env_key}. Expected 'client_id:client_secret'")
             
         if not credentials:
-            raise ValueError("No valid client credentials found in environment variables")
+            logging.warning(f"No valid client credentials found in environment variables prefix: {prefix}")
+            # raise ValueError("No valid client credentials found in environment variables")
         
         return credentials
     
@@ -60,6 +62,9 @@ class SecurityValidator:
             return False
         
         client_secret = self.valid_credentials[client_id]
+        if client_secret is None:
+            return False
+
         expected_signature = self._generate_signature(client_id, client_secret, payload)
         
         # 使用常时间比较防止时序攻击
