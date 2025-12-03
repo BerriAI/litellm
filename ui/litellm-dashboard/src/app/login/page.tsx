@@ -1,33 +1,57 @@
 "use client";
 
-import React, { useState } from "react";
-import { Form, Input, Button, Alert, Typography, Card, Spin, Space } from "antd";
+import { useLogin } from "@/app/(dashboard)/hooks/login/useLogin";
+import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
+import LoadingScreen from "@/components/common_components/LoadingScreen";
+import { getProxyBaseUrl } from "@/components/networking";
+import { getCookie } from "@/utils/cookieUtils";
+import { isJwtExpired } from "@/utils/jwtUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
-import { useLogin } from "@/app/(dashboard)/hooks/login/useLogin";
+import { Alert, Button, Card, Form, Input, Space, Typography } from "antd";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 function LoginPageContent() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
   const { isLoading: isConfigLoading } = useUIConfig();
   const loginMutation = useLogin();
+  const router = useRouter();
 
-  const handleSubmit = async () => {
-    loginMutation.mutate({ username, password });
+  useEffect(() => {
+    if (isConfigLoading) {
+      return;
+    }
+
+    const rawToken = getCookie("token");
+    if (rawToken && !isJwtExpired(rawToken)) {
+      router.replace(`${getProxyBaseUrl()}/ui`);
+      return;
+    }
+
+    setIsLoading(false);
+  }, [isConfigLoading, router]);
+
+  const handleSubmit = () => {
+    loginMutation.mutate(
+      { username, password },
+      {
+        onSuccess: (data) => {
+          router.push(data.redirect_url);
+        },
+      },
+    );
   };
 
   const error = loginMutation.error instanceof Error ? loginMutation.error.message : null;
-  const isLoading = loginMutation.isPending;
+  const isLoginLoading = loginMutation.isPending;
 
   const { Title, Text, Paragraph } = Typography;
 
-  if (isConfigLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-screen">
-        <Spin size="large" tip="Loading..." />
-      </div>
-    );
+  if (isConfigLoading || isLoading) {
+    return <LoadingScreen />;
   }
 
   return (
@@ -79,7 +103,7 @@ function LoginPageContent() {
                 autoComplete="username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                disabled={isLoading}
+                disabled={isLoginLoading}
                 size="large"
                 className="rounded-md border-gray-300"
               />
@@ -95,14 +119,21 @@ function LoginPageContent() {
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                disabled={isLoading}
+                disabled={isLoginLoading}
                 size="large"
               />
             </Form.Item>
 
             <Form.Item>
-              <Button type="primary" htmlType="submit" loading={isLoading} disabled={isLoading} block size="large">
-                {isLoading ? "Logging in..." : "Login"}
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={isLoginLoading}
+                disabled={isLoginLoading}
+                block
+                size="large"
+              >
+                {isLoginLoading ? "Loggin in..." : "Login"}
               </Button>
             </Form.Item>
           </Form>

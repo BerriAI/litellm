@@ -7980,51 +7980,33 @@ export interface LoginRequest {
 }
 
 export interface LoginResponse {
-  success: boolean;
-  redirectUrl?: string;
+  redirect_url: string;
 }
 
 export const loginCall = async (username: string, password: string): Promise<LoginResponse> => {
   const proxyBaseUrl = getProxyBaseUrl();
-  const loginUrl = proxyBaseUrl ? `${proxyBaseUrl}/login` : "/login";
+  const loginUrl = proxyBaseUrl ? `${proxyBaseUrl}/v2/login` : "/v2/login";
 
-  const formData = new FormData();
-  formData.append("username", username);
-  formData.append("password", password);
+  const body = JSON.stringify({
+    username,
+    password,
+  });
 
   const response = await fetch(loginUrl, {
     method: "POST",
-    body: formData,
+    body,
     credentials: "include",
-    redirect: "manual",
+    headers: {
+      "Content-Type": "application/json",
+    },
   });
 
-  // Handle redirect status codes (301, 302, 303, 307, 308)
-  if (response.status >= 300 && response.status < 400) {
-    const redirectUrl = response.headers.get("Location");
-
-    if (!redirectUrl) {
-      throw new Error("Login redirect missing Location header");
-    }
-
-    return {
-      success: true,
-      redirectUrl,
-    };
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    throw new Error(errorMessage);
   }
 
-  if (response.ok) {
-    return {
-      success: true,
-      redirectUrl: "/uia/",
-    };
-  }
-
-  // Otherwise, try to extract an error
-  let errorText = "Invalid username or password";
-  try {
-    errorText = await response.text();
-  } catch {}
-
-  throw new Error(errorText || "Login failed");
+  const data = await response.json();
+  return data;
 };
