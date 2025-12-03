@@ -266,6 +266,15 @@ def get_supported_openai_params(  # noqa: PLR0915
                     model=model
                 )
             )
+    elif custom_llm_provider == "ovhcloud":
+        if request_type == "transcription":
+            from litellm.llms.ovhcloud.audio_transcription.transformation import (
+                OVHCloudAudioTranscriptionConfig,
+            )
+
+            return OVHCloudAudioTranscriptionConfig().get_supported_openai_params(
+                model=model
+            )
     elif custom_llm_provider == "elevenlabs":
         if request_type == "transcription":
             from litellm.llms.elevenlabs.audio_transcription.transformation import (

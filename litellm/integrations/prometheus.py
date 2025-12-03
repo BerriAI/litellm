@@ -24,12 +24,28 @@ from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 else:
     AsyncIOScheduler = Any
+
+# Cached lazy import for get_end_user_id_for_cost_tracking
+# Module-level cache to avoid repeated imports while preserving memory benefits
+_get_end_user_id_for_cost_tracking = None
+
+
+def _get_cached_end_user_id_for_cost_tracking():
+    """
+    Get cached get_end_user_id_for_cost_tracking function.
+    Lazy imports on first call to avoid loading utils.py at import time (60MB saved).
+    Subsequent calls use cached function for better performance.
+    """
+    global _get_end_user_id_for_cost_tracking
+    if _get_end_user_id_for_cost_tracking is None:
+        from litellm.utils import get_end_user_id_for_cost_tracking
+        _get_end_user_id_for_cost_tracking = get_end_user_id_for_cost_tracking
+    return _get_end_user_id_for_cost_tracking
 
 
 class PrometheusLogger(CustomLogger):
@@ -778,6 +794,8 @@ class PrometheusLogger(CustomLogger):
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
+        get_end_user_id_for_cost_tracking = _get_cached_end_user_id_for_cost_tracking()
+        
         end_user_id = get_end_user_id_for_cost_tracking(
             litellm_params, service_type="prometheus"
         )
@@ -1164,6 +1182,8 @@ class PrometheusLogger(CustomLogger):
             "standard_logging_object", {}
         )
         litellm_params = kwargs.get("litellm_params", {}) or {}
+        get_end_user_id_for_cost_tracking = _get_cached_end_user_id_for_cost_tracking()
+        
         end_user_id = get_end_user_id_for_cost_tracking(
             litellm_params, service_type="prometheus"
         )
@@ -2249,6 +2269,8 @@ def prometheus_label_factory(
     }
 
     if UserAPIKeyLabelNames.END_USER.value in filtered_labels:
+        get_end_user_id_for_cost_tracking = _get_cached_end_user_id_for_cost_tracking()
+        
         filtered_labels["end_user"] = get_end_user_id_for_cost_tracking(
             litellm_params={"user_api_key_end_user_id": enum_values.end_user},
             service_type="prometheus",

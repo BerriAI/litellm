@@ -65,11 +65,11 @@ class DataDogLogger(
         `DD_SITE` - your datadog site, example = `"us5.datadoghq.com"`
 
         Optional environment variables (DataDog Agent):
-        `DD_AGENT_HOST` - hostname or IP of DataDog agent, example = `"localhost"`
-        `DD_AGENT_PORT` - port of DataDog agent (default: 10518 for logs)
+        `LITELLM_DD_AGENT_HOST` - hostname or IP of DataDog agent, example = `"localhost"`
+        `LITELLM_DD_AGENT_PORT` - port of DataDog agent (default: 10518 for logs)
         
-        Note: If DD_AGENT_HOST is set, logs will be sent to the agent instead of directly to DataDog API.
-        In this case, DD_API_KEY and DD_SITE are not required (agent handles authentication).
+        Note: We use LITELLM_DD_AGENT_HOST instead of DD_AGENT_HOST to avoid conflicts
+        with ddtrace which automatically sets DD_AGENT_HOST for APM tracing.
         """
         try:
             verbose_logger.debug("Datadog: in init datadog logger")
@@ -85,7 +85,8 @@ class DataDogLogger(
             )
             
             # Configure DataDog endpoint (Agent or Direct API)
-            dd_agent_host = os.getenv("DD_AGENT_HOST")
+            # Use LITELLM_DD_AGENT_HOST to avoid conflicts with ddtrace's DD_AGENT_HOST
+            dd_agent_host = os.getenv("LITELLM_DD_AGENT_HOST")
             if dd_agent_host:
                 self._configure_dd_agent(dd_agent_host=dd_agent_host)
             else:
@@ -127,7 +128,7 @@ class DataDogLogger(
         Args:
             dd_agent_host: Hostname or IP of DataDog agent
         """
-        dd_agent_port = os.getenv("DD_AGENT_PORT", "10518")  # default port for logs
+        dd_agent_port = os.getenv("LITELLM_DD_AGENT_PORT", "10518")  # default port for logs
         self.intake_url = f"http://{dd_agent_host}:{dd_agent_port}/api/v2/logs"
         self.DD_API_KEY = os.getenv("DD_API_KEY")  # Optional when using agent
         verbose_logger.debug(f"Datadog: Using DD Agent at {self.intake_url}")

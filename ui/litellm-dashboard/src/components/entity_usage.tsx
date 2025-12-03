@@ -550,7 +550,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               {/* Top API Keys */}
               <Col numColSpan={1}>
                 <Card>
-                  <Title>Top API Keys</Title>
+                  <Title>Top Virtual Keys</Title>
                   <TopKeyView
                     topKeys={getTopAPIKeys()}
                     accessToken={accessToken}

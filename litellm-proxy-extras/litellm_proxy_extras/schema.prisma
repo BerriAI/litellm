@@ -304,6 +304,7 @@ model LiteLLM_SpendLogs {
   cache_key           String?   @default("")
   request_tags        Json?     @default("[]")
   team_id             String? 
+  organization_id     String?
   end_user            String?
   requester_ip_address String?
   messages            Json?     @default("{}")
@@ -427,6 +428,35 @@ model LiteLLM_DailyUserSpend {
   @@unique([user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
   @@index([date])
   @@index([user_id])
+  @@index([api_key])
+  @@index([model])
+  @@index([mcp_namespaced_tool_name])
+}
+
+// Track daily organization spend metrics per model and key
+model LiteLLM_DailyOrganizationSpend {
+  id                  String   @id @default(uuid())
+  organization_id     String?
+  date                String
+  api_key             String   
+  model               String?
+  model_group         String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([organization_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@index([date])
+  @@index([organization_id])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -561,11 +591,15 @@ model LiteLLM_GuardrailsTable {
 // Prompt table for storing prompt configurations
 model LiteLLM_PromptTable {
   id String @id @default(uuid())
-  prompt_id String @unique
+  prompt_id String
+  version Int @default(1)
   litellm_params Json
   prompt_info Json?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+
+  @@unique([prompt_id, version])
+  @@index([prompt_id])
 }
 
 model LiteLLM_HealthCheckTable {

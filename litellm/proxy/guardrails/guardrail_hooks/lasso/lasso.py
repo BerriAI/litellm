@@ -33,6 +33,8 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.integrations.custom_guardrail import dc as global_cache
+
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -100,7 +102,7 @@ class LassoGuardrail(CustomGuardrail):
             )
 
         self.api_base = (
-            api_base or os.getenv("LASSO_API_BASE") or "https://server.lasso.security"
+            api_base or os.getenv("LASSO_API_BASE") or "https://server.lasso.security/gateway/v3"
         )
 
         verbose_proxy_logger.debug(
@@ -125,7 +127,7 @@ class LassoGuardrail(CustomGuardrail):
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: DualCache,
+        cache: DualCache,       # Deprecated, use global_cache instead (kept to align with CustomGuardrail interface)
         data: dict,
         call_type: Literal[
             "completion",
@@ -150,10 +152,10 @@ class LassoGuardrail(CustomGuardrail):
             return data
 
         # Get or generate conversation_id and store it in data for post-call consistency
-        conversation_id = self._get_or_generate_conversation_id(data, cache)
-        data.setdefault("_lasso_internal", {})["conversation_id"] = conversation_id
+        # The conversation_id is being stored in the cache so it can be used by the post_call hook
+        self._get_or_generate_conversation_id(data, global_cache)
 
-        return await self._run_lasso_guardrail(data, cache, message_type="PROMPT")
+        return await self._run_lasso_guardrail(data, global_cache, message_type="PROMPT")
 
     @log_guardrail_information
     async def async_moderation_hook(
@@ -213,17 +215,12 @@ class LassoGuardrail(CustomGuardrail):
                     "litellm_call_id": data.get("litellm_call_id"),
                 }
 
-                # Copy stored conversation_id from pre-call hook
-                if data.get("_lasso_internal", {}).get("conversation_id") and isinstance(response_data, dict):
-                    response_data.setdefault("_lasso_internal", {})["conversation_id"] = data["_lasso_internal"][
-                        "conversation_id"
-                    ]
 
                 # Handle masking for post-call
                 if self.mask:
-                    headers = self._prepare_headers(response_data)
-                    payload = self._prepare_payload(response_messages, "COMPLETION", response_data)
-                    api_url = f"{self.api_base}/gateway/v3/classifix"
+                    headers = self._prepare_headers(response_data, global_cache)
+                    payload = self._prepare_payload(response_messages, response_data, global_cache, "COMPLETION")
+                    api_url = f"{self.api_base}/classifix"
 
                     try:
                         lasso_response = await self._call_lasso_api(headers=headers, payload=payload, api_url=api_url)
@@ -241,7 +238,7 @@ class LassoGuardrail(CustomGuardrail):
                         raise LassoGuardrailAPIError(f"Failed to apply post-call masking: {str(e)}")
                 else:
                     # Use the same data for conversation_id consistency (no cache access needed)
-                    await self._run_lasso_guardrail(response_data, cache=None, message_type="COMPLETION")
+                    await self._run_lasso_guardrail(response_data, cache=global_cache, message_type="COMPLETION")
                     verbose_proxy_logger.debug("Post-call Lasso validation completed")
             else:
                 verbose_proxy_logger.warning("No response messages found to validate")
@@ -306,7 +303,7 @@ class LassoGuardrail(CustomGuardrail):
     async def _run_lasso_guardrail(
         self,
         data: dict,
-        cache: Optional[DualCache],
+        cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"] = "PROMPT",
     ):
         """
@@ -345,14 +342,14 @@ class LassoGuardrail(CustomGuardrail):
     async def _handle_classification(
         self,
         data: dict,
-        cache: Optional[DualCache],
+        cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"],
         messages: List[Dict[str, str]],
     ) -> dict:
         """Handle classification without masking."""
         try:
             headers = self._prepare_headers(data, cache)
-            payload = self._prepare_payload(messages, message_type, data, cache)
+            payload = self._prepare_payload(messages, data, cache, message_type)
             response = await self._call_lasso_api(headers=headers, payload=payload)
             self._process_lasso_response(response)
             return data
@@ -363,15 +360,15 @@ class LassoGuardrail(CustomGuardrail):
     async def _handle_masking(
         self,
         data: dict,
-        cache: Optional[DualCache],
+        cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"],
         messages: List[Dict[str, str]],
     ) -> dict:
         """Handle masking with classifix endpoint."""
         try:
             headers = self._prepare_headers(data, cache)
-            payload = self._prepare_payload(messages, message_type, data, cache)
-            api_url = f"{self.api_base}/gateway/v3/classifix"
+            payload = self._prepare_payload(messages, data, cache, message_type)
+            api_url = f"{self.api_base}/classifix"
             response = await self._call_lasso_api(headers=headers, payload=payload, api_url=api_url)
             self._process_lasso_response(response)
 
@@ -437,7 +434,7 @@ class LassoGuardrail(CustomGuardrail):
             },
         )
 
-    def _prepare_headers(self, data: dict, cache: Optional[DualCache] = None) -> Dict[str, str]:
+    def _prepare_headers(self, data: dict, cache: DualCache) -> Dict[str, str]:
         """Prepare headers for the Lasso API request."""
         if not self.lasso_api_key:
             raise LassoGuardrailMissingSecrets(
@@ -455,13 +452,7 @@ class LassoGuardrail(CustomGuardrail):
             headers["lasso-user-id"] = self.user_id
 
         # Always include conversation_id (generated or provided)
-        if cache is not None:
-            conversation_id = self._get_or_generate_conversation_id(data, cache)
-        else:
-            # For post-call hook, use stored conversation_id or generate a new one
-            conversation_id = (
-                data.get("_lasso_internal", {}).get("conversation_id") or self.conversation_id or self._generate_ulid()
-            )
+        conversation_id = self._get_or_generate_conversation_id(data, cache)        
 
         headers["lasso-conversation-id"] = conversation_id
 
@@ -470,9 +461,9 @@ class LassoGuardrail(CustomGuardrail):
     def _prepare_payload(
         self,
         messages: List[Dict[str, str]],
+        data: dict,
+        cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"] = "PROMPT",
-        data: Optional[dict] = None,
-        cache: Optional[DualCache] = None,
     ) -> Dict[str, Any]:
         """
         Prepare the payload for the Lasso API request.
@@ -490,20 +481,9 @@ class LassoGuardrail(CustomGuardrail):
             payload["userId"] = self.user_id
 
         # Always include sessionId (conversation_id - generated or provided)
-        if data is not None:
-            if cache is not None:
-                conversation_id = self._get_or_generate_conversation_id(data, cache)
-            else:
-                # For post-call hook, use stored conversation_id or fallback
-                conversation_id = (
-                    data.get("_lasso_internal", {}).get("conversation_id")
-                    or self.conversation_id
-                    or self._generate_ulid()
-                )
+        conversation_id = self._get_or_generate_conversation_id(data, cache)
 
-            payload["sessionId"] = conversation_id
-        elif self.conversation_id:
-            payload["sessionId"] = self.conversation_id
+        payload["sessionId"] = conversation_id
 
         return payload
 
@@ -514,7 +494,7 @@ class LassoGuardrail(CustomGuardrail):
         api_url: Optional[str] = None,
     ) -> LassoResponse:
         """Call the Lasso API and return the response."""
-        url = api_url or f"{self.api_base}/gateway/v3/classify"
+        url = api_url or f"{self.api_base}/classify"
         verbose_proxy_logger.debug(f"Calling Lasso API with messageType: {payload.get('messageType')}")
         response = await self.async_handler.post(
             url=url,

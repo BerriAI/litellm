@@ -235,6 +235,22 @@ def pillar_async_response():
 
 
 @pytest.fixture
+def user_api_key_dict_with_context():
+    """Fixture providing UserAPIKeyAuth with complete context."""
+    return UserAPIKeyAuth(
+        token="hashed-test-token",
+        key_name="production-api-key",
+        key_alias="prod-key",
+        user_id="user-123",
+        user_email="test@example.com",
+        team_id="team-456",
+        team_alias="engineering-team",
+        org_id="org-789",
+        metadata={"environment": "production", "region": "us-east-1"},
+    )
+
+
+@pytest.fixture
 def mock_llm_response_with_tools():
     """Fixture providing a mock LLM response with tool calls."""
     mock_response = Mock()
@@ -500,6 +516,217 @@ async def test_pre_call_hook_custom_header_overrides(
     assert captured_headers.get("plr_async") == "true"
     assert captured_headers.get("plr_scanners") == "false"
     assert captured_headers.get("plr_evidence") == "false"
+
+
+# =========================================================================
+# LITELLM KEY CONTEXT HEADER TESTS
+# =========================================================================
+
+
+@pytest.mark.asyncio
+async def test_litellm_context_headers_automatically_added(
+    sample_request_data,
+    user_api_key_dict_with_context,
+    dual_cache,
+    pillar_clean_response,
+):
+    """Test that LiteLLM context headers are automatically added (always enabled)."""
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-context-enabled",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+    )
+
+    captured_headers: Dict[str, str] = {}
+
+    async def _mock_post(*args, **kwargs):
+        captured_headers.update(kwargs.get("headers", {}))
+        return pillar_clean_response
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=_mock_post,
+    ):
+        await guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict_with_context,
+            call_type="completion",
+        )
+
+    # Verify LiteLLM context headers are present
+    assert "X-LiteLLM-Key-Name" in captured_headers
+    assert captured_headers["X-LiteLLM-Key-Name"] == "production-api-key"
+    assert "X-LiteLLM-Key-Alias" in captured_headers
+    assert captured_headers["X-LiteLLM-Key-Alias"] == "prod-key"
+    assert "X-LiteLLM-User-Id" in captured_headers
+    assert captured_headers["X-LiteLLM-User-Id"] == "user-123"
+    assert "X-LiteLLM-User-Email" in captured_headers
+    assert captured_headers["X-LiteLLM-User-Email"] == "test@example.com"
+    assert "X-LiteLLM-Team-Id" in captured_headers
+    assert captured_headers["X-LiteLLM-Team-Id"] == "team-456"
+    assert "X-LiteLLM-Team-Name" in captured_headers
+    assert captured_headers["X-LiteLLM-Team-Name"] == "engineering-team"
+    assert "X-LiteLLM-Org-Id" in captured_headers
+    assert captured_headers["X-LiteLLM-Org-Id"] == "org-789"
+    
+    # Metadata is NOT sent (may contain sensitive information)
+    assert "X-LiteLLM-Metadata" not in captured_headers
+
+
+@pytest.mark.asyncio
+async def test_litellm_context_with_partial_fields(
+    sample_request_data,
+    dual_cache,
+    pillar_clean_response,
+):
+    """Test that partial LiteLLM context (only some fields present) is handled correctly."""
+    # Create UserAPIKeyAuth with only some fields populated
+    partial_context = UserAPIKeyAuth(
+        user_id="user-only",
+        team_id="team-only",
+    )
+
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-partial-context",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        pass_litellm_key_header=True,
+    )
+
+    captured_headers: Dict[str, str] = {}
+
+    async def _mock_post(*args, **kwargs):
+        captured_headers.update(kwargs.get("headers", {}))
+        return pillar_clean_response
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=_mock_post,
+    ):
+        await guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=partial_context,
+            call_type="completion",
+        )
+
+    # Verify only populated fields are present
+    assert "X-LiteLLM-User-Id" in captured_headers
+    assert captured_headers["X-LiteLLM-User-Id"] == "user-only"
+    assert "X-LiteLLM-Team-Id" in captured_headers
+    assert captured_headers["X-LiteLLM-Team-Id"] == "team-only"
+
+    # Verify empty fields are not present
+    assert "X-LiteLLM-Key-Name" not in captured_headers
+    assert "X-LiteLLM-User-Email" not in captured_headers
+
+
+# =========================================================================
+# MULTI-MODAL CONTENT TESTS
+# =========================================================================
+
+
+@pytest.mark.asyncio
+async def test_multimodal_image_url_support(
+    user_api_key_dict,
+    dual_cache,
+    pillar_clean_response,
+):
+    """Test that messages with image URLs are properly handled."""
+    multimodal_data = {
+        "model": "gpt-4-vision-preview",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What's in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://example.com/image.jpg",
+                            "detail": "high",
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-multimodal",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+    )
+
+    captured_payload: Dict[str, Any] = {}
+
+    async def _mock_post(*args, **kwargs):
+        captured_payload.update(kwargs.get("json", {}))
+        return pillar_clean_response
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=_mock_post,
+    ):
+        result = await guardrail.async_pre_call_hook(
+            data=multimodal_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    # Verify multimodal message structure is preserved
+    assert result == multimodal_data
+    assert "messages" in captured_payload
+    assert len(captured_payload["messages"]) == 1
+    assert isinstance(captured_payload["messages"][0]["content"], list)
+    assert captured_payload["messages"][0]["content"][1]["type"] == "image_url"
+
+
+@pytest.mark.asyncio
+async def test_multimodal_with_attachments(
+    user_api_key_dict,
+    dual_cache,
+    pillar_clean_response,
+):
+    """Test that messages with file attachments are properly handled."""
+    multimodal_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Analyze this document",
+                "attachments": [
+                    {
+                        "file_id": "file-abc123",
+                        "tools": [{"type": "code_interpreter"}],
+                    }
+                ],
+            }
+        ],
+    }
+
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-attachments",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_clean_response,
+    ):
+        result = await guardrail.async_pre_call_hook(
+            data=multimodal_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    # Verify attachment structure is preserved
+    assert result == multimodal_data
+    assert result["messages"][0]["attachments"] is not None
 
 
 # ============================================================================

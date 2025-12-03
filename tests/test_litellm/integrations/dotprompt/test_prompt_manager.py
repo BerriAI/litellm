@@ -12,7 +12,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
+
+import httpx
 
 import litellm
 from litellm.integrations.dotprompt.prompt_manager import PromptManager, PromptTemplate
@@ -193,6 +195,29 @@ def test_get_prompt_metadata():
     assert metadata["model"] == "gemini/gemini-1.5-pro"
     assert "input" in metadata
     assert "output" in metadata
+
+
+def test_get_prompt_with_version():
+    """Test that get_prompt correctly retrieves versioned prompts."""
+    prompt_dir = Path(__file__).parent
+    manager = PromptManager(prompt_directory=str(prompt_dir))
+
+    # Get base prompt (no version)
+    base_prompt = manager.get_prompt(prompt_id="chat_prompt")
+    assert base_prompt is not None
+    assert "User: {{user_message}}" in base_prompt.content
+
+    # Get version 1
+    v1_prompt = manager.get_prompt(prompt_id="chat_prompt", version=1)
+    assert v1_prompt is not None
+    assert "Version 1:" in v1_prompt.content
+    assert v1_prompt.model == "gpt-3.5-turbo"
+
+    # Get version 2
+    v2_prompt = manager.get_prompt(prompt_id="chat_prompt", version=2)
+    assert v2_prompt is not None
+    assert "Version 2:" in v2_prompt.content
+    assert v2_prompt.model == "gpt-4"
 
 
 def test_add_prompt_programmatically():
@@ -523,77 +548,42 @@ def test_prompt_main():
     pass
 
 
+
 @pytest.mark.asyncio
-async def test_dotprompt_auto_detection_with_model_only():
+async def test_dotprompt_with_prompt_version():
     """
-    Test that dotprompt prompts can be auto-detected when passing model="gpt-4" and prompt_id,
-    without needing to specify model="dotprompt/gpt-4".
+    Test that dotprompt can load and use specific prompt versions.
+    Versions are stored as separate files with .v{version}.prompt naming convention.
     """
-    from litellm.integrations.dotprompt import DotpromptManager
+    from litellm.integrations.dotprompt.prompt_manager import PromptManager
 
     prompt_dir = Path(__file__).parent
-    dotprompt_manager = DotpromptManager(prompt_directory=str(prompt_dir))
+    prompt_manager = PromptManager(prompt_directory=str(prompt_dir))
     
-    # Register the dotprompt manager in callbacks
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [dotprompt_manager]
+    # Test version 1
+    v1_prompt = prompt_manager.get_prompt(prompt_id="chat_prompt", version=1)
+    assert v1_prompt is not None
+    assert v1_prompt.model == "gpt-3.5-turbo"
     
-    try:
-        # Mock the HTTP handler to avoid actual API calls
-        with patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post") as mock_post:
-            mock_response_data = litellm.ModelResponse(
-                choices=[
-                    litellm.Choices(
-                        message=litellm.Message(content="Hello!"),
-                        index=0,
-                        finish_reason="stop",
-                    )
-                ]
-            ).model_dump()
-            
-            # Create a proper mock response
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.text = json.dumps(mock_response_data)
-            mock_response.headers = {"Content-Type": "application/json"}
-            mock_response.json.return_value = mock_response_data
-            
-            mock_post.return_value = mock_response
-            
-            # Call with model="gpt-4" (no "dotprompt/" prefix) and prompt_id
-            await litellm.acompletion(
-                model="gpt-4",
-                prompt_id="chat_prompt",
-                prompt_variables={"user_message": "Hello world"},
-                messages=[{"role": "user", "content": "This will be ignored"}],
-            )
-            
-            mock_post.assert_called_once()
-            
-            # Get request body from the call (it's passed as 'data' parameter as JSON string)
-            data_str = mock_post.call_args.kwargs.get("data", "{}")
-            request_body = json.loads(data_str)
-            
-            print(f"Request body: {json.dumps(request_body, indent=2)}")
-            
-            # Verify the prompt was auto-detected and used
-            # The chat_prompt.prompt has metadata: model: gpt-4, temperature: 0.7, max_tokens: 150
-            assert request_body["model"] == "gpt-4"
-            
-            # Note: OpenAI API might strip out temperature/max_tokens if they're not in the request
-            # The key test is that the messages were transformed
-            
-            # Verify the messages were transformed using the prompt template
-            # chat_prompt template: "User: {{user_message}}"
-            messages = request_body["messages"]
-            assert len(messages) >= 1
-            
-            # The first message should be from the prompt template with the variable substituted
-            # Template is: "User: {{user_message}}" with user_message="Hello world"
-            first_message_content = messages[0]["content"]
-            print(f"First message content: {first_message_content}")
-            assert "Hello world" in first_message_content
+    # Verify version 1 content
+    v1_rendered = prompt_manager.render(
+        prompt_id="chat_prompt",
+        prompt_variables={"user_message": "Test v1"},
+        version=1
+    )
+    assert "Version 1:" in v1_rendered
+    assert "Test v1" in v1_rendered
     
-    finally:
-        # Restore original callbacks
-        litellm.callbacks = original_callbacks
+    # Test version 2
+    v2_prompt = prompt_manager.get_prompt(prompt_id="chat_prompt", version=2)
+    assert v2_prompt is not None
+    assert v2_prompt.model == "gpt-4"
+    
+    # Verify version 2 content
+    v2_rendered = prompt_manager.render(
+        prompt_id="chat_prompt",
+        prompt_variables={"user_message": "Test v2"},
+        version=2
+    )
+    assert "Version 2:" in v2_rendered
+    assert "Test v2" in v2_rendered
