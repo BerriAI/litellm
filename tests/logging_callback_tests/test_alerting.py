@@ -1106,10 +1106,219 @@ async def test_soft_budget_alerts_webhook(entity_info):
         assert logged_webhook_event.user_email == entity_info.user_email
         assert logged_webhook_event.key_alias == entity_info.key_alias
         assert logged_webhook_event.event_group == entity_info.event_group
-        
-        
-        
-        
-        
-        
+
+@pytest.mark.asyncio
+async def test_concurrent_budget_alerts_with_redis_lock():
+    """
+    Test that concurrent budget alert calls result in only one alert being sent
+    when using Redis atomic locking (nx=True).
+
+    This tests the core race condition prevention mechanism introduced to avoid
+    duplicate webhook alerts when multiple processes/threads detect budget violations.
+    """
+    redis_cache = RedisCache()
+    slack_alerting = SlackAlerting(
+        alerting=["webhook"],
+        internal_usage_cache=DualCache(redis_cache=redis_cache)
+    )
+
+    user_info = CallInfo(
+        token="test_token_concurrent",
+        spend=101,
+        max_budget=100,
+        user_id="test@test.com",
+        event_group=Litellm_EntityType.KEY,
+    )
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        # Simulate 10 concurrent requests triggering the same budget alert
+        tasks = [
+            slack_alerting.budget_alerts(type="token_budget", user_info=user_info)
+            for _ in range(10)
+        ]
+        await asyncio.gather(*tasks)
+
+        # Should only send alert once due to Redis atomic lock
+        mock_send_alert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_lock_timeout():
+    """
+    Test that lock expires after timeout and allows retry.
+
+    Verifies that if a lock gets stuck (e.g., process crashes during alert sending),
+    the 20-second TTL allows the system to recover and send alerts again.
+    """
+    redis_cache = RedisCache()
+    slack_alerting = SlackAlerting(
+        alerting=["webhook"],
+        internal_usage_cache=DualCache(redis_cache=redis_cache)
+    )
+
+    user_info = CallInfo(
+        token="test_token_timeout",
+        spend=101,
+        max_budget=100,
+        user_id="test@test.com",
+        event_group=Litellm_EntityType.KEY,
+    )
+
+    # Manually set the lock key to simulate a stuck lock
+    cache_key = "budget_alerts:budget_crossed:test_token_timeout"
+    await redis_cache.async_set_cache(
+        key=cache_key,
+        value="SENDING",
+        ttl=1  # 1 second TTL
+    )
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        # First call should fail to acquire lock
+        await slack_alerting.budget_alerts(type="token_budget", user_info=user_info)
+        mock_send_alert.assert_not_called()
+
+        # Wait for lock to expire
+        await asyncio.sleep(2)
+
+        # Second call should succeed
+        await slack_alerting.budget_alerts(type="token_budget", user_info=user_info)
+        mock_send_alert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_budget_alerts_without_redis():
+    """
+    Test concurrent alerts when Redis is not available (fallback to in-memory cache).
+    """
+    slack_alerting = SlackAlerting(
+        alerting=["webhook"],
+        internal_usage_cache=DualCache()  # No Redis cache
+    )
+
+    user_info = CallInfo(
+        token="test_token_no_redis",
+        spend=101,
+        max_budget=100,
+        user_id="test@test.com",
+        event_group=Litellm_EntityType.KEY,
+    )
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        # Simulate concurrent requests
+        tasks = [
+            slack_alerting.budget_alerts(type="token_budget", user_info=user_info)
+            for _ in range(10)
+        ]
+        await asyncio.gather(*tasks)
+
+        assert mock_send_alert.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_redis_nx_atomic_lock():
+    """
+    Test that Redis SET NX operation properly prevents concurrent writes.
+
+    This is a unit test for the underlying Redis atomic operation that
+    powers the lock mechanism.
+    """
+    redis_cache = RedisCache()
+    cache_key = "test:lock:key:atomic"
+
+    # Clean up any existing key
+    await redis_cache.async_delete_cache(key=cache_key)
+
+    # First call should succeed (key doesn't exist)
+    result1 = await redis_cache.async_set_cache(
+        key=cache_key,
+        value="SENDING",
+        ttl=10,
+        nx=True
+    )
+    assert result1 is True
+
+    # Second call should fail (key exists)
+    result2 = await redis_cache.async_set_cache(
+        key=cache_key,
+        value="SENDING",
+        ttl=10,
+        nx=True
+    )
+    assert result2 is False or result2 is None
+
+    # Clean up
+    await redis_cache.async_delete_cache(key=cache_key)
+
+
+@pytest.mark.asyncio
+async def test_different_budget_events_independent():
+    """
+    Test that different budget events (budget_crossed vs threshold_crossed)
+    are tracked independently and don't interfere with each other.
+
+    Each event type should have its own cache key and be tracked separately.
+    """
+    slack_alerting = SlackAlerting(alerting=["webhook"])
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        # Budget crossed event
+        user_info_crossed = CallInfo(
+            token="test_token_events",
+            spend=101,
+            max_budget=100,
+            user_id="test@test.com",
+            event_group=Litellm_EntityType.KEY,
+        )
+        await slack_alerting.budget_alerts(type="token_budget", user_info=user_info_crossed)
+
+        # Threshold crossed event (different event type, same user)
+        user_info_threshold = CallInfo(
+            token="test_token_events",
+            spend=95,
+            max_budget=100,
+            user_id="test@test.com",
+            event_group=Litellm_EntityType.KEY,
+        )
+        await slack_alerting.budget_alerts(type="token_budget", user_info=user_info_threshold)
+
+        # Should send 2 alerts (one for each event type: budget_crossed and threshold_crossed)
+        assert mock_send_alert.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_lock_with_webhook_failure():
+    """
+    Test that lock behavior is consistent even when webhook delivery fails.
+
+    When webhook delivery fails, the lock should still be set to prevent
+    retries within the lock window.
+    """
+    redis_cache = RedisCache()
+    slack_alerting = SlackAlerting(
+        alerting=["webhook"],
+        internal_usage_cache=DualCache(redis_cache=redis_cache)
+    )
+
+    user_info = CallInfo(
+        token="test_token_failure",
+        spend=101,
+        max_budget=100,
+        user_id="test@test.com",
+        event_group=Litellm_EntityType.KEY,
+    )
+
+    with patch.object(
+        slack_alerting, "send_alert", new=AsyncMock(side_effect=Exception("Webhook failed"))
+    ):
+        # First call should fail during webhook delivery
+        with pytest.raises(Exception):
+            await slack_alerting.budget_alerts(type="token_budget", user_info=user_info)
+
+        # Check cache key status - should still be "SENDING" due to lock
+        cache_key = "budget_alerts:budget_crossed:test_token_failure"
+        result = await redis_cache.async_get_cache(key=cache_key)
+
+        # Lock should be acquired even though delivery failed
+        assert result == "SENDING"
+
         
