@@ -34,6 +34,33 @@ from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
 
+def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
+    """
+    Get UI username and password from environment variables or master key.
+
+    Args:
+        master_key: Master key for the proxy (used as fallback for password)
+
+    Returns:
+        tuple[str, str]: A tuple containing (ui_username, ui_password)
+
+    Raises:
+        ProxyException: If neither UI_PASSWORD nor master_key is available
+    """
+    ui_username = os.getenv("UI_USERNAME", "admin")
+    ui_password = os.getenv("UI_PASSWORD", None)
+    if ui_password is None:
+        ui_password = str(master_key) if master_key is not None else None
+    if ui_password is None:
+        raise ProxyException(
+            message="set Proxy master key to use UI. https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
+            type=ProxyErrorTypes.auth_error,
+            param="UI_PASSWORD",
+            code=500,
+        )
+    return ui_username, ui_password
+
+
 class LoginResult:
     """Result object containing authentication data from login."""
 
@@ -85,17 +112,7 @@ async def authenticate_user(
             code=500,
         )
 
-    ui_username = os.getenv("UI_USERNAME", "admin")
-    ui_password = os.getenv("UI_PASSWORD", None)
-    if ui_password is None:
-        ui_password = str(master_key) if master_key is not None else None
-    if ui_password is None:
-        raise ProxyException(
-            message="set Proxy master key to use UI. https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
-            type=ProxyErrorTypes.auth_error,
-            param="UI_PASSWORD",
-            code=500,
-        )
+    ui_username, ui_password = get_ui_credentials(master_key)
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
     _user_row: Optional[LiteLLM_UserTable] = None
@@ -115,10 +132,6 @@ async def authenticate_user(
                 where={"user_email": {"equals": username}}
             ),
         )
-
-    disabled_non_admin_personal_key_creation = (
-        get_disabled_non_admin_personal_key_creation()
-    )
 
     """
     To login to Admin UI, we support the following
