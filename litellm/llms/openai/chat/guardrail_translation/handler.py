@@ -243,47 +243,121 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     async def process_output_streaming_response(
         self,
-        response: "ModelResponseStream",
+        responses_so_far: List["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
-    ) -> Any:
+    ) -> List["ModelResponseStream"]:
         """
-        Process output streaming response by applying guardrails to text content.
+        Process output streaming responses by applying guardrails to text content.
 
         Args:
-            response: LiteLLM ModelResponseStream object
+            responses_so_far: List of LiteLLM ModelResponseStream objects
             guardrail_to_apply: The guardrail instance to apply
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata to pass to guardrails
 
         Returns:
-            Modified response with guardrail applied to content
+            Modified list of responses with guardrail applied to content
 
         Response Format Support:
             - String content: choice.message.content = "text here"
             - List content: choice.message.content = [{"type": "text", "text": "text here"}, ...]
         """
 
-        # Step 0: Check if response has any text content to process
-        if not self._has_text_content(response):
-            return response
+        # Step 0: Check if any response has text content to process
+        has_any_text_content = False
+        for response in responses_so_far:
+            if self._has_text_content(response):
+                has_any_text_content = True
+                break
 
+        if not has_any_text_content:
+            verbose_proxy_logger.warning(
+                "OpenAI Chat Completions: No text content in streaming responses, skipping guardrail"
+            )
+            return responses_so_far
+
+        # Step 1: Combine all streaming chunks into complete text per choice
+        # For streaming, we need to concatenate all delta.content across all chunks
+        # Key: (choice_idx, content_idx), Value: combined text
+        combined_texts: Dict[Tuple[int, Optional[int]], str] = {}
+
+        for response_idx, response in enumerate(responses_so_far):
+            for choice_idx, choice in enumerate(response.choices):
+                if isinstance(choice, litellm.StreamingChoices):
+                    content = choice.delta.content
+                elif isinstance(choice, litellm.Choices):
+                    content = choice.message.content
+                else:
+                    continue
+
+                if content is None:
+                    continue
+
+                if isinstance(content, str):
+                    # String content - accumulate for this choice
+                    key = (choice_idx, None)
+                    if key not in combined_texts:
+                        combined_texts[key] = ""
+                    combined_texts[key] += content
+
+                elif isinstance(content, list):
+                    # List content - accumulate for each content item
+                    for content_idx, content_item in enumerate(content):
+                        text_str = content_item.get("text")
+                        if text_str:
+                            key = (choice_idx, content_idx)
+                            if key not in combined_texts:
+                                combined_texts[key] = ""
+                            combined_texts[key] += text_str
+
+        # Step 2: Create lists for guardrail processing
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
         task_mappings: List[Tuple[int, Optional[int]]] = []
-        # Track (choice_index, content_index) for each text
+        # Track (choice_index, content_index) for each combined text
 
-        # Step 1: Extract all text content and images from response choices
-        for choice_idx, choice in enumerate(response.choices):
+        for (choice_idx, content_idx), combined_text in combined_texts.items():
+            texts_to_check.append(combined_text)
+            task_mappings.append((choice_idx, content_idx))
 
-            self._extract_output_text_and_images(
-                choice=choice,
-                choice_idx=choice_idx,
-                texts_to_check=texts_to_check,
-                images_to_check=images_to_check,
+        # Step 3: Apply guardrail to all combined texts in batch
+        if texts_to_check:
+            # Create a request_data dict with response info and user API key metadata
+            request_data: dict = {"responses": responses_so_far}
+
+            # Add user API key metadata with prefixed keys
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
+
+            guardrailed_texts, guardrailed_images = (
+                await guardrail_to_apply.apply_guardrail(
+                    texts=texts_to_check,
+                    request_data=request_data,
+                    input_type="response",
+                    images=images_to_check if images_to_check else None,
+                    logging_obj=litellm_logging_obj,
+                )
+            )
+
+            # Step 4: Apply guardrailed text back to all streaming chunks
+            # For each choice, replace the combined text across all chunks
+            await self._apply_guardrail_responses_to_output_streaming(
+                responses=responses_so_far,
+                guardrailed_texts=guardrailed_texts,
                 task_mappings=task_mappings,
             )
+
+        verbose_proxy_logger.debug(
+            "OpenAI Chat Completions: Processed output streaming responses: %s",
+            responses_so_far,
+        )
+
+        return responses_so_far
 
     def _has_text_content(
         self, response: Union["ModelResponse", "ModelResponseStream"]
@@ -304,10 +378,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         return True
         elif isinstance(response, ModelResponseStream):
             for choice in response.choices:
-                if isinstance(choice, litellm.Choices):
-                    if choice.message.content and isinstance(
-                        choice.message.content, str
-                    ):
+                if isinstance(choice, litellm.StreamingChoices):
+                    if choice.delta.content and isinstance(choice.delta.content, str):
                         return True
         return False
 
@@ -394,3 +466,79 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 ][
                     "text"
                 ] = guardrail_response
+
+    async def _apply_guardrail_responses_to_output_streaming(
+        self,
+        responses: List["ModelResponseStream"],
+        guardrailed_texts: List[str],
+        task_mappings: List[Tuple[int, Optional[int]]],
+    ) -> None:
+        """
+        Apply guardrail responses back to output streaming responses.
+
+        For streaming responses, the guardrailed text (which is the combined text from all chunks)
+        is placed in the first chunk, and subsequent chunks are cleared.
+
+        Args:
+            responses: List of ModelResponseStream objects to modify
+            guardrailed_texts: List of guardrailed text responses (combined from all chunks)
+            task_mappings: List of tuples (choice_idx, content_idx)
+
+        Override this method to customize how responses are applied to streaming responses.
+        """
+        # Build a mapping of what guardrailed text to use for each (choice_idx, content_idx)
+        guardrail_map: Dict[Tuple[int, Optional[int]], str] = {}
+        for task_idx, guardrail_response in enumerate(guardrailed_texts):
+            mapping = task_mappings[task_idx]
+            choice_idx = cast(int, mapping[0])
+            content_idx_optional = cast(Optional[int], mapping[1])
+            guardrail_map[(choice_idx, content_idx_optional)] = guardrail_response
+
+        # Track which choices we've already set the guardrailed text for
+        # Key: (choice_idx, content_idx), Value: boolean (True if already set)
+        already_set: Dict[Tuple[int, Optional[int]], bool] = {}
+
+        # Iterate through all responses and update content
+        for response_idx, response in enumerate(responses):
+            for choice_idx_in_response, choice in enumerate(response.choices):
+                if isinstance(choice, litellm.StreamingChoices):
+                    content = choice.delta.content
+                elif isinstance(choice, litellm.Choices):
+                    content = choice.message.content
+                else:
+                    continue
+
+                if content is None:
+                    continue
+
+                if isinstance(content, str):
+                    # String content
+                    key = (choice_idx_in_response, None)
+                    if key in guardrail_map:
+                        if key not in already_set:
+                            # First chunk - set the complete guardrailed text
+                            if isinstance(choice, litellm.StreamingChoices):
+                                choice.delta.content = guardrail_map[key]
+                            elif isinstance(choice, litellm.Choices):
+                                choice.message.content = guardrail_map[key]
+                            already_set[key] = True
+                        else:
+                            # Subsequent chunks - clear the content
+                            if isinstance(choice, litellm.StreamingChoices):
+                                choice.delta.content = ""
+                            elif isinstance(choice, litellm.Choices):
+                                choice.message.content = ""
+
+                elif isinstance(content, list):
+                    # List content - handle each content item
+                    for content_idx, content_item in enumerate(content):
+                        if "text" in content_item:
+                            key = (choice_idx_in_response, content_idx)
+                            if key in guardrail_map:
+                                if key not in already_set:
+                                    # First chunk - set the complete guardrailed text
+                                    content_item["text"] = guardrail_map[key]
+                                    already_set[key] = True
+                                else:
+                                    # Subsequent chunks - clear the text
+                                    content_item["text"] = ""
