@@ -1125,7 +1125,7 @@ from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.azure.anthropic.transformation import AzureAnthropicConfig
+from .llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -1234,6 +1234,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation imp
 from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import (
     AmazonTitanConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import (
+    AmazonTwelveLabsPegasusConfig,
+)
 from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -1256,6 +1259,9 @@ from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
+)
+from .llms.bedrock.embed.amazon_nova_transformation import (
+    AmazonNovaEmbeddingConfig,
 )
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
@@ -1371,6 +1377,7 @@ from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
 )
+from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig
 from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
@@ -1380,6 +1387,7 @@ from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatC
 from .llms.v0.chat.transformation import V0ChatConfig
 from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
+from .llms.ragflow.chat.transformation import RAGFlowConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig

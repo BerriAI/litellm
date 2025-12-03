@@ -21,6 +21,7 @@ LiteLLM integrates with vector stores, allowing your models to access your organ
 - [Azure Vector Stores](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/file-search?tabs=python#vector-stores) (Cannot be directly queried. Only available for calling in Assistants messages. We will be adding Azure AI Search Vector Store API support soon.)
 - [Vertex AI RAG API](https://cloud.google.com/vertex-ai/generative-ai/docs/rag-overview)
 - [Gemini File Search](https://ai.google.dev/gemini-api/docs/file-search)
+- [RAGFlow Datasets](/docs/providers/ragflow_vector_store.md) (Dataset management only, search not supported)
 
 ## Quick Start
 

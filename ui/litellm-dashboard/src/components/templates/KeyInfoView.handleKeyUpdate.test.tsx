@@ -245,7 +245,7 @@ import KeyInfoView from "./key_info_view";
 const baseKeyData = {
   token_id: "tok_123",
   token: "tok_123",
-  key_alias: "My API Key",
+  key_alias: "My Virtual Key",
   key_name: "sk-xxxx",
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),

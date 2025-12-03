@@ -175,6 +175,50 @@ def test_chat_completion(mock_acompletion, client_no_auth):
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
+def test_chat_completion_malformed_messages_returns_400(client_no_auth):
+    """
+    Test that malformed messages (strings instead of dicts) return 400 instead of 500.
+    
+    This test verifies that when a client sends messages as raw strings instead of
+    {role, content} objects, LiteLLM returns a 400 invalid_request_error instead
+    of a 500 Internal Server Error.
+    """
+    global headers
+    try:
+        # Test data with malformed messages (string instead of dict)
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": ["hi how are you"],  # Invalid: should be [{"role": "user", "content": "hi how are you"}]
+        }
+
+        print("testing proxy server with malformed messages")
+        response = client_no_auth.post("/v1/chat/completions", json=test_data, headers=headers)
+        
+        print(f"response status: {response.status_code}")
+        print(f"response text: {response.text}")
+        
+        # Should return 400, not 500
+        assert response.status_code == 400, f"Expected 400, got {response.status_code}. Response: {response.text}"
+        
+        # Verify error format
+        result = response.json()
+        assert "error" in result, "Response should contain 'error' key"
+        error = result["error"]
+        
+        # Verify error type and message
+        assert error.get("type") == "invalid_request_error" or error.get("type") is None, \
+            f"Expected invalid_request_error or None, got {error.get('type')}"
+        assert error.get("code") == "400" or error.get("code") == 400, \
+            f"Expected code 400, got {error.get('code')}"
+        
+        # Error message should indicate invalid request format
+        error_message = error.get("message", "")
+        assert len(error_message) > 0, "Error message should not be empty"
+        
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
+
 def test_get_settings_request_timeout(client_no_auth):
     """
     When no timeout is set, it should use the litellm.request_timeout value

@@ -691,7 +691,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const effectiveApiKey = apiKeySource === "session" ? accessToken : apiKey;
 
     if (!effectiveApiKey) {
-      NotificationsManager.fromBackend("Please provide an API key or select Current UI Session");
+      NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
       return;
     }
 
@@ -1003,7 +1003,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             <div className="space-y-4">
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                  <KeyOutlined className="mr-2" /> API Key Source
+                  <KeyOutlined className="mr-2" /> Virtual Key Source
                 </Text>
                 <Select
                   disabled={disabledPersonalKeyCreation}
@@ -1021,7 +1021,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 {apiKeySource === "custom" && (
                   <TextInput
                     className="mt-2"
-                    placeholder="Enter custom API key"
+                    placeholder="Enter custom Virtual Key"
                     type="password"
                     onValueChange={setApiKey}
                     value={apiKey}
