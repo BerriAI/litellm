@@ -50,6 +50,14 @@ class TeamBudgetAlert(BaseBudgetAlertType):
         return user_info.team_id or "default_id"
 
 
+class OrganizationBudgetAlert(BaseBudgetAlertType):
+    def get_event_message(self) -> str:
+        return "Organization Budget: "
+
+    def get_id(self, user_info: CallInfo) -> str:
+        return user_info.organization_id or "default_id"
+
+
 class TokenBudgetAlert(BaseBudgetAlertType):
     def get_event_message(self) -> str:
         return "Key Budget: "
@@ -72,6 +80,7 @@ def get_budget_alert_type(
         "soft_budget",
         "user_budget",
         "team_budget",
+        "organization_budget",
         "proxy_budget",
         "projected_limit_exceeded",
     ],
@@ -83,6 +92,7 @@ def get_budget_alert_type(
         "soft_budget": SoftBudgetAlert(),
         "user_budget": UserBudgetAlert(),
         "team_budget": TeamBudgetAlert(),
+        "organization_budget": OrganizationBudgetAlert(),
         "token_budget": TokenBudgetAlert(),
         "projected_limit_exceeded": ProjectedLimitExceededAlert(),
     }

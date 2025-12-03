@@ -1,6 +1,7 @@
 import { LogEntry } from "./columns";
 import NotificationsManager from "../molecules/notifications_manager";
-import { JsonView, allExpanded, defaultStyles } from 'react-json-view-lite';
+import { JsonView, defaultStyles } from "react-json-view-lite";
+import "react-json-view-lite/dist/index.css";
 
 interface RequestResponsePanelProps {
   row: {
@@ -95,15 +96,7 @@ export function RequestResponsePanel({
           </button>
         </div>
         <div className="p-4 overflow-auto max-h-96 w-full max-w-full box-border">
-          <pre className="text-xs font-mono whitespace-pre-wrap break-all w-full max-w-full overflow-hidden break-words">
-            {/* {JSON.stringify(getRawRequest(), null, 2)} */}
-            <JsonView
-              data={getRawRequest()}
-              shouldExpandNode={allExpanded}
-              style={defaultStyles}
-              clickToExpandNode={true}
-            />
-          </pre>
+          <JsonView data={getRawRequest()} style={defaultStyles} clickToExpandNode={true} />
         </div>
       </div>
 
@@ -136,17 +129,9 @@ export function RequestResponsePanel({
             </svg>
           </button>
         </div>
-        <div className="p-4 overflow-auto max-h-96 bg-gray-50 w-full max-w-full box-border">
+        <div className="p-4 overflow-auto max-h-96 w-full max-w-full box-border">
           {hasResponse ? (
-            <pre className="text-xs font-mono whitespace-pre-wrap break-all w-full max-w-full overflow-hidden break-words">
-              {/* {JSON.stringify(formattedResponse(), null, 2)} */}
-              <JsonView
-                data={formattedResponse()}
-                shouldExpandNode={allExpanded}
-                style={defaultStyles}
-                clickToExpandNode={true}
-              />
-            </pre>
+            <JsonView data={formattedResponse()} style={defaultStyles} clickToExpandNode={true} />
           ) : (
             <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>
           )}

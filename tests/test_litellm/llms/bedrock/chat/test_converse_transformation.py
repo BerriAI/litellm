@@ -238,6 +238,30 @@ def test_transform_tool_call_with_cache_control():
     assert "cachePoint" in transformed_cache_msg
     assert transformed_cache_msg["cachePoint"]["type"] == "default"
 
+
+def test_reasoning_with_forced_tool_choice_switches_to_auto():
+    config = AmazonConverseConfig()
+
+    non_default_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "get_current_weather", "parameters": {}},
+            }
+        ],
+        "tool_choice": "required",
+        "reasoning_effort": "low",
+    }
+
+    optional_params = config.map_openai_params(
+        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        non_default_params=non_default_params,
+        optional_params={},
+        drop_params=False,
+    )
+
+    assert optional_params["tool_choice"] == {"auto": {}}
+
 def test_get_supported_openai_params():
     config = AmazonConverseConfig()
     supported_params = config.get_supported_openai_params(
@@ -2592,8 +2616,10 @@ def test_empty_assistant_message_handling():
     empty or whitespace-only content with a placeholder to prevent AWS Bedrock
     Converse API 400 Bad Request errors.
     """
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
-    
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
     # Test case 1: Empty string content - test with modify_params=True to prevent merging
     messages = [
         {"role": "user", "content": "Hello"},
@@ -2676,3 +2702,36 @@ def test_empty_assistant_message_handling():
     finally:
         # Restore original modify_params setting
         litellm.modify_params = original_modify_params
+
+
+def test_is_nova_lite_2_model():
+    """Test the _is_nova_lite_2_model() method for detecting Nova 2 models."""
+    config = AmazonConverseConfig()
+    
+    # Test with amazon.nova-2-lite-v1:0
+    assert config._is_nova_lite_2_model("amazon.nova-2-lite-v1:0") is True
+    
+    # Test with regional variants
+    assert config._is_nova_lite_2_model("us.amazon.nova-2-lite-v1:0") is True
+    assert config._is_nova_lite_2_model("eu.amazon.nova-2-lite-v1:0") is True
+    assert config._is_nova_lite_2_model("apac.amazon.nova-2-lite-v1:0") is True
+    
+    # Test with other Nova 2 variants (pro, micro)
+    assert config._is_nova_lite_2_model("amazon.nova-pro-1-5-v1:0") is False
+    assert config._is_nova_lite_2_model("amazon.nova-micro-1-5-v1:0") is False
+    assert config._is_nova_lite_2_model("us.amazon.nova-pro-1-5-v1:0") is False
+    assert config._is_nova_lite_2_model("eu.amazon.nova-micro-1-5-v1:0") is False
+    
+    # Test with non-Nova-1.5 lite models (should return False)
+    assert config._is_nova_lite_2_model("amazon.nova-lite-v1:0") is False
+    assert config._is_nova_lite_2_model("amazon.nova-pro-v1:0") is False
+    assert config._is_nova_lite_2_model("amazon.nova-micro-v1:0") is False
+    
+    # Test with Nova v1:0 models (should return False)
+    assert config._is_nova_lite_2_model("us.amazon.nova-lite-v1:0") is False
+    assert config._is_nova_lite_2_model("eu.amazon.nova-pro-v1:0") is False
+    
+    # Test with completely different models (should return False)
+    assert config._is_nova_lite_2_model("anthropic.claude-3-5-sonnet-20240620-v1:0") is False
+    assert config._is_nova_lite_2_model("meta.llama3-70b-instruct-v1:0") is False
+    assert config._is_nova_lite_2_model("mistral.mistral-7b-instruct-v0:2") is False

@@ -17,16 +17,15 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
+from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import (
-    CallToolRequestParams as MCPCallToolRequestParams,
+    CallToolResult,
     GetPromptRequestParams,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
 )
-from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
-
 from pydantic import AnyUrl
 
 import litellm
@@ -1735,7 +1734,7 @@ class MCPServerManager:
             if extra_headers is None:
                 extra_headers = {}
             for header in mcp_server.extra_headers:
-                if header in raw_headers:
+                if isinstance(header, str) and header in raw_headers:
                     extra_headers[header] = raw_headers[header]
 
         if mcp_server.static_headers:
@@ -1949,7 +1948,12 @@ class MCPServerManager:
             ) = split_server_prefix_from_name(tool_name)
             if original_tool_name in self.tool_name_to_mcp_server_name_mapping:
                 for server in self.get_registry().values():
-                    if normalize_server_name(server.name) == normalize_server_name(
+                    if server.server_name is None:
+                        if normalize_server_name(server.name) == normalize_server_name(
+                            server_name_from_prefix
+                        ):
+                            return server
+                    elif normalize_server_name(server.server_name) == normalize_server_name(
                         server_name_from_prefix
                     ):
                         return server
@@ -1976,7 +1980,7 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Adding server to registry: {server.server_id} ({server.server_name})"
             )
-            self.add_update_server(server)
+            await self.add_update_server(server)
 
         verbose_logger.debug(
             f"Registry now contains {len(self.get_registry())} servers"
@@ -2270,7 +2274,7 @@ class MCPServerManager:
                 server.status = "unhealthy"
                 ## try adding server to registry to get error
                 try:
-                    self.add_update_server(server)
+                    await self.add_update_server(server)
                 except Exception as e:
                     server.health_check_error = str(e)
                 server.health_check_error = "Server is not in in memory registry yet. This could be a temporary sync issue."
