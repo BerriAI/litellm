@@ -29,6 +29,7 @@ def make_sync_call(
     logging_obj: LiteLLMLoggingObject,
     json_mode: Optional[bool] = False,
     fake_stream: bool = False,
+    stream_chunk_size: int = 1024,
 ):
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
@@ -66,7 +67,7 @@ def make_sync_call(
         )
     else:
         decoder = AWSEventStreamDecoder(model=model)
-        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
 
     # LOGGING
     logging_obj.post_call(
@@ -102,6 +103,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         fake_stream: bool = False,
         json_mode: Optional[bool] = False,
         api_key: Optional[str] = None,
+        stream_chunk_size: int = 1024,
     ) -> CustomStreamWrapper:
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
@@ -143,6 +145,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             logging_obj=logging_obj,
             fake_stream=fake_stream,
             json_mode=json_mode,
+            stream_chunk_size=stream_chunk_size,
         )
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -260,6 +263,7 @@ class BedrockConverseLLM(BaseAWSLLM):
     ):
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        stream_chunk_size = optional_params.pop("stream_chunk_size", 1024)
         unencoded_model_id = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
         json_mode = optional_params.get("json_mode", False)
@@ -356,7 +360,8 @@ class BedrockConverseLLM(BaseAWSLLM):
                     json_mode=json_mode,
                     fake_stream=fake_stream,
                     credentials=credentials,
-                    api_key=api_key
+                    api_key=api_key,
+                    stream_chunk_size=stream_chunk_size,
                 )  # type: ignore
             ### ASYNC COMPLETION
             return self.async_completion(
@@ -433,6 +438,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 logging_obj=logging_obj,
                 json_mode=json_mode,
                 fake_stream=fake_stream,
+                stream_chunk_size=stream_chunk_size,
             )
             streaming_response = CustomStreamWrapper(
                 completion_stream=completion_stream,
