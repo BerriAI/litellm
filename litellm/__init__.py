@@ -1539,26 +1539,7 @@ def __getattr__(name: str) -> Any:
     if name in _utils_names:
         from ._lazy_imports import _lazy_import_utils
         return _lazy_import_utils(name)
-    
-    # Lazy-load ALL_LITELLM_RESPONSE_TYPES
-    if name == "ALL_LITELLM_RESPONSE_TYPES":
-        from .utils import (
-            ModelResponse,
-            EmbeddingResponse,
-            ImageResponse,
-            TranscriptionResponse,
-            TextCompletionResponse,
-        )
-        _all_response_types = [
-            ModelResponse,
-            EmbeddingResponse,
-            ImageResponse,
-            TranscriptionResponse,
-            TextCompletionResponse,
-        ]
-        globals()["ALL_LITELLM_RESPONSE_TYPES"] = _all_response_types
-        return _all_response_types
-    
+        
     # Lazy-load encoding to avoid loading tiktoken at import time
     if name == "encoding":
         from litellm.litellm_core_utils.default_encoding import encoding as _encoding
