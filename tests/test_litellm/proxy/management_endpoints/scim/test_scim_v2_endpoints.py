@@ -15,7 +15,6 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     update_user,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
-    SCIMFeature,
     SCIMGroup,
     SCIMMember,
     SCIMPatchOp,
@@ -428,7 +427,7 @@ async def test_update_user_success(mocker):
         "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
         AsyncMock()
     )
-    mock_transform = mocker.patch(
+    mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=response_scim_user)
     )
@@ -524,7 +523,7 @@ async def test_patch_user_success(mocker):
         "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
         AsyncMock()
     )
-    mock_transform = mocker.patch(
+    mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=response_scim_user)
     )
@@ -660,7 +659,7 @@ async def test_update_group_metadata_serialization_issue(mocker):
     )
     
     # Call the function that had the bug
-    result = await update_group(group_id=group_id, group=scim_group)
+    await update_group(group_id=group_id, group=scim_group)
     
     # Verify the team update was called
     mock_prisma_client.db.litellm_teamtable.update.assert_called_once()
@@ -696,7 +695,6 @@ async def test_team_membership_management(mocker):
     from litellm.proxy.management_endpoints.scim.scim_v2 import (
         _get_team_member_user_ids_from_team,
         _handle_group_membership_changes,
-        patch_team_membership,
     )
 
     # Mock team with members_with_roles as source of truth
@@ -772,7 +770,6 @@ async def test_update_group_e2e(mocker):
     from litellm.proxy.management_endpoints.scim.scim_transformations import (
         ScimTransformations,
     )
-    from litellm.proxy.utils import safe_dumps
 
     # Setup test data
     group_id = "test-team-123"

@@ -1,14 +1,8 @@
-import asyncio
-import json
 import os
 import sys
-from litellm._uuid import uuid
-from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../")
@@ -19,10 +13,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
-    SCIMGroup,
-    SCIMPatchOp,
     SCIMPatchOperation,
-    SCIMUser,
 )
 
 
