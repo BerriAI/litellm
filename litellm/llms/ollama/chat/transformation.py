@@ -387,7 +387,6 @@ class OllamaChatConfig(BaseConfig):
         )
 
         response_json = raw_response.json()
-        print("RESPONSE JSON:", response_json)
         ## RESPONSE OBJECT
 
         model_response.choices[0].finish_reason = "stop"
