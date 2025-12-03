@@ -182,7 +182,18 @@ async def common_checks(
         general_settings.get("enforce_user_param", None) is not None
         and general_settings["enforce_user_param"] is True
     ):
-        if RouteChecks.is_llm_api_route(route=route) and "user" not in request_body:
+        # Get HTTP method from request
+        http_method = request.method if hasattr(request, 'method') else None
+        
+        # Check if it's a POST request and if it's an OpenAI route but not MCP
+        is_post_method = http_method and http_method.upper() == "POST"
+        is_openai_route = RouteChecks.is_llm_api_route(route=route)
+        is_mcp_route = route in LiteLLMRoutes.mcp_routes.value or RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
+        )
+        
+        # Enforce user param only for POST requests on OpenAI routes (excluding MCP routes)
+        if is_post_method and is_openai_route and not is_mcp_route and "user" not in request_body:
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
