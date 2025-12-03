@@ -721,6 +721,7 @@ API_ROUTE_TO_CALL_TYPES = {
         CallTypes.llm_passthrough_route,
         CallTypes.allm_passthrough_route,
     ],
+    "/v1/messages": [CallTypes.anthropic_messages],
 }
 
 

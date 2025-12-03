@@ -6,7 +6,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 3. Implements a way to call /applyGuardrail endpoint for `/chat/completions` + `/v1/messages` requests on async_post_call_streaming_iterator_hook
 """
 
-from typing import Any, AsyncGenerator, Union
+from typing import Any, AsyncGenerator, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -126,16 +126,21 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             is not True
         ):
-
             return
 
         verbose_proxy_logger.debug(
             "async_post_call_success_hook response: %s", response
         )
 
-        call_type = _infer_call_type(call_type=None, completion_response=response)
-        if call_type is None:
+        call_type: Optional[CallTypesLiteral] = None
+        if user_api_key_dict.request_route is not None:
+            call_types = get_call_types_for_route(user_api_key_dict.request_route)
+            if call_types is not None:
+                call_type = call_types[0]
+        else:
+            call_type = _infer_call_type(call_type=None, completion_response=response)
 
+        if call_type is None:
             return response
 
         if endpoint_guardrail_translation_mappings is None:

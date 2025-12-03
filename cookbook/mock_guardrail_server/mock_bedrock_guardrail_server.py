@@ -429,6 +429,8 @@ class LitellmBasicGuardrailRequest(BaseModel):
     request_data: Dict[str, Any] = Field(default_factory=dict)
     additional_provider_specific_params: Dict[str, Any] = Field(default_factory=dict)
     input_type: Literal["request", "response"]
+    litellm_call_id: Optional[str] = None
+    litellm_trace_id: Optional[str] = None
 
 
 class LitellmBasicGuardrailResponse(BaseModel):
