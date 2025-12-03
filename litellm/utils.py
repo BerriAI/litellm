@@ -241,23 +241,7 @@ from typing import (
     get_args,
 )
 
-# Helper function for lazy importing and caching - must be defined after typing imports
-def _lazy_import_and_cache(cache_var_name: str, import_func: Callable[[], Any]) -> Any:
-    """
-    Helper function for lazy importing and caching modules to avoid repeated import overhead.
-    
-    Args:
-        cache_var_name: Name of the global variable to cache the imported object
-        import_func: Function that performs the import and returns the object
-    
-    Returns:
-        The cached imported object
-    """
-    cache = globals().get(cache_var_name)
-    if cache is None:
-        cache = import_func()
-        globals()[cache_var_name] = cache
-    return cache
+
 
 from openai import OpenAIError as OriginalError
 
