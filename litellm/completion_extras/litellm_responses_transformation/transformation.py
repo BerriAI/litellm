@@ -148,7 +148,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if role == "system":
                 # Extract system message as instructions
                 if isinstance(content, str):
-                    instructions = content
+                    if instructions:
+                        # Concatenate multiple system prompts with a space
+                        instructions = f"{instructions} {content}"
+                    else:
+                        instructions = content
                 else:
                     input_items.append(
                         {
