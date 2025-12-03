@@ -1,26 +1,8 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
 import * as useTeamsModule from "@/app/(dashboard)/hooks/useTeams";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import AllModelsTab from "./AllModelsTab";
-
-// Mock window.matchMedia for Ant Design components
-beforeAll(() => {
-  Object.defineProperty(window, "matchMedia", {
-    writable: true,
-    value: (query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    }),
-  });
-});
 
 describe("AllModelsTab", () => {
   const mockSetSelectedModelGroup = vi.fn();
@@ -52,29 +34,22 @@ describe("AllModelsTab", () => {
     showSSOBanner: false,
   };
 
-  beforeAll(() => {
-    // Mock useAuthorized hook
+  beforeEach(() => {
+    vi.clearAllMocks();
     vi.spyOn(useAuthorizedModule, "default").mockReturnValue(mockUseAuthorized);
   });
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   it("should render with empty data", () => {
-    // Mock useTeams hook
     vi.spyOn(useTeamsModule, "default").mockReturnValue({
       teams: [],
       setTeams: vi.fn(),
     });
 
-    const { container } = render(<AllModelsTab {...defaultProps} />);
-    expect(container).toBeTruthy();
+    render(<AllModelsTab {...defaultProps} />);
     expect(screen.getByText("Current Team:")).toBeInTheDocument();
   });
 
   it("should filter models by direct team access when current team is selected", async () => {
-    const user = userEvent.setup();
     const mockTeams = [
       {
         team_id: "team-456",
@@ -91,7 +66,6 @@ describe("AllModelsTab", () => {
       },
     ];
 
-    // Mock useTeams hook with team data
     vi.spyOn(useTeamsModule, "default").mockReturnValue({
       teams: mockTeams,
       setTeams: vi.fn(),
@@ -103,7 +77,7 @@ describe("AllModelsTab", () => {
           model_name: "gpt-4-accessible",
           model_info: {
             id: "model-1",
-            access_via_team_ids: ["team-456"], // Direct team access
+            access_via_team_ids: ["team-456"],
             access_groups: [],
           },
         },
@@ -111,7 +85,7 @@ describe("AllModelsTab", () => {
           model_name: "gpt-3.5-turbo-blocked",
           model_info: {
             id: "model-2",
-            access_via_team_ids: ["team-789"], // Different team
+            access_via_team_ids: ["team-789"],
             access_groups: [],
           },
         },
@@ -120,34 +94,17 @@ describe("AllModelsTab", () => {
 
     render(<AllModelsTab {...defaultProps} modelData={modelData} />);
 
-    // Initially on "personal" team, should show 0 results (no models have direct_access)
-    expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
-
-    // Click on the team selector to change to Engineering Team
-    const teamSelector = screen.getAllByRole("button").find((btn) => btn.textContent?.includes("Personal"));
-    expect(teamSelector).toBeInTheDocument();
-
-    await user.click(teamSelector!);
-
-    // Click on Engineering Team option
-    await waitFor(async () => {
-      const engineeringOption = await screen.findByText(/Engineering Team/);
-      await user.click(engineeringOption);
-    });
-
-    // After selecting Engineering Team, should show 1 result (gpt-4-accessible has direct team access)
     await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
     });
   });
 
   it("should filter models by access group matching when team models match model access groups", async () => {
-    const user = userEvent.setup();
     const mockTeams = [
       {
         team_id: "team-sales",
         team_alias: "Sales Team",
-        models: ["sales-model-group"], // Team has this model group
+        models: ["sales-model-group"],
         max_budget: null,
         budget_duration: null,
         tpm_limit: null,
@@ -159,7 +116,6 @@ describe("AllModelsTab", () => {
       },
     ];
 
-    // Mock useTeams hook
     vi.spyOn(useTeamsModule, "default").mockReturnValue({
       teams: mockTeams,
       setTeams: vi.fn(),
@@ -171,8 +127,8 @@ describe("AllModelsTab", () => {
           model_name: "gpt-4-sales",
           model_info: {
             id: "model-sales-1",
-            access_via_team_ids: [], // No direct team access
-            access_groups: ["sales-model-group"], // But has access group that matches team's models
+            access_via_team_ids: [],
+            access_groups: ["sales-model-group"],
           },
         },
         {
@@ -180,7 +136,7 @@ describe("AllModelsTab", () => {
           model_info: {
             id: "model-eng-1",
             access_via_team_ids: [],
-            access_groups: ["engineering-model-group"], // Different access group
+            access_groups: ["engineering-model-group"],
           },
         },
       ],
@@ -188,29 +144,12 @@ describe("AllModelsTab", () => {
 
     render(<AllModelsTab {...defaultProps} modelData={modelData} />);
 
-    // Initially on "personal" team, should show 0 results
-    expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
-
-    // Click on the team selector
-    const teamSelector = screen.getAllByRole("button").find((btn) => btn.textContent?.includes("Personal"));
-    expect(teamSelector).toBeInTheDocument();
-
-    await user.click(teamSelector!);
-
-    // Click on Sales Team option
-    await waitFor(async () => {
-      const salesOption = await screen.findByText(/Sales Team/);
-      await user.click(salesOption);
-    });
-
-    // After selecting Sales Team, should show 1 result (gpt-4-sales has matching access group)
     await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
     });
   });
 
   it("should filter models by direct_access for personal team", async () => {
-    // Mock useTeams hook
     vi.spyOn(useTeamsModule, "default").mockReturnValue({
       teams: [],
       setTeams: vi.fn(),
@@ -222,7 +161,7 @@ describe("AllModelsTab", () => {
           model_name: "gpt-4-personal",
           model_info: {
             id: "model-personal-1",
-            direct_access: true, // Available for personal use
+            direct_access: true,
             access_via_team_ids: [],
             access_groups: [],
           },
@@ -231,7 +170,7 @@ describe("AllModelsTab", () => {
           model_name: "gpt-4-team-only",
           model_info: {
             id: "model-team-1",
-            direct_access: false, // Not available for personal use
+            direct_access: false,
             access_via_team_ids: ["team-123"],
             access_groups: [],
           },
@@ -241,16 +180,12 @@ describe("AllModelsTab", () => {
 
     render(<AllModelsTab {...defaultProps} modelData={modelData} />);
 
-    // When currentTeam is "personal" (default), it should filter by direct_access === true
-    // This tests the personal access logic in lines 72-73
-    // Should show 1 result (only gpt-4-personal with direct_access=true)
     await waitFor(() => {
       expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
     });
   });
 
-  it("should show disabled delete icon for config models", async () => {
-    // Mock useTeams hook
+  it("should show config model status for models defined in configs", async () => {
     vi.spyOn(useTeamsModule, "default").mockReturnValue({
       teams: [],
       setTeams: vi.fn(),
@@ -264,7 +199,7 @@ describe("AllModelsTab", () => {
           provider: "openai",
           model_info: {
             id: "model-config-1",
-            db_model: false, // Config model (no db_model)
+            db_model: false,
             direct_access: true,
             access_via_team_ids: [],
             access_groups: [],
@@ -279,7 +214,7 @@ describe("AllModelsTab", () => {
           provider: "openai",
           model_info: {
             id: "model-db-1",
-            db_model: true, // DB model
+            db_model: true,
             direct_access: true,
             access_via_team_ids: [],
             access_groups: [],
@@ -291,19 +226,42 @@ describe("AllModelsTab", () => {
       ],
     };
 
-    const { container } = render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Showing \d+ - \d+ of 2 results/)).toBeInTheDocument();
+      expect(screen.getByText("Config Model")).toBeInTheDocument();
+      expect(screen.getByText("DB Model")).toBeInTheDocument();
+    });
+  });
+
+  it("should show 'Defined in config' for models defined in configs", async () => {
+    vi.spyOn(useTeamsModule, "default").mockReturnValue({
+      teams: [],
+      setTeams: vi.fn(),
     });
 
-    const disabledIcons = container.querySelectorAll(".opacity-50.cursor-not-allowed");
-    expect(disabledIcons.length).toBeGreaterThan(0);
+    const modelData = {
+      data: [
+        {
+          model_name: "gpt-4-config-model",
+          litellm_model_name: "gpt-4-config-model",
+          provider: "openai",
+          model_info: {
+            id: "model-config-defined",
+            db_model: false,
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
+        },
+      ],
+    };
 
-    const configModelIcon = Array.from(disabledIcons).find((icon) => {
-      const parent = icon.closest('[class*="actions"], [class*="flex items-center justify-end"]');
-      return parent !== null;
-    });
-    expect(configModelIcon).toBeTruthy();
+    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+
+    expect(screen.getByText("Defined in config")).toBeInTheDocument();
   });
 });

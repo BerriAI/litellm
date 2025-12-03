@@ -8,14 +8,18 @@ from typing_extensions import Required, TypedDict
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+    GenericGuardrailAPIOptionalParams,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
     GraySwanGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
 )
-
-
+from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
+    ToolPermissionGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -51,11 +55,13 @@ class SupportedGuardrailIntegrations(Enum):
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
     TOOL_PERMISSION = "tool_permission"
-    ZSCALER_AI_GUARD = "zscaler_ai_guard"    
+    ZSCALER_AI_GUARD = "zscaler_ai_guard"
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
+    PROMPT_SECURITY = "prompt_security"
+    GENERIC_GUARDRAIL_API = "generic_guardrail_api"
 
 
 class Role(Enum):
@@ -415,24 +421,12 @@ class NomaGuardrailConfigModel(BaseModel):
     )
 
 
-class ToolPermissionGuardrailConfigModel(BaseModel):
-    """Configuration parameters for the Tool Permission guardrail"""
-
-    rules: Optional[List[Dict]] = Field(
-        default=None, description="List of permission rules for tool usage"
-    )
-    default_action: Optional[str] = Field(
-        default="Deny",
-        description="Default action when no rule matches (Allow or Deny)",
-    )
-
-
 class ZscalerAIGuardConfigModel(BaseModel):
     """Configuration parameters for the Zscaler AI Guard guardrail"""
 
     policy_id: Optional[int] = Field(
         default=None,
-        description="Policy ID for Zscaler AI Guard. Can also be set via ZSCALER_AI_GUARD_POLICY_ID environment variable"
+        description="Policy ID for Zscaler AI Guard. Can also be set via ZSCALER_AI_GUARD_POLICY_ID environment variable",
     )
     send_user_api_key_alias: Optional[bool] = Field(
         default=False, description="Whether to send user_API_key_alias in headers"
@@ -443,6 +437,7 @@ class ZscalerAIGuardConfigModel(BaseModel):
     send_user_api_key_team_id: Optional[bool] = Field(
         default=False, description="Whether to send user_API_key_team_id in headers"
     )
+
 
 class JavelinGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Javelin guardrail"""
@@ -479,7 +474,8 @@ class BlockedWord(BaseModel):
         description="Action to take when keyword is detected (BLOCK or MASK)"
     )
     description: Optional[str] = Field(
-        default=None, description="Optional description explaining why this keyword is sensitive"
+        default=None,
+        description="Optional description explaining why this keyword is sensitive",
     )
 
 
@@ -491,15 +487,15 @@ class ContentFilterPattern(BaseModel):
     )
     pattern_name: Optional[str] = Field(
         default=None,
-        description="Name of prebuilt pattern (e.g., 'us_ssn', 'credit_card'). Required if pattern_type is 'prebuilt'"
+        description="Name of prebuilt pattern (e.g., 'us_ssn', 'credit_card'). Required if pattern_type is 'prebuilt'",
     )
     pattern: Optional[str] = Field(
         default=None,
-        description="Custom regex pattern. Required if pattern_type is 'regex'"
+        description="Custom regex pattern. Required if pattern_type is 'regex'",
     )
     name: Optional[str] = Field(
         default=None,
-        description="Name for this pattern (used in logging and error messages)"
+        description="Name for this pattern (used in logging and error messages)",
     )
     action: ContentFilterAction = Field(
         description="Action to take when pattern matches (BLOCK or MASK)"
@@ -511,15 +507,13 @@ class ContentFilterConfigModel(BaseModel):
 
     patterns: Optional[List[ContentFilterPattern]] = Field(
         default=None,
-        description="List of patterns (prebuilt or custom regex) to detect"
+        description="List of patterns (prebuilt or custom regex) to detect",
     )
     blocked_words: Optional[List[BlockedWord]] = Field(
-        default=None,
-        description="List of blocked words with individual actions"
+        default=None, description="List of blocked words with individual actions"
     )
     blocked_words_file: Optional[str] = Field(
-        default=None,
-        description="Path to YAML file containing blocked_words list"
+        default=None, description="Path to YAML file containing blocked_words list"
     )
 
 
@@ -529,6 +523,11 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     )
     api_base: Optional[str] = Field(
         default=None, description="Base URL for the guardrail service API"
+    )
+
+    experimental_use_latest_role_message_only: Optional[bool] = Field(
+        default=False,
+        description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
     )
 
     # Lakera specific params
@@ -575,6 +574,11 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         description="Optional field if guardrail requires a 'model' parameter",
     )
 
+    violation_message_template: Optional[str] = Field(
+        default=None,
+        description="Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.",
+    )
+
     # Model Armor params
     template_id: Optional[str] = Field(
         default=None, description="The ID of your Model Armor template"
@@ -592,6 +596,12 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     fail_on_error: Optional[bool] = Field(
         default=True,
         description="Whether to fail the request if Model Armor encounters an error",
+    )
+
+    # Generic Guardrail API params
+    additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Additional provider-specific parameters for generic guardrail APIs",
     )
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
@@ -613,7 +623,7 @@ class LitellmParams(
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
-    ZscalerAIGuardConfigModel, 
+    ZscalerAIGuardConfigModel,
     JavelinGuardrailConfigModel,
     ContentFilterConfigModel,
     BaseLitellmParams,
@@ -671,9 +681,11 @@ class GuardrailEventHooks(str, Enum):
 class DynamicGuardrailParams(TypedDict):
     extra_body: Dict[str, Any]
 
+
 class GUARDRAIL_DEFINITION_LOCATION(str, Enum):
     DB = "db"
     CONFIG = "config"
+
 
 class GuardrailInfoResponse(BaseModel):
     guardrail_id: Optional[str] = None
@@ -682,7 +694,9 @@ class GuardrailInfoResponse(BaseModel):
     guardrail_info: Optional[Dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
+    guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = (
+        GUARDRAIL_DEFINITION_LOCATION.CONFIG
+    )
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

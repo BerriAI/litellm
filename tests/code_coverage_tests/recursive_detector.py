@@ -30,6 +30,11 @@ IGNORE_FUNCTIONS = [
     "_fix_enum_empty_strings",  # max depth set.,
     "get_access_token",  # max depth set.,
     "_redact_base64",  # max depth set.
+    "_contains_vision_content",  # max depth set.
+    "_read_all_bytes",  # max depth set.
+    "_fix_enum_types",  # max depth set.
+    "_collect_argument_paths",  # max depth set.
+    "_split_text",  # max depth set.
 ]
 
 

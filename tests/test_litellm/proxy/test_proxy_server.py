@@ -2450,3 +2450,47 @@ async def test_init_sso_settings_in_db_empty_settings():
         # Verify empty dictionary
         assert uppercased_settings == {}
 
+
+def test_get_prompt_spec_for_db_prompt_with_versions():
+    """
+    Test that _get_prompt_spec_for_db_prompt correctly converts database prompts
+    to PromptSpec with versioned naming convention.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Mock database prompt version 1
+    mock_prompt_v1 = MagicMock()
+    mock_prompt_v1.model_dump.return_value = {
+        "id": "uuid-1",
+        "prompt_id": "chat_prompt",
+        "version": 1,
+        "litellm_params": '{"prompt_id": "chat_prompt", "prompt_integration": "dotprompt", "model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "v1 content"}]}',
+        "prompt_info": '{"prompt_type": "db"}',
+        "created_at": "2024-01-01T00:00:00",
+        "updated_at": "2024-01-01T00:00:00",
+    }
+
+    # Mock database prompt version 2
+    mock_prompt_v2 = MagicMock()
+    mock_prompt_v2.model_dump.return_value = {
+        "id": "uuid-2",
+        "prompt_id": "chat_prompt",
+        "version": 2,
+        "litellm_params": '{"prompt_id": "chat_prompt", "prompt_integration": "dotprompt", "model": "gpt-4", "messages": [{"role": "user", "content": "v2 content"}]}',
+        "prompt_info": '{"prompt_type": "db"}',
+        "created_at": "2024-01-02T00:00:00",
+        "updated_at": "2024-01-02T00:00:00",
+    }
+
+    # Test version 1
+    prompt_spec_v1 = proxy_config._get_prompt_spec_for_db_prompt(db_prompt=mock_prompt_v1)
+    assert prompt_spec_v1.prompt_id == "chat_prompt.v1"
+
+    # Test version 2
+    prompt_spec_v2 = proxy_config._get_prompt_spec_for_db_prompt(db_prompt=mock_prompt_v2)
+    assert prompt_spec_v2.prompt_id == "chat_prompt.v2"
+

@@ -196,7 +196,7 @@ input=["good morning from litellm"]
       ]
     }
   ],
-  "model": "text-embedding-ada-002",
+  "model": "text-embedding-ada-002-v2",
   "usage": {
     "prompt_tokens": 10,
     "total_tokens": 10
@@ -263,6 +263,8 @@ print(response)
 
 | Model Name           | Function Call                               |
 |----------------------|---------------------------------------------|
+| Amazon Nova Multimodal Embeddings | `embedding(model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0", input=input)` | [Nova Docs](../providers/bedrock_embedding#amazon-nova-multimodal-embeddings) |
+| Amazon Nova (Async) | `embedding(model="bedrock/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0", input=input, input_type="text", output_s3_uri="s3://bucket/")` | [Nova Async Docs](../providers/bedrock_embedding#asynchronous-embeddings-with-segmentation) |
 | Titan Embeddings - G1 | `embedding(model="amazon.titan-embed-text-v1", input=input)` |
 | Cohere Embeddings - English | `embedding(model="cohere.embed-english-v3", input=input)` |
 | Cohere Embeddings - Multilingual | `embedding(model="cohere.embed-multilingual-v3", input=input)` |

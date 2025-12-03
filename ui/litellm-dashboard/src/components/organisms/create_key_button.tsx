@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
 import { Text, Title, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Button as Button2, Modal, Form, Input, Select, Radio } from "antd";
+import { Button as Button2, Modal, Form, Input, Select, Radio, Switch } from "antd";
 import NumericalInput from "../shared/numerical_input";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import SchemaFormFields from "../common_components/check_openapi_schema";
@@ -405,7 +405,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);
-      NotificationsManager.success("API Key Created");
+      NotificationsManager.success("Virtual Key Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
     } catch (error) {
@@ -415,7 +415,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   const handleCopy = () => {
-    NotificationsManager.success("API Key copied to clipboard");
+    NotificationsManager.success("Virtual Key copied to clipboard");
   };
 
   useEffect(() => {
@@ -505,7 +505,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               label={
                 <span>
                   Owned By{" "}
-                  <Tooltip title="Select who will own this API key">
+                  <Tooltip title="Select who will own this Virtual Key">
                     <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                   </Tooltip>
                 </span>
@@ -594,8 +594,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           {isFormDisabled && (
             <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
               <Text className="text-blue-800 text-sm">
-                Please select a team to continue configuring your API key. If you do not see any teams, please contact
-                your Proxy Admin to either provide you with access to models or to add you to a team.
+                Please select a team to continue configuring your Virtual Key. If you do not see any teams, please
+                contact your Proxy Admin to either provide you with access to models or to add you to a team.
               </Text>
             </div>
           )}
@@ -882,6 +882,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <Form.Item
                     label={
                       <span>
+                        Disable Global Guardrails{" "}
+                        <Tooltip title="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="disable_global_guardrails"
+                    className="mt-4"
+                    valuePropName="checked"
+                    help={
+                      premiumUser
+                        ? "Bypass global guardrails for this key"
+                        : "Premium feature - Upgrade to disable global guardrails by key"
+                    }
+                  >
+                    <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
                         Prompts{" "}
                         <Tooltip title="Allow this key to use specific prompt templates">
                           <a
@@ -942,7 +969,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       value={form.getFieldValue("allowed_passthrough_routes")}
                       accessToken={accessToken}
                       placeholder={
-                        !premiumUser ? "Premium feature - Upgrade to set pass through routes by key" : "Select or enter pass through routes"
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set pass through routes by key"
+                          : "Select or enter pass through routes"
                       }
                       disabled={!premiumUser}
                       teamId={selectedCreateKeyTeam ? selectedCreateKeyTeam.team_id : null}
@@ -1150,7 +1179,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         />
                       </div>
                     </AccordionBody>
-                    <Form.Item name="duration" hidden initialValue="">
+                    <Form.Item name="duration" hidden initialValue={null}>
                       <Input />
                     </Form.Item>
                   </Accordion>
@@ -1248,7 +1277,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             <Col numColSpan={1}>
               {apiKey != null ? (
                 <div>
-                  <Text className="mt-3">API Key:</Text>
+                  <Text className="mt-3">Virtual Key:</Text>
                   <div
                     style={{
                       background: "#f8f8f8",
@@ -1261,7 +1290,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   </div>
 
                   <CopyToClipboard text={apiKey} onCopy={handleCopy}>
-                    <Button className="mt-3">Copy API Key</Button>
+                    <Button className="mt-3">Copy Virtual Key</Button>
                   </CopyToClipboard>
                   {/* <Button className="mt-3" onClick={sendSlackAlert}>
                     Test Key
