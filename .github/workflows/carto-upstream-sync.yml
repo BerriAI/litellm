@@ -353,6 +353,12 @@ jobs:
 
           This PR syncs CARTO's LiteLLM fork with the latest stable upstream release.
 
+          > [!CAUTION]
+          > **⚠️ DO NOT SQUASH MERGE THIS PR ⚠️**
+          >
+          > This PR **must be merged with a regular merge commit** (not squash).
+          > Squashing will break future upstream syncs by losing commit history.
+
           ### 📊 Release Information
 
           - **Upstream Version:** \`${NEW_VERSION}\`
@@ -484,7 +490,7 @@ jobs:
             --repo CartoDB/litellm \
             --base carto/main \
             --head "${SYNC_BRANCH}" \
-            --title "🔄 sync: upstream ${NEW_VERSION}" \
+            --title "🔄 Upstream Sync: LiteLLM ${NEW_VERSION}" \
             --body-file ${PR_BODY_FILE} \
             --label "upstream-sync" \
             --label "automated")
