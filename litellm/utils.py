@@ -7633,6 +7633,12 @@ class ProviderConfigManager:
             )
 
             return GeminiVectorStoreConfig()
+        elif litellm.LlmProviders.RAGFLOW == provider:
+            from litellm.llms.ragflow.vector_stores.transformation import (
+                RAGFlowVectorStoreConfig,
+            )
+
+            return RAGFlowVectorStoreConfig()
         return None
 
     @staticmethod
