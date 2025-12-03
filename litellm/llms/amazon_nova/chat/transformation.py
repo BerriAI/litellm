@@ -78,8 +78,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
             "stream_options",
             "tools",
             "tool_choice",
-            "reasoning_effort",
-            "system_tools"
+            "reasoning_effort"
         ]
 
     def transform_response(

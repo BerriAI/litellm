@@ -1396,6 +1396,7 @@ from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
 from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
+from .llms.amazon_nova.chat.transformation import AmazonNovaChatConfig
 from .main import *  # type: ignore
 
 # Skills API

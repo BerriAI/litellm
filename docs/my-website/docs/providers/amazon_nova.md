@@ -8,7 +8,8 @@ import TabItem from '@theme/TabItem';
 | Description | Amazon Nova is a family of foundation models built by Amazon that deliver frontier intelligence and industry-leading price performance. |
 | Provider Route on LiteLLM | `amazon-nova/` |
 | Provider Doc | [Amazon Nova ↗](https://docs.aws.amazon.com/nova/latest/userguide/what-is-nova.html) |
-| Supported OpenAI Endpoints | `/chat/completions` |
+| Supported OpenAI Endpoints | `/chat/completions`, `v1/responses` |
+| Other Supported Endpoints | `v1/messages`, `/generateContent` | 
 
 ## Authentication
 
