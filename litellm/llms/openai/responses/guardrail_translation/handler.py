@@ -357,8 +357,16 @@ class OpenAIResponsesHandler(BaseTranslation):
         Override this method to customize text/image extraction logic.
         """
         # Handle both GenericResponseOutputItem and dict
-        if isinstance(output_item, GenericResponseOutputItem):
-            content = output_item.content
+        content: Optional[Union[List[OutputText], List[dict]]] = None
+        if isinstance(output_item, BaseModel):
+            try:
+                generic_response_output_item = GenericResponseOutputItem.model_validate(
+                    output_item.model_dump()
+                )
+                if generic_response_output_item.content:
+                    content = generic_response_output_item.content
+            except Exception:
+                return
         elif isinstance(output_item, dict):
             content = output_item.get("content", [])
         else:
