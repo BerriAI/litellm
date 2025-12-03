@@ -242,7 +242,7 @@ jobs:
 
           echo "::endgroup::"
 
-      - name: Check for existing PR from main to carto/main
+      - name: Check for existing PR from upstream-sync branch to carto/main
         id: check-pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -250,17 +250,17 @@ jobs:
           set -eu
 
           echo "::group::Checking for existing PR"
-          echo "[Sync] Looking for open PR from main to carto/main..."
+          echo "[Sync] Looking for open upstream-sync PR to carto/main..."
 
-          # Check if PR exists from main to carto/main with upstream-sync label
+          # Check if PR exists with upstream-sync label targeting carto/main
+          # Head branch pattern: upstream-sync/* (e.g., upstream-sync/v1.79.3-stable)
           PR_URL=$(gh pr list \
             --repo CartoDB/litellm \
             --base carto/main \
-            --head main \
             --label upstream-sync \
             --state open \
-            --json url \
-            --jq ".[0].url" 2>/dev/null || echo "")
+            --json url,headRefName \
+            --jq '.[] | select(.headRefName | startswith("upstream-sync/")) | .url' 2>/dev/null | head -1 || echo "")
 
           if [[ -n "${PR_URL}" ]]; then
             echo "[Sync] PR already exists: ${PR_URL}"
@@ -287,12 +287,42 @@ jobs:
     if: needs.check-carto-main-sync.outputs.needs-sync == 'true' && needs.check-carto-main-sync.outputs.pr-exists == 'false'
     outputs:
       pr-url: ${{ steps.create-pr.outputs.pr-url }}
+      sync-branch: ${{ steps.create-sync-branch.outputs.branch-name }}
     steps:
       - name: Checkout main branch
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+
+      - name: Configure Git
+        run: |
+          git config --global user.email "cartofante@carto.com"
+          git config --global user.name "Cartofante"
+
+      - name: Create sync branch from main
+        id: create-sync-branch
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+        run: |
+          set -eu
+
+          echo "::group::Creating sync branch from main"
+
+          # Create a dedicated sync branch that we can push conflict resolutions to
+          # Format: upstream-sync/vX.Y.Z-stable (e.g., upstream-sync/v1.79.3-stable)
+          BRANCH_NAME="upstream-sync/${NEW_VERSION}"
+
+          echo "[Sync] Creating branch: ${BRANCH_NAME}"
+          git checkout -b "${BRANCH_NAME}"
+
+          # Push the branch to origin
+          git push -u origin "${BRANCH_NAME}"
+
+          echo "branch-name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+          echo "[Sync] ✅ Created and pushed branch: ${BRANCH_NAME}"
+          echo "::endgroup::"
 
       - name: Generate PR body
         id: generate-pr-body
@@ -333,7 +363,10 @@ jobs:
           ### 🔀 Branch Flow
 
           1. ✅ \`BerriAI/litellm:main\` merged into \`CartoDB/litellm:main\`
-          2. 📝 This PR: \`CartoDB/litellm:main\` → \`CartoDB/litellm:carto/main\`
+          2. ✅ Created dedicated sync branch: \`upstream-sync/${NEW_VERSION}\`
+          3. 📝 This PR: \`upstream-sync/${NEW_VERSION}\` → \`carto/main\`
+
+          > **Why a dedicated branch?** Allows pushing conflict resolution commits directly to this PR instead of creating separate PRs.
 
           ### 📝 CARTO-Specific File Guidelines
 
@@ -382,27 +415,27 @@ jobs:
 
           **It will:**
           1. 🤖 Detect conflicts in this PR
-          2. 🔀 Checkout \`carto/main\` and merge \`main\` into it
+          2. 🔀 Checkout the sync branch and merge \`carto/main\` into it
           3. ✏️ Resolve conflicts following CARTO priority rules
           4. ✅ Run all tests (\`make lint\`, \`make lint-mypy\`, \`make test-unit\`)
-          5. 📝 Create a resolution PR: \`upstream-sync-resolver/<PR-number> → carto/main\`
+          5. 📌 Push resolution commits directly to this PR's branch
 
           **What you need to do:**
-          1. Review the resolution PR created by Claude Code
+          1. Wait for this PR to update with conflict resolution commits
           2. Verify CARTO customizations are preserved
-          3. Merge the resolution PR into \`carto/main\`
-          4. **Close this PR** (changes already merged via resolution PR)
+          3. Merge this PR into \`carto/main\`
+
+          > ✨ **Single PR workflow!** No separate resolution PR - everything is in this PR.
 
           #### Option 2: Manual Resolution
 
           If you prefer manual resolution or Claude fails:
 
-          1. **Checkout and merge locally:**
+          1. **Checkout the sync branch and merge carto/main:**
             \`\`\`bash
             git fetch origin
-            git checkout carto/main
-            git pull origin carto/main
-            git merge main  # Creates conflicts
+            git checkout upstream-sync/${NEW_VERSION}
+            git merge origin/carto/main  # Creates conflicts
             \`\`\`
 
           2. **Resolve conflicts following guidelines above**
@@ -414,12 +447,12 @@ jobs:
             make test-unit
             \`\`\`
 
-          4. **Push resolved changes:**
+          4. **Push resolved changes to the sync branch:**
             \`\`\`bash
-            git push origin carto/main
+            git push origin upstream-sync/${NEW_VERSION}
             \`\`\`
 
-          5. **Close this PR** (changes already in carto/main)
+          5. **Merge this PR** (this PR will update automatically)
 
           ---
 
@@ -433,6 +466,7 @@ jobs:
         id: create-pr
         env:
           NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+          SYNC_BRANCH: ${{ steps.create-sync-branch.outputs.branch-name }}
           GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
         run: |
           set -eu
@@ -441,11 +475,12 @@ jobs:
 
           PR_BODY_FILE="sync-pr-body.md"
 
-          # Create PR from main to carto/main
+          # Create PR from sync branch to carto/main
+          # Using dedicated branch (not main) allows pushing conflict resolution commits
           PR_URL=$(gh pr create \
             --repo CartoDB/litellm \
             --base carto/main \
-            --head main \
+            --head "${SYNC_BRANCH}" \
             --title "🔄 sync: upstream ${NEW_VERSION}" \
             --body-file ${PR_BODY_FILE} \
             --label "upstream-sync" \

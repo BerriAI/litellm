@@ -37,16 +37,22 @@ CARTO maintains a fork of [BerriAI/litellm](https://github.com/BerriAI/litellm) 
 
 ---
 
+## When creating PRs
+
+- Always use the --repo CartoDB/litellm by default. Only use Upstream repo to PR if explicify written in the prompt. 
+- Always create in Draft. 
+- Follow the claude.md global configuration. 
+
 ## Branch Strategy
 
 ```
 upstream/main          → BerriAI's development branch (may be unstable)
          ↓
-       main            → Mirrors upstream/main (tracking/reference only)
-
-upstream/v1.75.2       → Stable upstream release tag
+       main            → Mirrors upstream/main (sync happens here first)
          ↓
-    carto/main         → Production branch (stable tag + CARTO mods)
+upstream-sync/vX.Y.Z   → Dedicated sync branch for PR to carto/main
+         ↓
+    carto/main         → Production branch (stable + CARTO mods)
          ↓
     feature/*          → Development branches
 ```
@@ -55,15 +61,30 @@ upstream/v1.75.2       → Stable upstream release tag
 
 | Branch | Purpose | Base | Stability |
 |--------|---------|------|-----------|
-| `main` | Track upstream development | `upstream/main` | Unstable (reference only) |
+| `main` | Mirror upstream (sync target) | `upstream/main` | Unstable (reference only) |
+| `upstream-sync/*` | Sync PRs to carto/main | `main` | Temporary (for PRs) |
 | `carto/main` | CARTO production deployments | Stable upstream tags | Stable |
 | `feature/*` | Development work | `carto/main` | Development |
 
 ### Critical Rules
 
-⚠️ **NEVER merge `main` into `carto/main`** - `main` may contain unstable upstream commits
+⚠️ **NEVER merge `main` directly into `carto/main`** - Use sync workflow instead
 
-✅ **ALWAYS merge stable upstream release tags** (e.g., `v1.76.5`) into `carto/main`
+✅ **ALWAYS use "Create a merge commit"** when merging sync PRs (never squash/rebase!)
+
+✅ **ALWAYS merge stable upstream release tags** (e.g., `v1.76.5`) via the sync workflow
+
+### ⛔ Merge Instructions for Upstream Sync PRs
+
+When merging any `upstream-sync/*` PR into `carto/main`:
+
+| Merge Type | Result |
+|------------|--------|
+| ✅ **Create a merge commit** | Preserves upstream history, future syncs work correctly |
+| ❌ Squash and merge | **DESTROYS** upstream history, breaks future syncs |
+| ❌ Rebase and merge | **DESTROYS** upstream history, breaks future syncs |
+
+**Why this matters:** Squash/rebase rewrites commit SHAs, causing future syncs to show thousands of "new" commits that were already merged. This happened with PR #26 - don't repeat it!
 
 ---
 
@@ -266,9 +287,38 @@ CARTO uses an automated workflow to sync with upstream LiteLLM stable releases.
 
 🔄 **Automated Sync:** CARTO runs an automated workflow that detects new upstream stable releases and creates sync PRs for team review.
 
+#### Architecture: Single-PR Workflow
+
+```
+BerriAI/litellm:main
+        │
+        │ (1) Sync upstream to main
+        ▼
+CartoDB/litellm:main  ←── upstream mirror
+        │
+        │ (2) Create dedicated sync branch
+        ▼
+upstream-sync/vX.Y.Z  ←── pushable branch for PR
+        │
+        │ (3) Single PR to carto/main
+        ▼                    │
+CartoDB/litellm:carto/main   │
+        ▲                    │
+        │ (4) If conflicts:  │
+        │     Claude resolves and pushes
+        │     to SAME branch (PR auto-updates)
+        └────────────────────┘
+```
+
+**Key benefits:**
+- ✅ Single PR for entire sync (no separate resolution PR)
+- ✅ Pushable branch allows conflict resolution commits
+- ✅ Deterministic git operations (hardcoded in workflow)
+- ✅ Merge commit preserves full upstream history
+
 #### How It Works
 
-Every 8 hours, the `carto-upstream-sync.yml` workflow:
+Every Monday at noon, the `carto-upstream-sync.yml` workflow:
 
 1. **Detects** new upstream stable releases (e.g., `v1.78.5-stable`)
    - Uses `gh CLI` to fetch releases from BerriAI/litellm
@@ -280,32 +330,59 @@ Every 8 hours, the `carto-upstream-sync.yml` workflow:
    - Merges `BerriAI/litellm:main` → `CartoDB/litellm:main`
    - Pushes updated main branch automatically
 
-3. **Creates PR** from main to carto/main
-   - PR: `CartoDB/litellm:main` → `CartoDB/litellm:carto/main`
-   - Detects if conflicts exist
-   - Creates detailed PR with resolution guidelines
-   - Labels PR appropriately (`upstream-sync`, `automated`)
+3. **Creates dedicated sync branch** from main
+   - Branch: `upstream-sync/vX.Y.Z-stable` (e.g., `upstream-sync/v1.79.3-stable`)
+   - This branch is pushable (unlike `main` which is read-only for CARTO commits)
 
-4. **Provides comprehensive PR** with:
+4. **Creates PR** from sync branch to carto/main
+   - PR: `upstream-sync/vX.Y.Z` → `carto/main`
+   - Detects if conflicts exist
+   - Labels PR appropriately (`upstream-sync`, `automated`)
+   - If conflicts detected, triggers resolver workflow
+
+5. **Provides comprehensive PR** with:
    - Link to upstream changes and release notes
    - Branch flow diagram
    - Summary of commits and files changed
    - Detailed conflict resolution guidelines
    - Testing checklist
-   - Step-by-step resolution instructions
 
-#### Conflict Handling Strategy
+#### Automated Conflict Resolution
 
-The workflow **detects but does not automatically resolve** conflicts. This ensures:
-- ✅ No silent breaking changes
-- ✅ Human review of important conflicts
-- ✅ Clear documentation of what needs resolution
-- ✅ Safe, conservative approach
+When conflicts are detected, the `carto-upstream-sync-resolver.yml` workflow:
 
-When conflicts are detected, the PR includes detailed guidelines on which files to:
-- **Keep CARTO versions:** `carto_*.yaml`, `CARTO_*.md`
-- **Accept upstream:** Core `litellm/` code, `tests/`
-- **Manually review:** `Dockerfile`, `Makefile` (check `# CARTO:` comments)
+1. **Checkouts** the sync branch (`upstream-sync/vX.Y.Z`)
+2. **Merges** `carto/main` into it (creates conflict state)
+3. **Claude Code** edits files to resolve conflicts (following CARTO priority rules)
+4. **Workflow** creates merge commit with both parents (preserves history)
+5. **Pushes** directly to the sync branch (PR auto-updates!)
+
+**Resolution priorities:**
+| File Pattern | Keep | Reason |
+|--------------|------|--------|
+| `carto_*.yaml`, `carto-*.yml` | CARTO version | CARTO workflows |
+| `CARTO_*.md` | CARTO version | CARTO docs |
+| `litellm/**` (core) | Upstream | Upstream improvements |
+| `tests/**` | Upstream | Upstream tests |
+| `Dockerfile`, `Makefile` | Merge carefully | Keep `# CARTO:` sections |
+
+#### Why Single-PR Workflow?
+
+**Before (2 PRs, confusing):**
+```
+main → PR #1 to carto/main (conflicts!)
+     └── Can't push to main (read-only)
+         └── PR #2: resolver/XX → carto/main (separate PR)
+             └── Must close PR #1 after merging PR #2
+```
+
+**After (1 PR, clean):**
+```
+main → upstream-sync/vX.Y.Z (dedicated, pushable)
+     └── Single PR to carto/main
+         └── Conflicts? Push resolution to same branch
+             └── PR auto-updates, merge when ready ✅
+```
 
 #### Setup
 
@@ -455,7 +532,8 @@ These modifications exist in `carto/main` but NOT in upstream. Be careful to pre
 ### 1. Custom GitHub Workflows
 
 **Added:**
-- `.github/workflows/carto-upstream-sync.yml` - Automated upstream sync (runs every 8 hours, all bash)
+- `.github/workflows/carto-upstream-sync.yml` - Automated upstream sync (runs weekly, all bash)
+- `.github/workflows/carto-upstream-sync-resolver.yml` - Claude Code conflict resolution (single-PR workflow)
 - `.github/workflows/carto_ghcr_deploy.yaml` - CI/CD for CARTO Docker images
 - `.github/workflows/carto_release.yaml` - Automated release creation
 
@@ -746,29 +824,42 @@ gh workflow run carto-upstream-sync.yml
 
 #### Issue: PR Created with Conflicts
 
-**Symptoms:** Sync PR is labeled with `conflicts`.
+**Symptoms:** Sync PR shows merge conflicts.
 
 **Solution:**
 
-This is expected when upstream changes conflict with CARTO modifications. Follow the resolution guide in the PR:
+With the single-PR workflow, conflicts are resolved automatically by Claude Code:
 
-1. Checkout the PR branch:
-   ```bash
-   gh pr checkout <PR_NUMBER>
-   ```
-2. Review conflicts using the guidelines in the PR body
-3. Resolve conflicts:
-   ```bash
-   # Fix the conflicts
-   git add <files>
-   git commit -m "resolve: conflicts from upstream sync"
-   git push
-   ```
-4. Run tests to verify:
-   ```bash
-   make lint
-   make test-unit
-   ```
+1. **Wait for resolver workflow** - It triggers automatically when conflicts are detected
+2. **Check PR for updates** - Resolution commits are pushed directly to the sync branch
+3. **Review the resolution** - Verify CARTO customizations are preserved
+4. **Merge using "Create a merge commit"** - Never squash or rebase!
+
+**If automatic resolution fails**, resolve manually:
+
+```bash
+# Checkout the sync branch
+gh pr checkout <PR_NUMBER>
+
+# The branch is already in conflict state, or merge carto/main:
+git merge origin/carto/main
+
+# Resolve conflicts following priority rules:
+# - CARTO files (carto_*, CARTO_*): Keep CARTO version
+# - Core litellm/: Keep upstream version
+# - Dockerfile, Makefile: Merge carefully (keep # CARTO: sections)
+
+# After resolving:
+git add <files>
+git commit -m "fix: resolve upstream sync conflicts"
+git push
+
+# Run tests
+make lint
+make test-unit
+```
+
+**Important:** The PR will auto-update when you push to the sync branch.
 
 #### Issue: Slack Notifications Not Received
 
@@ -974,6 +1065,6 @@ For questions about this fork:
 
 ---
 
-**Last Updated:** 2025-11-12
+**Last Updated:** 2025-12-03
 **Maintained By:** CARTO Engineering Team
 **For:** AI Assistants & Developers working on CARTO's LiteLLM fork
