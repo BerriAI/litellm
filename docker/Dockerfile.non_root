@@ -11,6 +11,8 @@ WORKDIR /app
 # Install build dependencies including Node.js for UI build
 USER root
 RUN apk add --no-cache \
+    python3 \
+    py3-pip \
     clang \
     llvm \
     lld \
@@ -71,7 +73,7 @@ WORKDIR /app
 # Install runtime dependencies
 USER root
 RUN apk upgrade --no-cache && \
-  apk add --no-cache bash libstdc++ ca-certificates openssl supervisor
+  apk add --no-cache python3 py3-pip bash libstdc++ ca-certificates openssl supervisor
 
 # Copy only necessary artifacts from builder stage for runtime
 COPY . .
