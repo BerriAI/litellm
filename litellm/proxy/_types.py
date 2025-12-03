@@ -2444,6 +2444,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
     user_id: Optional[str] = None
     team_id: Optional[str] = None
     team_alias: Optional[str] = None
+    organization_id: Optional[str] = None
     user_email: Optional[str] = None
     key_alias: Optional[str] = None
     projected_exceeded_date: Optional[str] = None

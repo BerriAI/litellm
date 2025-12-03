@@ -20,7 +20,6 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
     Mode,
-    PiiEntityType,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
