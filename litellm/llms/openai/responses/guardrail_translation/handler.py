@@ -30,6 +30,8 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
+from openai import BaseModel
+
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
@@ -275,6 +277,32 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         return response
 
+    async def process_output_streaming_response(
+        self,
+        responses_so_far: List[Any],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
+    ) -> List[Any]:
+        """
+        Process output streaming response by applying guardrails to text content.
+        """
+        string_so_far = self.get_streaming_string_so_far(responses_so_far)
+        guardrailed_text, _ = await guardrail_to_apply.apply_guardrail(
+            texts=[string_so_far],
+            request_data={},
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+            images=None,
+        )
+        return responses_so_far + [guardrailed_text]
+
+    def get_streaming_string_so_far(self, responses_so_far: List[Any]) -> str:
+        """
+        Get the string so far from the responses so far.
+        """
+        return "".join([response.get("text", "") for response in responses_so_far])
+
     def _has_text_content(self, response: "ResponsesAPIResponse") -> bool:
         """
         Check if response has any text content to process.
@@ -285,6 +313,17 @@ class OpenAIResponsesHandler(BaseTranslation):
             return False
 
         for output_item in response.output:
+            if isinstance(output_item, BaseModel):
+                try:
+                    generic_response_output_item = (
+                        GenericResponseOutputItem.model_validate(
+                            output_item.model_dump()
+                        )
+                    )
+                    if generic_response_output_item.content:
+                        output_item = generic_response_output_item
+                except Exception:
+                    continue
             if isinstance(output_item, (GenericResponseOutputItem, dict)):
                 content = (
                     output_item.content
@@ -296,9 +335,11 @@ class OpenAIResponsesHandler(BaseTranslation):
                         # Check if it's an OutputText with text
                         if isinstance(content_item, OutputText):
                             if content_item.text:
+
                                 return True
                         elif isinstance(content_item, dict):
                             if content_item.get("text"):
+
                                 return True
         return False
 
