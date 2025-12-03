@@ -48,20 +48,16 @@ class TestBudgetResetAtValidation:
 
 
 class TestUserCreationWithBudgetResetAt:
-    """Integration tests for creating users with budget_reset_at"""
+    """Integration test for creating users with budget_reset_at"""
 
     @pytest.mark.asyncio
     async def test_create_user_explicit_budget_reset_at_takes_precedence(self):
         """Test that explicit budget_reset_at is honored and takes precedence over duration-based computation"""
         mock_prisma_client = MagicMock()
-        mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(
-            return_value=MagicMock(user_id="new_user", spend=0.0)
+        mock_prisma_client.insert_data = AsyncMock(
+            return_value=MagicMock(user_id="new_user", spend=0.0, models=[])
         )
         mock_prisma_client.db.litellm_usertable.count = AsyncMock(return_value=0)
-        mock_prisma_client.db.litellm_budgettable.upsert = AsyncMock(
-            return_value=MagicMock()
-        )
-        mock_prisma_client.insert_data = AsyncMock()
 
         explicit_date = datetime.now(timezone.utc) + timedelta(days=30)
 
@@ -82,20 +78,19 @@ class TestUserCreationWithBudgetResetAt:
             )
 
             assert result is not None
+            assert mock_prisma_client.insert_data.called
 
-            # verify that budget_reset_at was set and matches explicit date (not computed from duration)
-            budget_upsert_calls = (
-                mock_prisma_client.db.litellm_budgettable.upsert.call_args_list
-            )
-            if budget_upsert_calls:
-                for call in budget_upsert_calls:
-                    data_dict = call[1].get("data", {})
-                    update_data = data_dict.get("update") or data_dict.get("create")
-                    if update_data and "budget_reset_at" in update_data:
-                        stored_date = update_data["budget_reset_at"]
-                        assert isinstance(stored_date, datetime)
-                        assert abs((stored_date - explicit_date).total_seconds()) < 1 # verify dates are effectively equal
-                        break
+            # find the user insert call and verify budget_reset_at
+            for call in mock_prisma_client.insert_data.call_args_list:
+                if call.kwargs.get("table_name") == "user":
+                    user_data = call.kwargs["data"]
+                    assert "budget_reset_at" in user_data
+                    stored_date = user_data["budget_reset_at"]
+                    assert isinstance(stored_date, datetime)
+                    assert abs((stored_date - explicit_date).total_seconds()) < 1 # verify dates are effectively equal
+                    break
+            else:
+                raise AssertionError("User insert call not found")
 
 
 if __name__ == "__main__":
