@@ -489,3 +489,30 @@ def test_openrouter_cost_tracking_streaming():
     # Verify cost field is preserved in the Usage object - this is the key data for cost tracking
     # The chunk_parser converts the dict to a Usage Pydantic model which includes the cost field
     assert result2.usage.cost == 0.0001
+
+
+def test_openrouter_reasoning_models_allow_reasoning_effort_param():
+    """
+    OpenRouter reasoning-capable models should accept the reasoning_effort param.
+    """
+    config = OpenrouterConfig()
+
+    supported_params = config.get_supported_openai_params(
+        model="openrouter/deepseek/deepseek-v3.2"
+    )
+
+    assert "reasoning_effort" in supported_params
+    assert supported_params.count("reasoning_effort") == 1
+
+
+def test_openrouter_non_reasoning_models_do_not_add_reasoning_effort():
+    """
+    Models without reasoning support should not gain reasoning-specific params.
+    """
+    config = OpenrouterConfig()
+
+    supported_params = config.get_supported_openai_params(
+        model="openrouter/anthropic/claude-3-5-haiku"
+    )
+
+    assert "reasoning_effort" not in supported_params

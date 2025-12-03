@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { render } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ModelsAndEndpointsView from "./ModelsAndEndpointsView";
 
 // Minimal stubs to avoid Next.js router and network usage during render
@@ -56,19 +57,24 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   }),
 }));
 
+const createQueryClient = () =>
+  new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+
 describe("ModelsAndEndpointsView", () => {
-  it(
-    "should render the models and endpoints view",
-    async () => {
-      // JSDOM polyfill for libraries expecting ResizeObserver (e.g., recharts)
-      // Note: ResizeObserver is now globally mocked in setupTests.ts, but keeping this for backwards compatibility
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (global as any).ResizeObserver = class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      };
-      const { findByText } = render(
+  it("should render the models and endpoints view", async () => {
+    // JSDOM polyfill for libraries expecting ResizeObserver (e.g., recharts)
+    // Note: ResizeObserver is now globally mocked in setupTests.ts, but keeping this for backwards compatibility
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (global as any).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    const queryClient = createQueryClient();
+    const { findByText } = render(
+      <QueryClientProvider client={queryClient}>
         <ModelsAndEndpointsView
           accessToken="123"
           token="123"
@@ -79,10 +85,9 @@ describe("ModelsAndEndpointsView", () => {
           setModelData={() => {}}
           premiumUser={false}
           teams={[]}
-        />,
-      );
-      expect(await findByText("Model Management", {}, { timeout: 10000 })).toBeInTheDocument();
-    },
-    15000,
-  );
+        />
+      </QueryClientProvider>,
+    );
+    expect(await findByText("Model Management", {}, { timeout: 10000 })).toBeInTheDocument();
+  }, 15000);
 });

@@ -113,7 +113,7 @@ general_settings:
 
   # Database Settings
   database_url: string
-  database_connection_pool_limit: 0  # default 100
+  database_connection_pool_limit: 0  # default 10
   database_connection_timeout: 0  # default 60s
   allow_requests_on_db_unavailable: boolean  # if true, will allow requests that can not connect to the DB to verify Virtual Key to still work 
 
@@ -234,7 +234,7 @@ router_settings:
 | max_response_size_mb | int | The maximum size for responses in MB. LLM Responses above this size will not be sent. |
 | proxy_budget_rescheduler_min_time | int | The minimum time (in seconds) to wait before checking db for budget resets. **Default is 597 seconds** |
 | proxy_budget_rescheduler_max_time | int | The maximum time (in seconds) to wait before checking db for budget resets. **Default is 605 seconds** |
-| proxy_batch_write_at | int | Time (in seconds) to wait before batch writing spend logs to the db. **Default is 30 seconds** |
+| proxy_batch_write_at | int | Time (in seconds) to wait before batch writing spend logs to the db. **Default is 10 seconds** |
 | proxy_batch_polling_interval | int | Time (in seconds) to wait before polling a batch, to check if it's completed. **Default is 6000 seconds (1 hour)** |
 | alerting_args | dict | Args for Slack Alerting [Doc on Slack Alerting](./alerting.md) |
 | custom_key_generate | str | Custom function for key generation [Doc on custom key generation](./virtual_keys.md#custom--key-generate) |
@@ -475,6 +475,8 @@ router_settings:
 | DEFAULT_ALLOWED_FAILS | Maximum failures allowed before cooling down a model. Default is 3
 | DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS | Default maximum tokens for Anthropic chat completions. Default is 4096
 | DEFAULT_BATCH_SIZE | Default batch size for operations. Default is 512
+| DEFAULT_CHUNK_OVERLAP | Default chunk overlap for RAG text splitters. Default is 200
+| DEFAULT_CHUNK_SIZE | Default chunk size for RAG text splitters. Default is 1000
 | DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS | Timeout in seconds for checking client disconnection. Default is 1
 | DEFAULT_COOLDOWN_TIME_SECONDS | Duration in seconds to cooldown a model after failures. Default is 5
 | DEFAULT_CRON_JOB_LOCK_TTL_SECONDS | Time-to-live for cron job locks in seconds. Default is 60 (1 minute)
@@ -574,6 +576,8 @@ router_settings:
 | GENERIC_USER_PROVIDER_ATTRIBUTE | Attribute specifying the user's provider
 | GENERIC_USER_ROLE_ATTRIBUTE | Attribute specifying the user's role
 | GENERIC_USERINFO_ENDPOINT | Endpoint to fetch user information in generic OAuth
+| GENERIC_LOGGER_ENDPOINT | Endpoint URL for the Generic Logger callback to send logs to
+| GENERIC_LOGGER_HEADERS | JSON string of headers to include in Generic Logger callback requests
 | GEMINI_API_BASE | Base URL for Gemini API. Default is https://generativelanguage.googleapis.com
 | GALILEO_BASE_URL | Base URL for Galileo platform
 | GALILEO_PASSWORD | Password for Galileo authentication
@@ -759,7 +763,7 @@ router_settings:
 | PROMPTLAYER_API_KEY | API key for PromptLayer integration
 | PROXY_ADMIN_ID | Admin identifier for proxy server
 | PROXY_BASE_URL | Base URL for proxy service
-| PROXY_BATCH_WRITE_AT | Time in seconds to wait before batch writing spend logs to the database. Default is 30
+| PROXY_BATCH_WRITE_AT | Time in seconds to wait before batch writing spend logs to the database. Default is 10
 | PROXY_BATCH_POLLING_INTERVAL | Time in seconds to wait before polling a batch, to check if it's completed. Default is 6000s (1 hour)
 | PROXY_BUDGET_RESCHEDULER_MAX_TIME | Maximum time in seconds to wait before checking database for budget resets. Default is 605
 | PROXY_BUDGET_RESCHEDULER_MIN_TIME | Minimum time in seconds to wait before checking database for budget resets. Default is 597

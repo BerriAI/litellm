@@ -250,6 +250,23 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                     inference_params[k] = v
             request_data = {"prompt": prompt, **inference_params}
+        elif provider == "twelvelabs":
+            return litellm.AmazonTwelveLabsPegasusConfig().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        elif provider == "openai":
+            # OpenAI imported models use OpenAI Chat Completions format
+            return litellm.AmazonBedrockOpenAIConfig().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         else:
             raise BedrockError(
                 status_code=404,
@@ -320,6 +337,20 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     optional_params=optional_params,
                     litellm_params=litellm_params,
                     encoding=encoding,
+                )
+            elif provider == "twelvelabs":
+                return litellm.AmazonTwelveLabsPegasusConfig().transform_response(
+                    model=model,
+                    raw_response=raw_response,
+                    model_response=model_response,
+                    logging_obj=logging_obj,
+                    request_data=request_data,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    encoding=encoding,
+                    api_key=api_key,
+                    json_mode=json_mode,
                 )
             elif provider == "ai21":
                 outputText = (

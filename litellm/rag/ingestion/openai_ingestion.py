@@ -78,6 +78,10 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
         vector_store_id = self.vector_store_config.get("vector_store_id")
         ttl_days = self.vector_store_config.get("ttl_days")
 
+        # Get credentials from vector_store_config (loaded from litellm_credential_name if provided)
+        api_key = self.vector_store_config.get("api_key")
+        api_base = self.vector_store_config.get("api_base")
+
         # Create vector store if not provided
         if not vector_store_id:
             expires_after = {"anchor": "last_active_at", "days": ttl_days} if ttl_days else None
@@ -85,6 +89,8 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
                 name=self.ingest_name or "litellm-rag-ingest",
                 custom_llm_provider="openai",
                 expires_after=expires_after,
+                api_key=api_key,
+                api_base=api_base,
             )
             vector_store_id = create_response.get("id")
 
@@ -96,6 +102,8 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
                 file=(filename, file_content, content_type or "application/octet-stream"),
                 purpose="assistants",
                 custom_llm_provider="openai",
+                api_key=api_key,
+                api_base=api_base,
             )
             result_file_id = file_response.id
 
@@ -105,6 +113,8 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
                 file_id=result_file_id,
                 custom_llm_provider="openai",
                 chunking_strategy=cast(Optional[Dict[str, Any]], self.chunking_strategy),
+                api_key=api_key,
+                api_base=api_base,
             )
 
         return vector_store_id, result_file_id

@@ -292,6 +292,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             getRowCanExpand={() => false}
             isLoading={isLoadingServers}
             noDataMessage="No MCP servers configured"
+            loadingMessage="🚅 Loading MCP servers..."
           />
         </div>
       </div>

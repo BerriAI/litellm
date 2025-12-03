@@ -14,14 +14,16 @@ from __future__ import annotations
 
 import base64
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
-
-import httpx
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid4
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.rag.text_splitters import RecursiveCharacterTextSplitter
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
 
@@ -49,10 +51,35 @@ class BaseRAGIngestion(ABC):
 
         # Extract configs from options
         self.ocr_config = ingest_options.get("ocr")
-        self.chunking_strategy = ingest_options.get("chunking_strategy", {"type": "auto"})
+        self.chunking_strategy: Dict[str, Any] = cast(
+            Dict[str, Any],
+            ingest_options.get("chunking_strategy") or {"type": "auto"},
+        )
         self.embedding_config = ingest_options.get("embedding")
-        self.vector_store_config = ingest_options.get("vector_store") or {}
+        self.vector_store_config: Dict[str, Any] = cast(
+            Dict[str, Any], ingest_options.get("vector_store") or {}
+        )
         self.ingest_name = ingest_options.get("name")
+
+        # Load credentials from litellm_credential_name if provided in vector_store config
+        self._load_credentials_from_config()
+
+    def _load_credentials_from_config(self) -> None:
+        """
+        Load credentials from litellm_credential_name if provided in vector_store config.
+
+        This allows users to specify a credential name in the vector_store config
+        which will be resolved from litellm.credential_list.
+        """
+        from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+        credential_name = self.vector_store_config.get("litellm_credential_name")
+        if credential_name and litellm.credential_list:
+            credential_values = CredentialAccessor.get_credential_values(credential_name)
+            # Merge credentials into vector_store_config (don't overwrite existing values)
+            for key, value in credential_values.items():
+                if key not in self.vector_store_config:
+                    self.vector_store_config[key] = value
 
     @property
     def custom_llm_provider(self) -> str:
@@ -81,12 +108,12 @@ class BaseRAGIngestion(ABC):
             return filename, file_content, content_type, None
 
         if file_url:
-            async with httpx.AsyncClient() as http_client:
-                response = await http_client.get(file_url)
-                response.raise_for_status()
-                file_content = response.content
-                filename = file_url.split("/")[-1] or "document"
-                content_type = response.headers.get("content-type", "application/octet-stream")
+            http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.RAG)
+            response = await http_client.get(file_url)
+            response.raise_for_status()
+            file_content = response.content
+            filename = file_url.split("/")[-1] or "document"
+            content_type = response.headers.get("content-type", "application/octet-stream")
             return filename, file_content, content_type, None
 
         if file_id:
@@ -310,5 +337,6 @@ class BaseRAGIngestion(ABC):
                 status="failed",
                 vector_store_id="",
                 file_id=None,
+                error=str(e),
             )
 

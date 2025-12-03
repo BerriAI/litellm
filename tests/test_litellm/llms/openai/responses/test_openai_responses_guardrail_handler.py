@@ -7,7 +7,7 @@ with guardrail transformations.
 
 import os
 import sys
-from typing import Any
+from typing import Any, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -29,9 +29,11 @@ from litellm.types.utils import CallTypes
 class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing that transforms text"""
 
-    async def apply_guardrail(self, text: str) -> str:
+    async def apply_guardrail(
+        self, texts: List[str], request_data: dict, input_type: str, **kwargs
+    ) -> Tuple[List[str], Optional[List[str]]]:
         """Append [GUARDRAILED] to text"""
-        return f"{text} [GUARDRAILED]"
+        return ([f"{text} [GUARDRAILED]" for text in texts], None)
 
 
 class TestOpenAIResponsesHandlerDiscovery:
@@ -450,7 +452,10 @@ class TestOpenAIResponsesHandlerEdgeCases:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "List content"},
-                        {"type": "image_url", "image_url": {"url": "http://example.com"}},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "http://example.com"},
+                        },
                     ],
                     "type": "message",
                 },
@@ -492,4 +497,3 @@ class TestOpenAIResponsesHandlerEdgeCases:
 
         # Should skip processing and return unchanged
         assert result == response
-

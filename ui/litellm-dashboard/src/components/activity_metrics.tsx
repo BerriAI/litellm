@@ -38,10 +38,9 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
         </Card>
       </Grid>
 
-      {/* Top API Keys Section */}
       {metrics.top_api_keys && metrics.top_api_keys.length > 0 && (
         <Card className="mt-4">
-          <Title>Top API Keys by Spend</Title>
+          <Title>Top Virtual Keys by Spend</Title>
           <div className="mt-3">
             <div className="grid grid-cols-1 gap-2">
               {metrics.top_api_keys.map((keyData, index) => (
@@ -384,12 +383,12 @@ export const processActivityData = (
     });
   });
 
-  // Process API key breakdowns for each metric (skip if key is 'api_keys' to avoid duplication)
+  // Process Virtual Key breakdowns for each metric (skip if key is 'api_keys' to avoid duplication)
   if (key !== "api_keys") {
     Object.entries(modelMetrics).forEach(([model, _]) => {
       const apiKeyBreakdown: Record<string, TopApiKeyData> = {};
 
-      // Aggregate API key data across all days
+      // Aggregate Virtual Key data across all days
       dailyActivity.results.forEach((day) => {
         const modelData = day.breakdown[key]?.[model];
         if (modelData && "api_key_breakdown" in modelData) {

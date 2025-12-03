@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Dict,
     List,
     Literal,
@@ -31,7 +32,9 @@ from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
+    AUDIO_SPEECH_CHUNK_SIZE,
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
@@ -398,6 +401,9 @@ from litellm.proxy.utils import (
     update_spend,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
+from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    router as vector_store_management_router,
+)
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     router as vector_store_files_router,
 )
@@ -630,7 +636,7 @@ async def _initialize_shared_aiohttp_session():
             limit=AIOHTTP_CONNECTOR_LIMIT,
             keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
             ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
-            enable_cleanup_closed=True,
+            enable_cleanup_closed=AIOHTTP_NEEDS_CLEANUP_CLOSED,
         )
 
         session = ClientSession(connector=connector)
@@ -1084,7 +1090,6 @@ llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
 general_settings: dict = {}
 config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
-callback_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
@@ -1241,6 +1246,9 @@ def cost_tracking():
     global prisma_client
     if prisma_client is not None:
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
+        litellm.logging_callback_manager.add_litellm_async_success_callback(
+            _ProxyDBLogger()
+        )
 
 
 async def update_cache(  # noqa: PLR0915
@@ -2074,7 +2082,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval, config_passthrough_endpoints
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -2082,6 +2090,8 @@ class ProxyConfig:
 
         ## Callback settings
         callback_settings = config.get("callback_settings", {})
+        if callback_settings:
+            litellm.callback_settings = callback_settings
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", None)
@@ -4080,7 +4090,8 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        str_so_far = ""
+        # Use a list to accumulate response segments to avoid O(n^2) string concatenation
+        str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
@@ -4096,12 +4107,12 @@ async def async_data_generator(
                 user_api_key_dict=user_api_key_dict,
                 response=chunk,
                 data=request_data,
-                str_so_far=str_so_far,
+                str_so_far="".join(str_so_far_parts),
             )
 
             if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                 response_str = litellm.get_response_string(response_obj=chunk)
-                str_so_far += response_str
+                str_so_far_parts.append(response_str)
 
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
@@ -5295,6 +5306,18 @@ async def moderations(
             )
 
 
+async def _audio_speech_chunk_generator(
+    _response: HttpxBinaryResponseContent,
+) -> AsyncGenerator[bytes, None]:
+    # chunk_size has a big impact on latency, it can't be too small or too large
+    # too small: latency is high
+    # too large: latency is low, but memory usage is high
+    # 8192 is a good compromise
+    _generator = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
+    async for chunk in _generator:
+        yield chunk
+
+
 @router.post(
     "/v1/audio/speech",
     dependencies=[Depends(user_api_key_auth)],
@@ -5340,7 +5363,7 @@ async def audio_speech(
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
+            user_api_key_dict=user_api_key_dict, data=data, call_type="aspeech"
         )
 
         ## ROUTE TO CORRECT ENDPOINT ##
@@ -5367,12 +5390,6 @@ async def audio_speech(
         response_cost = hidden_params.get("response_cost", None) or ""
         litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
 
-        # Printing each chunk size
-        async def generate(_response: HttpxBinaryResponseContent):
-            _generator = await _response.aiter_bytes(chunk_size=1024)
-            async for chunk in _generator:
-                yield chunk
-
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             model_id=model_id,
@@ -5387,21 +5404,20 @@ async def audio_speech(
             hidden_params=hidden_params,
         )
 
-        select_data_generator(
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            request_data=data,
-        )
         # Determine media type based on model type
         media_type = "audio/mpeg"  # Default for OpenAI TTS
         request_model = data.get("model", "")
-        if "gemini" in request_model.lower() and (
-            "tts" in request_model.lower() or "preview-tts" in request_model.lower()
-        ):
-            media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
+        if request_model:
+            request_model_lower = request_model.lower()
+            if "gemini" in request_model_lower and (
+                "tts" in request_model_lower or "preview-tts" in request_model_lower
+            ):
+                media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
 
         return StreamingResponse(
-            generate(response), media_type=media_type, headers=custom_headers  # type: ignore
+            _audio_speech_chunk_generator(response), # type: ignore[arg-type]
+            media_type=media_type,
+            headers=custom_headers,  # type: ignore
         )
 
     except Exception as e:
@@ -10165,6 +10181,7 @@ app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(vector_store_router)
+app.include_router(vector_store_management_router)
 app.include_router(vector_store_files_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)

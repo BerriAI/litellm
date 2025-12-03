@@ -1,6 +1,6 @@
 # Base images
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
 
 # -----------------
 # Builder Stage
@@ -10,7 +10,18 @@ WORKDIR /app
 
 # Install build dependencies including Node.js for UI build
 USER root
-RUN apk add --no-cache build-base bash nodejs npm \
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    clang \
+    llvm \
+    lld \
+    gcc \
+    linux-headers \
+    build-base \
+    bash \
+    nodejs \
+    npm \
   && pip install --no-cache-dir --upgrade pip build
 
 # Copy project files
@@ -62,7 +73,7 @@ WORKDIR /app
 # Install runtime dependencies
 USER root
 RUN apk upgrade --no-cache && \
-  apk add --no-cache bash libstdc++ ca-certificates openssl supervisor
+  apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor
 
 # Copy only necessary artifacts from builder stage for runtime
 COPY . .

@@ -1,50 +1,52 @@
-import React, { useState, useEffect } from "react";
-import NumericalInput from "../shared/numerical_input";
+import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
-  Card,
-  Title,
-  Text,
-  Tab,
-  TabList,
-  TabGroup,
-  TabPanel,
-  TabPanels,
-  Grid,
-  Badge,
-  Button as TremorButton,
-  TextInput,
-} from "@tremor/react";
-import TeamMembersComponent from "./team_member_view";
-import MemberPermissions from "./member_permissions";
-import {
-  teamInfoCall,
-  teamMemberDeleteCall,
-  teamMemberAddCall,
-  teamMemberUpdateCall,
-  Member,
-  teamUpdateCall,
   getGuardrailsList,
+  Member,
+  Organization,
+  organizationInfoCall,
+  teamInfoCall,
+  teamMemberAddCall,
+  teamMemberDeleteCall,
+  teamMemberUpdateCall,
+  teamUpdateCall,
 } from "@/components/networking";
-import { Button, Form, Input, Select, Switch, message, Tooltip } from "antd";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import MemberModal from "./edit_membership";
-import UserSearchModal from "@/components/common_components/user_search_modal";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import ObjectPermissionsView from "../object_permissions_view";
-import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import {
+  Badge,
+  Card,
+  Grid,
+  Tab,
+  TabGroup,
+  TabList,
+  TabPanel,
+  TabPanels,
+  Text,
+  TextInput,
+  Title,
+  Button as TremorButton,
+} from "@tremor/react";
+import { Button, Form, Input, message, Select, Switch, Tooltip } from "antd";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import { getModelDisplayName, unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
+import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import EditLoggingSettings from "./EditLoggingSettings";
-import LoggingSettingsView from "../logging_settings_view";
-import { fetchMCPAccessGroups } from "../networking";
-import { CheckIcon, CopyIcon } from "lucide-react";
-import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import NotificationsManager from "../molecules/notifications_manager";
-import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import { fetchMCPAccessGroups } from "../networking";
+import ObjectPermissionsView from "../object_permissions_view";
+import NumericalInput from "../shared/numerical_input";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import MemberModal from "./edit_membership";
+import EditLoggingSettings from "./EditLoggingSettings";
+import MemberPermissions from "./member_permissions";
+import TeamMembersComponent from "./team_member_view";
 
 export interface TeamMembership {
   user_id: string;
@@ -117,6 +119,29 @@ export interface TeamInfoProps {
   premiumUser?: boolean;
 }
 
+const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
+  let tempModelsToPick = [];
+
+  if (organization) {
+    // Check if organization has "all-proxy-models" in its models array
+    if (organization.models.includes("all-proxy-models")) {
+      // Treat as all-proxy-models (use userModels)
+      tempModelsToPick = userModels;
+    } else if (organization.models.length > 0) {
+      // Organization has specific models
+      tempModelsToPick = organization.models;
+    } else {
+      // Empty array [] is treated as all-proxy-models
+      tempModelsToPick = userModels;
+    }
+  } else {
+    // No organization, show all available models
+    tempModelsToPick = userModels;
+  }
+
+  return unfurlWildcardModelsInList(tempModelsToPick, userModels);
+};
+
 const TeamInfoView: React.FC<TeamInfoProps> = ({
   teamId,
   onClose,
@@ -142,6 +167,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isTeamSaving, setIsTeamSaving] = useState(false);
+  const [organization, setOrganization] = useState<Organization | null>(null);
 
   console.log("userModels in team info", userModels);
 
@@ -164,6 +191,31 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   useEffect(() => {
     fetchTeamInfo();
   }, [teamId, accessToken]);
+
+  // Fetch organization data when team has organization_id
+  useEffect(() => {
+    const fetchOrganization = async () => {
+      if (!accessToken || !teamData?.team_info?.organization_id) {
+        setOrganization(null);
+        return;
+      }
+
+      try {
+        const orgData = await organizationInfoCall(accessToken, teamData.team_info.organization_id);
+        setOrganization(orgData);
+      } catch (error) {
+        console.error("Error fetching organization info:", error);
+        setOrganization(null);
+      }
+    };
+
+    fetchOrganization();
+  }, [accessToken, teamData?.team_info?.organization_id]);
+
+  // Compute modelsToPick based on organization and userModels
+  const modelsToPick = useMemo(() => {
+    return getOrganizationModels(organization, userModels);
+  }, [organization, userModels]);
 
   const fetchMcpAccessGroups = async () => {
     if (!accessToken) return;
@@ -310,6 +362,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const handleTeamUpdate = async (values: any) => {
     try {
       if (!accessToken) return;
+      setIsTeamSaving(true);
 
       let parsedMetadata = {};
       try {
@@ -387,6 +440,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       fetchTeamInfo();
     } catch (error) {
       console.error("Error updating team:", error);
+    } finally {
+      setIsTeamSaving(false);
     }
   };
 
@@ -586,15 +641,47 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Input type="" />
                   </Form.Item>
 
-                  <Form.Item label="Models" name="models">
+                  <Form.Item
+                    label="Models"
+                    name="models"
+                    rules={[{ required: true, message: "Please select at least one model" }]}
+                  >
                     <Select mode="multiple" placeholder="Select models">
-                      <Select.Option key="all-proxy-models" value="all-proxy-models">
-                        All Proxy Models
-                      </Select.Option>
-                      <Select.Option key="no-default-models" value="no-default-models">
-                        No Default Models
-                      </Select.Option>
-                      {Array.from(new Set(userModels)).map((model, idx) => (
+                      {(() => {
+                        let shouldShowAllProxyModels = false;
+
+                        if (organization) {
+                          // Team is in an organization
+                          if (organization.models.length === 0 || organization.models.includes("all-proxy-models")) {
+                            // Organization has empty array [] or "all-proxy-models"
+                            shouldShowAllProxyModels = true;
+                          }
+                          // Otherwise (organization has specific models), don't show "all-proxy-models"
+                        } else {
+                          // Team is not in an organization
+                          shouldShowAllProxyModels = is_proxy_admin || userModels.includes("all-proxy-models");
+                        }
+
+                        return shouldShowAllProxyModels ? (
+                          <Select.Option key="all-proxy-models" value="all-proxy-models">
+                            All Proxy Models
+                          </Select.Option>
+                        ) : null;
+                      })()}
+                      {(() => {
+                        // Show "no-default-models" option if:
+                        // 1. Team is not in an organization, OR
+                        // 2. Team is in an organization and organization's models include "no-default-models"
+                        const shouldShowNoDefaultModels =
+                          !organization || organization.models.includes("no-default-models");
+
+                        return shouldShowNoDefaultModels ? (
+                          <Select.Option key="no-default-models" value="no-default-models">
+                            No Default Models
+                          </Select.Option>
+                        ) : null;
+                      })()}
+                      {Array.from(new Set(modelsToPick)).map((model, idx) => (
                         <Select.Option key={idx} value={model}>
                           {getModelDisplayName(model)}
                         </Select.Option>
@@ -748,7 +835,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Organization ID" name="organization_id">
-                    <Input type="" />
+                    <Input type="" disabled />
                   </Form.Item>
 
                   <Form.Item label="Logging Settings" name="logging_settings">
@@ -764,10 +851,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
                     <div className="flex justify-end items-center gap-2">
-                      <TremorButton variant="secondary" onClick={() => setIsEditing(false)}>
+                      <TremorButton variant="secondary" onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
                         Cancel
                       </TremorButton>
-                      <TremorButton type="submit">Save Changes</TremorButton>
+                      <TremorButton type="submit" loading={isTeamSaving}>
+                        Save Changes
+                      </TremorButton>
                     </div>
                   </div>
                 </Form>

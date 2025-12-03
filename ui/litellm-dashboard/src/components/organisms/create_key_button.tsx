@@ -405,7 +405,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);
-      NotificationsManager.success("API Key Created");
+      NotificationsManager.success("Virtual Key Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
     } catch (error) {
@@ -415,7 +415,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   const handleCopy = () => {
-    NotificationsManager.success("API Key copied to clipboard");
+    NotificationsManager.success("Virtual Key copied to clipboard");
   };
 
   useEffect(() => {
@@ -505,7 +505,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               label={
                 <span>
                   Owned By{" "}
-                  <Tooltip title="Select who will own this API key">
+                  <Tooltip title="Select who will own this Virtual Key">
                     <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                   </Tooltip>
                 </span>
@@ -594,8 +594,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           {isFormDisabled && (
             <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
               <Text className="text-blue-800 text-sm">
-                Please select a team to continue configuring your API key. If you do not see any teams, please contact
-                your Proxy Admin to either provide you with access to models or to add you to a team.
+                Please select a team to continue configuring your Virtual Key. If you do not see any teams, please
+                contact your Proxy Admin to either provide you with access to models or to add you to a team.
               </Text>
             </div>
           )}
@@ -904,11 +904,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         : "Premium feature - Upgrade to disable global guardrails by key"
                     }
                   >
-                    <Switch 
-                      disabled={!premiumUser}
-                      checkedChildren="Yes"
-                      unCheckedChildren="No"
-                    />
+                    <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
                   <Form.Item
                     label={
@@ -973,7 +969,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       value={form.getFieldValue("allowed_passthrough_routes")}
                       accessToken={accessToken}
                       placeholder={
-                        !premiumUser ? "Premium feature - Upgrade to set pass through routes by key" : "Select or enter pass through routes"
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set pass through routes by key"
+                          : "Select or enter pass through routes"
                       }
                       disabled={!premiumUser}
                       teamId={selectedCreateKeyTeam ? selectedCreateKeyTeam.team_id : null}
@@ -1181,7 +1179,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         />
                       </div>
                     </AccordionBody>
-                    <Form.Item name="duration" hidden initialValue="">
+                    <Form.Item name="duration" hidden initialValue={null}>
                       <Input />
                     </Form.Item>
                   </Accordion>
@@ -1279,7 +1277,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             <Col numColSpan={1}>
               {apiKey != null ? (
                 <div>
-                  <Text className="mt-3">API Key:</Text>
+                  <Text className="mt-3">Virtual Key:</Text>
                   <div
                     style={{
                       background: "#f8f8f8",
@@ -1292,7 +1290,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   </div>
 
                   <CopyToClipboard text={apiKey} onCopy={handleCopy}>
-                    <Button className="mt-3">Copy API Key</Button>
+                    <Button className="mt-3">Copy Virtual Key</Button>
                   </CopyToClipboard>
                   {/* <Button className="mt-3" onClick={sendSlackAlert}>
                     Test Key

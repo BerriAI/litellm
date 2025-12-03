@@ -759,3 +759,62 @@ def test_get_final_response_obj_with_empty_response_obj_and_list_init():
     assert len(result) == 2
     assert result[0].name == "Object1"
     assert result[1].name == "Object2"
+
+
+def test_append_system_prompt_messages():
+    """
+    Test append_system_prompt_messages prepends system message from kwargs to messages list.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Test case 1: system in kwargs with existing messages
+    kwargs = {"system": "You are a helpful assistant"}
+    messages = [{"role": "user", "content": "Hello"}]
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=messages
+    )
+    assert len(result) == 2
+    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
+    assert result[1] == {"role": "user", "content": "Hello"}
+
+    # Test case 2: system in kwargs with None messages
+    kwargs = {"system": "You are a helpful assistant"}
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=None
+    )
+    assert len(result) == 1
+    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
+
+    # Test case 3: system in kwargs with empty messages list
+    kwargs = {"system": "You are a helpful assistant"}
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=[]
+    )
+    assert len(result) == 1
+    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
+
+    # Test case 4: duplicate system message should not be added
+    kwargs = {"system": "You are a helpful assistant"}
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant"},
+        {"role": "user", "content": "Hello"},
+    ]
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=messages
+    )
+    assert len(result) == 2
+    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
+
+    # Test case 5: no system in kwargs returns messages unchanged
+    kwargs = {}
+    messages = [{"role": "user", "content": "Hello"}]
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=messages
+    )
+    assert result == messages
+
+    # Test case 6: None kwargs returns messages unchanged
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=None, messages=messages
+    )
+    assert result == messages

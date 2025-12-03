@@ -395,7 +395,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       return;
     }
     if (!effectiveApiKey) {
-      NotificationsManager.fromBackend("Please provide an API key or select Current UI Session");
+      NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
       return;
     }
     const targetComparisons = comparisons;
@@ -551,7 +551,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         <div className="border-b px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-600">API Key Source</span>
+              <span className="text-sm font-medium text-gray-600">Virtual Key Source</span>
               <Select
                 value={apiKeySource}
                 onChange={(value) => setApiKeySource(value as "session" | "custom")}
@@ -567,7 +567,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                 <Input.Password
                   value={customApiKey}
                   onChange={(event) => setCustomApiKey(event.target.value)}
-                  placeholder="Enter API key"
+                  placeholder="Enter Virtual Key"
                   className="w-56"
                 />
               )}
