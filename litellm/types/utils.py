@@ -2665,6 +2665,10 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     posthog_api_key: Optional[str]
     posthog_api_url: Optional[str]
 
+    # Weave (W&B) dynamic params
+    wandb_api_key: Optional[str]
+    weave_project_id: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]

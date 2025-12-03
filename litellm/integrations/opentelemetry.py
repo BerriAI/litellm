@@ -1088,6 +1088,11 @@ class OpenTelemetry(CustomLogger):
                     span, kwargs, response_obj
                 )
                 return
+            elif self.callback_name == "weave_otel":
+                from litellm.integrations.weave.weave_otel import set_weave_otel_attributes
+
+                set_weave_otel_attributes(span, kwargs, response_obj)
+                return
             from litellm.proxy._types import SpanAttributes
 
             optional_params = kwargs.get("optional_params", {})
