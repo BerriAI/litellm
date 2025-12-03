@@ -47,6 +47,12 @@ export const columns = (
       cell: ({ row }) => <span className="text-xs">{possibleUIRoles?.[row.original.user_role]?.ui_label || "-"}</span>,
     },
     {
+      header: "User Alias",
+      accessorKey: "user_alias",
+      enableSorting: false,
+      cell: ({ row }) => <span className="text-xs">{row.original.user_alias || "-"}</span>,
+    },
+    {
       header: "Spend (USD)",
       accessorKey: "spend",
       enableSorting: true,
