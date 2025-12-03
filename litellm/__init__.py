@@ -1387,6 +1387,7 @@ from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatC
 from .llms.v0.chat.transformation import V0ChatConfig
 from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
+from .llms.ragflow.chat.transformation import RAGFlowConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
