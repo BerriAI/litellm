@@ -40,10 +40,12 @@ jobs:
       new-version: ${{ steps.detect-release.outputs.new-version }}
       current-version: ${{ steps.detect-release.outputs.current-version }}
     steps:
-      - name: Checkout main branch
+      # Checkout carto/main to check what version we currently have in production
+      # NOT main (which has unstable upstream dev code that's always ahead of stable)
+      - name: Checkout carto/main branch
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: carto/main
           fetch-depth: 0
 
       - name: Add upstream remote
@@ -62,9 +64,10 @@ jobs:
           echo "::group::Detecting new stable releases"
           echo "[Sync] Using gh CLI to fetch releases from BerriAI/litellm..."
 
-          # Get current version from pyproject.toml
+          # Get current version from carto/main's pyproject.toml
+          # This is the version currently deployed in production
           CURRENT_VERSION=$(grep -E "^version\s*=" pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-          echo "[Sync] Current version in pyproject.toml: ${CURRENT_VERSION}"
+          echo "[Sync] Current version in carto/main pyproject.toml: ${CURRENT_VERSION}"
 
           # Get latest stable release tag (ends with -stable, not a prerelease)
           LATEST_STABLE=$(gh release list --repo BerriAI/litellm --limit 50 --json tagName,isPrerelease,isDraft | \
