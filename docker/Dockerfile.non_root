@@ -12,16 +12,27 @@ WORKDIR /app
 USER root
 RUN apk add --no-cache \
     clang \
+    clang-dev \
     llvm \
+    llvm-dev \
     lld \
     gcc \
+    g++ \
     linux-headers \
     build-base \
     bash \
     nodejs \
     npm \
     openssl-dev \
-  && pip install --no-cache-dir --upgrade pip build
+    libffi-dev \
+    musl-dev \
+    pkgconfig \
+    cmake \
+    make \
+    coreutils \
+    perl \
+    zlib-dev \
+  && pip install --no-cache-dir --upgrade pip build wheel setuptools cython
 
 # Copy project files
 COPY . .
@@ -59,9 +70,16 @@ RUN cd /tmp/litellm_ui && \
 RUN cd /app/ui/litellm-dashboard && rm -rf ./out
 
 # Build package and wheel dependencies
-# Use prebuilt binary wheels to avoid compilation issues with minimal toolchain
-ENV GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1 \
-    GRPC_PYTHON_DISABLE_LIBC_COMPATIBILITY=1
+# Set compiler environment variables for grpcio compilation
+ENV CC=clang \
+    CXX=clang++ \
+    GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1 \
+    GRPC_PYTHON_DISABLE_LIBC_COMPATIBILITY=1 \
+    GRPC_PYTHON_BUILD_WITH_CYTHON=1 \
+    PIP_PREFER_BINARY=1 \
+    CFLAGS="-Wno-error" \
+    CXXFLAGS="-Wno-error"
+
 RUN rm -rf dist/* && python -m build && \
   pip install dist/*.whl && \
   pip wheel --no-cache-dir --wheel-dir=/wheels/ --prefer-binary -r requirements.txt
