@@ -88,7 +88,9 @@ from litellm.litellm_core_utils.cached_imports import (
     get_coroutine_checker,
     get_default_encoding,
     get_litellm_logging_class,
+    get_modified_max_tokens_fn,
     get_set_callbacks,
+    get_tiktoken_encoding_type,
     get_tiktoken_module,
 )
 from litellm.litellm_core_utils.core_helpers import (
@@ -141,9 +143,6 @@ from litellm.litellm_core_utils.redact_messages import (
 )
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-# get_modified_max_tokens is imported lazily when needed to avoid loading token_counter
-# Cached after first import to avoid repeated import overhead
-_get_modified_max_tokens = None
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
@@ -1257,12 +1256,8 @@ def client(original_function):  # noqa: PLR0915
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
                     user_max_tokens = kwargs.get("max_tokens")
-                    # Import get_modified_max_tokens lazily and cache it to avoid repeated import overhead
-                    # This avoids loading token_counter (which imports default_encoding and tiktoken) at import time
-                    get_modified_max_tokens = _lazy_import_and_cache(
-                        "_get_modified_max_tokens",
-                        lambda: __import__("litellm.litellm_core_utils.token_counter", fromlist=["get_modified_max_tokens"]).get_modified_max_tokens
-                    )
+                    # Get cached get_modified_max_tokens function
+                    get_modified_max_tokens = get_modified_max_tokens_fn()
                     modified_max_tokens = get_modified_max_tokens(
                         model=model,
                         base_model=base_model,
@@ -1500,12 +1495,8 @@ def client(original_function):  # noqa: PLR0915
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
                     user_max_tokens = kwargs.get("max_tokens")
-                    # Import get_modified_max_tokens lazily and cache it to avoid repeated import overhead
-                    # This avoids loading token_counter (which imports default_encoding and tiktoken) at import time
-                    get_modified_max_tokens = _lazy_import_and_cache(
-                        "_get_modified_max_tokens",
-                        lambda: __import__("litellm.litellm_core_utils.token_counter", fromlist=["get_modified_max_tokens"]).get_modified_max_tokens
-                    )
+                    # Get cached get_modified_max_tokens function
+                    get_modified_max_tokens = get_modified_max_tokens_fn()
                     modified_max_tokens = get_modified_max_tokens(
                         model=model,
                         base_model=base_model,
@@ -1818,12 +1809,8 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc: The encoded text.
     """
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
-    # Import Encoding lazily and cache it to avoid repeated import overhead
-    # This avoids loading tiktoken at import time
-    Encoding = _lazy_import_and_cache(
-        "_tiktoken_encoding_type",
-        lambda: __import__("tiktoken", fromlist=["Encoding"]).Encoding
-    )
+    # Get cached tiktoken Encoding type
+    Encoding = get_tiktoken_encoding_type()
     if isinstance(tokenizer_json["tokenizer"], Encoding):
         enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
     else:

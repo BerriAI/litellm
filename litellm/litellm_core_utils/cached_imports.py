@@ -18,6 +18,8 @@ _coroutine_checker: Optional["CoroutineChecker"] = None
 _set_callbacks: Optional[Callable] = None
 _tiktoken_module: Optional[Any] = None
 _default_encoding: Optional[Any] = None
+_get_modified_max_tokens: Optional[Callable] = None
+_tiktoken_encoding_type: Optional[Type] = None
 
 
 def get_litellm_logging_class() -> Type["Logging"]:
@@ -81,11 +83,42 @@ def get_default_encoding():
     return _default_encoding
 
 
+def get_modified_max_tokens_fn():
+    """
+    Get the cached get_modified_max_tokens function, initializing if needed.
+    
+    This avoids repeated import overhead when checking max tokens.
+    The token_counter module imports tiktoken, so this ensures it's only loaded once.
+    """
+    global _get_modified_max_tokens
+    if _get_modified_max_tokens is not None:
+        return _get_modified_max_tokens
+    from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
+    _get_modified_max_tokens = get_modified_max_tokens
+    return _get_modified_max_tokens
+
+
+def get_tiktoken_encoding_type():
+    """
+    Get the cached tiktoken Encoding type, initializing if needed.
+    
+    This avoids repeated import overhead when checking encoding types.
+    """
+    global _tiktoken_encoding_type
+    if _tiktoken_encoding_type is not None:
+        return _tiktoken_encoding_type
+    import tiktoken
+    _tiktoken_encoding_type = tiktoken.Encoding
+    return _tiktoken_encoding_type
+
+
 def clear_cached_imports() -> None:
     """Clear all cached imports. Useful for testing or memory management."""
-    global _LiteLLMLogging, _coroutine_checker, _set_callbacks, _tiktoken_module, _default_encoding
+    global _LiteLLMLogging, _coroutine_checker, _set_callbacks, _tiktoken_module, _default_encoding, _get_modified_max_tokens, _tiktoken_encoding_type
     _LiteLLMLogging = None
     _coroutine_checker = None
     _set_callbacks = None
     _tiktoken_module = None
     _default_encoding = None
+    _get_modified_max_tokens = None
+    _tiktoken_encoding_type = None
