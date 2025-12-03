@@ -15,7 +15,7 @@
 #
 # Uses X_GITHUB_SUPERCARTOFANTE token to allow workflow file modifications.
 
-name: CARTO - Upstream Sync
+name: CARTO - Upstream Sync # do not change the name since is referenced in the ci-fixer workflow
 
 permissions:
   contents: write        # Allow push to main branch and modify files (including workflows)

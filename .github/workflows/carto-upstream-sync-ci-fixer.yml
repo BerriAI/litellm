@@ -1,7 +1,8 @@
 name: CARTO Upstream Sync - CI Failure Auto-Fix
 
-# This workflow automatically fixes CI failures in upstream sync resolution PRs.
-# Triggered when CI checks fail on PRs created by the conflict resolver.
+# This workflow automatically fixes CI failures in upstream sync PRs.
+# Triggered when CI checks fail on PRs created by the upstream sync workflow
+# or the conflict resolver.
 
 on:
   workflow_run:
@@ -12,6 +13,7 @@ on:
     types:
       - completed
     branches:
+      - 'upstream-sync/**'
       - 'upstream-sync-resolver/**'
 
   workflow_dispatch:
@@ -76,16 +78,16 @@ jobs:
           echo "[Fixer] PR: #${PR_NUMBER}"
           echo "[Fixer] Labels: ${LABELS}"
 
-          # Only fix PRs with 'conflict-resolution' or 'automated' labels
-          if [[ ! "${LABELS}" =~ "conflict-resolution" && ! "${LABELS}" =~ "automated" ]]; then
-            echo "[Fixer] ❌ PR doesn't have required labels - skipping"
+          # Only fix PRs with upstream sync related labels
+          if [[ ! "${LABELS}" =~ "conflict-resolution" && ! "${LABELS}" =~ "automated" && ! "${LABELS}" =~ "upstream-sync" ]]; then
+            echo "[Fixer] ❌ PR doesn't have required labels (need: conflict-resolution, automated, or upstream-sync) - skipping"
             echo "should-fix=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Only fix upstream-sync-resolver branches
-          if [[ ! "${BRANCH_NAME}" =~ ^upstream-sync-resolver/ ]]; then
-            echo "[Fixer] ❌ Not an upstream-sync-resolver branch - skipping"
+          # Only fix upstream sync related branches
+          if [[ ! "${BRANCH_NAME}" =~ ^upstream-sync-resolver/ && ! "${BRANCH_NAME}" =~ ^upstream-sync/ ]]; then
+            echo "[Fixer] ❌ Not an upstream sync branch (need: upstream-sync-resolver/* or upstream-sync/*) - skipping"
             echo "should-fix=false" >> $GITHUB_OUTPUT
             exit 0
           fi

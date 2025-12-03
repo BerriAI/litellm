@@ -1,4 +1,4 @@
-name: CARTO Upstream Sync - Conflict Resolver
+name: CARTO Upstream Sync - Conflict Resolver # do not change the name since is referenced in the ci-fixer workflow
 
 # This workflow uses Claude Code to automatically resolve merge conflicts
 # for upstream sync PRs, pushing resolution directly to the sync branch.
