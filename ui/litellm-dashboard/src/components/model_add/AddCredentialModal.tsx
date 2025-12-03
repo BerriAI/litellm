@@ -1,34 +1,21 @@
-import React, { useEffect, useState } from "react";
-import { Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
-import type { UploadProps } from "antd/es/upload";
-import { Providers, providerLogoMap } from "../provider_info_helpers";
-import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { TextInput } from "@tremor/react";
-import { CredentialItem } from "../networking";
-const { Title, Link } = Typography;
+import { Select as AntdSelect, Button, Form, Modal, Tooltip, Typography } from "antd";
+import type { UploadProps } from "antd/es/upload";
+import React, { useState } from "react";
+import ProviderSpecificFields from "../add_model/provider_specific_fields";
+import { Providers, providerLogoMap } from "../provider_info_helpers";
+const { Link } = Typography;
 
 interface AddCredentialsModalProps {
-  isVisible: boolean;
+  open: boolean;
   onCancel: () => void;
   onAddCredential: (values: any) => void;
-  onUpdateCredential: (values: any) => void;
   uploadProps: UploadProps;
-  addOrEdit: "add" | "edit";
-  existingCredential: CredentialItem | null;
 }
 
-const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
-  isVisible,
-  onCancel,
-  onAddCredential,
-  onUpdateCredential,
-  uploadProps,
-  addOrEdit,
-  existingCredential,
-}) => {
+const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCancel, onAddCredential, uploadProps }) => {
   const [form] = Form.useForm();
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
-  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
   const handleSubmit = (values: any) => {
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
@@ -37,32 +24,14 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
       }
       return acc;
     }, {} as any);
-    if (addOrEdit === "add") {
-      onAddCredential(filteredValues);
-    } else {
-      onUpdateCredential(filteredValues);
-    }
+    onAddCredential(filteredValues);
     form.resetFields();
   };
 
-  useEffect(() => {
-    if (existingCredential) {
-      form.setFieldsValue({
-        credential_name: existingCredential.credential_name,
-        custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
-        api_base: existingCredential.credential_values.api_base,
-        api_version: existingCredential.credential_values.api_version,
-        base_model: existingCredential.credential_values.base_model,
-        api_key: existingCredential.credential_values.api_key,
-      });
-      setSelectedProvider(existingCredential.credential_info.custom_llm_provider as Providers);
-    }
-  }, [existingCredential]);
-
   return (
     <Modal
-      title={addOrEdit === "add" ? "Add New Credential" : "Edit Credential"}
-      visible={isVisible}
+      title="Add New Credential"
+      open={open}
       onCancel={() => {
         onCancel();
         form.resetFields();
@@ -76,12 +45,8 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
           label="Credential Name:"
           name="credential_name"
           rules={[{ required: true, message: "Credential name is required" }]}
-          initialValue={existingCredential?.credential_name}
         >
-          <TextInput
-            placeholder="Enter a friendly name for these credentials"
-            disabled={existingCredential?.credential_name ? true : false}
-          />
+          <TextInput placeholder="Enter a friendly name for these credentials" />
         </Form.Item>
 
         {/* Provider Selection */}
@@ -142,7 +107,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
             >
               Cancel
             </Button>
-            <Button htmlType="submit">{addOrEdit === "add" ? "Add Credential" : "Update Credential"}</Button>
+            <Button htmlType="submit">{"Add Credential"}</Button>
           </div>
         </div>
       </Form>
