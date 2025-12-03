@@ -229,6 +229,76 @@ class TestScimTransformations:
         result = ScimTransformations._get_scim_member_value(member_without_email)
         assert result == member_without_email.user_id
 
+    @pytest.mark.asyncio
+    async def test_transform_user_with_uuid_as_email(self, mock_prisma_client):
+        """
+        Test that users with UUID in user_email field (from old bug) 
+        don't cause validation errors when transforming to SCIM format.
+        This tests the defensive fix that validates email contains '@' before creating SCIMUserEmail.
+        """
+        mock_client, mock_find_unique = mock_prisma_client
+        
+        # Create a user with UUID in user_email (simulating the bug scenario)
+        user_with_uuid_email = LiteLLM_UserTable(
+            user_id="21df4e37-2f38-4f2e-a21b-c33cb939ff5b",
+            user_email="21df4e37-2f38-4f2e-a21b-c33cb939ff5b",  # UUID as email (bug scenario)
+            user_alias=None,
+            teams=[],
+            created_at=None,
+            updated_at=None,
+            metadata={},
+        )
+        
+        mock_find_unique.return_value = None  # No teams to look up
+        
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            # This should not raise a validation error
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+                user_with_uuid_email
+            )
+            
+            # Verify the user was transformed successfully
+            assert scim_user.id == user_with_uuid_email.user_id
+            # Email should not be in emails array since it's a UUID (no '@' sign)
+            assert scim_user.emails is None or len(scim_user.emails) == 0
+            # userName should fall back to default since email is invalid
+            assert scim_user.userName == ScimTransformations.DEFAULT_SCIM_DISPLAY_NAME
+
+    @pytest.mark.asyncio
+    async def test_transform_user_with_none_email(self, mock_prisma_client):
+        """
+        Test that users created via group membership (with user_email=None) 
+        are transformed correctly without errors.
+        This tests the root cause fix.
+        """
+        mock_client, mock_find_unique = mock_prisma_client
+        
+        # Create a user with None email (correct behavior after fix)
+        user_with_none_email = LiteLLM_UserTable(
+            user_id="user-from-group",
+            user_email=None,  # None instead of UUID (after fix)
+            user_alias=None,
+            teams=[],
+            created_at=None,
+            updated_at=None,
+            metadata={"created_via": "scim_group_membership"},
+        )
+        
+        mock_find_unique.return_value = None  # No teams to look up
+        
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            # This should not raise any errors
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+                user_with_none_email
+            )
+            
+            # Verify the user was transformed successfully
+            assert scim_user.id == user_with_none_email.user_id
+            # Email should not be in emails array
+            assert scim_user.emails is None or len(scim_user.emails) == 0
+            # userName should use default since no email
+            assert scim_user.userName == ScimTransformations.DEFAULT_SCIM_DISPLAY_NAME
+
 
 class TestSCIMPatchOperations:
     """Test SCIM PATCH operation validation and case-insensitive handling"""
