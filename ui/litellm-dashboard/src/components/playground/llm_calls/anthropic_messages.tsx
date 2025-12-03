@@ -20,7 +20,7 @@ export async function makeAnthropicMessagesRequest(
   selectedMCPTools?: string[],
 ) {
   if (!accessToken) {
-    throw new Error("API key is required");
+    throw new Error("Virtual Key is required");
   }
 
   const isLocal = process.env.NODE_ENV === "development";

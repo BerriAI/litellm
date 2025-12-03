@@ -14,8 +14,7 @@ from litellm.utils import token_counter
 
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
-    model_name: Optional[str] = None,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm"],
 ) -> Tuple[float, Usage, List[str]]:
     """
     Calculate the cost and usage of a batch
@@ -37,8 +36,7 @@ async def calculate_batch_cost_and_usage(
 
 async def _handle_completed_batch(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
-    model_name: Optional[str] = None,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm"],
 ) -> Tuple[float, Usage, List[str]]:
     """Helper function to process a completed batch and handle logging"""
     # Get batch results
@@ -84,8 +82,7 @@ def _get_batch_models_from_file_content(
 
 def _batch_cost_calculator(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    model_name: Optional[str] = None,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm"] = "openai",
 ) -> float:
     """
     Calculate the cost of a batch based on the output file id
@@ -186,7 +183,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
 
 async def _get_batch_output_file_content_as_dictionary(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm"] = "openai",
 ) -> List[dict]:
     """
     Get the batch output file content as a list of dictionaries
@@ -225,7 +222,7 @@ def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
 
 def _get_batch_job_cost_from_file_content(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm"] = "openai",
 ) -> float:
     """
     Get the cost of a batch job from the file content
@@ -253,8 +250,7 @@ def _get_batch_job_cost_from_file_content(
 
 def _get_batch_job_total_usage_from_file_content(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    model_name: Optional[str] = None,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm"] = "openai",
 ) -> Usage:
     """
     Get the tokens of a batch job from the file content
