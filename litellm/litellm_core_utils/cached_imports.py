@@ -17,6 +17,7 @@ _LiteLLMLogging: Optional[Type["Logging"]] = None
 _coroutine_checker: Optional["CoroutineChecker"] = None
 _set_callbacks: Optional[Callable] = None
 _tiktoken_module: Optional[Any] = None
+_default_encoding: Optional[Any] = None
 
 
 def get_litellm_logging_class() -> Type["Logging"]:
@@ -64,10 +65,27 @@ def get_tiktoken_module():
     return _tiktoken_module
 
 
+def get_default_encoding():
+    """
+    Get the cached default encoding (cl100k_base), initializing if needed.
+    
+    This avoids repeated import overhead in token counting functions.
+    The default_encoding module imports tiktoken at module level, so this
+    ensures tiktoken is only loaded once and cached.
+    """
+    global _default_encoding
+    if _default_encoding is not None:
+        return _default_encoding
+    from litellm.litellm_core_utils.default_encoding import encoding
+    _default_encoding = encoding
+    return _default_encoding
+
+
 def clear_cached_imports() -> None:
     """Clear all cached imports. Useful for testing or memory management."""
-    global _LiteLLMLogging, _coroutine_checker, _set_callbacks, _tiktoken_module
+    global _LiteLLMLogging, _coroutine_checker, _set_callbacks, _tiktoken_module, _default_encoding
     _LiteLLMLogging = None
     _coroutine_checker = None
     _set_callbacks = None
     _tiktoken_module = None
+    _default_encoding = None

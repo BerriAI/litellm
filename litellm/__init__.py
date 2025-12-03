@@ -1056,7 +1056,6 @@ from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 # Note: get_modified_max_tokens is not exported from __init__.py and is only used
-# internally in utils.py, so we don't need to import it here
 # client must be imported immediately as it's used as a decorator at function definition time
 from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 

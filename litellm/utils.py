@@ -86,6 +86,7 @@ from litellm.integrations.vector_store_integrations.base_vector_store import (
 # Import cached imports utilities
 from litellm.litellm_core_utils.cached_imports import (
     get_coroutine_checker,
+    get_default_encoding,
     get_litellm_logging_class,
     get_set_callbacks,
     get_tiktoken_module,
@@ -141,11 +142,8 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 # get_modified_max_tokens is imported lazily when needed to avoid loading token_counter
-# (which imports default_encoding and tiktoken) at import time
 # Cached after first import to avoid repeated import overhead
 _get_modified_max_tokens = None
-_default_encoding = None
-_tiktoken_encoding_type = None
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
@@ -1779,12 +1777,8 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
 
 
 def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
-    # Import encoding lazily and cache it to avoid repeated import overhead
-    # This avoids loading tiktoken at import time
-    encoding = _lazy_import_and_cache(
-        "_default_encoding",
-        lambda: __import__("litellm.litellm_core_utils.default_encoding", fromlist=["encoding"]).encoding
-    )
+    # Get cached default encoding
+    encoding = get_default_encoding()
     return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
@@ -5853,12 +5847,8 @@ def prompt_token_calculator(model, messages):
         anthropic_obj = Anthropic()
         num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
-        # Import encoding lazily and cache it to avoid repeated import overhead
-        # This avoids loading tiktoken at import time
-        encoding = _lazy_import_and_cache(
-            "_default_encoding",
-            lambda: __import__("litellm.litellm_core_utils.default_encoding", fromlist=["encoding"]).encoding
-        )
+        # Get cached default encoding
+        encoding = get_default_encoding()
         num_tokens = len(encoding.encode(text))
     return num_tokens
 

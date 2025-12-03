@@ -27,7 +27,10 @@ from litellm.constants import (
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
 )
-from litellm.litellm_core_utils.cached_imports import get_tiktoken_module
+from litellm.litellm_core_utils.cached_imports import (
+    get_default_encoding,
+    get_tiktoken_module,
+)
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
     AnthropicMessagesToolResultParam,
@@ -551,8 +554,8 @@ def _get_count_function(
     else:
 
         def count_tokens(text: str) -> int:
-            # Import default_encoding lazily to avoid loading tiktoken at import time
-            from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
+            # Get cached default encoding
+            default_encoding = get_default_encoding()
             return len(default_encoding.encode(text, disallowed_special=()))
 
     return count_tokens
