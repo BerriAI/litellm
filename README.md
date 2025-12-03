@@ -125,7 +125,7 @@ response = litellm.responses(
 
 # Anthropic
 response = litellm.responses(
-    model="anthropic/claude-sonnet-4-20250514",
+    model="anthropic/claude-sonnet-4-5-20250929",
     input="Hello, how are you?"
 )
 
