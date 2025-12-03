@@ -786,6 +786,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 valid_content: bool = False
                 system_message_block = ChatCompletionSystemMessage(**message)
                 if isinstance(system_message_block["content"], str):
+                    # Skip empty text blocks - Anthropic API raises errors for empty text
+                    if not system_message_block["content"]:
+                        continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
                         text=system_message_block["content"],
@@ -800,10 +803,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     valid_content = True
                 elif isinstance(message["content"], list):
                     for _content in message["content"]:
+                        # Skip empty text blocks - Anthropic API raises errors for empty text
+                        text_value = _content.get("text")
+                        if _content.get("type") == "text" and not text_value:
+                            continue
                         anthropic_system_message_content = (
                             AnthropicSystemMessageContent(
                                 type=_content.get("type"),
-                                text=_content.get("text"),
+                                text=text_value,
                             )
                         )
                         if "cache_control" in _content:
