@@ -369,7 +369,7 @@ jobs:
           github_token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           show_full_output: true
-          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 250 --allowed-tools Read,Write,Edit,Bash,Grep,Glob ${{ github.event.inputs.debug == 'true' && '--debug' || '' }}"
+          claude_args: "--model claude-opus-4-5-20250929 --max-turns 250 --allowed-tools Read,Write,Edit,Bash,Grep,Glob ${{ github.event.inputs.debug == 'true' && '--debug' || '' }}"
           prompt: |
             # Conflict Resolution Task - EDIT FILES ONLY
 

@@ -135,7 +135,7 @@ jobs:
             --repo ${{ github.repository }} \
             --commit ${HEAD_SHA} \
             --status failure \
-            --json databaseId,name,conclusion,url \
+            --json databaseId,name,url \
             --limit 10 > /tmp/failed_runs.json
 
           FAILED_COUNT=$(cat /tmp/failed_runs.json | jq 'length')
@@ -143,17 +143,17 @@ jobs:
           echo "[Fixer] Found ${FAILED_COUNT} failed workflow runs"
           cat /tmp/failed_runs.json | jq -r '.[] | "  - \(.name): \(.url)"'
 
-          # Get check runs details
+          # Get check runs details (gh pr checks uses 'state' not 'conclusion')
           gh pr checks ${PR_NUMBER} \
             --repo ${{ github.repository }} \
-            --json name,conclusion,detailsUrl \
+            --json name,state,link \
             > /tmp/check_runs.json
 
-          FAILED_CHECKS=$(cat /tmp/check_runs.json | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "TIMED_OUT")]')
+          FAILED_CHECKS=$(cat /tmp/check_runs.json | jq '[.[] | select(.state == "FAILURE" or .state == "TIMED_OUT")]')
           echo "${FAILED_CHECKS}" > /tmp/failed_checks.json
 
           echo "[Fixer] Failed checks:"
-          echo "${FAILED_CHECKS}" | jq -r '.[] | "  - \(.name): \(.conclusion)"'
+          echo "${FAILED_CHECKS}" | jq -r '.[] | "  - \(.name): \(.state)"'
 
           echo "failed-count=${FAILED_COUNT}" >> $GITHUB_OUTPUT
           echo "head-sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
@@ -189,7 +189,7 @@ jobs:
         run: |
           PR_NUMBER="${{ needs.check-ci-status.outputs.pr-number }}"
 
-          FAILED_CHECKS=$(cat /tmp/failed_checks.json | jq -r '.[] | "- **\(.name)**: \(.conclusion)"' | head -10)
+          FAILED_CHECKS=$(cat /tmp/failed_checks.json | jq -r '.[] | "- **\(.name)**: \(.state)"' | head -10)
 
           gh pr comment ${PR_NUMBER} \
             --repo ${{ github.repository }} \
@@ -214,7 +214,7 @@ jobs:
           github_token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           show_full_output: true
-          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 150 --allowed-tools Read,Write,Edit,Bash,Grep,Glob"
+          claude_args: "--model claude-opus-4-5-20250929 --max-turns 150 --allowed-tools Read,Write,Edit,Bash,Grep,Glob"
           prompt: |
             # Fix CI Failures in Upstream Sync Resolution PR
 
