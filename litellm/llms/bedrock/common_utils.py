@@ -616,6 +616,8 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonInvokeNovaConfig()
     elif bedrock_invoke_provider == "qwen3":
         return litellm.AmazonQwen3Config()
+    elif bedrock_invoke_provider == "twelvelabs":
+        return litellm.AmazonTwelveLabsPegasusConfig()
     else:
         return litellm.AmazonInvokeConfig()
 

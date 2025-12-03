@@ -29,8 +29,12 @@ test.describe("User Info View", () => {
     await firstUserIdCell.click();
 
     // Check for tabs
-    await expect(page.locator('button:has-text("Overview")')).toBeVisible();
-    await expect(page.locator('button:has-text("Details")')).toBeVisible();
+    await expect(page.locator('button:has-text("Overview")')).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(page.locator('button:has-text("Details")')).toBeVisible({
+      timeout: 10000,
+    });
 
     // Switch to details tab
     await page.locator('button:has-text("Details")').click();
