@@ -40,6 +40,7 @@ class BatchIDSecurity(CustomLogger):
     BATCH_CALL_TYPES = {
         "acreate_batch",
         "aretrieve_batch",
+        "acancel_batch",
         "alist_batches",
     }
 
@@ -63,7 +64,7 @@ class BatchIDSecurity(CustomLogger):
         if call_type not in self.BATCH_CALL_TYPES:
             return None
 
-        if call_type == "aretrieve_batch":
+        if call_type in ("aretrieve_batch", "acancel_batch"):
             batch_id = data.get("batch_id")
             verbose_proxy_logger.debug(
                 f"BatchIDSecurity: checking batch_id: {batch_id}"
