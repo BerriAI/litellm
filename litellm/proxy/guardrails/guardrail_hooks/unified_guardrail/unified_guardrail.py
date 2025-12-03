@@ -13,6 +13,7 @@ from litellm.caching.caching import DualCache
 from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
@@ -180,6 +181,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         Supports sampling_rate parameter to control how often chunks are processed.
         sampling_rate=1 means every chunk, sampling_rate=5 means every 5th chunk, etc.
         """
+
         global endpoint_guardrail_translation_mappings
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -237,8 +239,10 @@ class UnifiedLLMGuardrails(CustomLogger):
             chunk_counter += 1
 
             # Infer call type from first chunk if not already done
-            if call_type is None:
-                call_type = _infer_call_type(call_type=None, completion_response=item)
+            if call_type is None and user_api_key_dict.request_route is not None:
+                call_types = get_call_types_for_route(user_api_key_dict.request_route)
+                if call_types is not None:
+                    call_type = call_types[0]
 
                 # If call type not supported, just pass through all chunks
                 if (
@@ -264,11 +268,13 @@ class UnifiedLLMGuardrails(CustomLogger):
                     CallTypes(call_type)
                 ]()
 
-                processed_item = await endpoint_translation.process_output_response(
-                    response=item,  # type: ignore
-                    guardrail_to_apply=guardrail_to_apply,
-                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
-                    user_api_key_dict=user_api_key_dict,
+                processed_item = (
+                    await endpoint_translation.process_output_streaming_response(
+                        response=item,
+                        guardrail_to_apply=guardrail_to_apply,
+                        litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                        user_api_key_dict=user_api_key_dict,
+                    )
                 )
 
                 # Add guardrail to applied guardrails header (only once, on first processed chunk)
