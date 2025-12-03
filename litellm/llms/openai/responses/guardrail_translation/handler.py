@@ -295,7 +295,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
             images=None,
         )
-        return responses_so_far + [guardrailed_text]
+        return responses_so_far
 
     def get_streaming_string_so_far(self, responses_so_far: List[Any]) -> str:
         """
