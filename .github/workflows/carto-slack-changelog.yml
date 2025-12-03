@@ -1,0 +1,296 @@
+name: CARTO - Slack Changelog
+
+################################################################################
+# Event-Driven Slack Changelog
+################################################################################
+#
+# Posts changelog updates to Slack when PRs are merged to carto/main.
+# Also supports manual trigger for initial repo status post.
+#
+# Modes:
+# - PR merge: Analyzes merged PR and posts summary
+# - repo_status: Posts current fork status (manual trigger)
+#
+# Security:
+# - Read-only tools for Claude (no file modifications)
+# - Rate limited: max-turns 20, 10-min timeout
+# - Uses existing SLACK_KEY and ANTHROPIC_API_KEY secrets
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [carto/main]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'What to post'
+        type: choice
+        options:
+          - repo_status
+          - last_pr
+        default: 'repo_status'
+
+jobs:
+  post-changelog:
+    # Only run on merged PRs or manual trigger
+    if: >
+      (github.event.pull_request.merged == true) ||
+      (github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine mode and context
+        id: context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          MANUAL_MODE: ${{ inputs.mode }}
+        run: |
+          set -eu
+          echo "::group::Determining context"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "mode=pr_merge" >> $GITHUB_OUTPUT
+            echo "pr_number=${PR_NUMBER}" >> $GITHUB_OUTPUT
+            echo "pr_title=${PR_TITLE}" >> $GITHUB_OUTPUT
+            echo "pr_url=${PR_URL}" >> $GITHUB_OUTPUT
+            echo "Mode: PR merge (#${PR_NUMBER})"
+          else
+            echo "mode=${MANUAL_MODE}" >> $GITHUB_OUTPUT
+            echo "Mode: Manual (${MANUAL_MODE})"
+          fi
+
+          # Get current versions
+          UPSTREAM_VERSION=$(grep -E "^version\s*=" pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          LATEST_TAG=$(git tag -l "v*-carto.*" | sort -V | tail -n 1 || echo "none")
+
+          echo "upstream_version=${UPSTREAM_VERSION}" >> $GITHUB_OUTPUT
+          echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+          echo "Upstream: ${UPSTREAM_VERSION}, Latest tag: ${LATEST_TAG}"
+
+          echo "::endgroup::"
+
+      - name: Generate changelog with Claude
+        id: changelog
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: false
+          claude_args: "--model claude-haiku-4-5-20251101 --max-turns 20 --allowed-tools Read,Bash,Grep,Glob"
+          prompt: |
+            # Slack Changelog Generation
+
+            ## Mode: ${{ steps.context.outputs.mode }}
+
+            ## Context
+            - **Repository:** CartoDB/litellm (fork of BerriAI/litellm)
+            - **Upstream Version:** ${{ steps.context.outputs.upstream_version }}
+            - **Latest CARTO Tag:** ${{ steps.context.outputs.latest_tag }}
+            - **Output file:** Create `slack_message.txt`
+
+            ---
+
+            ## IF MODE IS "pr_merge":
+
+            PR Details:
+            - **Number:** #${{ steps.context.outputs.pr_number }}
+            - **Title:** ${{ steps.context.outputs.pr_title }}
+            - **URL:** ${{ steps.context.outputs.pr_url }}
+
+            ### Task:
+            1. Analyze the PR to determine its type:
+               - **Upstream Sync**: PRs from upstream-sync/* branches, sync-related
+               - **Feature**: New functionality (feat:, feature:)
+               - **Bug Fix**: Fixes (fix:, bugfix:)
+               - **Infrastructure**: Workflow, Docker, CI/CD changes
+               - **Documentation**: Docs only changes
+
+            2. Get PR commits:
+               ```bash
+               gh pr view ${{ steps.context.outputs.pr_number }} --json commits --jq '.commits[].messageHeadline'
+               ```
+
+            3. Get files changed:
+               ```bash
+               gh pr view ${{ steps.context.outputs.pr_number }} --json files --jq '.files[].path' | head -20
+               ```
+
+            4. Write to `slack_message.txt` with this format:
+               ```
+               :clipboard: *LiteLLM Fork Update*
+
+               *PR #${{ steps.context.outputs.pr_number }}:* ${{ steps.context.outputs.pr_title }}
+
+               *Type:* [Upstream Sync / Feature / Bug Fix / Infrastructure / Documentation]
+
+               *Summary:*
+               - [Brief 1-2 sentence summary of what this PR does]
+
+               *Key Changes:*
+               - [Most important change 1]
+               - [Most important change 2]
+               - [etc - max 5 bullets]
+
+               :link: <${{ steps.context.outputs.pr_url }}|View PR>
+               ```
+
+            ---
+
+            ## IF MODE IS "repo_status":
+
+            ### Task:
+            1. Get recent merged PRs:
+               ```bash
+               gh pr list --state merged --base carto/main --limit 10 --json number,title,mergedAt \
+                 --jq '.[] | "- #\(.number): \(.title) (\(.mergedAt | split("T")[0]))"'
+               ```
+
+            2. Get recent releases:
+               ```bash
+               gh release list --limit 5 2>/dev/null || echo "No releases yet"
+               ```
+
+            3. Write to `slack_message.txt` with this format:
+               ```
+               :bar_chart: *LiteLLM Fork Status*
+
+               *Current Versions:*
+               - Upstream Base: LiteLLM v${{ steps.context.outputs.upstream_version }}
+               - Latest CARTO Release: ${{ steps.context.outputs.latest_tag }}
+
+               *What is this fork?*
+               CARTO's fork of LiteLLM - the unified LLM proxy for 100+ providers used for all AI features.
+
+               *Recent Activity (last 10 PRs):*
+               [List from gh pr list]
+
+               *Recent Releases:*
+               [List from gh release list]
+
+               :link: Links:
+               - <https://github.com/CartoDB/litellm|Repository>
+               - <https://github.com/CartoDB/litellm/releases|Releases>
+               - <https://github.com/BerriAI/litellm|Upstream LiteLLM>
+               ```
+
+            ---
+
+            ## Guidelines:
+            - Keep messages concise - Slack has message length limits
+            - Use Slack mrkdwn formatting (not GitHub markdown)
+            - Emoji codes like :clipboard: :bar_chart: :link: :rocket:
+            - Bold with *text*, links with <url|text>
+            - No code blocks - use plain text
+
+            Write the message now to `slack_message.txt`.
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify message was created
+        id: verify
+        run: |
+          if [ -f "slack_message.txt" ]; then
+            echo "✅ Message generated successfully"
+            echo "message_exists=true" >> $GITHUB_OUTPUT
+            echo "--- Message content ---"
+            cat slack_message.txt
+            echo "--- End message ---"
+          else
+            echo "❌ Message file not found"
+            echo "message_exists=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Post to Slack
+        if: steps.verify.outputs.message_exists == 'true'
+        env:
+          SLACK_CHANNEL: "C0A11FKJHDK"  # #litellm-changelog
+        run: |
+          set -eu
+
+          echo "::group::Preparing Slack notification"
+
+          # Check if SLACK_KEY secret is configured
+          if [[ -z "${{ secrets.SLACK_KEY }}" ]]; then
+            echo "::warning::SLACK_KEY secret not configured - skipping notification"
+            exit 0
+          fi
+
+          # Read message content
+          MESSAGE=$(cat slack_message.txt)
+
+          echo "[Slack] Sending to channel ${SLACK_CHANNEL}"
+          echo "::endgroup::"
+
+          echo "::group::Posting to Slack"
+
+          # Retry logic (up to 3 attempts)
+          SUCCESS=false
+          for attempt in 1 2 3; do
+            echo "[Slack] Attempt ${attempt}/3..."
+
+            # Send to Slack API
+            RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -F "text=${MESSAGE}" \
+              -F "channel=${SLACK_CHANNEL}" \
+              -H "Authorization: Bearer ${{ secrets.SLACK_KEY }}" \
+              -X POST https://slack.com/api/chat.postMessage)
+
+            # Extract HTTP code and body
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | head -n-1)
+
+            echo "[Slack] HTTP ${HTTP_CODE}"
+
+            # Check if successful
+            if [ "$HTTP_CODE" = "200" ]; then
+              if echo "$BODY" | grep -q '"ok":true'; then
+                echo "✅ [Slack] Message posted successfully"
+                SUCCESS=true
+                break
+              else
+                ERROR=$(echo "$BODY" | grep -o '"error":"[^"]*"' || echo "unknown error")
+                echo "⚠️ [Slack] Slack API error: ${ERROR}"
+              fi
+            else
+              echo "⚠️ [Slack] HTTP error: ${HTTP_CODE}"
+            fi
+
+            # Wait before retry
+            if [ $attempt -lt 3 ]; then
+              echo "[Slack] Retrying in 5 seconds..."
+              sleep 5
+            fi
+          done
+
+          if [ "$SUCCESS" = "false" ]; then
+            echo "::error::Failed to send Slack notification after 3 attempts"
+            echo "::notice::Check SLACK_KEY secret and channel permissions"
+            exit 1
+          fi
+
+          echo "::endgroup::"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Slack Changelog Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** ${{ steps.context.outputs.mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f "slack_message.txt" ]; then
+            echo "### Message Posted" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat slack_message.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Message generation failed" >> $GITHUB_STEP_SUMMARY
+          fi
