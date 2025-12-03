@@ -328,7 +328,7 @@ export default function CreateKeyPage() {
                 sidebarCollapsed={sidebarCollapsed}
                 onToggleSidebar={toggleSidebar}
               />
-              <div className="flex flex-1 overflow-auto">
+              <div className="flex flex-1">
                 <div className="mt-2">
                   <SidebarProvider setPage={updatePage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
                 </div>

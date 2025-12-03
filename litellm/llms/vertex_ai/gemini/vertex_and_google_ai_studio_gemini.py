@@ -1091,6 +1091,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "thoughtSignature" in part:
                 part_copy = part.copy()
                 part_copy.pop("thoughtSignature")
+
+                text_content = part_copy.get("text")
+                if isinstance(text_content, str) and text_content.strip() == "":
+                    continue
+
                 thinking_blocks.append(
                     ChatCompletionThinkingBlock(
                         type="thinking",
@@ -1205,14 +1210,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     }
                     # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
-                        _tool_response_chunk[
-                            "id"
-                        ] = _encode_tool_call_id_with_signature(
-                            _tool_response_chunk["id"] or "", thought_signature
-                        )
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
                         }
+                        # Only embed in ID if preview features are enabled
+                        if litellm.enable_preview_features:
+                            _tool_response_chunk[
+                                "id"
+                            ] = _encode_tool_call_id_with_signature(
+                                _tool_response_chunk["id"] or "", thought_signature
+                            )
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
         if len(_tools) == 0:

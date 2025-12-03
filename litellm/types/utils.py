@@ -401,6 +401,328 @@ CallTypesLiteral = Literal[
     "responses",
 ]
 
+# Mapping of API routes to their corresponding call types
+API_ROUTE_TO_CALL_TYPES = {
+    # Chat Completions
+    "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
+    "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
+    "/engines/{model}/chat/completions": [CallTypes.acompletion, CallTypes.completion],
+    "/openai/deployments/{model}/chat/completions": [
+        CallTypes.acompletion,
+        CallTypes.completion,
+    ],
+    # Text Completions
+    "/completions": [CallTypes.atext_completion, CallTypes.text_completion],
+    "/v1/completions": [CallTypes.atext_completion, CallTypes.text_completion],
+    "/engines/{model}/completions": [
+        CallTypes.atext_completion,
+        CallTypes.text_completion,
+    ],
+    "/openai/deployments/{model}/completions": [
+        CallTypes.atext_completion,
+        CallTypes.text_completion,
+    ],
+    # Embeddings
+    "/embeddings": [CallTypes.aembedding, CallTypes.embedding],
+    "/v1/embeddings": [CallTypes.aembedding, CallTypes.embedding],
+    "/engines/{model}/embeddings": [CallTypes.aembedding, CallTypes.embedding],
+    "/openai/deployments/{model}/embeddings": [
+        CallTypes.aembedding,
+        CallTypes.embedding,
+    ],
+    # Image Generation
+    "/images/generations": [CallTypes.aimage_generation, CallTypes.image_generation],
+    "/v1/images/generations": [CallTypes.aimage_generation, CallTypes.image_generation],
+    "/engines/{model}/images/generations": [
+        CallTypes.aimage_generation,
+        CallTypes.image_generation,
+    ],
+    "/openai/deployments/{model}/images/generations": [
+        CallTypes.aimage_generation,
+        CallTypes.image_generation,
+    ],
+    # Image Edits
+    "/images/edits": [CallTypes.aimage_edit, CallTypes.image_edit],
+    "/v1/images/edits": [CallTypes.aimage_edit, CallTypes.image_edit],
+    # Audio Transcriptions
+    "/audio/transcriptions": [CallTypes.atranscription, CallTypes.transcription],
+    "/v1/audio/transcriptions": [CallTypes.atranscription, CallTypes.transcription],
+    # Audio Speech
+    "/audio/speech": [CallTypes.aspeech, CallTypes.speech],
+    "/v1/audio/speech": [CallTypes.aspeech, CallTypes.speech],
+    # Moderations
+    "/moderations": [CallTypes.amoderation, CallTypes.moderation],
+    "/v1/moderations": [CallTypes.amoderation, CallTypes.moderation],
+    # Rerank
+    "/rerank": [CallTypes.arerank, CallTypes.rerank],
+    "/v1/rerank": [CallTypes.arerank, CallTypes.rerank],
+    "/v2/rerank": [CallTypes.arerank, CallTypes.rerank],
+    # Search
+    "/search": [CallTypes.asearch, CallTypes.search],
+    "/v1/search": [CallTypes.asearch, CallTypes.search],
+    # Batches
+    "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
+    "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
+    "/batches/{batch_id}": [CallTypes.aretrieve_batch, CallTypes.retrieve_batch],
+    "/v1/batches/{batch_id}": [CallTypes.aretrieve_batch, CallTypes.retrieve_batch],
+    # Files
+    "/files": [
+        CallTypes.acreate_file,
+        CallTypes.create_file,
+        CallTypes.afile_list,
+        CallTypes.file_list,
+    ],
+    "/v1/files": [
+        CallTypes.acreate_file,
+        CallTypes.create_file,
+        CallTypes.afile_list,
+        CallTypes.file_list,
+    ],
+    "/files/{file_id}": [
+        CallTypes.afile_retrieve,
+        CallTypes.file_retrieve,
+        CallTypes.afile_delete,
+        CallTypes.file_delete,
+    ],
+    "/v1/files/{file_id}": [
+        CallTypes.afile_retrieve,
+        CallTypes.file_retrieve,
+        CallTypes.afile_delete,
+        CallTypes.file_delete,
+    ],
+    "/files/{file_id}/content": [CallTypes.afile_content, CallTypes.file_content],
+    "/v1/files/{file_id}/content": [CallTypes.afile_content, CallTypes.file_content],
+    # Assistants
+    "/assistants": [
+        CallTypes.aget_assistants,
+        CallTypes.get_assistants,
+        CallTypes.acreate_assistants,
+        CallTypes.create_assistants,
+    ],
+    "/v1/assistants": [
+        CallTypes.aget_assistants,
+        CallTypes.get_assistants,
+        CallTypes.acreate_assistants,
+        CallTypes.create_assistants,
+    ],
+    "/assistants/{assistant_id}": [
+        CallTypes.adelete_assistant,
+        CallTypes.delete_assistant,
+    ],
+    "/v1/assistants/{assistant_id}": [
+        CallTypes.adelete_assistant,
+        CallTypes.delete_assistant,
+    ],
+    # Threads
+    "/threads": [CallTypes.acreate_thread, CallTypes.create_thread],
+    "/v1/threads": [CallTypes.acreate_thread, CallTypes.create_thread],
+    "/threads/{thread_id}": [CallTypes.aget_thread, CallTypes.get_thread],
+    "/v1/threads/{thread_id}": [CallTypes.aget_thread, CallTypes.get_thread],
+    # Thread Messages
+    "/threads/{thread_id}/messages": [
+        CallTypes.a_add_message,
+        CallTypes.add_message,
+        CallTypes.aget_messages,
+        CallTypes.get_messages,
+    ],
+    "/v1/threads/{thread_id}/messages": [
+        CallTypes.a_add_message,
+        CallTypes.add_message,
+        CallTypes.aget_messages,
+        CallTypes.get_messages,
+    ],
+    # Thread Runs
+    "/threads/{thread_id}/runs": [
+        CallTypes.arun_thread,
+        CallTypes.run_thread,
+        CallTypes.arun_thread_stream,
+        CallTypes.run_thread_stream,
+    ],
+    "/v1/threads/{thread_id}/runs": [
+        CallTypes.arun_thread,
+        CallTypes.run_thread,
+        CallTypes.arun_thread_stream,
+        CallTypes.run_thread_stream,
+    ],
+    # Fine-tuning Jobs
+    "/fine_tuning/jobs": [
+        CallTypes.acreate_fine_tuning_job,
+        CallTypes.create_fine_tuning_job,
+        CallTypes.alist_fine_tuning_jobs,
+        CallTypes.list_fine_tuning_jobs,
+    ],
+    "/v1/fine_tuning/jobs": [
+        CallTypes.acreate_fine_tuning_job,
+        CallTypes.create_fine_tuning_job,
+        CallTypes.alist_fine_tuning_jobs,
+        CallTypes.list_fine_tuning_jobs,
+    ],
+    "/fine_tuning/jobs/{fine_tuning_job_id}": [
+        CallTypes.aretrieve_fine_tuning_job,
+        CallTypes.retrieve_fine_tuning_job,
+    ],
+    "/v1/fine_tuning/jobs/{fine_tuning_job_id}": [
+        CallTypes.aretrieve_fine_tuning_job,
+        CallTypes.retrieve_fine_tuning_job,
+    ],
+    "/fine_tuning/jobs/{fine_tuning_job_id}/cancel": [
+        CallTypes.acancel_fine_tuning_job,
+        CallTypes.cancel_fine_tuning_job,
+    ],
+    "/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel": [
+        CallTypes.acancel_fine_tuning_job,
+        CallTypes.cancel_fine_tuning_job,
+    ],
+    # Video Generation
+    "/videos": [
+        CallTypes.acreate_video,
+        CallTypes.create_video,
+        CallTypes.avideo_list,
+        CallTypes.video_list,
+    ],
+    "/v1/videos": [
+        CallTypes.acreate_video,
+        CallTypes.create_video,
+        CallTypes.avideo_list,
+        CallTypes.video_list,
+    ],
+    "/videos/{video_id}": [
+        CallTypes.avideo_retrieve,
+        CallTypes.video_retrieve,
+        CallTypes.avideo_delete,
+        CallTypes.video_delete,
+    ],
+    "/v1/videos/{video_id}": [
+        CallTypes.avideo_retrieve,
+        CallTypes.video_retrieve,
+        CallTypes.avideo_delete,
+        CallTypes.video_delete,
+    ],
+    "/videos/{video_id}/content": [CallTypes.avideo_content, CallTypes.video_content],
+    "/v1/videos/{video_id}/content": [
+        CallTypes.avideo_content,
+        CallTypes.video_content,
+    ],
+    "/videos/{video_id}/remix": [CallTypes.avideo_remix, CallTypes.video_remix],
+    "/v1/videos/{video_id}/remix": [CallTypes.avideo_remix, CallTypes.video_remix],
+    # Vector Stores
+    "/vector_stores": [CallTypes.avector_store_create, CallTypes.vector_store_create],
+    "/v1/vector_stores": [
+        CallTypes.avector_store_create,
+        CallTypes.vector_store_create,
+    ],
+    "/vector_stores/{vector_store_id}/search": [
+        CallTypes.avector_store_search,
+        CallTypes.vector_store_search,
+    ],
+    "/v1/vector_stores/{vector_store_id}/search": [
+        CallTypes.avector_store_search,
+        CallTypes.vector_store_search,
+    ],
+    "/vector_stores/{vector_store_id}/files": [
+        CallTypes.avector_store_file_create,
+        CallTypes.vector_store_file_create,
+        CallTypes.avector_store_file_list,
+        CallTypes.vector_store_file_list,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files": [
+        CallTypes.avector_store_file_create,
+        CallTypes.vector_store_file_create,
+        CallTypes.avector_store_file_list,
+        CallTypes.vector_store_file_list,
+    ],
+    "/vector_stores/{vector_store_id}/files/{file_id}": [
+        CallTypes.avector_store_file_retrieve,
+        CallTypes.vector_store_file_retrieve,
+        CallTypes.avector_store_file_delete,
+        CallTypes.vector_store_file_delete,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files/{file_id}": [
+        CallTypes.avector_store_file_retrieve,
+        CallTypes.vector_store_file_retrieve,
+        CallTypes.avector_store_file_delete,
+        CallTypes.vector_store_file_delete,
+    ],
+    "/vector_stores/{vector_store_id}/files/{file_id}/content": [
+        CallTypes.avector_store_file_content,
+        CallTypes.vector_store_file_content,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files/{file_id}/content": [
+        CallTypes.avector_store_file_content,
+        CallTypes.vector_store_file_content,
+    ],
+    "/vector_stores/{vector_store_id}/files/{file_id}/update": [
+        CallTypes.avector_store_file_update,
+        CallTypes.vector_store_file_update,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files/{file_id}/update": [
+        CallTypes.avector_store_file_update,
+        CallTypes.vector_store_file_update,
+    ],
+    # Containers
+    "/containers": [
+        CallTypes.acreate_container,
+        CallTypes.create_container,
+        CallTypes.alist_containers,
+        CallTypes.list_containers,
+    ],
+    "/v1/containers": [
+        CallTypes.acreate_container,
+        CallTypes.create_container,
+        CallTypes.alist_containers,
+        CallTypes.list_containers,
+    ],
+    "/containers/{container_id}": [
+        CallTypes.aretrieve_container,
+        CallTypes.retrieve_container,
+        CallTypes.adelete_container,
+        CallTypes.delete_container,
+    ],
+    "/v1/containers/{container_id}": [
+        CallTypes.aretrieve_container,
+        CallTypes.retrieve_container,
+        CallTypes.adelete_container,
+        CallTypes.delete_container,
+    ],
+    # Responses API
+    "/responses": [CallTypes.aresponses, CallTypes.responses],
+    "/v1/responses": [CallTypes.aresponses, CallTypes.responses],
+    "/responses/{response_id}": [CallTypes.aresponses, CallTypes.responses],
+    "/v1/responses/{response_id}": [CallTypes.aresponses, CallTypes.responses],
+    "/responses/{response_id}/input_items": [CallTypes.alist_input_items],
+    "/v1/responses/{response_id}/input_items": [CallTypes.alist_input_items],
+    # Realtime API
+    "/realtime": [CallTypes.arealtime],
+    "/v1/realtime": [CallTypes.arealtime],
+    # Provider-specific routes
+    "/anthropic/v1/messages": [CallTypes.anthropic_messages],
+    # Google GenAI routes
+    "/generate_content": [CallTypes.agenerate_content, CallTypes.generate_content],
+    "/models/{model}:generateContent": [
+        CallTypes.agenerate_content,
+        CallTypes.generate_content,
+    ],
+    "/generate_content_stream": [
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream,
+    ],
+    "/models/{model}:streamGenerateContent": [
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream,
+    ],
+    # MCP (Model Context Protocol)
+    "/mcp/call_tool": [CallTypes.call_mcp_tool],
+    # Passthrough endpoints
+    "/llm_passthrough": [
+        CallTypes.llm_passthrough_route,
+        CallTypes.allm_passthrough_route,
+    ],
+    "/v1/llm_passthrough": [
+        CallTypes.llm_passthrough_route,
+        CallTypes.allm_passthrough_route,
+    ],
+}
+
 
 class PassthroughCallTypes(Enum):
     passthrough_image_generation = "passthrough-image-generation"
@@ -1060,7 +1382,10 @@ class Usage(CompletionUsage):
 
             # Auto-calculate text_tokens only if provider didn't set it explicitly
             # Formula: text_tokens = completion_tokens - reasoning_tokens - image_tokens - audio_tokens
-            if _completion_tokens_details.text_tokens is None and completion_tokens is not None:
+            if (
+                _completion_tokens_details.text_tokens is None
+                and completion_tokens is not None
+            ):
                 calculated_text_tokens = completion_tokens - reasoning_tokens
 
                 # Subtract other modality tokens if present
@@ -2618,6 +2943,7 @@ class LlmProviders(str, Enum):
     DATABRICKS = "databricks"
     EMPOWER = "empower"
     GITHUB = "github"
+    RAGFLOW = "ragflow"
     COMPACTIFAI = "compactifai"
     DOCKER_MODEL_RUNNER = "docker_model_runner"
     CUSTOM = "custom"

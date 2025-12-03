@@ -1020,7 +1020,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         headers: dict,
         client=None,
         timeout=None,
-    ) -> litellm.ImageResponse:
+    ) -> ImageResponse:
 
         response: Optional[dict] = None
         try:
