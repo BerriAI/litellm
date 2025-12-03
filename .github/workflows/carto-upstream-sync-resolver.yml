@@ -342,21 +342,33 @@ jobs:
           gh pr comment ${{ needs.check-eligibility.outputs.pr-number }} \
             --repo ${{ github.repository }} \
             --body "$(cat <<'EOF'
-          ## 🤖 Automated Conflict Resolution Started
+          ## 🤖 Conflict Resolution Started
 
-          Claude Code is now resolving conflicts for this PR.
+          **Status:** ⏳ In progress...
 
-          **Process:**
+          Claude Code (Opus 4.5) is resolving merge conflicts in this PR.
+
+          | Step | Status |
+          |------|--------|
+          | 🔍 Analyze conflicts | In progress |
+          | ✏️ Resolve files | Pending |
+          | 🧪 Run tests | Pending |
+          | 📌 Push to PR | Pending |
+
+          > [!NOTE]
+          > This may take **30-90 minutes** for large PRs. Resolution commits will be pushed directly to this PR.
+
+          <details>
+          <summary>📋 Resolution Process (click to expand)</summary>
+
           1. 🔍 Analyzing conflicts in all files
           2. 📋 Reading CARTO customization guidelines
           3. ⚖️ Applying resolution priorities (CARTO first, then upstream)
           4. ✏️ Resolving conflicts file by file
           5. 🧪 Running tests (lint, mypy, unit tests)
-          6. 📌 **Pushing resolution directly to this PR** (single-PR workflow!)
+          6. 📌 Pushing resolution directly to this PR
 
-          **Status:** In progress...
-
-          _This process may take 30-90 minutes for large PRs._
+          </details>
 
           [View workflow run →](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           EOF
@@ -599,23 +611,37 @@ jobs:
               --body "$(cat <<EOF
           ## ✅ Conflict Resolution Complete
 
-          Conflicts have been resolved and pushed directly to this PR.
+          All conflicts resolved and pushed to this PR.
 
-          **What happened (deterministic workflow):**
-          1. ✅ Workflow started merge (hardcoded)
-          2. ✅ Claude edited files to resolve conflicts
-          3. ✅ Workflow verified no conflict markers remain
-          4. ✅ Workflow created merge commit with both parents
-          5. ✅ Workflow pushed resolution to sync branch
+          | Step | Status |
+          |------|--------|
+          | 🔍 Analyze conflicts | ✅ Complete |
+          | ✏️ Resolve files | ✅ Complete |
+          | 🧪 Verify resolution | ✅ Complete |
+          | 📌 Push to PR | ✅ Complete |
 
-          **Next Steps:**
-          1. Review the resolved changes in this PR
-          2. Merge this PR into \`carto/main\` using **"Create a merge commit"**
+          > [!IMPORTANT]
+          > **Ready to merge!** Use **"Create a merge commit"** — do NOT squash or rebase.
+
+          ### Next Steps
+
+          1. Review the resolved changes
+          2. Merge using **"Create a merge commit"**
           3. 🎉 Upstream sync complete!
 
-          > ⚠️ **IMPORTANT:** Use "Create a merge commit" - do NOT squash or rebase!
+          <details>
+          <summary>🔧 Resolution Details (click to expand)</summary>
+
+          **Workflow steps completed:**
+          1. ✅ Started merge process
+          2. ✅ Claude edited files to resolve conflicts
+          3. ✅ Verified no conflict markers remain
+          4. ✅ Created merge commit with both parents
+          5. ✅ Pushed resolution to sync branch
 
           **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          </details>
           EOF
           )"
           else
@@ -625,17 +651,39 @@ jobs:
               --body "$(cat <<EOF
           ## ❌ Conflict Resolution Failed
 
-          The workflow encountered an error.
+          The automated resolution encountered an error.
 
-          **Step Status:**
-          - Claude file edits: ${{ steps.claude-run.outcome }}
-          - Verify no markers: ${{ steps.verify-resolution.outcome }}
-          - Create merge commit: ${{ steps.complete-merge.outcome }}
-          - Push to sync branch: ${{ steps.push-resolution.outcome }}
+          | Step | Status |
+          |------|--------|
+          | ✏️ Claude file edits | ${{ steps.claude-run.outcome }} |
+          | 🔍 Verify no markers | ${{ steps.verify-resolution.outcome }} |
+          | 📝 Create merge commit | ${{ steps.complete-merge.outcome }} |
+          | 📌 Push to sync branch | ${{ steps.push-resolution.outcome }} |
 
-          **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          > [!WARNING]
+          > Manual intervention may be required. Check the workflow logs below.
 
-          Check the logs to see which step failed.
+          <details>
+          <summary>🔧 Troubleshooting (click to expand)</summary>
+
+          **Common issues:**
+          - Complex merge conflicts requiring human judgment
+          - Leftover conflict markers in files
+          - Test failures after resolution
+
+          **Manual resolution:**
+          \`\`\`bash
+          git fetch origin
+          git checkout <sync-branch>
+          git merge origin/carto/main
+          # Resolve conflicts manually
+          make lint && make test-unit
+          git push origin <sync-branch>
+          \`\`\`
+
+          </details>
+
+          [View workflow logs →](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           EOF
           )"
           fi
@@ -648,20 +696,12 @@ jobs:
           PR_NUMBER="${{ needs.check-eligibility.outputs.pr-number }}"
 
           echo "[Resolver] Adding merge warning comment to PR #${PR_NUMBER}"
-          gh pr comment ${PR_NUMBER} --repo ${{ github.repository }} --body "## ⚠️ REMINDER: Use \"Create a merge commit\" ⚠️
-
-          When you're ready to merge this PR:
-
-          1. Click the **dropdown arrow** next to the merge button
-          2. Select **\"Create a merge commit\"**
-          3. **DO NOT** select \"Squash and merge\" or \"Rebase and merge\"
-
-          This preserves upstream commit history and ensures future syncs work correctly.
-
-          ### Why?
-
-          Using squash/rebase will **destroy** the upstream commit history, causing:
-          - Future syncs to show thousands of extra commits
-          - git bisect and git blame to become useless
-          - This already happened with PR #26 - please don't repeat it!"
+          gh pr comment ${PR_NUMBER} --repo ${{ github.repository }} --body "> [!CAUTION]
+          > ## ⚠️ Merge Method Reminder
+          >
+          > **Use \"Create a merge commit\"** — Click the dropdown arrow next to merge button.
+          >
+          > ❌ Do NOT use \"Squash and merge\" or \"Rebase and merge\"
+          >
+          > _Squashing destroys upstream history and breaks future syncs (see PR #26)._"
           echo "[Resolver] ✅ Merge warning comment added"

@@ -349,119 +349,115 @@ jobs:
 
           # Create PR body
           cat > ${PR_BODY_FILE} << EOF
-          ## 🔄 Upstream Sync: ${NEW_VERSION}
+          ## 🔄 Upstream Sync: LiteLLM ${NEW_VERSION}
 
-          This PR syncs CARTO's LiteLLM fork with the latest stable upstream release.
+          Syncs CARTO's LiteLLM fork with upstream stable release **${NEW_VERSION}**.
+
+          | Metric | Value |
+          |--------|-------|
+          | **Version** | \`${CURRENT_VERSION}\` → \`${NEW_VERSION}\` |
+          | **Commits** | ${COMMITS_COUNT} |
+          | **Files Changed** | ${FILES_CHANGED} |
+          | **Upstream Release** | [${NEW_VERSION}](https://github.com/BerriAI/litellm/releases/tag/${NEW_VERSION}) |
 
           > [!CAUTION]
-          > **⚠️ DO NOT SQUASH MERGE THIS PR ⚠️**
+          > **⚠️ DO NOT SQUASH MERGE THIS PR**
           >
-          > This PR **must be merged with a regular merge commit** (not squash).
-          > Squashing will break future upstream syncs by losing commit history.
+          > Use **"Create a merge commit"** only. Squashing destroys upstream history and breaks future syncs.
 
-          ### 📊 Release Information
+          ---
+
+          ### 🧪 Pre-Merge Checklist
+
+          - [ ] CI checks pass (lint, tests, Docker build)
+          - [ ] CARTO customizations preserved
+          - [ ] \`pyproject.toml\` version matches upstream
+
+          ---
+
+          <details>
+          <summary>📊 Release Information (click to expand)</summary>
 
           - **Upstream Version:** \`${NEW_VERSION}\`
           - **Current Version:** \`${CURRENT_VERSION}\`
           - **Commits Ahead:** ${COMMITS_COUNT}
           - **Files Changed:** ${FILES_CHANGED}
           - **Upstream Repo:** [BerriAI/litellm](https://github.com/BerriAI/litellm)
-          - **Upstream Release:** [${NEW_VERSION}](https://github.com/BerriAI/litellm/releases/tag/${NEW_VERSION})
           - **Compare Changes:** [v${CURRENT_VERSION}-stable...${NEW_VERSION}](https://github.com/BerriAI/litellm/compare/v${CURRENT_VERSION}-stable...${NEW_VERSION})
 
-          ### 🔀 Branch Flow
+          </details>
+
+          <details>
+          <summary>🔀 Branch Flow (click to expand)</summary>
 
           1. ✅ \`BerriAI/litellm:main\` merged into \`CartoDB/litellm:main\`
           2. ✅ Created dedicated sync branch: \`upstream-sync/${NEW_VERSION}\`
           3. 📝 This PR: \`upstream-sync/${NEW_VERSION}\` → \`carto/main\`
 
-          > **Why a dedicated branch?** Allows pushing conflict resolution commits directly to this PR instead of creating separate PRs.
+          > [!NOTE]
+          > **Why a dedicated branch?** Allows pushing conflict resolution commits directly to this PR.
 
-          ### 📝 CARTO-Specific File Guidelines
+          </details>
 
-          When reviewing or resolving conflicts, follow these guidelines:
+          <details>
+          <summary>📝 CARTO-Specific File Guidelines (click to expand)</summary>
+
+          When reviewing or resolving conflicts:
 
           #### ✅ Keep CARTO Versions (Ours)
-          - \`.github/workflows/carto_*.yaml\` - All CARTO-specific workflows
+          - \`.github/workflows/carto_*.yaml\` - CARTO workflows
           - \`.github/workflows/carto-*.yml\` - CARTO workflows
-          - \`CARTO_*.md\` - CARTO documentation files
-          - \`docs/CARTO_*.md\` - CARTO documentation in docs/
+          - \`CARTO_*.md\`, \`docs/CARTO_*.md\` - CARTO documentation
 
           #### 🔄 Accept Upstream (Theirs)
-          - \`pyproject.toml\` - Version field (should match upstream)
-          - \`litellm/\` - Core LiteLLM library code
-          - \`tests/\` - Upstream test files
-          - \`requirements.txt\` - Upstream dependencies
+          - \`pyproject.toml\` - Version field
+          - \`litellm/\` - Core library code
+          - \`tests/\` - Upstream tests
+          - \`requirements.txt\` - Dependencies
 
           #### ⚠️ Manual Review Required
-          - \`Dockerfile\` - Check sections marked with \`# CARTO:\` comments
-          - \`docker/Dockerfile.non_root\` - Contains CARTO customizations
-          - \`Makefile\` - Check sections marked with \`# CARTO:\` comments
-          - \`db_scripts/\` - CARTO may have custom scripts
+          - \`Dockerfile\`, \`docker/Dockerfile.non_root\` - CARTO customizations
+          - \`Makefile\` - Check \`# CARTO:\` sections
 
-          ### 🧪 Testing Checklist
+          </details>
 
-          Before merging, ensure the following tests pass:
+          <details>
+          <summary>🔧 Conflict Resolution (click to expand)</summary>
 
-          - [ ] \`make lint\` - Linting passes
-          - [ ] \`make test-unit\` - Unit tests pass
-          - [ ] Docker build succeeds: \`docker build -f docker/Dockerfile.non_root .\`
-          - [ ] CARTO workflows still work (check \`carto_*.yaml\` files)
-          - [ ] Review \`pyproject.toml\` version matches upstream
+          **If this PR has conflicts:**
 
-          ### 📚 Documentation
+          #### Option 1: Automated (Recommended)
 
-          - [CARTO Release Process](./docs/CARTO_RELEASE_PROCESS.md) - Full sync and release process
-          - [CARTO Customizations](./CARTO_CLAUDE.md) - CARTO-specific modifications
+          The [carto-upstream-sync-resolver](https://github.com/CartoDB/litellm/actions/workflows/carto-upstream-sync-resolver.yml) workflow triggers automatically.
 
-          ### 🔧 Conflict Resolution
+          **What it does:**
+          1. 🤖 Detects conflicts → 🔀 Merges \`carto/main\` → ✏️ Resolves conflicts → 🧪 Runs tests → 📌 Pushes to this PR
 
-          **If this PR has conflicts, there are two options:**
+          **You just need to:** Wait for resolution commits, verify CARTO customizations, merge.
 
-          #### Option 1: Automated Claude Code Resolution (Recommended)
-
-          The [carto-upstream-sync-resolver](https://github.com/CartoDB/litellm/actions/workflows/carto-upstream-sync-resolver.yml) workflow will automatically trigger when conflicts are detected.
-
-          **It will:**
-          1. 🤖 Detect conflicts in this PR
-          2. 🔀 Checkout the sync branch and merge \`carto/main\` into it
-          3. ✏️ Resolve conflicts following CARTO priority rules
-          4. ✅ Run all tests (\`make lint\`, \`make lint-mypy\`, \`make test-unit\`)
-          5. 📌 Push resolution commits directly to this PR's branch
-
-          **What you need to do:**
-          1. Wait for this PR to update with conflict resolution commits
-          2. Verify CARTO customizations are preserved
-          3. Merge this PR into \`carto/main\`
-
-          > ✨ **Single PR workflow!** No separate resolution PR - everything is in this PR.
+          > [!TIP]
+          > **Single PR workflow!** No separate resolution PR needed.
 
           #### Option 2: Manual Resolution
 
-          If you prefer manual resolution or Claude fails:
+          \`\`\`bash
+          git fetch origin
+          git checkout upstream-sync/${NEW_VERSION}
+          git merge origin/carto/main  # Creates conflicts
+          # ... resolve conflicts ...
+          make lint && make test-unit
+          git push origin upstream-sync/${NEW_VERSION}
+          \`\`\`
 
-          1. **Checkout the sync branch and merge carto/main:**
-            \`\`\`bash
-            git fetch origin
-            git checkout upstream-sync/${NEW_VERSION}
-            git merge origin/carto/main  # Creates conflicts
-            \`\`\`
+          </details>
 
-          2. **Resolve conflicts following guidelines above**
+          <details>
+          <summary>📚 Documentation Links (click to expand)</summary>
 
-          3. **Test your changes:**
-            \`\`\`bash
-            make lint
-            make lint-mypy
-            make test-unit
-            \`\`\`
+          - [CARTO Release Process](./docs/CARTO_RELEASE_PROCESS.md)
+          - [CARTO Customizations](./CARTO_CLAUDE.md)
 
-          4. **Push resolved changes to the sync branch:**
-            \`\`\`bash
-            git push origin upstream-sync/${NEW_VERSION}
-            \`\`\`
-
-          5. **Merge this PR** (this PR will update automatically)
+          </details>
 
           ---
 

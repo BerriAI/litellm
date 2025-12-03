@@ -194,16 +194,25 @@ jobs:
           gh pr comment ${PR_NUMBER} \
             --repo ${{ github.repository }} \
             --body "$(cat <<EOF
-          ## 🔧 Auto-Fixing CI Failures
+          ## 🔧 CI Auto-Fix Started
 
-          Claude Code is analyzing and fixing the failed CI checks.
+          **Status:** ⏳ In progress...
+
+          Claude Code (Opus 4.5) is analyzing and fixing CI failures.
 
           **Failed Checks:**
           ${FAILED_CHECKS}
 
-          **Workflow:** [Run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          | Step | Status |
+          |------|--------|
+          | 🔍 Analyze failures | In progress |
+          | ✏️ Apply fixes | Pending |
+          | 📌 Push fixes | Pending |
 
-          _This may take 15-30 minutes..._
+          > [!NOTE]
+          > This may take **15-30 minutes**. Fixes will be pushed directly to this PR.
+
+          [View workflow run →](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           EOF
           )"
 
@@ -471,16 +480,31 @@ jobs:
             gh pr comment ${PR_NUMBER} \
               --repo ${{ github.repository }} \
               --body "$(cat <<EOF
-          ## ✅ CI Fix Attempt Complete
+          ## ✅ CI Fix Complete
 
-          Claude Code has analyzed and attempted to fix the CI failures.
+          Fixes applied and pushed to this PR.
 
-          **Next Steps:**
-          - CI will re-run automatically on the new commits
-          - Monitor the check results on this PR
-          - If failures persist, manual review may be needed
+          | Step | Status |
+          |------|--------|
+          | 🔍 Analyze failures | ✅ Complete |
+          | ✏️ Apply fixes | ✅ Complete |
+          | 📌 Push fixes | ✅ Complete |
 
-          **Workflow:** [Run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          > [!NOTE]
+          > CI will re-run automatically. Monitor check results below.
+
+          ### Next Steps
+
+          1. Wait for CI checks to complete
+          2. If failures persist, manual review may be needed
+          3. Merge when all checks pass
+
+          <details>
+          <summary>🔧 Workflow Details (click to expand)</summary>
+
+          **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          </details>
           EOF
           )"
           else
@@ -489,17 +513,33 @@ jobs:
               --body "$(cat <<EOF
           ## ❌ CI Fix Failed
 
-          Claude Code encountered an error while trying to fix the CI failures.
+          The automated fix encountered an error.
 
-          **Manual intervention needed:**
-          - Check the workflow logs: [Run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          - Review the error messages
-          - May need human debugging
+          | Step | Status |
+          |------|--------|
+          | 🔍 Analyze failures | ${{ steps.claude-fix.outcome }} |
+          | ✏️ Apply fixes | - |
+          | 📌 Push fixes | - |
+
+          > [!WARNING]
+          > Manual intervention required. Check the workflow logs below.
+
+          <details>
+          <summary>🔧 Troubleshooting (click to expand)</summary>
 
           **Common issues:**
           - Complex merge conflicts requiring human judgment
           - Multiple interrelated failures
           - Test failures requiring code logic changes
+
+          **Manual fix steps:**
+          1. Check the workflow logs
+          2. Review error messages
+          3. Fix issues locally and push
+
+          </details>
+
+          [View workflow logs →](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           EOF
           )"
           fi
