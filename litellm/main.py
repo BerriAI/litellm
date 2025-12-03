@@ -233,9 +233,6 @@ from .types.utils import (
     all_litellm_params,
 )
 
-# encoding is initialized lazily when needed to avoid loading tiktoken at import time
-# This will be set when token_counter or encode/decode functions are first called
-encoding = None
 from litellm.types.utils import ModelResponseStream
 from litellm.utils import (
     Choices,
