@@ -1297,3 +1297,131 @@ def test_effort_with_other_features():
     assert "tools" in result
     assert len(result["tools"]) > 0
     assert "thinking" in result
+
+
+# ============ Reasoning Effort Dict Format Tests ============
+
+
+def test_reasoning_effort_string_format_opus_45():
+    """Test that reasoning_effort as string works for Claude Opus 4.5"""
+    config = AnthropicConfig()
+
+    non_default_params = {"reasoning_effort": "medium"}
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-opus-4-5-20251101",
+        drop_params=False,
+    )
+
+    assert "output_config" in result
+    assert result["output_config"]["effort"] == "medium"
+
+
+def test_reasoning_effort_dict_format_opus_45():
+    """Test that reasoning_effort as dict works for Claude Opus 4.5
+
+    This test verifies the fix for:
+    https://github.com/BerriAI/litellm/issues/17428
+
+    SDKs like openai-agents-python pass reasoning_effort as a dict:
+    {"effort": "medium", "summary": "auto"}
+
+    The Anthropic provider should extract the "effort" key and ignore "summary"
+    (since Anthropic doesn't support configurable summary).
+    """
+    config = AnthropicConfig()
+
+    # This is the format openai-agents-python passes after PR #2144
+    non_default_params = {"reasoning_effort": {"effort": "medium", "summary": "auto"}}
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-opus-4-5-20251101",
+        drop_params=False,
+    )
+
+    assert "output_config" in result
+    assert result["output_config"]["effort"] == "medium"
+
+
+def test_reasoning_effort_dict_format_other_models():
+    """Test that reasoning_effort as dict works for non-Opus 4.5 models
+
+    For models like claude-3-7-sonnet, reasoning_effort maps to the
+    "thinking" parameter instead of "output_config".
+    """
+    config = AnthropicConfig()
+
+    non_default_params = {"reasoning_effort": {"effort": "high", "summary": "auto"}}
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-3-7-sonnet-20250219",
+        drop_params=False,
+    )
+
+    assert "thinking" in result
+    assert result["thinking"]["type"] == "enabled"
+    # "high" maps to DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+
+
+def test_reasoning_effort_string_format_other_models():
+    """Test that reasoning_effort as string works for non-Opus 4.5 models"""
+    config = AnthropicConfig()
+
+    non_default_params = {"reasoning_effort": "low"}
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-3-7-sonnet-20250219",
+        drop_params=False,
+    )
+
+    assert "thinking" in result
+    assert result["thinking"]["type"] == "enabled"
+
+
+def test_reasoning_effort_dict_without_effort_key():
+    """Test that reasoning_effort dict without effort key is handled gracefully"""
+    config = AnthropicConfig()
+
+    # Dict without "effort" key should be handled gracefully (no error, no effect)
+    non_default_params = {"reasoning_effort": {"summary": "auto"}}
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-opus-4-5-20251101",
+        drop_params=False,
+    )
+
+    # Should not set output_config since effort_value is None
+    assert "output_config" not in result
+
+
+def test_reasoning_effort_dict_with_none_effort():
+    """Test that reasoning_effort dict with None effort is handled gracefully"""
+    config = AnthropicConfig()
+
+    non_default_params = {"reasoning_effort": {"effort": None, "summary": "auto"}}
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-opus-4-5-20251101",
+        drop_params=False,
+    )
+
+    # Should not set output_config since effort_value is None
+    assert "output_config" not in result
