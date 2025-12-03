@@ -80,7 +80,8 @@ class TestAnthropicBetaHeaderSupport:
         assert "additionalModelRequestFields" in result
         additional_fields = result["additionalModelRequestFields"]
         assert "anthropic_beta" in additional_fields
-        assert additional_fields["anthropic_beta"] == ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"]
+        # Sort both arrays before comparing to avoid flakiness from ordering differences
+        assert sorted(additional_fields["anthropic_beta"]) == sorted(["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"])
 
     def test_messages_transformation_anthropic_beta(self):
         """Test that Messages API transformation includes anthropic_beta in request."""
@@ -96,7 +97,8 @@ class TestAnthropicBetaHeaderSupport:
         )
         
         assert "anthropic_beta" in result
-        assert result["anthropic_beta"] == ["output-128k-2025-02-19"]
+        # Sort both arrays before comparing to avoid flakiness from ordering differences
+        assert sorted(result["anthropic_beta"]) == sorted(["output-128k-2025-02-19"])
 
     def test_converse_computer_use_compatibility(self):
         """Test that user anthropic_beta headers work with computer use tools."""

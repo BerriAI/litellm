@@ -16,7 +16,9 @@ from litellm._logging import verbose_logger
 from litellm.constants import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AIOHTTP_CONNECTOR_LIMIT,
+    AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     DEFAULT_SSL_CIPHERS,
 )
@@ -792,15 +794,20 @@ class AsyncHTTPHandler:
         verbose_logger.debug(
             "NEW SESSION: Creating new ClientSession (no shared session provided)"
         )
+        transport_connector_kwargs = {
+            "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
+            "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
+            "enable_cleanup_closed": True,
+            **connector_kwargs,
+        }
+        if AIOHTTP_CONNECTOR_LIMIT > 0:
+            transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
+        if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
+            transport_connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+        
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(
-                    limit=AIOHTTP_CONNECTOR_LIMIT,
-                    keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
-                    ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
-                    enable_cleanup_closed=True,
-                    **connector_kwargs,
-                ),
+                connector=TCPConnector(**transport_connector_kwargs),
                 trust_env=trust_env,
             ),
         )

@@ -606,8 +606,27 @@ def test_get_tags_from_request_body_with_dict_tags():
             }
         }
     }
-    
+
     result = get_tags_from_request_body(request_body=request_body)
-    
+
+    assert result == []
+    assert isinstance(result, list)
+
+
+def test_get_tags_from_request_body_with_null_metadata():
+    """
+    Test that function handles null metadata gracefully without crashing.
+
+    This is a regression test for https://github.com/BerriAI/litellm/issues/17263
+    When metadata is explicitly set to null/None, the function should return
+    an empty list instead of raising AttributeError.
+    """
+    request_body = {
+        "model": "gpt-4",
+        "metadata": None  # OpenAI API accepts metadata: null
+    }
+
+    result = get_tags_from_request_body(request_body=request_body)
+
     assert result == []
     assert isinstance(result, list)

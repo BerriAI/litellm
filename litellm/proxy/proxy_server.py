@@ -31,7 +31,9 @@ from typing import (
 from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
+    AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     AUDIO_SPEECH_CHUNK_SIZE,
     BASE_MCP_ROUTE,
@@ -626,21 +628,26 @@ async def proxy_shutdown_event():
 
 
 async def _initialize_shared_aiohttp_session():
-    """Initialize shared aiohttp session for connection reuse."""
+    """Initialize shared aiohttp session for connection reuse with connection limits."""
     try:
         from aiohttp import ClientSession, TCPConnector
 
-        # Create connector with connection pooling settings optimized for long-lived connections
-        connector = TCPConnector(
-            limit=AIOHTTP_CONNECTOR_LIMIT,
-            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
-            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
-            enable_cleanup_closed=True,
-        )
-
+        connector_kwargs = {
+            "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
+            "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
+            "enable_cleanup_closed": True,
+        }
+        if AIOHTTP_CONNECTOR_LIMIT > 0:
+            connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
+        if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
+            connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+        
+        connector = TCPConnector(**connector_kwargs)
         session = ClientSession(connector=connector)
+        
         verbose_proxy_logger.info(
-            f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)})"
+            f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)}, "
+            f"limit={AIOHTTP_CONNECTOR_LIMIT}, limit_per_host={AIOHTTP_CONNECTOR_LIMIT_PER_HOST})"
         )
         return session
     except Exception as e:
