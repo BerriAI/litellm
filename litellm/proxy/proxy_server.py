@@ -32,6 +32,7 @@ from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     AUDIO_SPEECH_CHUNK_SIZE,
     BASE_MCP_ROUTE,
@@ -635,7 +636,7 @@ async def _initialize_shared_aiohttp_session():
             limit=AIOHTTP_CONNECTOR_LIMIT,
             keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
             ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
-            enable_cleanup_closed=True,
+            enable_cleanup_closed=AIOHTTP_NEEDS_CLEANUP_CLOSED,
         )
 
         session = ClientSession(connector=connector)

@@ -43,6 +43,8 @@ export AWS_BEARER_TOKEN_BEDROCK="your-api-key"
 
 Option 2: use the api_key parameter to pass in API key for completion, embedding, image_generation API calls.
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
 ```python
 response = completion(
   model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
@@ -50,7 +52,17 @@ response = completion(
   api_key="your-api-key"
 )
 ```
-
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+```yaml
+model_list:
+  - model_name: bedrock-claude-3-sonnet
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
+```
+</TabItem>
+</Tabs>
 
 ## Usage
 
