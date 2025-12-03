@@ -220,12 +220,12 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
       <Space direction="vertical" size="large" className="w-full">
         <FeatureCard
           icon={<KeyIcon className="text-emerald-600" size={16} />}
-          title="API Key Setup"
-          description="Configure your LiteLLM Proxy API key for authentication"
+          title="Virtual Key Setup"
+          description="Configure your LiteLLM Proxy Virtual Key for authentication"
         >
           <Space direction="vertical" size="middle" className="w-full">
             <div>
-              <Text>Get your API key from your LiteLLM Proxy dashboard or contact your administrator</Text>
+              <Text>Get your Virtual Key from your LiteLLM Proxy dashboard or contact your administrator</Text>
             </div>
             <CodeBlock title="Environment Variable" code='export LITELLM_API_KEY="sk-..."' copyKey="litellm-env" />
           </Space>
@@ -249,7 +249,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           <CodeBlock
             code={`curl --location '${proxyBaseUrl}/v1/responses' \\
 --header 'Content-Type: application/json' \\
---header "Authorization: Bearer $LITELLM_API_KEY" \\
+--header "Authorization: Bearer $LITELLM_VIRTUAL_KEY" \\
 --data '{
     "model": "gpt-4",
     "tools": [
@@ -259,7 +259,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
             "server_url": "${proxyBaseUrl}/mcp",
             "require_approval": "never",
             "headers": {
-                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_VIRTUAL_KEY",
                 "x-mcp-servers": ["Zapier_MCP,dev"]
             }
         }

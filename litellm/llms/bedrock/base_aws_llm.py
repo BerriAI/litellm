@@ -353,6 +353,10 @@ class BaseAWSLLM:
             model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
                 model_id, spec="deepseek_r1"
             )
+        elif provider == "openai" and "openai/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="openai"
+            )
         return model_id
 
     @staticmethod

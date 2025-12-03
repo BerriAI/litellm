@@ -859,6 +859,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "deepseek_r1",
     "qwen3",
     "twelvelabs",
+    "openai"
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
@@ -908,6 +909,9 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-3b-instruct-v1:0",
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
+    "amazon.nova-lite-v1:0",
+    "amazon.nova-2-lite-v1:0",
+    "amazon.nova-pro-v1:0",
 ]
 
 

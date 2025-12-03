@@ -2702,3 +2702,36 @@ def test_empty_assistant_message_handling():
     finally:
         # Restore original modify_params setting
         litellm.modify_params = original_modify_params
+
+
+def test_is_nova_lite_2_model():
+    """Test the _is_nova_lite_2_model() method for detecting Nova 2 models."""
+    config = AmazonConverseConfig()
+    
+    # Test with amazon.nova-2-lite-v1:0
+    assert config._is_nova_lite_2_model("amazon.nova-2-lite-v1:0") is True
+    
+    # Test with regional variants
+    assert config._is_nova_lite_2_model("us.amazon.nova-2-lite-v1:0") is True
+    assert config._is_nova_lite_2_model("eu.amazon.nova-2-lite-v1:0") is True
+    assert config._is_nova_lite_2_model("apac.amazon.nova-2-lite-v1:0") is True
+    
+    # Test with other Nova 2 variants (pro, micro)
+    assert config._is_nova_lite_2_model("amazon.nova-pro-1-5-v1:0") is False
+    assert config._is_nova_lite_2_model("amazon.nova-micro-1-5-v1:0") is False
+    assert config._is_nova_lite_2_model("us.amazon.nova-pro-1-5-v1:0") is False
+    assert config._is_nova_lite_2_model("eu.amazon.nova-micro-1-5-v1:0") is False
+    
+    # Test with non-Nova-1.5 lite models (should return False)
+    assert config._is_nova_lite_2_model("amazon.nova-lite-v1:0") is False
+    assert config._is_nova_lite_2_model("amazon.nova-pro-v1:0") is False
+    assert config._is_nova_lite_2_model("amazon.nova-micro-v1:0") is False
+    
+    # Test with Nova v1:0 models (should return False)
+    assert config._is_nova_lite_2_model("us.amazon.nova-lite-v1:0") is False
+    assert config._is_nova_lite_2_model("eu.amazon.nova-pro-v1:0") is False
+    
+    # Test with completely different models (should return False)
+    assert config._is_nova_lite_2_model("anthropic.claude-3-5-sonnet-20240620-v1:0") is False
+    assert config._is_nova_lite_2_model("meta.llama3-70b-instruct-v1:0") is False
+    assert config._is_nova_lite_2_model("mistral.mistral-7b-instruct-v0:2") is False

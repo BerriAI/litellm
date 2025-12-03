@@ -18,11 +18,14 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
+from openai.types.batch import Metadata
+from openai.types.batch import Metadata as OpenAIBatchMetadata
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
+from litellm.llms.bedrock.batches.handler import BedrockBatchesHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.openai import OpenAIBatchesAPI
@@ -35,7 +38,11 @@ from litellm.types.llms.openai import (
     RetrieveBatchRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LiteLLMBatch, LlmProviders
+from litellm.types.utils import (
+    OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
+    LiteLLMBatch,
+    LlmProviders,
+)
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -100,7 +107,7 @@ async def acreate_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -148,7 +155,7 @@ def create_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -235,7 +242,7 @@ def create_batch(
             )
             return response
         api_base: Optional[str] = None
-        if custom_llm_provider == "openai":
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -350,7 +357,7 @@ def create_batch(
 @client
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -396,10 +403,10 @@ def _handle_retrieve_batch_providers_without_provider_config(
     litellm_params: dict,
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
 ):
     api_base: Optional[str] = None
-    if custom_llm_provider == "openai":
+    if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
         # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
         api_base = (
             optional_params.api_base
@@ -512,7 +519,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
 @client
 def retrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -576,7 +583,7 @@ def retrieve_batch(
             async_kwargs = kwargs.copy()
             async_kwargs.pop("aws_region_name", None)
 
-            return _handle_async_invoke_status(
+            return BedrockBatchesHandler._handle_async_invoke_status(
                 batch_id=batch_id,
                 aws_region_name=kwargs.get("aws_region_name", "us-east-1"),
                 logging_obj=litellm_logging_obj,
@@ -644,7 +651,7 @@ def retrieve_batch(
 async def alist_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "hosted_vllm", "vertex_ai"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -687,7 +694,7 @@ async def alist_batches(
 def list_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "hosted_vllm", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -727,7 +734,7 @@ def list_batches(
             timeout = 600.0
 
         _is_async = kwargs.pop("alist_batches", False) is True
-        if custom_llm_provider == "openai":
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -928,7 +935,7 @@ def cancel_batch(
 
         _is_async = kwargs.pop("acancel_batch", False) is True
         api_base: Optional[str] = None
-        if custom_llm_provider == "openai":
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
@@ -1043,19 +1050,20 @@ def _handle_async_invoke_status(
         )
 
         # Transform response to a LiteLLMBatch object
+        from litellm.types.llms.openai import BatchJobStatus
         from litellm.types.utils import LiteLLMBatch
 
         # Normalize status to lowercase (AWS returns 'Completed', 'Failed', etc.)
         aws_status_raw = status_response.get("status", "")
         aws_status_lower = aws_status_raw.lower()
         # Map AWS status values to LiteLLM expected values
-        status_mapping = {
+        status_mapping: dict[str, BatchJobStatus] = {
             "completed": "completed",
             "failed": "failed",
             "inprogress": "in_progress",
             "in_progress": "in_progress",
         }
-        normalized_status = status_mapping.get(aws_status_lower, aws_status_lower)
+        normalized_status: BatchJobStatus = status_mapping.get(aws_status_lower, "failed")  # Default to "failed" if unknown status
 
         # Get output S3 URI safely
         output_s3_uri = ""
@@ -1065,13 +1073,15 @@ def _handle_async_invoke_status(
             pass
         
         # Use BedrockBatchesConfig's timestamp parsing method (expects raw AWS status string)
+        import time
+
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
         created_at, in_progress_at, completed_at, failed_at, _, _ = BedrockBatchesConfig()._parse_timestamps_and_status(status_response, aws_status_raw)
         result = LiteLLMBatch(
             id=status_response["invocationArn"],
             object="batch",
             status=normalized_status,
-            created_at=created_at,
+            created_at=created_at or int(time.time()),  # Provide default timestamp if None
             in_progress_at=in_progress_at,
             completed_at=completed_at,
             failed_at=failed_at,

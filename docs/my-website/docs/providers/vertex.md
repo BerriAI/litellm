@@ -2089,180 +2089,36 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 | code-gecko@latest| `completion('code-gecko@latest', messages)` |
 
 
-## **Gemini TTS (Text-to-Speech) Audio Output**
+## **Embedding Models**
 
-:::info
-
-LiteLLM supports Gemini TTS models on Vertex AI that can generate audio responses using the OpenAI-compatible `audio` parameter format.
-
-:::
-
-### Supported Models
-
-LiteLLM supports Gemini TTS models with audio capabilities on Vertex AI (e.g. `vertex_ai/gemini-2.5-flash-preview-tts` and `vertex_ai/gemini-2.5-pro-preview-tts`). For the complete list of available TTS models and voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
-
-### Limitations
-
-:::warning
-
-**Important Limitations**:
-- Gemini TTS models only support the `pcm16` audio format
-- **Streaming support has not been added** to TTS models yet
-- The `modalities` parameter must be set to `['audio']` for TTS requests
-
-:::
-
-### Quick Start
+#### Usage - Embedding
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
 ```python
-from litellm import completion
-import json
+import litellm
+from litellm import embedding
+litellm.vertex_project = "hardy-device-38811" # Your Project ID
+litellm.vertex_location = "us-central1"  # proj location
 
-## GET CREDENTIALS
-file_path = 'path/to/vertex_ai_service_account.json'
-
-# Load the JSON file
-with open(file_path, 'r') as file:
-    vertex_credentials = json.load(file)
-
-# Convert to JSON string
-vertex_credentials_json = json.dumps(vertex_credentials)
-
-response = completion(
-    model="vertex_ai/gemini-2.5-flash-preview-tts",
-    messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
-    modalities=["audio"],  # Required for TTS models
-    audio={
-        "voice": "Kore",
-        "format": "pcm16"  # Required: must be "pcm16"
-    },
-    vertex_credentials=vertex_credentials_json
+response = embedding(
+    model="vertex_ai/textembedding-gecko",
+    input=["good morning from litellm"],
 )
-
 print(response)
 ```
-
 </TabItem>
-<TabItem value="proxy" label="PROXY">
 
-1. Setup config.yaml
+<TabItem value="proxy" label="LiteLLM PROXY">
 
-```yaml
-model_list:
-  - model_name: gemini-tts-flash
-    litellm_params:
-      model: vertex_ai/gemini-2.5-flash-preview-tts
-      vertex_project: "your-project-id"
-      vertex_location: "us-central1"
-      vertex_credentials: "/path/to/service_account.json"
-  - model_name: gemini-tts-pro
-    litellm_params:
-      model: vertex_ai/gemini-2.5-pro-preview-tts
-      vertex_project: "your-project-id"
-      vertex_location: "us-central1"
-      vertex_credentials: "/path/to/service_account.json"
-```
-
-2. Start proxy
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Make TTS request
-
-```bash
-curl http://0.0.0.0:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
-  -d '{
-    "model": "gemini-tts-flash",
-    "messages": [{"role": "user", "content": "Say hello in a friendly voice"}],
-    "modalities": ["audio"],
-    "audio": {
-      "voice": "Kore",
-      "format": "pcm16"
-    }
-  }'
-```
-
-</TabItem>
-</Tabs>
-
-### Advanced Usage
-
-You can combine TTS with other Gemini features:
-
-```python
-response = completion(
-    model="vertex_ai/gemini-2.5-pro-preview-tts",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant that speaks clearly."},
-        {"role": "user", "content": "Explain quantum computing in simple terms"}
-    ],
-    modalities=["audio"],
-    audio={
-        "voice": "Charon",
-        "format": "pcm16"
-    },
-    temperature=0.7,
-    max_tokens=150,
-    vertex_credentials=vertex_credentials_json
-)
-```
-
-For more information about Gemini's TTS capabilities and available voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
-
-## **Text to Speech APIs**
-
-:::info
-
-LiteLLM supports calling [Vertex AI Text to Speech API](https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech) in the OpenAI text to speech API format
-
-:::
-
-
-
-### Usage - Basic
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-
-**Sync Usage**
-
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-response = litellm.speech(
-    model="vertex_ai/",
-    input="hello what llm guardrail do you have",
-)
-response.stream_to_file(speech_file_path)
-```
-
-**Async Usage**
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-response = litellm.aspeech(
-    model="vertex_ai/",
-    input="hello what llm guardrail do you have",
-)
-response.stream_to_file(speech_file_path)
-```
-
-</TabItem>
-<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
 
 1. Add model to config.yaml
 ```yaml
 model_list:
-  - model_name: vertex-tts
+  - model_name: snowflake-arctic-embed-m-long-1731622468876
     litellm_params:
-      model: vertex_ai/ # Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
+      model: vertex_ai/<your-model-id>
       vertex_project: "adroit-crow-413218"
       vertex_location: "us-central1"
       vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
@@ -2277,161 +2133,465 @@ litellm_settings:
 $ litellm --config /path/to/config.yaml
 ```
 
+3. Make Request using OpenAI Python SDK, Langchain Python SDK
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="snowflake-arctic-embed-m-long-1731622468876", 
+    input = ["good morning from litellm", "this is another item"],
+)
+
+print(response)
+```
+
+
+</TabItem>
+</Tabs>
+
+#### Supported Embedding Models
+All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a0249f630a6792d49dffc2c5d9b7/model_prices_and_context_window.json#L835) are supported
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| text-embedding-004 | `embedding(model="vertex_ai/text-embedding-004", input)` | 
+| text-multilingual-embedding-002 | `embedding(model="vertex_ai/text-multilingual-embedding-002", input)` | 
+| textembedding-gecko | `embedding(model="vertex_ai/textembedding-gecko", input)` | 
+| textembedding-gecko-multilingual | `embedding(model="vertex_ai/textembedding-gecko-multilingual", input)` | 
+| textembedding-gecko-multilingual@001 | `embedding(model="vertex_ai/textembedding-gecko-multilingual@001", input)` | 
+| textembedding-gecko@001 | `embedding(model="vertex_ai/textembedding-gecko@001", input)` | 
+| textembedding-gecko@003 | `embedding(model="vertex_ai/textembedding-gecko@003", input)` | 
+| text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
+| text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
+| Fine-tuned OR Custom Embedding models | `embedding(model="vertex_ai/<your-model-id>", input)` | 
+
+### Supported OpenAI (Unified) Params
+
+| [param](../embedding/supported_embedding.md#input-params-for-litellmembedding) | type | [vertex equivalent](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api) |
+|-------|-------------|--------------------|
+| `input` | **string or List[string]** | `instances` |
+| `dimensions` | **int** | `output_dimensionality` |
+| `input_type` | **Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]** | `task_type` |
+
+#### Usage with OpenAI (Unified) Params
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = litellm.embedding(
+    model="vertex_ai/text-embedding-004",
+    input=["good morning from litellm", "gm"]
+    input_type = "RETRIEVAL_DOCUMENT",
+    dimensions=1,
+)
+```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY">
+
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="text-embedding-004", 
+    input = ["good morning from litellm", "gm"],
+    dimensions=1,
+    extra_body = {
+        "input_type": "RETRIEVAL_QUERY",
+    }
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+
+### Supported Vertex Specific Params
+
+| param | type |
+|-------|-------------|
+| `auto_truncate` | **bool** |
+| `task_type` | **Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]** |
+| `title` | **str** |
+
+#### Usage with Vertex Specific Params  (Use `task_type` and `title`)
+
+You can pass any vertex specific params to the embedding model. Just pass them to the embedding function like this: 
+
+[Relevant Vertex AI doc with all embedding params](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api#request_body)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = litellm.embedding(
+    model="vertex_ai/text-embedding-004",
+    input=["good morning from litellm", "gm"]
+    task_type = "RETRIEVAL_DOCUMENT",
+    title = "test",
+    dimensions=1,
+    auto_truncate=True,
+)
+```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY">
+
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="text-embedding-004", 
+    input = ["good morning from litellm", "gm"],
+    dimensions=1,
+    extra_body = {
+        "task_type": "RETRIEVAL_QUERY",
+        "auto_truncate": True,
+        "title": "test",
+    }
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+## **Multi-Modal Embeddings**
+
+
+Known Limitations:
+- Only supports 1 image / video / image per request
+- Only supports GCS or base64 encoded images / videos
+
+### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+Using GCS Images
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input="gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png" # will be sent as a gcs image
+)
+```
+
+Using base 64 encoded images
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input="data:image/jpeg;base64,..." # will be sent as a base64 encoded image
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: multimodalembedding@001
+    litellm_params:
+      model: vertex_ai/multimodalembedding@001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request use OpenAI Python SDK, Langchain Python SDK
+
+
+<Tabs>
+
+<TabItem value="OpenAI SDK" label="OpenAI SDK">
+
+Requests with GCS Image / Video URI
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png",
+)
+
+print(response)
+```
+
+Requests with base64 encoded images
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = "data:image/jpeg;base64,...",
+)
+
+print(response)
+```
+
+</TabItem>
+
+<TabItem value="langchain" label="Langchain">
+
+Requests with GCS Image / Video URI
+```python
+from langchain_openai import OpenAIEmbeddings
+
+embeddings_models = "multimodalembedding@001"
+
+embeddings = OpenAIEmbeddings(
+    model="multimodalembedding@001",
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-1234",  # type: ignore
+)
+
+
+query_result = embeddings.embed_query(
+    "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+)
+print(query_result)
+
+```
+
+Requests with base64 encoded images
+
+```python
+from langchain_openai import OpenAIEmbeddings
+
+embeddings_models = "multimodalembedding@001"
+
+embeddings = OpenAIEmbeddings(
+    model="multimodalembedding@001",
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-1234",  # type: ignore
+)
+
+
+query_result = embeddings.embed_query(
+    "data:image/jpeg;base64,..."
+)
+print(query_result)
+
+```
+
+</TabItem>
+
+</Tabs>
+</TabItem>
+
+
+<TabItem value="proxy-vtx" label="LiteLLM PROXY (Vertex SDK)">
+
+1. Add model to config.yaml
+```yaml
+default_vertex_config:
+  vertex_project: "adroit-crow-413218"
+  vertex_location: "us-central1"
+  vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
 3. Make Request use OpenAI Python SDK
 
-
 ```python
-import openai
+import vertexai
 
-client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+from vertexai.vision_models import Image, MultiModalEmbeddingModel, Video
+from vertexai.vision_models import VideoSegmentConfig
+from google.auth.credentials import Credentials
 
-# see supported values for "voice" on vertex here: 
-# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
-response = client.audio.speech.create(
-    model = "vertex-tts",
-    input="the quick brown fox jumped over the lazy dogs",
-    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'}
+
+LITELLM_PROXY_API_KEY = "sk-1234"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+
+import datetime
+
+class CredentialsWrapper(Credentials):
+    def __init__(self, token=None):
+        super().__init__()
+        self.token = token
+        self.expiry = None  # or set to a future date if needed
+        
+    def refresh(self, request):
+        pass
+    
+    def apply(self, headers, token=None):
+        headers['Authorization'] = f'Bearer {self.token}'
+
+    @property
+    def expired(self):
+        return False  # Always consider the token as non-expired
+
+    @property
+    def valid(self):
+        return True  # Always consider the credentials as valid
+
+credentials = CredentialsWrapper(token=LITELLM_PROXY_API_KEY)
+
+vertexai.init(
+    project="adroit-crow-413218",
+    location="us-central1",
+    api_endpoint=LITELLM_PROXY_BASE,
+    credentials = credentials,
+    api_transport="rest",
+   
 )
-print("response from proxy", response)
+
+model = MultiModalEmbeddingModel.from_pretrained("multimodalembedding")
+image = Image.load_from_file(
+    "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+)
+
+embeddings = model.get_embeddings(
+    image=image,
+    contextual_text="Colosseum",
+    dimension=1408,
+)
+print(f"Image Embedding: {embeddings.image_embedding}")
+print(f"Text Embedding: {embeddings.text_embedding}")
 ```
 
 </TabItem>
 </Tabs>
 
 
-### Usage - `ssml` as input
-
-Pass your `ssml` as input to the `input` param, if it contains `<speak>`, it will be automatically detected and passed as `ssml` to the Vertex AI API
-
-If you need to force your `input` to be passed as `ssml`, set `use_ssml=True`
+### Text + Image + Video Embeddings
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
-Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-
+Text + Image 
 
 ```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-
-
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-response = litellm.speech(
-    input=ssml,
-    model="vertex_ai/test",
-    voice={
-        "languageCode": "en-UK",
-        "name": "en-UK-Studio-O",
-    },
-    audioConfig={
-        "audioEncoding": "LINEAR22",
-        "speakingRate": "10",
-    },
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["hey", "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"] # will be sent as a gcs image
 )
-response.stream_to_file(speech_file_path)
 ```
 
-</TabItem>
+Text + Video 
 
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["hey", "gs://my-bucket/embeddings/supermarket-video.mp4"] # will be sent as a gcs image
+)
+```
+
+Image + Video 
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png", "gs://my-bucket/embeddings/supermarket-video.mp4"] # will be sent as a gcs image
+)
+```
+
+
+</TabItem>
 <TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: multimodalembedding@001
+    litellm_params:
+      model: vertex_ai/multimodalembedding@001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request use OpenAI Python SDK, Langchain Python SDK
+
+
+Text + Image 
 
 ```python
 import openai
 
 client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-# see supported values for "voice" on vertex here: 
-# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
-response = client.audio.speech.create(
-    model = "vertex-tts",
-    input=ssml,
-    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["hey", "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"],
 )
-print("response from proxy", response)
+
+print(response)
 ```
 
-</TabItem>
-</Tabs>
-
-
-### Forcing SSML Usage
-
-You can force the use of SSML by setting the `use_ssml` parameter to `True`. This is useful when you want to ensure that your input is treated as SSML, even if it doesn't contain the `<speak>` tags.
-
-Here are examples of how to force SSML usage:
-
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-
-
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-
-
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-response = litellm.speech(
-    input=ssml,
-    use_ssml=True,
-    model="vertex_ai/test",
-    voice={
-        "languageCode": "en-UK",
-        "name": "en-UK-Studio-O",
-    },
-    audioConfig={
-        "audioEncoding": "LINEAR22",
-        "speakingRate": "10",
-    },
-)
-response.stream_to_file(speech_file_path)
-```
-
-</TabItem>
-
-<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
-
+Text + Video 
 ```python
 import openai
 
 client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-# see supported values for "voice" on vertex here: 
-# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
-response = client.audio.speech.create(
-    model = "vertex-tts",
-    input=ssml, # pass as None since OpenAI SDK requires this param
-    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
-    extra_body={"use_ssml": True},
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["hey", "gs://my-bucket/embeddings/supermarket-video.mp4"],
 )
-print("response from proxy", response)
+
+print(response)
+```
+
+Image + Video 
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png", "gs://my-bucket/embeddings/supermarket-video.mp4"],
+)
+
+print(response)
 ```
 
 </TabItem>

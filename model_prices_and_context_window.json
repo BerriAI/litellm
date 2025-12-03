@@ -269,6 +269,71 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
+    "amazon.nova-2-lite-v1:0": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+    "apac.amazon.nova-2-lite-v1:0": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-06,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+    "eu.amazon.nova-2-lite-v1:0": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-06,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+    "us.amazon.nova-2-lite-v1:0": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-06,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+
     "amazon.nova-micro-v1:0": {
         "input_cost_per_token": 3.5e-08,
         "litellm_provider": "bedrock_converse",
@@ -10418,6 +10483,19 @@
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
         "source": "https://fireworks.ai/pricing",
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "fireworks_ai/accounts/fireworks/models/deepseek-v3p2": {
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://fireworks.ai/models/fireworks/deepseek-v3p2",
+        "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -24824,6 +24902,15 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true
+    },
+    "vertex_ai/chirp": {
+        "input_cost_per_character": 30e-06,
+        "litellm_provider": "vertex_ai",
+        "mode": "audio_speech",
+        "source": "https://cloud.google.com/text-to-speech/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
     },
     "vertex_ai/claude-3-5-haiku": {
         "input_cost_per_token": 1e-06,
