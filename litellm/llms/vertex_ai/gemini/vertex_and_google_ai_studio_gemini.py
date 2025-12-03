@@ -1091,6 +1091,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "thoughtSignature" in part:
                 part_copy = part.copy()
                 part_copy.pop("thoughtSignature")
+
+                text_content = part_copy.get("text")
+                if isinstance(text_content, str) and text_content.strip() == "":
+                    continue
+
                 thinking_blocks.append(
                     ChatCompletionThinkingBlock(
                         type="thinking",
