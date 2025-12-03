@@ -12,6 +12,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.utils import client
 
 if TYPE_CHECKING:
@@ -19,7 +20,6 @@ if TYPE_CHECKING:
     from a2a.types import (
         AgentCard,
         SendMessageRequest,
-        SendMessageResponse,
         SendStreamingMessageRequest,
         SendStreamingMessageResponse,
     )
@@ -43,7 +43,7 @@ async def asend_message(
     a2a_client: "A2AClientType",
     request: "SendMessageRequest",
     **kwargs: Any,
-) -> "SendMessageResponse":
+) -> LiteLLMSendMessageResponse:
     """
     Async: Send a message to an A2A agent.
 
@@ -55,7 +55,7 @@ async def asend_message(
         **kwargs: Additional arguments passed to the client decorator
 
     Returns:
-        SendMessageResponse from the agent
+        LiteLLMSendMessageResponse (wraps a2a SendMessageResponse with _hidden_params)
 
     Example:
         ```python
@@ -82,9 +82,12 @@ async def asend_message(
     """
     verbose_logger.info(f"A2A send_message request_id={request.id}")
 
-    response = await a2a_client.send_message(request)
+    a2a_response = await a2a_client.send_message(request)
 
     verbose_logger.info(f"A2A send_message completed, request_id={request.id}")
+
+    # Wrap in LiteLLM response type for _hidden_params support
+    response = LiteLLMSendMessageResponse.from_a2a_response(a2a_response)
 
     return response
 
@@ -94,7 +97,7 @@ def send_message(
     a2a_client: "A2AClientType",
     request: "SendMessageRequest",
     **kwargs: Any,
-) -> Union["SendMessageResponse", Coroutine[Any, Any, "SendMessageResponse"]]:
+) -> Union[LiteLLMSendMessageResponse, Coroutine[Any, Any, LiteLLMSendMessageResponse]]:
     """
     Sync: Send a message to an A2A agent.
 
@@ -106,7 +109,7 @@ def send_message(
         **kwargs: Additional arguments passed to the client decorator
 
     Returns:
-        SendMessageResponse from the agent
+        LiteLLMSendMessageResponse (wraps a2a SendMessageResponse with _hidden_params)
     """
     try:
         loop = asyncio.get_running_loop()

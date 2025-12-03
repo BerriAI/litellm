@@ -4,14 +4,15 @@ LiteLLM A2A Client class.
 Provides a class-based interface for A2A agent invocation.
 """
 
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Dict, Optional
+
+from litellm.types.agents import LiteLLMSendMessageResponse
 
 if TYPE_CHECKING:
     from a2a.client import A2AClient as A2AClientType
     from a2a.types import (
         AgentCard,
         SendMessageRequest,
-        SendMessageResponse,
         SendStreamingMessageRequest,
         SendStreamingMessageResponse,
     )
@@ -88,7 +89,7 @@ class A2AClient:
 
     async def send_message(
         self, request: "SendMessageRequest"
-    ) -> "SendMessageResponse":
+    ) -> LiteLLMSendMessageResponse:
         """Send a message to the A2A agent."""
         from litellm.a2a.main import asend_message
 

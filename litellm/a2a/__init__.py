@@ -46,6 +46,7 @@ from litellm.a2a.main import (
     create_a2a_client,
     send_message,
 )
+from litellm.types.agents import LiteLLMSendMessageResponse
 
 __all__ = [
     "A2AClient",
@@ -54,4 +55,5 @@ __all__ = [
     "asend_message_streaming",
     "aget_agent_card",
     "create_a2a_client",
+    "LiteLLMSendMessageResponse",
 ]
