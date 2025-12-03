@@ -662,6 +662,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.XAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "zai":
+        api_base = (
+            api_base
+            or get_secret_str("ZAI_API_BASE")
+            or "https://api.z.ai/api/paas/v4"
+        )
+        dynamic_api_key = api_key or get_secret_str("ZAI_API_KEY")
     elif custom_llm_provider == "together_ai":
         api_base = (
             api_base
@@ -833,6 +840,16 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.ClarifaiConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "ragflow":
+        full_model = f"ragflow/{model}"
+        (
+            api_base,
+            dynamic_api_key,
+            _,
+        ) = litellm.RAGFlowConfig()._get_openai_compatible_provider_info(
+            full_model, api_base, api_key, "ragflow"
+        )
+        model = full_model
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))
