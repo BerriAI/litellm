@@ -15,7 +15,6 @@ RUN apk add --no-cache \
     llvm \
     lld \
     gcc \
-    python3-dev \
     linux-headers \
     build-base \
     bash \
