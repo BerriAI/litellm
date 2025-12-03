@@ -153,23 +153,12 @@ class MlflowLogger(CustomLogger):
 
         try:
             for choice in response_obj.choices:
-                payload = None
-                delta = getattr(choice, "delta", None)
-                if delta is not None:
-                    payload = delta.model_dump(exclude_none=True)
-                else:
-                    message = getattr(choice, "message", None)
-                    if message is not None and hasattr(message, "model_dump"):
-                        payload = message.model_dump(exclude_none=True)
-                    elif hasattr(choice, "model_dump"):
-                        payload = choice.model_dump(exclude_none=True)
-                    else:
-                        payload = choice
-
                 span.add_event(
                     SpanEvent(
                         name="streaming_chunk",
-                        attributes={"delta": json.dumps(payload, default=str)},
+                        attributes={
+                            "delta": json.dumps(choice.delta.model_dump, default=str)
+                        },
                     )
                 )
         except Exception:

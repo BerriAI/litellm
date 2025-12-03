@@ -186,28 +186,3 @@ def test_mlflow_stream_handler_uses_async_complete_response():
             is final_response
         )
         assert "abc123" not in mlflow_logger._stream_id_to_span
-
-
-def test_mlflow_chunk_events_support_choices_without_delta():
-    modules = _mock_mlflow_modules()
-    with patch.dict("sys.modules", modules):
-        from litellm.integrations.mlflow import MlflowLogger
-
-        mlflow_logger = MlflowLogger()
-        span = MagicMock()
-
-        class DummyMessage:
-            def model_dump(self, exclude_none=True):
-                return {"content": "full"}
-
-        choice = MagicMock()
-        choice.delta = None
-        choice.message = DummyMessage()
-        response_obj = MagicMock()
-        response_obj.choices = [choice]
-
-        mlflow_logger._add_chunk_events(span=span, response_obj=response_obj)
-
-        span.add_event.assert_called_once()
-        event = span.add_event.call_args.args[0]
-        assert json.loads(event.attributes["delta"]) == {"content": "full"}
