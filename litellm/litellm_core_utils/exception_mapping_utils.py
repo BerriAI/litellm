@@ -15,6 +15,7 @@ from ..exceptions import (
     AuthenticationError,
     BadGatewayError,
     BadRequestError,
+    ConflictError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
     InternalServerError,
