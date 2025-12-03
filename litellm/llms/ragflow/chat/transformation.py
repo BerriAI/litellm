@@ -10,7 +10,7 @@ Model name format:
 - Agent: ragflow/agent/{agent_id}/{model_name}
 """
 
-from typing import Any, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import litellm
 from litellm.llms.openai.openai import OpenAIConfig
