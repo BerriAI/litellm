@@ -47,7 +47,6 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-# tiktoken is imported lazily when needed to avoid loading it at import time
 from pydantic import BaseModel
 from typing_extensions import overload
 
@@ -70,6 +69,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
+from litellm.litellm_core_utils.cached_imports import get_tiktoken_module
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -5247,9 +5247,8 @@ def text_completion(  # noqa: PLR0915
         # processing prompt - users can pass raw tokens to OpenAI Completion()
         if isinstance(prompt, list):
             import concurrent.futures
-            # Import tiktoken lazily to avoid loading it at import time
-            import tiktoken
 
+            tiktoken = get_tiktoken_module()
             tokenizer = tiktoken.encoding_for_model("text-davinci-003")
             ## if it's a 2d list - each element in the list is a text_completion() request
             if len(prompt) > 0 and isinstance(prompt[0], list):

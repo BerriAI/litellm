@@ -44,7 +44,6 @@ import aiohttp
 import dotenv
 import httpx
 import openai
-# tiktoken is imported lazily when needed to avoid loading it at import time
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
@@ -89,6 +88,7 @@ from litellm.litellm_core_utils.cached_imports import (
     get_coroutine_checker,
     get_litellm_logging_class,
     get_set_callbacks,
+    get_tiktoken_module,
 )
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,

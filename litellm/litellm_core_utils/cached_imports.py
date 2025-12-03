@@ -5,7 +5,7 @@ This module provides cached import functionality to avoid repeated imports
 inside functions that are critical to performance.
 """
 
-from typing import TYPE_CHECKING, Callable, Optional, Type
+from typing import TYPE_CHECKING, Any, Callable, Optional, Type
 
 # Type annotations for cached imports
 if TYPE_CHECKING:
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 _LiteLLMLogging: Optional[Type["Logging"]] = None
 _coroutine_checker: Optional["CoroutineChecker"] = None
 _set_callbacks: Optional[Callable] = None
+_tiktoken_module: Optional[Any] = None
 
 
 def get_litellm_logging_class() -> Type["Logging"]:
@@ -48,9 +49,25 @@ def get_set_callbacks() -> Callable:
     return _set_callbacks
 
 
+def get_tiktoken_module():
+    """
+    Get the cached tiktoken module, initializing if needed.
+    
+    This avoids repeated import overhead in hot paths like text_completion() 
+    and token_counter functions.
+    """
+    global _tiktoken_module
+    if _tiktoken_module is not None:
+        return _tiktoken_module
+    import tiktoken
+    _tiktoken_module = tiktoken
+    return _tiktoken_module
+
+
 def clear_cached_imports() -> None:
     """Clear all cached imports. Useful for testing or memory management."""
-    global _LiteLLMLogging, _coroutine_checker, _set_callbacks
+    global _LiteLLMLogging, _coroutine_checker, _set_callbacks, _tiktoken_module
     _LiteLLMLogging = None
     _coroutine_checker = None
     _set_callbacks = None
+    _tiktoken_module = None
