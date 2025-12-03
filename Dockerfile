@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -12,11 +12,9 @@ WORKDIR /app
 USER root
 
 # Install build dependencies
-RUN apk add --no-cache gcc python3-dev openssl openssl-dev
+RUN apk add --no-cache bash gcc py3-pip python3 python3-dev openssl openssl-dev
 
-
-RUN pip install --upgrade pip>=24.3.1 && \
-    pip install build
+RUN python -m pip install build
 
 # Copy the current directory contents into the container at /app
 COPY . .
@@ -48,10 +46,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies
-RUN apk add --no-cache openssl tzdata
-
-# Upgrade pip to fix CVE-2025-8869
-RUN pip install --upgrade pip>=24.3.1
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
