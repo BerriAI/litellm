@@ -206,19 +206,34 @@ def _build_scim_metadata(
 
 async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionResult:
     """
-    Extract member IDs from SCIMGroup, creating users that don't exist.
+    Extract member IDs from SCIMGroup, validating that all users exist.
+
+    Per SCIM 2.0 protocol, groups should only reference existing users.
+    Users must be created via POST /Users before being added to groups.
 
     Returns:
-        GroupMemberExtractionResult with existing members, created users, and all member IDs
+        GroupMemberExtractionResult with existing members and all member IDs
+
+    Raises:
+        HTTPException: If any member user does not exist (400 Bad Request)
     """
     prisma_client = await _get_prisma_client_or_raise_exception()
     existing_member_ids = []
-    created_users = []
+    created_users = []  # Always empty - users must exist before group membership
     all_member_ids = []
 
     if group.members:
         for member in group.members:
             user_id = member.value
+
+            # Validate user_id is not empty
+            if not user_id or not user_id.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Invalid member: user ID cannot be empty."
+                    },
+                )
 
             # Check if user exists
             user = await prisma_client.db.litellm_usertable.find_unique(
@@ -229,15 +244,16 @@ async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionRe
                 existing_member_ids.append(user_id)
                 all_member_ids.append(user_id)
             else:
-                # Create the user if they don't exist using our helper
-                created_user = await _create_user_if_not_exists(
-                    user_id=user_id, created_via="scim_group_membership"
+                # User doesn't exist - reject per SCIM 2.0 protocol
+                # This prevents security issues where users not assigned to app
+                # get provisioned via group membership
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"User with ID '{user_id}' does not exist. "
+                                 "Please create the user first via POST /Users before adding to group."
+                    },
                 )
-
-                if created_user:
-                    created_users.append(created_user)
-                    all_member_ids.append(user_id)
-                # If creation failed, user is skipped (logged in helper)
 
     return GroupMemberExtractionResult(
         existing_member_ids=existing_member_ids,
@@ -1024,7 +1040,7 @@ async def create_group(
                 detail={"error": f"Group already exists with ID: {team_id}"},
             )
 
-        # Extract and process group members (creating users that don't exist)
+        # Extract and validate group members (all users must exist)
         member_result = await _extract_group_member_ids(group)
         members_with_roles = [
             Member(user_id=member_id, role="user")
@@ -1072,7 +1088,7 @@ async def update_group(
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_team = await _check_team_exists(group_id)
 
-        # Extract and process group members (creating users that don't exist)
+        # Extract and validate group members (all users must exist)
         member_result = await _extract_group_member_ids(group)
         verbose_proxy_logger.debug(
             f"SCIM PUT GROUP all_member_ids: {member_result.all_member_ids}"
@@ -1189,23 +1205,32 @@ async def _process_group_patch_operations(
         elif path.startswith("members"):
             # Handle member operations
             member_values = _extract_group_values(value)
-            # Create users that don't exist and get all valid member IDs
+            # Validate all users exist - per SCIM 2.0, users must exist before group membership
             valid_members = []
             for member_id in member_values:
+                # Validate member_id is not empty
+                if not member_id or not member_id.strip():
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Invalid member: user ID cannot be empty."
+                        },
+                    )
+
                 user = await prisma_client.db.litellm_usertable.find_unique(
                     where={"user_id": member_id}
                 )
                 if user:
                     valid_members.append(member_id)
                 else:
-                    # Create the user if they don't exist using our helper
-                    created_user = await _create_user_if_not_exists(
-                        user_id=member_id, created_via="scim_group_patch"
+                    # User doesn't exist - reject per SCIM 2.0 protocol
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"User with ID '{member_id}' does not exist. "
+                                     "Please create the user first via POST /Users before adding to group."
+                        },
                     )
-
-                    if created_user:
-                        valid_members.append(member_id)
-                    # If creation failed, user is skipped (logged in helper)
 
             if op_type == "replace":
                 final_members = set(valid_members)
