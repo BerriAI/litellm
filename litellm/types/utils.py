@@ -2873,6 +2873,16 @@ class SpecialEnums(Enum):
         "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
     )
 
+    # Batch ID security - encrypts batch IDs with user/team ownership info
+    LITELLM_MANAGED_BATCH_ID_COMPLETE_STR = (
+        "litellm_proxy:batch:batch_id:{};user_id:{};team_id:{}"
+    )
+
+    # File ID security - encrypts file IDs with user/team ownership info (used in batch responses)
+    LITELLM_MANAGED_FILE_ID_SECURITY_STR = (
+        "litellm_proxy:file:file_id:{};user_id:{};team_id:{}"
+    )
+
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
