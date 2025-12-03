@@ -19,6 +19,8 @@ import {
 } from "@tremor/react";
 import { Form } from "antd";
 import { UploadProps } from "antd/es/upload";
+import { useEffect, useState } from "react";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
 import AddCredentialsTab from "./AddCredentialModal";
 import EditCredentialsModal from "./EditCredentialModal";
