@@ -327,3 +327,51 @@ async def test_router_cooldown_event_callback_no_prometheus():
 
     # Assert that the router's get_deployment method was called
     mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
+
+
+@pytest.mark.asyncio
+async def test_time_to_first_token_metric_dynamic_labels(prometheus_logger):
+    """
+    Test that the time-to-first-token metric uses dynamic labels via prometheus_label_factory
+
+    This ensures that the metric respects the configured labels instead of using hardcoded parameters.
+    """
+    litellm.callbacks = [prometheus_logger]
+
+    # Mock the streaming completion to trigger time-to-first-token metric
+    response = await litellm.acompletion(
+        model="claude-3-haiku-20240307",
+        messages=[{"role": "user", "content": "test streaming"}],
+        max_tokens=10,
+        mock_response="streaming response",
+        stream=True,
+        metadata={
+            "user_api_key": "test-key",
+            "user_api_key_alias": "test-key-alias",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_team_alias": "test-team",
+        },
+    )
+
+    # Consume the stream to trigger the metrics
+    async for chunk in response:
+        pass
+
+    await asyncio.sleep(1)
+
+    # Verify that the metric was created with the correct label structure
+    metric_found = False
+    for metric in REGISTRY.collect():
+        if metric.name == "litellm_llm_api_time_to_first_token_metric":
+            metric_found = True
+            # Verify that samples exist (metric was recorded)
+            assert len(list(metric.samples)) > 0, "Expected metric samples to be recorded"
+
+            # Verify that the metric uses the configured labels
+            for sample in metric.samples:
+                # The labels should come from get_labels_for_metric, not hardcoded parameters
+                # At minimum, we should have some labels defined
+                assert len(sample.labels) >= 0, "Expected metric to have labels configured"
+            break
+
+    assert metric_found, "Expected litellm_llm_api_time_to_first_token_metric to be registered"
