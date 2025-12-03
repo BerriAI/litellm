@@ -12,6 +12,7 @@ Pattern Overview:
 4. Apply guardrail responses back to the original structure
 """
 
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
@@ -245,6 +246,115 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
         return response
+
+    async def process_output_streaming_response(
+        self,
+        responses_so_far: List[Any],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
+    ) -> List[Any]:
+        """
+        Process output streaming response by applying guardrails to text content.
+
+        Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
+        """
+        string_so_far = self.get_streaming_string_so_far(responses_so_far)
+        _, _ = (
+            await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
+                texts=[string_so_far],
+                request_data={},
+                input_type="response",
+                logging_obj=litellm_logging_obj,
+                images=None,
+            )
+        )
+        return responses_so_far
+
+    def get_streaming_string_so_far(self, responses_so_far: List[Any]) -> str:
+        """
+        Parse streaming responses and extract accumulated text content.
+
+        Handles two formats:
+        1. Raw bytes in SSE (Server-Sent Events) format from Anthropic API
+        2. Parsed dict objects (for backwards compatibility)
+
+        SSE format example:
+            b'event: content_block_delta\\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" curious"}}\\n\\n'
+
+        Dict format example:
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "text_delta",
+                    "text": " curious"
+                }
+            }
+        """
+        text_so_far = ""
+        for response in responses_so_far:
+            # Handle raw bytes in SSE format
+            if isinstance(response, bytes):
+                text_so_far += self._extract_text_from_sse(response)
+            # Handle already-parsed dict format
+            elif isinstance(response, dict):
+                delta = response.get("delta") if response.get("delta") else None
+                if delta and delta.get("type") == "text_delta":
+                    text = delta.get("text", "")
+                    if text:
+                        text_so_far += text
+        return text_so_far
+
+    def _extract_text_from_sse(self, sse_bytes: bytes) -> str:
+        """
+        Extract text content from Server-Sent Events (SSE) format.
+
+        Args:
+            sse_bytes: Raw bytes in SSE format
+
+        Returns:
+            Accumulated text from all content_block_delta events
+        """
+        text = ""
+        try:
+            # Decode bytes to string
+            sse_string = sse_bytes.decode("utf-8")
+
+            # Split by double newline to get individual events
+            events = sse_string.split("\n\n")
+
+            for event in events:
+                if not event.strip():
+                    continue
+
+                # Parse event lines
+                lines = event.strip().split("\n")
+                event_type = None
+                data_line = None
+
+                for line in lines:
+                    if line.startswith("event:"):
+                        event_type = line[6:].strip()
+                    elif line.startswith("data:"):
+                        data_line = line[5:].strip()
+
+                # Only process content_block_delta events
+                if event_type == "content_block_delta" and data_line:
+                    try:
+                        data = json.loads(data_line)
+                        delta = data.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            text += delta.get("text", "")
+                    except json.JSONDecodeError:
+                        verbose_proxy_logger.warning(
+                            f"Failed to parse JSON from SSE data: {data_line}"
+                        )
+
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error extracting text from SSE: {e}")
+
+        return text
 
     def _has_text_content(self, response: "AnthropicMessagesResponse") -> bool:
         """
