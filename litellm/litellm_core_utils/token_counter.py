@@ -73,7 +73,12 @@ def get_modified_max_tokens(
         if max_output_tokens is None:
             return user_max_tokens
 
+        import time
+        print(f"[DEBUG] get_modified_max_tokens: About to call token_counter. Messages: {len(messages) if messages else 0}, total chars: {sum(len(str(m.get('content', ''))) for m in messages) if messages else 0}")
+        start_time = time.perf_counter()
         input_tokens = litellm.token_counter(model=base_model, messages=messages)
+        elapsed = time.perf_counter() - start_time
+        print(f"[DEBUG] get_modified_max_tokens: token_counter completed in {elapsed:.3f}s. Tokens: {input_tokens}")
 
         # token buffer
         if buffer_perc is None:
@@ -374,6 +379,9 @@ def token_counter(
     Returns:
     int: The number of tokens in the text.
     """
+    import time
+    start_time = time.perf_counter()
+    
     from litellm.utils import convert_list_message_to_dict
 
     #########################################################
@@ -385,6 +393,15 @@ def token_counter(
     if litellm.disable_token_counter is True:
         return 0
 
+    # DEBUG: Print input size
+    if text:
+        text_len = len(text) if isinstance(text, str) else sum(len(t) for t in text if isinstance(t, str))
+        print(f"[DEBUG] token_counter called with TEXT. Length: {text_len:,} chars, model: {model}")
+    elif messages:
+        msg_count = len(messages)
+        total_chars = sum(len(str(m.get('content', ''))) for m in messages)
+        print(f"[DEBUG] token_counter called with MESSAGES. Count: {msg_count}, total chars: {total_chars:,}, model: {model}")
+    
     verbose_logger.debug(
         f"messages in token_counter: {messages}, text in token_counter: {text}"
     )
@@ -401,16 +418,20 @@ def token_counter(
         elif isinstance(text, str):
             text_to_count = text
         count_function = _get_count_function(model, custom_tokenizer)
+        print(f"[DEBUG] About to call count_function(text). Text length: {len(text_to_count):,}")
         num_tokens = count_function(text_to_count)
+        print(f"[DEBUG] count_function(text) returned: {num_tokens:,} tokens")
 
     elif messages is not None:
         new_messages = cast(
             List[AllMessageValues], convert_list_message_to_dict(messages)
         )
         params = _MessageCountParams(model, custom_tokenizer)
+        print(f"[DEBUG] About to call _count_messages(). Messages: {len(new_messages)}, total chars: {sum(len(str(m.get('content', ''))) for m in new_messages):,}")
         num_tokens = _count_messages(
             params, new_messages, use_default_image_token_count, default_token_count
         )
+        print(f"[DEBUG] _count_messages() returned: {num_tokens:,} tokens")
         if count_response_tokens is False:
             includes_system_message = any(
                 [message.get("role", None) == "system" for message in new_messages]
@@ -422,6 +443,8 @@ def token_counter(
     else:
         raise ValueError("Either text or messages must be provided")
 
+    elapsed = time.perf_counter() - start_time
+    print(f"[DEBUG] token_counter completed in {elapsed:.3f}s. Tokens: {num_tokens}")
     return num_tokens
 
 
@@ -440,10 +463,13 @@ def _count_messages(
         use_default_image_token_count (bool): When True, will NOT make a GET request to the image URL and instead return the default image dimensions.
         default_token_count (Optional[int]): The default number of tokens to return for a message block, if an error occurs.
     """
+    import time
     num_tokens = 0
     if len(messages) == 0:
         return num_tokens
-    for message in messages:
+    print(f"[DEBUG] _count_messages: Processing {len(messages)} message(s)")
+    for msg_idx, message in enumerate(messages):
+        print(f"[DEBUG] _count_messages: Processing message {msg_idx + 1}/{len(messages)}")
         num_tokens += params.tokens_per_message
         for key, value in message.items():
             if value is None:
@@ -465,16 +491,24 @@ def _count_messages(
                         f"Unsupported type {type(value)} for key tool_calls in message {message}"
                     )
             elif isinstance(value, str):
+                print(f"[DEBUG] _count_messages: About to tokenize string field '{key}', length: {len(value):,}")
+                start = time.perf_counter()
                 num_tokens += params.count_function(value)
+                elapsed = time.perf_counter() - start
+                print(f"[DEBUG] _count_messages: Tokenized '{key}' in {elapsed:.3f}s")
                 if key == "name":
                     num_tokens += params.tokens_per_name
             elif key == "content" and isinstance(value, List):
+                print(f"[DEBUG] _count_messages: About to tokenize content list with {len(value)} items")
+                start = time.perf_counter()
                 num_tokens += _count_content_list(
                     params.count_function,
                     value,
                     use_default_image_token_count,
                     default_token_count,
                 )
+                elapsed = time.perf_counter() - start
+                print(f"[DEBUG] _count_messages: Tokenized content list in {elapsed:.3f}s")
             else:
                 # Skip unsupported keys instead of raising an error
                 continue
@@ -528,8 +562,14 @@ def _get_count_function(
         if tokenizer_json["type"] == "huggingface_tokenizer":
 
             def count_tokens(text: str) -> int:
+                import time
+                print(f"[DEBUG] huggingface count_tokens: About to encode {len(text):,} chars")
+                start = time.perf_counter()
                 enc = tokenizer_json["tokenizer"].encode(text)
-                return len(enc.ids)
+                elapsed = time.perf_counter() - start
+                result = len(enc.ids)
+                print(f"[DEBUG] huggingface count_tokens: Encoded {result:,} tokens in {elapsed:.3f}s")
+                return result
 
         elif tokenizer_json["type"] == "openai_tokenizer":
             model_to_use = _fix_model_name(model)  # type: ignore
@@ -543,14 +583,28 @@ def _get_count_function(
                 encoding = tiktoken.get_encoding("cl100k_base")
 
             def count_tokens(text: str) -> int:
-                return len(encoding.encode(text, disallowed_special=()))
+                import time
+                print(f"[DEBUG] tiktoken count_tokens: About to encode {len(text):,} chars with {encoding.name}")
+                start = time.perf_counter()
+                tokens = encoding.encode(text, disallowed_special=())
+                elapsed = time.perf_counter() - start
+                result = len(tokens)
+                print(f"[DEBUG] tiktoken count_tokens: Encoded {result:,} tokens in {elapsed:.3f}s")
+                return result
 
         else:
             raise ValueError("Unsupported tokenizer type")
     else:
 
         def count_tokens(text: str) -> int:
-            return len(default_encoding.encode(text, disallowed_special=()))
+            import time
+            print(f"[DEBUG] default_encoding count_tokens: About to encode {len(text):,} chars")
+            start = time.perf_counter()
+            tokens = default_encoding.encode(text, disallowed_special=())
+            elapsed = time.perf_counter() - start
+            result = len(tokens)
+            print(f"[DEBUG] default_encoding count_tokens: Encoded {result:,} tokens in {elapsed:.3f}s")
+            return result
 
     return count_tokens
 
@@ -700,19 +754,33 @@ def _count_content_list(
     """
     Recursively count tokens from a list of content blocks.
     """
+    import time
     try:
         num_tokens = 0
-        for c in content_list:
+        print(f"[DEBUG] _count_content_list: Processing {len(content_list)} content item(s)")
+        for idx, c in enumerate(content_list):
+            print(f"[DEBUG] _count_content_list: Processing item {idx + 1}/{len(content_list)}")
             if isinstance(c, str):
+                print(f"[DEBUG] _count_content_list: Item is string, length: {len(c):,}")
+                start = time.perf_counter()
                 num_tokens += count_function(c)
+                elapsed = time.perf_counter() - start
+                print(f"[DEBUG] _count_content_list: Tokenized string in {elapsed:.3f}s")
             elif c["type"] == "text":
-                num_tokens += count_function(c.get("text", ""))
+                text_content = c.get("text", "")
+                print(f"[DEBUG] _count_content_list: Item is text block, length: {len(text_content):,}")
+                start = time.perf_counter()
+                num_tokens += count_function(text_content)
+                elapsed = time.perf_counter() - start
+                print(f"[DEBUG] _count_content_list: Tokenized text block in {elapsed:.3f}s")
             elif c["type"] == "image_url":
+                print(f"[DEBUG] _count_content_list: Item is image_url")
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(
                     image_url, use_default_image_token_count
                 )
             elif c["type"] in ("tool_use", "tool_result"):
+                print(f"[DEBUG] _count_content_list: Item is {c['type']}")
                 num_tokens += _count_anthropic_content(
                     c,
                     count_function,

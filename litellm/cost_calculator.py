@@ -924,15 +924,28 @@ def completion_cost(  # noqa: PLR0915
                         )
                         region_name = hidden_params.get("region_name", region_name)
                 else:
+                    import time
                     if model is None:
                         raise ValueError(
                             f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
                         )
                     if len(messages) > 0:
+                        print(f"[DEBUG] cost_calculator: About to call token_counter for messages. Message count: {len(messages)}, total chars: {sum(len(str(m.get('content', ''))) for m in messages)}")
+                        start_time = time.perf_counter()
                         prompt_tokens = token_counter(model=model, messages=messages)
+                        elapsed = time.perf_counter() - start_time
+                        print(f"[DEBUG] cost_calculator: token_counter for messages completed in {elapsed:.3f}s. Tokens: {prompt_tokens}")
                     elif len(prompt) > 0:
+                        print(f"[DEBUG] cost_calculator: About to call token_counter for prompt. Prompt length: {len(prompt)}")
+                        start_time = time.perf_counter()
                         prompt_tokens = token_counter(model=model, text=prompt)
+                        elapsed = time.perf_counter() - start_time
+                        print(f"[DEBUG] cost_calculator: token_counter for prompt completed in {elapsed:.3f}s. Tokens: {prompt_tokens}")
+                    print(f"[DEBUG] cost_calculator: About to call token_counter for completion. Completion length: {len(completion)}")
+                    start_time = time.perf_counter()
                     completion_tokens = token_counter(model=model, text=completion)
+                    elapsed = time.perf_counter() - start_time
+                    print(f"[DEBUG] cost_calculator: token_counter for completion completed in {elapsed:.3f}s. Tokens: {completion_tokens}")
 
                 if model is None:
                     raise ValueError(
