@@ -820,6 +820,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         "method": request.method,
         "headers": _headers,
         "body": copy.copy(data),  # use copy instead of deepcopy
+        "is_disconnected": request.state.is_disconnected if hasattr(request.state, "is_disconnected") else request.is_disconnected,
     }
 
     safe_add_api_version_from_query_params(data, request)

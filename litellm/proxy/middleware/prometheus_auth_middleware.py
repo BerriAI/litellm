@@ -25,8 +25,11 @@ class PrometheusAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
-        # Check if this is a request to the metrics endpoint
+        # BaseHTTPMiddleware issue https://github.com/Kludex/starlette/discussions/2094#discussioncomment-9096047
+        if not hasattr(request.state, "is_disconnected"):
+            request.state.is_disconnected = request.is_disconnected
 
+        # Check if this is a request to the metrics endpoint
         if self._is_prometheus_metrics_endpoint(request):
             if self._should_run_auth_on_metrics_endpoint() is True:
                 try:

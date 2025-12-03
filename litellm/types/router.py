@@ -182,6 +182,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: Optional[str] = None
+    proxy_server_request: Optional[dict] = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: Optional[str] = None

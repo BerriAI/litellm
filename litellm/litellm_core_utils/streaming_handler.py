@@ -90,6 +90,7 @@ class CustomStreamWrapper:
         self.merge_reasoning_content_in_choices: bool = (
             litellm_params.merge_reasoning_content_in_choices or False
         )
+        self.proxy_server_request = litellm_params.proxy_server_request or {}
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
         self.thinking_content = ""
@@ -1877,7 +1878,13 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True:
                         processed_chunk = await self._call_post_streaming_deployment_hook(processed_chunk)
                     
+                    if self.proxy_server_request.get("is_disconnected"):
+                        if await self.proxy_server_request["is_disconnected"]():
+                            break
+
                     return processed_chunk
+
+                await self.completion_stream.close()
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
                 # example - boto3 bedrock llms
