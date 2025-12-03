@@ -10,7 +10,16 @@ WORKDIR /app
 
 # Install build dependencies including Node.js for UI build
 USER root
-RUN apk add --no-cache build-base bash nodejs npm \
+RUN apk add --no-cache \
+    clang \
+    llvm \
+    lld \
+    gcc \
+    linux-headers \
+    build-base \
+    bash \
+    nodejs \
+    npm \
   && pip install --no-cache-dir --upgrade pip build
 
 # Copy project files

@@ -141,6 +141,7 @@ const sidebars = {
             "proxy/quick_start",
             "proxy/cli",
             "proxy/debugging",
+            "proxy/error_diagnosis",
             "proxy/deploy",
             "proxy/health",
             "proxy/master_key_rotations",
@@ -521,6 +522,7 @@ const sidebars = {
             "providers/vertex_self_deployed",
             "providers/vertex_embedding",
             "providers/vertex_image",
+            "providers/vertex_speech",
             "providers/vertex_batch",
             "providers/vertex_ocr",
           ]

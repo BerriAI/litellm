@@ -2660,6 +2660,12 @@ class LlmProviders(str, Enum):
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
 
+# File and Batch API providers that are OpenAI-compatible
+OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
+    LlmProviders.OPENAI.value,
+    LlmProviders.HOSTED_VLLM.value,
+}
+
 
 class SearchProviders(str, Enum):
     """
