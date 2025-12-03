@@ -387,10 +387,12 @@ class OllamaChatConfig(BaseConfig):
         )
 
         response_json = raw_response.json()
-
+        print("RESPONSE JSON:", response_json)
         ## RESPONSE OBJECT
 
         model_response.choices[0].finish_reason = "stop"
+        if response_json.get("logprobs") :
+            model_response.choices[0].logprobs ={"content": response_json.get("logprobs") }
         response_json_message = response_json.get("message")
         if response_json_message is not None:
             if "thinking" in response_json_message:
@@ -446,11 +448,6 @@ class OllamaChatConfig(BaseConfig):
         completion_tokens = response_json.get(
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),
-        )
-        setattr(
-            model_response,
-            "logprobs",
-            response_json.get("logprobs", None),
         )
         setattr(
             model_response,
