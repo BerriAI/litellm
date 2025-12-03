@@ -185,5 +185,5 @@ class RAGIngestRequest(BaseModel):
     file_id: Optional[str] = None  # Existing file ID
     ingest_options: Dict[str, Any]  # RAGIngestOptions as dict for flexibility
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow")  # Allow additional fields
 
