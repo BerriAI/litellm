@@ -19,10 +19,9 @@ import {
 } from "@tremor/react";
 import { Form } from "antd";
 import { UploadProps } from "antd/es/upload";
-import React, { useEffect, useState } from "react";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
-import AddCredentialsTab from "./add_credentials_tab";
+import AddCredentialsTab from "./AddCredentialModal";
+import EditCredentialsModal from "./EditCredentialModal";
 interface CredentialsPanelProps {
   accessToken: string | null;
   uploadProps: UploadProps;
@@ -62,10 +61,10 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
       },
     };
 
-    const response = await credentialUpdateCall(accessToken, values.credential_name, newCredential);
+    await credentialUpdateCall(accessToken, values.credential_name, newCredential);
     NotificationsManager.success("Credential updated successfully");
     setIsUpdateModalOpen(false);
-    fetchCredentials(accessToken);
+    await fetchCredentials(accessToken);
   };
 
   const handleAddCredential = async (values: any) => {
@@ -86,10 +85,10 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
     };
 
     // Add to list and close modal
-    const response = await credentialCreateCall(accessToken, newCredential);
+    await credentialCreateCall(accessToken, newCredential);
     NotificationsManager.success("Credential added successfully");
     setIsAddModalOpen(false);
-    fetchCredentials(accessToken);
+    await fetchCredentials(accessToken);
   };
 
   useEffect(() => {
@@ -201,23 +200,18 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
       {isAddModalOpen && (
         <AddCredentialsTab
           onAddCredential={handleAddCredential}
-          isVisible={isAddModalOpen}
+          open={isAddModalOpen}
           onCancel={() => setIsAddModalOpen(false)}
           uploadProps={uploadProps}
-          addOrEdit="add"
-          onUpdateCredential={handleUpdateCredential}
-          existingCredential={null}
         />
       )}
       {isUpdateModalOpen && (
-        <AddCredentialsTab
-          onAddCredential={handleAddCredential}
-          isVisible={isUpdateModalOpen}
+        <EditCredentialsModal
+          open={isUpdateModalOpen}
           existingCredential={selectedCredential}
           onUpdateCredential={handleUpdateCredential}
           uploadProps={uploadProps}
           onCancel={() => setIsUpdateModalOpen(false)}
-          addOrEdit="edit"
         />
       )}
 
