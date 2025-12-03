@@ -246,6 +246,93 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock",
                 )
 
+    def _is_nova_lite_2_model(self, model: str) -> bool:
+        """
+        Check if the model is a Nova Lite 2 model that supports reasoningConfig.
+
+        Nova Lite 2 models use a different reasoning configuration structure compared to
+        Anthropic's thinking parameter and GPT-OSS's reasoning_effort parameter.
+
+        Supported models:
+        - amazon.nova-2-lite-v1:0
+        - us.amazon.nova-2-lite-v1:0
+        - eu.amazon.nova-2-lite-v1:0
+        - apac.amazon.nova-2-lite-v1:0
+
+        Args:
+            model: The model identifier
+
+        Returns:
+            True if the model is a Nova Lite 2 model, False otherwise
+
+        Examples:
+            >>> config = AmazonConverseConfig()
+            >>> config._is_nova_lite_2_model("amazon.nova-2-lite-v1:0")
+            True
+            >>> config._is_nova_lite_2_model("us.amazon.nova-2-lite-v1:0")
+            True
+            >>> config._is_nova_lite_2_model("amazon.nova-pro-1-5-v1:0")
+            False
+            >>> config._is_nova_lite_2_model("amazon.nova-pro-v1:0")
+            False
+        """
+        # Remove regional prefix if present (us., eu., apac.)
+        model_without_region = model
+        for prefix in ["us.", "eu.", "apac."]:
+            if model.startswith(prefix):
+                model_without_region = model[len(prefix) :]
+                break
+
+        # Check if the model is specifically Nova Lite 2
+        return "nova-2-lite" in model_without_region
+
+    def _transform_reasoning_effort_to_reasoning_config(
+        self, reasoning_effort: str
+    ) -> dict:
+        """
+        Transform reasoning_effort parameter to Nova 2 reasoningConfig structure.
+
+        Nova 2 models use a reasoningConfig structure in additionalModelRequestFields
+        that differs from both Anthropic's thinking parameter and GPT-OSS's reasoning_effort.
+
+        Args:
+            reasoning_effort: The reasoning effort level, must be "low" or "high"
+
+        Returns:
+            dict: A dictionary containing the reasoningConfig structure:
+                {
+                    "reasoningConfig": {
+                        "type": "enabled",
+                        "maxReasoningEffort": "low" | "medium" |"high"
+                    }
+                }
+
+        Raises:
+            BadRequestError: If reasoning_effort is not "low", "medium" or "high"
+
+        Examples:
+            >>> config = AmazonConverseConfig()
+            >>> config._transform_reasoning_effort_to_reasoning_config("high")
+            {'reasoningConfig': {'type': 'enabled', 'maxReasoningEffort': 'high'}}
+            >>> config._transform_reasoning_effort_to_reasoning_config("low")
+            {'reasoningConfig': {'type': 'enabled', 'maxReasoningEffort': 'low'}}
+        """
+        valid_values = ["low", "medium", "high"]
+        if reasoning_effort not in valid_values:
+            raise litellm.exceptions.BadRequestError(
+                message=f"Invalid reasoning_effort value '{reasoning_effort}' for Nova 2 models. "
+                f"Supported values: {valid_values}",
+                model="amazon.nova-2-lite-v1:0",
+                llm_provider="bedrock_converse",
+            )
+
+        return {
+            "reasoningConfig": {
+                "type": "enabled",
+                "maxReasoningEffort": reasoning_effort,
+            }
+        }
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         from litellm.utils import supports_function_calling
 
@@ -298,6 +385,10 @@ class AmazonConverseConfig(BaseConfig):
             supported_params.append("tool_choice")
 
         if "gpt-oss" in model:
+            supported_params.append("reasoning_effort")
+        elif self._is_nova_lite_2_model(model):
+            # Nova Lite 2 models support reasoning_effort (transformed to reasoningConfig)
+            # These models use a different reasoning structure than Anthropic's thinking parameter
             supported_params.append("reasoning_effort")
         elif (
             "claude-3-7" in model
@@ -564,6 +655,12 @@ class AmazonConverseConfig(BaseConfig):
                     # GPT-OSS models: keep reasoning_effort as-is
                     # It will be passed through to additionalModelRequestFields
                     optional_params["reasoning_effort"] = value
+                elif self._is_nova_lite_2_model(model):
+                    # Nova Lite 2 models: transform to reasoningConfig
+                    reasoning_config = (
+                        self._transform_reasoning_effort_to_reasoning_config(value)
+                    )
+                    optional_params.update(reasoning_config)
                 else:
                     # Anthropic and other models: convert to thinking parameter
                     optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
@@ -574,8 +671,9 @@ class AmazonConverseConfig(BaseConfig):
                     self._validate_request_metadata(value)  # type: ignore
                     optional_params["requestMetadata"] = value
 
-        # Only update thinking tokens for non-GPT-OSS models
-        if "gpt-oss" not in model:
+        # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
+        # Nova Lite 2 handles token budgeting differently through reasoningConfig
+        if "gpt-oss" not in model and not self._is_nova_lite_2_model(model):
             self.update_optional_params_with_thinking_tokens(
                 non_default_params=non_default_params, optional_params=optional_params
             )
