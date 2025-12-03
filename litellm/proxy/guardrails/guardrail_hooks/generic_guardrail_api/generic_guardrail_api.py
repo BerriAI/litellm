@@ -6,7 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -124,14 +124,16 @@ class GenericGuardrailAPI(CustomGuardrail):
         # Dynamically iterate through GenericGuardrailAPIMetadata fields
         # and extract matching fields from the source metadata
         # Fields in metadata are already prefixed with 'user_api_key_'
+        # Cast to Dict for dynamic assignment to avoid TypedDict literal-required error
+        result_metadata_dict = cast(Dict[str, Any], result_metadata)
         for field_name in GenericGuardrailAPIMetadata.__annotations__.keys():
             value = metadata_dict.get(field_name)
             if value is not None:
-                result_metadata[field_name] = value
+                result_metadata_dict[field_name] = value
 
         # handle user_api_key_token = user_api_key_hash
         if metadata_dict.get("user_api_key_token") is not None:
-            result_metadata["user_api_key_hash"] = metadata_dict.get(
+            result_metadata_dict["user_api_key_hash"] = metadata_dict.get(
                 "user_api_key_token"
             )
 
