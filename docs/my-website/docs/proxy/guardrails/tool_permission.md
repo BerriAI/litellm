@@ -1,4 +1,3 @@
-import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
@@ -14,8 +13,6 @@ LiteLLM provides the LiteLLM Tool Permission Guardrail that lets you control whi
 
 Open the LiteLLM Dashboard, click **Add New Guardrail**, and choose **LiteLLM Tool Permission Guardrail**. This loads the rule builder UI.
 
-<Image img={require('../../../img/create_guard_tool_permission.png')} alt="Configure tool permission guardrail in LiteLLM UI" />
-
 #### Step 2: Define Regex Rules
 
 1. Click **Add Rule**.
@@ -23,8 +20,6 @@ Open the LiteLLM Dashboard, click **Add New Guardrail**, and choose **LiteLLM To
 3. Provide a regex for the tool name (e.g., `^mcp__github_.*$`).
 4. Optionally add a regex for tool type (e.g., `^function$`).
 5. Pick **Allow** or **Deny**.
-
-<Image img={require('../../../img/create_rule_tool_permission.png')} alt="Configure tool permission guardrail in LiteLLM UI" />
 
 #### Step 3: Restrict Tool Arguments (Optional)
 

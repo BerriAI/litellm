@@ -8,6 +8,9 @@ from typing_extensions import Required, TypedDict
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+    GenericGuardrailAPIOptionalParams,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
     GraySwanGuardrailConfigModel,
 )
@@ -17,7 +20,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
-
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -59,6 +61,7 @@ class SupportedGuardrailIntegrations(Enum):
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
     PROMPT_SECURITY = "prompt_security"
+    GENERIC_GUARDRAIL_API = "generic_guardrail_api"
 
 
 class Role(Enum):
@@ -522,6 +525,11 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         default=None, description="Base URL for the guardrail service API"
     )
 
+    experimental_use_latest_role_message_only: Optional[bool] = Field(
+        default=False,
+        description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
+    )
+
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds] = Field(
         default=None,
@@ -588,6 +596,12 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     fail_on_error: Optional[bool] = Field(
         default=True,
         description="Whether to fail the request if Model Armor encounters an error",
+    )
+
+    # Generic Guardrail API params
+    additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Additional provider-specific parameters for generic guardrail APIs",
     )
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
