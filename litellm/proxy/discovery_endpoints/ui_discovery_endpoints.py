@@ -14,8 +14,9 @@ router = APIRouter()
 )  # if mounted at root path
 async def get_ui_config():
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
-
+    from litellm.proxy.auth.auth_utils import _has_user_setup_sso
     return UiDiscoveryEndpoints(
         server_root_path=get_server_root_path(),
         proxy_base_url=get_proxy_base_url(),
+        is_sso_configured=_has_user_setup_sso(),
     )
