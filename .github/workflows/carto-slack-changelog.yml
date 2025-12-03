@@ -4,11 +4,12 @@ name: CARTO - Slack Changelog
 # Event-Driven Slack Changelog
 ################################################################################
 #
-# Posts changelog updates to Slack when PRs are merged to carto/main.
-# Also supports manual trigger for initial repo status post.
+# Posts changelog updates to Slack when changes are pushed to carto/main.
+# This includes PR merges and direct pushes.
+# Also supports manual trigger for repo status post.
 #
 # Modes:
-# - PR merge: Analyzes merged PR and posts summary
+# - push: Analyzes the pushed commits and posts summary
 # - repo_status: Posts current fork status (manual trigger)
 #
 # Security:
@@ -17,8 +18,7 @@ name: CARTO - Slack Changelog
 # - Uses existing SLACK_KEY and ANTHROPIC_API_KEY secrets
 
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches: [carto/main]
   workflow_dispatch:
     inputs:
@@ -27,15 +27,11 @@ on:
         type: choice
         options:
           - repo_status
-          - last_pr
+          - last_commits
         default: 'repo_status'
 
 jobs:
   post-changelog:
-    # Only run on merged PRs or manual trigger
-    if: >
-      (github.event.pull_request.merged == true) ||
-      (github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -46,21 +42,31 @@ jobs:
       - name: Determine mode and context
         id: context
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_BODY: ${{ github.event.pull_request.body }}
           MANUAL_MODE: ${{ inputs.mode }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          PUSHER: ${{ github.event.pusher.name }}
         run: |
           set -eu
           echo "::group::Determining context"
 
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "mode=pr_merge" >> $GITHUB_OUTPUT
-            echo "pr_number=${PR_NUMBER}" >> $GITHUB_OUTPUT
-            echo "pr_title=${PR_TITLE}" >> $GITHUB_OUTPUT
-            echo "pr_url=${PR_URL}" >> $GITHUB_OUTPUT
-            echo "Mode: PR merge (#${PR_NUMBER})"
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "mode=push" >> $GITHUB_OUTPUT
+            echo "before_sha=${BEFORE_SHA}" >> $GITHUB_OUTPUT
+            echo "after_sha=${AFTER_SHA}" >> $GITHUB_OUTPUT
+            echo "pusher=${PUSHER}" >> $GITHUB_OUTPUT
+
+            # Get commit count in push
+            COMMIT_COUNT=$(git rev-list --count ${BEFORE_SHA}..${AFTER_SHA} 2>/dev/null || echo "1")
+            echo "commit_count=${COMMIT_COUNT}" >> $GITHUB_OUTPUT
+
+            # Get the head commit message (first line)
+            HEAD_COMMIT_TITLE=$(echo "${COMMIT_MESSAGE}" | head -n1)
+            echo "head_commit_title=${HEAD_COMMIT_TITLE}" >> $GITHUB_OUTPUT
+
+            echo "Mode: Push (${COMMIT_COUNT} commits)"
+            echo "Head commit: ${HEAD_COMMIT_TITLE}"
           else
             echo "mode=${MANUAL_MODE}" >> $GITHUB_OUTPUT
             echo "Mode: Manual (${MANUAL_MODE})"
@@ -97,48 +103,51 @@ jobs:
 
             ---
 
-            ## IF MODE IS "pr_merge":
+            ## IF MODE IS "push":
 
-            PR Details:
-            - **Number:** #${{ steps.context.outputs.pr_number }}
-            - **Title:** ${{ steps.context.outputs.pr_title }}
-            - **URL:** ${{ steps.context.outputs.pr_url }}
+            Push Details:
+            - **Commits:** ${{ steps.context.outputs.commit_count }} commit(s)
+            - **Before SHA:** ${{ steps.context.outputs.before_sha }}
+            - **After SHA:** ${{ steps.context.outputs.after_sha }}
+            - **Pusher:** ${{ steps.context.outputs.pusher }}
+            - **Head Commit:** ${{ steps.context.outputs.head_commit_title }}
 
             ### Task:
-            1. Analyze the PR to determine its type:
-               - **Upstream Sync**: PRs from upstream-sync/* branches, sync-related
-               - **Feature**: New functionality (feat:, feature:)
-               - **Bug Fix**: Fixes (fix:, bugfix:)
-               - **Infrastructure**: Workflow, Docker, CI/CD changes
+            1. Get the commits in this push:
+               ```bash
+               git log --oneline ${{ steps.context.outputs.before_sha }}..${{ steps.context.outputs.after_sha }}
+               ```
+
+            2. Get files changed:
+               ```bash
+               git diff --name-only ${{ steps.context.outputs.before_sha }}..${{ steps.context.outputs.after_sha }} | head -20
+               ```
+
+            3. Analyze commits to determine the type:
+               - **Upstream Sync**: Commits with "sync:", "upstream", merge commits from upstream
+               - **Feature**: Commits with "feat:", "feature:"
+               - **Bug Fix**: Commits with "fix:", "bugfix:"
+               - **Infrastructure**: Changes to .github/workflows/, docker/, scripts
                - **Documentation**: Docs only changes
-
-            2. Get PR commits:
-               ```bash
-               gh pr view ${{ steps.context.outputs.pr_number }} --json commits --jq '.commits[].messageHeadline'
-               ```
-
-            3. Get files changed:
-               ```bash
-               gh pr view ${{ steps.context.outputs.pr_number }} --json files --jq '.files[].path' | head -20
-               ```
 
             4. Write to `slack_message.txt` with this format:
                ```
                :clipboard: *LiteLLM Fork Update*
 
-               *PR #${{ steps.context.outputs.pr_number }}:* ${{ steps.context.outputs.pr_title }}
+               *${{ steps.context.outputs.head_commit_title }}*
 
                *Type:* [Upstream Sync / Feature / Bug Fix / Infrastructure / Documentation]
+               *Commits:* ${{ steps.context.outputs.commit_count }}
 
                *Summary:*
-               - [Brief 1-2 sentence summary of what this PR does]
+               - [Brief 1-2 sentence summary of what changed]
 
                *Key Changes:*
                - [Most important change 1]
                - [Most important change 2]
                - [etc - max 5 bullets]
 
-               :link: <${{ steps.context.outputs.pr_url }}|View PR>
+               :link: <https://github.com/${{ github.repository }}/compare/${{ steps.context.outputs.before_sha }}...${{ steps.context.outputs.after_sha }}|View Changes>
                ```
 
             ---
