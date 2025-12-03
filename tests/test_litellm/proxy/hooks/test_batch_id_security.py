@@ -79,3 +79,38 @@ async def test_user_a_can_access_own_batch():
 
             # Should decrypt and return original batch_id
             assert result["batch_id"] == "batch_original_123"
+
+
+@pytest.mark.asyncio
+async def test_user_b_cannot_cancel_user_a_batch():
+    """
+    Security test: User B should get 403 when trying to cancel User A's batch.
+    """
+    security = BatchIDSecurity()
+
+    # User B's credentials
+    user_b_auth = MagicMock()
+    user_b_auth.user_id = "user-b"
+    user_b_auth.team_id = "team-b"
+    user_b_auth.user_role = None
+
+    # User A's encrypted batch ID
+    data = {"batch_id": "batch_encrypted_user_a"}
+
+    with patch.object(security, "_is_encrypted_batch_id", return_value=True):
+        with patch.object(
+            security,
+            "_decrypt_batch_id",
+            return_value=("batch_original_123", "user-a", "team-a"),  # User A owns this
+        ):
+            with patch("litellm.proxy.proxy_server.general_settings", {}):
+                with pytest.raises(HTTPException) as exc_info:
+                    await security.async_pre_call_hook(
+                        user_api_key_dict=user_b_auth,
+                        cache=MagicMock(),
+                        data=data,
+                        call_type="acancel_batch",
+                    )
+
+                assert exc_info.value.status_code == 403
+                assert "Forbidden" in exc_info.value.detail
