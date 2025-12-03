@@ -48,7 +48,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
   const [transportType, setTransportType] = useState<string>("");
   const [searchValue, setSearchValue] = useState<string>("");
-  const [urlWarning, setUrlWarning] = useState<string>("");
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
@@ -125,22 +124,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     onBeforeRedirect: persistCreateUiState,
   });
 
-  // Function to check URL format based on transport type
-  const checkUrlFormat = (url: string, transport: string) => {
-    if (!url) {
-      setUrlWarning("");
-      return;
-    }
-
-    if (transport === "sse" && !url.endsWith("/sse")) {
-      setUrlWarning("Typically MCP SSE URLs end with /sse. You can add this url but this is a warning.");
-    } else if (transport === "http" && !url.endsWith("/mcp")) {
-      setUrlWarning("Typically MCP HTTP URLs end with /mcp. You can add this url but this is a warning.");
-    } else {
-      setUrlWarning("");
-    }
-  };
-
   React.useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -192,9 +175,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     form.setFieldsValue(pendingRestoredValues.values);
     setFormValues(pendingRestoredValues.values);
-    if (pendingRestoredValues.values.url && transportReady) {
-      checkUrlFormat(pendingRestoredValues.values.url, transportReady);
-    }
     setPendingRestoredValues(null);
   }, [pendingRestoredValues, form, transportType]);
 
@@ -315,7 +295,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         setCostConfig({});
         setTools([]);
         setAllowedTools([]);
-        setUrlWarning("");
         setAliasManuallyEdited(false);
         setModalVisible(false);
         onCreateSuccess(response);
@@ -333,7 +312,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setCostConfig({});
     setTools([]);
     setAllowedTools([]);
-    setUrlWarning("");
     setAliasManuallyEdited(false);
     setModalVisible(false);
   };
@@ -343,14 +321,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     // Clear fields that are not relevant for the selected transport
     if (value === "stdio") {
       form.setFieldsValue({ url: undefined, auth_type: undefined, credentials: undefined });
-      setUrlWarning("");
     } else {
       form.setFieldsValue({ command: undefined, args: undefined, env: undefined });
-      // Check URL format for the new transport type
-      const currentUrl = form.getFieldValue("url");
-      if (currentUrl) {
-        checkUrlFormat(currentUrl, value);
-      }
     }
   };
 
@@ -536,19 +508,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   { validator: (_, value) => validateMCPServerUrl(value) },
                 ]}
               >
-                <div>
-                  <Input
-                    value={form.getFieldValue("url") ?? ""}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      checkUrlFormat(value, transportType);
-                      form.setFieldValue("url", value);
-                    }}
-                    placeholder="https://your-mcp-server.com"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                  {urlWarning && <div className="mt-1 text-red-500 text-sm font-medium">{urlWarning}</div>}
-                </div>
+                <Input
+                  placeholder="https://your-mcp-server.com"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
               </Form.Item>
             )}
 

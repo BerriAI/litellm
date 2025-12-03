@@ -7110,6 +7110,8 @@ class ProviderConfigManager:
             return litellm.CompactifAIChatConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotConfig()
+        elif litellm.LlmProviders.RAGFLOW == provider:
+            return litellm.RAGFlowConfig()
         elif (
             litellm.LlmProviders.CUSTOM == provider
             or litellm.LlmProviders.CUSTOM_OPENAI == provider
@@ -7298,6 +7300,8 @@ class ProviderConfigManager:
             return litellm.SnowflakeEmbeddingConfig()
         elif litellm.LlmProviders.COMETAPI == provider:
             return litellm.CometAPIEmbeddingConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            return litellm.GithubCopilotEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
             from litellm.llms.sagemaker.embedding.transformation import (
                 SagemakerEmbeddingConfig,
@@ -7393,6 +7397,12 @@ class ProviderConfigManager:
             )
 
             return IBMWatsonXAudioTranscriptionConfig()
+        elif litellm.LlmProviders.OVHCLOUD == provider:
+            from litellm.llms.ovhcloud.audio_transcription.transformation import (
+                OVHCloudAudioTranscriptionConfig,
+            )
+
+            return OVHCloudAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -7911,6 +7921,12 @@ class ProviderConfigManager:
             )
 
             return RunwayMLTextToSpeechConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.text_to_speech.transformation import (
+                VertexAITextToSpeechConfig,
+            )
+
+            return VertexAITextToSpeechConfig()
         return None
 
     @staticmethod

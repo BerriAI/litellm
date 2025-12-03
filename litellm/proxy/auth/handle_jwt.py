@@ -480,6 +480,71 @@ class JWTHandler:
         else:
             return False
 
+    async def get_oidc_userinfo(self, token: str) -> dict:
+        """
+        Fetch user information from OIDC UserInfo endpoint.
+        
+        This follows the OpenID Connect protocol where an access token
+        is sent to the identity provider's UserInfo endpoint to retrieve
+        user identity information.
+        
+        Args:
+            token: The access token to use for authentication
+            
+        Returns:
+            dict: User information from the UserInfo endpoint
+            
+        Raises:
+            Exception: If UserInfo endpoint is not configured or request fails
+        """
+        if not self.litellm_jwtauth.oidc_userinfo_endpoint:
+            raise Exception(
+                "OIDC UserInfo endpoint not configured. Set 'oidc_userinfo_endpoint' in JWT auth config."
+            )
+        
+        # Check cache first
+        cache_key = f"oidc_userinfo_{token[:20]}"  # Use first 20 chars of token as cache key
+        cached_userinfo = await self.user_api_key_cache.async_get_cache(cache_key)
+        
+        if cached_userinfo is not None:
+            verbose_proxy_logger.debug("Returning cached OIDC UserInfo")
+            return cached_userinfo
+        
+        verbose_proxy_logger.debug(
+            f"Calling OIDC UserInfo endpoint: {self.litellm_jwtauth.oidc_userinfo_endpoint}"
+        )
+        
+        try:
+            # Call the UserInfo endpoint with the access token
+            response = await self.http_handler.get(
+                url=self.litellm_jwtauth.oidc_userinfo_endpoint,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
+            )
+            
+            if response.status_code != 200:
+                raise Exception(
+                    f"OIDC UserInfo endpoint returned status {response.status_code}: {response.text}"
+                )
+            
+            userinfo = response.json()
+            verbose_proxy_logger.debug(f"Received OIDC UserInfo: {userinfo}")
+            
+            # Cache the userinfo response
+            await self.user_api_key_cache.async_set_cache(
+                key=cache_key,
+                value=userinfo,
+                ttl=self.litellm_jwtauth.oidc_userinfo_cache_ttl,
+            )
+            
+            return userinfo
+            
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error fetching OIDC UserInfo: {str(e)}")
+            raise Exception(f"Failed to fetch OIDC UserInfo: {str(e)}")
+
     async def auth_jwt(self, token: str) -> dict:
         # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
         # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
@@ -1077,7 +1142,16 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
     ) -> JWTAuthBuilderResult:
         """Main authentication and authorization builder"""
-        jwt_valid_token: dict = await jwt_handler.auth_jwt(token=api_key)
+        # Check if OIDC UserInfo endpoint is enabled
+        if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+            verbose_proxy_logger.debug(
+                "OIDC UserInfo is enabled. Fetching user info from UserInfo endpoint."
+            )
+            # Use the access token to fetch user info from OIDC UserInfo endpoint
+            jwt_valid_token: dict = await jwt_handler.get_oidc_userinfo(token=api_key)
+        else:
+            # Default behavior: decode and validate the JWT token
+            jwt_valid_token = await jwt_handler.auth_jwt(token=api_key)
 
         # Check custom validate
         if jwt_handler.litellm_jwtauth.custom_validate:

@@ -45,6 +45,7 @@ const sidebars = {
           type: "category",
           "label": "Contributing to Guardrails",
           items: [
+            "adding_provider/generic_guardrail_api",
             "adding_provider/simple_guardrail_tutorial",
             "adding_provider/adding_guardrail_support",
           ]
@@ -140,6 +141,7 @@ const sidebars = {
             "proxy/quick_start",
             "proxy/cli",
             "proxy/debugging",
+            "proxy/error_diagnosis",
             "proxy/deploy",
             "proxy/health",
             "proxy/master_key_rotations",
@@ -519,6 +521,7 @@ const sidebars = {
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
             "providers/vertex_image",
+            "providers/vertex_speech",
             "providers/vertex_batch",
             "providers/vertex_ocr",
           ]
@@ -625,6 +628,7 @@ const sidebars = {
         "providers/petals",
         "providers/publicai",
         "providers/predibase",
+        "providers/ragflow",
         "providers/recraft",
         "providers/replicate",
         {
@@ -656,6 +660,7 @@ const sidebars = {
         },
         "providers/xai",
         "providers/xinference",
+        "providers/zai",
       ],
     },
     {
@@ -817,10 +822,12 @@ const sidebars = {
               "Learn how to deploy + call models from different providers on LiteLLM",
             slug: "/project",
           },
-          items: [        
+          items: [
             "projects/smolagents",
             "projects/mini-swe-agent",
             "projects/openai-agents",
+            "projects/Google ADK",
+            "projects/Harbor",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",

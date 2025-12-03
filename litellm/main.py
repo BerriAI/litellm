@@ -208,7 +208,6 @@ from .llms.vertex_ai.image_generation.image_generation_handler import (
 from .llms.vertex_ai.multimodal_embeddings.embedding_handler import (
     VertexMultimodalEmbedding,
 )
-from .llms.vertex_ai.text_to_speech.text_to_speech_handler import VertexTextToSpeechAPI
 from .llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
 from .llms.vertex_ai.vertex_gemma_models.main import VertexAIGemmaModels
@@ -279,7 +278,7 @@ google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_gemma_chat_completion = VertexAIGemmaModels()
 vertex_model_garden_chat_completion = VertexAIModelGardenModels()
-vertex_text_to_speech = VertexTextToSpeechAPI()
+# vertex_text_to_speech is now replaced by VertexAITextToSpeechConfig
 sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
@@ -863,6 +862,7 @@ def mock_completion(
             raise mock_response
         # At this point, mock_response must be a string (all other types have been handled or returned early)
         mock_response = cast(str, mock_response)
+
         if n is None:
             model_response.choices[0].message.content = mock_response  # type: ignore
         else:
@@ -909,6 +909,7 @@ def mock_completion(
                 api_key="my-secret-key",
                 original_response="my-original-response",
             )
+
         return model_response
 
     except Exception as e:
@@ -945,10 +946,16 @@ def responses_api_bridge_check(
     return model_info, model
 
 
-def _should_allow_input_examples(custom_llm_provider: Optional[str], model: str) -> bool:
+def _should_allow_input_examples(
+    custom_llm_provider: Optional[str], model: str
+) -> bool:
     if custom_llm_provider == "anthropic":
         return True
-    if custom_llm_provider == "azure_ai" or custom_llm_provider == "bedrock" or custom_llm_provider == "vertex_ai":
+    if (
+        custom_llm_provider == "azure_ai"
+        or custom_llm_provider == "bedrock"
+        or custom_llm_provider == "vertex_ai"
+    ):
         return "claude" in model.lower()
     return False
 
@@ -964,7 +971,9 @@ def _drop_input_examples_from_tool(tool: dict) -> dict:
     return tool_copy
 
 
-def _drop_input_examples_from_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
+def _drop_input_examples_from_tools(
+    tools: Optional[List[dict]],
+) -> Optional[List[dict]]:
     if tools is None:
         return None
     cleaned_tools: List[dict] = []
@@ -1737,7 +1746,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "Set `api_base` or the AZURE_AI_API_BASE env var."
                     )
                 api_key = AzureFoundryModelInfo.get_api_key(api_key)
-                
+
                 # Ensure the URL ends with /v1/messages for Anthropic
                 if api_base:
                     api_base = api_base.rstrip("/")
@@ -1748,7 +1757,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         else:
                             api_base = api_base + "/anthropic"
                         api_base = api_base + "/v1/messages"
-                
+
                 response = azure_anthropic_chat_completions.completion(
                     model=model,
                     messages=messages,
@@ -1981,6 +1990,36 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
 
+        elif custom_llm_provider == "ragflow":
+            ## COMPLETION CALL - RAGFlow uses HTTP handler to support custom URL paths
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    timeout=timeout,
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=encoding,
+                    stream=stream,
+                    provider_config=provider_config,
+                )
+            except Exception as e:
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
         elif custom_llm_provider == "xai":
             ## COMPLETION CALL
             try:
@@ -4290,6 +4329,22 @@ def embedding(  # noqa: PLR0915
                 headers=headers or extra_headers,
                 litellm_params=litellm_params_dict,
             )
+        elif custom_llm_provider == "github_copilot":
+            api_key = (api_key or litellm.api_key)
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+            )
         elif (
             model in litellm.open_ai_embedding_models
             or custom_llm_provider == "openai"
@@ -5926,9 +5981,7 @@ def speech(  # noqa: PLR0915
     custom_llm_provider: Optional[str] = None,
     aspeech: Optional[bool] = None,
     **kwargs,
-) -> Union[
-    HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
-]:
+) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -5973,7 +6026,9 @@ def speech(  # noqa: PLR0915
             kwargs=kwargs,
         )
 
-    logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
+    logging_obj: LiteLLMLoggingObj = cast(
+        LiteLLMLoggingObj, kwargs.get("litellm_logging_obj")
+    )
     logging_obj.update_environment_variables(
         model=model,
         user=user,
@@ -6161,9 +6216,9 @@ def speech(  # noqa: PLR0915
                 ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY
             ] = query_params
 
-        litellm_params_dict[
-            ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY
-        ] = voice_id
+        litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY] = (
+            voice_id
+        )
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
@@ -6185,30 +6240,13 @@ def speech(  # noqa: PLR0915
             _is_async=aspeech or False,
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
+        from litellm.llms.vertex_ai.text_to_speech.transformation import (
+            VertexAITextToSpeechConfig,
+        )
+
         generic_optional_params = GenericLiteLLMParams(**kwargs)
 
-        api_base = generic_optional_params.api_base or ""
-        vertex_ai_project = (
-            generic_optional_params.vertex_project
-            or litellm.vertex_project
-            or get_secret_str("VERTEXAI_PROJECT")
-        )
-        vertex_ai_location = (
-            generic_optional_params.vertex_location
-            or litellm.vertex_location
-            or get_secret_str("VERTEXAI_LOCATION")
-        )
-        vertex_credentials = (
-            generic_optional_params.vertex_credentials
-            or get_secret_str("VERTEXAI_CREDENTIALS")
-        )
-
-        if voice is not None and not isinstance(voice, dict):
-            raise litellm.BadRequestError(
-                message=f"'voice' is required to be passed as a dict for Vertex AI TTS, passed in voice={voice}",
-                model=model,
-                llm_provider=custom_llm_provider,
-            )
+        # Handle Gemini models separately (they use speech_to_completion_bridge)
         if "gemini" in model:
             from .endpoints.speech.speech_to_completion_bridge.handler import (
                 speech_to_completion_bridge_handler,
@@ -6224,19 +6262,37 @@ def speech(  # noqa: PLR0915
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
             )
-        response = vertex_text_to_speech.audio_speech(
-            _is_async=aspeech,
-            vertex_credentials=vertex_credentials,
-            vertex_project=vertex_ai_project,
-            vertex_location=vertex_ai_location,
-            timeout=timeout,
-            api_base=api_base,
+
+        # Vertex AI Text-to-Speech (Google Cloud TTS)
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = VertexAITextToSpeechConfig()
+
+        # Cast to specific Vertex AI config type to access dispatch method
+        vertex_config = cast(
+            VertexAITextToSpeechConfig, text_to_speech_provider_config
+        )
+
+        # Store Vertex AI specific params in litellm_params_dict
+        litellm_params_dict.update({
+            "vertex_project": generic_optional_params.vertex_project,
+            "vertex_location": generic_optional_params.vertex_location,
+            "vertex_credentials": generic_optional_params.vertex_credentials,
+        })
+
+        response = vertex_config.dispatch_text_to_speech(
             model=model,
             input=input,
             voice=voice,
             optional_params=optional_params,
-            kwargs=kwargs,
+            litellm_params_dict=litellm_params_dict,
             logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=headers,
+            base_llm_http_handler=base_llm_http_handler,
+            aspeech=aspeech or False,
+            api_base=generic_optional_params.api_base,
+            api_key=None,  # Vertex AI uses OAuth, not API key
+            **kwargs,
         )
     elif custom_llm_provider == "gemini":
         from .endpoints.speech.speech_to_completion_bridge.handler import (

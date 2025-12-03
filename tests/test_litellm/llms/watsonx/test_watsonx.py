@@ -414,3 +414,93 @@ def test_watsonx_chat_completion_with_reasoning_effort(monkeypatch):
     assert (
         json_data["reasoning_effort"] == "low"
     ), "The value of 'reasoning_effort' should be 'low'."
+
+
+def test_watsonx_zen_api_key_from_client(monkeypatch, watsonx_chat_completion_call):
+    """
+    Test that zen_api_key can be passed from client code and is used in Authorization header.
+    """
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "test-project-id")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://test-api.watsonx.ai")
+
+    model = "watsonx/ibm/granite-3-3-8b-instruct"
+    messages = [{"role": "user", "content": "What is your favorite color?"}]
+
+    client = HTTPHandler()
+
+    zen_api_key = "U1ZDLWQo="
+
+    # No need to patch token call since zen_api_key should skip token generation
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model=model,
+                messages=messages,
+                api_key="test_api_key",
+                client=client,
+                zen_api_key=zen_api_key,
+            )
+        except Exception as e:
+            print(f"Caught expected exception: {e}")
+
+    # Verify the request was made
+    assert mock_post.call_count == 1, "The completion endpoint should have been called once."
+
+    # Get the headers sent in the POST request
+    request_kwargs = mock_post.call_args.kwargs
+    headers = request_kwargs["headers"]
+
+    print("\nHeaders sent to WatsonX API:")
+    print(json.dumps(dict(headers), indent=2))
+
+    # Verify Authorization header uses ZenApiKey format
+    assert "Authorization" in headers, "Authorization header should be present."
+    assert headers["Authorization"] == f"ZenApiKey {zen_api_key}", (
+        f"Authorization header should use ZenApiKey format. "
+        f"Expected: 'ZenApiKey {zen_api_key}', Got: '{headers['Authorization']}'"
+    )
+
+
+def test_watsonx_zen_api_key_from_env(monkeypatch, watsonx_chat_completion_call):
+    """
+    Test that zen_api_key from environment variable is used in Authorization header.
+    """
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "test-project-id")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://test-api.watsonx.ai")
+
+    zen_api_key = "U1ZDLWxpdG--==="
+    monkeypatch.setenv("WATSONX_ZENAPIKEY", zen_api_key)
+
+    model = "watsonx/ibm/granite-3-3-8b-instruct"
+    messages = [{"role": "user", "content": "What is your favorite color?"}]
+
+    client = HTTPHandler()
+
+    # No need to patch token call since zen_api_key should skip token generation
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model=model,
+                messages=messages,
+                api_key="test_api_key",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Caught expected exception: {e}")
+
+    # Verify the request was made
+    assert mock_post.call_count == 1, "The completion endpoint should have been called once."
+
+    # Get the headers sent in the POST request
+    request_kwargs = mock_post.call_args.kwargs
+    headers = request_kwargs["headers"]
+
+    print("\nHeaders sent to WatsonX API:")
+    print(json.dumps(dict(headers), indent=2))
+
+    # Verify Authorization header uses ZenApiKey format
+    assert "Authorization" in headers, "Authorization header should be present."
+    assert headers["Authorization"] == f"ZenApiKey {zen_api_key}", (
+        f"Authorization header should use ZenApiKey format. "
+        f"Expected: 'ZenApiKey {zen_api_key}', Got: '{headers['Authorization']}'"
+    )
