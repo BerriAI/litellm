@@ -239,7 +239,7 @@ describe("NewUsage", () => {
 
     // Check for chart titles
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();
-    expect(screen.getByText("Top API Keys")).toBeInTheDocument();
+    expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
 
   it("should switch between tabs correctly", async () => {
