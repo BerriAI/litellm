@@ -4,6 +4,7 @@ from typing import cast
 import httpx
 from httpx._types import RequestFiles
 
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.router import GenericLiteLLMParams
@@ -15,15 +16,12 @@ from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    BaseVideoConfig = _BaseVideoConfig
     BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    BaseVideoConfig = Any
     BaseLLMException = Any
 
 
@@ -63,7 +61,12 @@ class OpenAIVideoConfig(BaseVideoConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
+        # Use api_key from litellm_params if available, otherwise fall back to other sources
+        if litellm_params and litellm_params.api_key:
+            api_key = api_key or litellm_params.api_key
+        
         api_key = (
             api_key
             or litellm.api_key

@@ -208,7 +208,10 @@ def set_attributes(
     )
 
     try:
+        # Remove secret_fields to prevent leaking sensitive data (e.g., authorization headers)
         optional_params = kwargs.get("optional_params", {})
+        if isinstance(optional_params, dict):
+            optional_params.pop("secret_fields", None)
         litellm_params = kwargs.get("litellm_params", {})
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object"

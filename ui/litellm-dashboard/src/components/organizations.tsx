@@ -32,6 +32,7 @@ import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import NotificationsManager from "./molecules/notifications_manager";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -70,6 +71,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   const [editOrg, setEditOrg] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isOrgModalVisible, setIsOrgModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
@@ -91,15 +93,18 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     if (!orgToDelete || !accessToken) return;
 
     try {
+      setIsDeleting(true);
       await organizationDeleteCall(accessToken, orgToDelete);
       NotificationsManager.success("Organization deleted successfully");
 
       setIsDeleteModalOpen(false);
       setOrgToDelete(null);
       // Refresh organizations list
-      fetchOrganizations(accessToken, setOrganizations);
+      await fetchOrganizations(accessToken, setOrganizations);
     } catch (error) {
       console.error("Error deleting organization:", error);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -506,40 +511,16 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
         </Form>
       </Modal>
 
-      {isDeleteModalOpen ? (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
-
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Organization</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this organization?</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={confirmDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={cancelDelete}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <></>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete Organization?"
+        message="Are you sure you want to delete this organization? This action cannot be undone."
+        resourceInformationTitle="Organization Information"
+        resourceInformation={[{ label: "Organization ID", value: orgToDelete, code: true }]}
+        onCancel={cancelDelete}
+        onOk={confirmDelete}
+        confirmLoading={isDeleting}
+      />
     </div>
   );
 };

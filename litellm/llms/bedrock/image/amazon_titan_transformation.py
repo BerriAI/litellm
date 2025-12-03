@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from openai.types.image import Image
 
-from litellm import get_model_info
+from litellm.utils import get_model_info
 from litellm.types.llms.bedrock import (
     AmazonNovaCanvasImageGenerationConfig,
     AmazonTitanImageGenerationRequestBody,
@@ -103,16 +103,16 @@ class AmazonTitanImageGenerationConfig:
         return optional_params
 
     @classmethod
-    def _transform_request(
+    def transform_request_body(
         cls,
-        input: str,
+        text: str,
         optional_params: dict,
     ) -> AmazonTitanImageGenerationRequestBody:
         from typing import Any, Dict
 
         image_generation_config = optional_params.pop("imageGenerationConfig", {})
         negative_text = optional_params.pop("negativeText", None)
-        text_to_image_params: Dict[str, Any] = {"text": input}
+        text_to_image_params: Dict[str, Any] = {"text": text}
         if negative_text:
             text_to_image_params["negativeText"] = negative_text
         task_type = optional_params.pop("taskType", "TEXT_IMAGE")

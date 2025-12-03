@@ -36,6 +36,11 @@ ROUTE_ENDPOINT_MAPPING = {
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
     "adelete_container": "/containers/{container_id}",
+    "acreate_skill": "/skills",
+    "alist_skills": "/skills",
+    "aget_skill": "/skills/{skill_id}",
+    "adelete_skill": "/skills/{skill_id}",
+    "aingest": "/rag/ingest",
 }
 
 
@@ -109,6 +114,12 @@ async def route_request(
         "allm_passthrough_route",
         "avector_store_search",
         "avector_store_create",
+        "avector_store_file_create",
+        "avector_store_file_list",
+        "avector_store_file_retrieve",
+        "avector_store_file_content",
+        "avector_store_file_update",
+        "avector_store_file_delete",
         "aocr",
         "asearch",
         "avideo_generation",
@@ -120,6 +131,11 @@ async def route_request(
         "alist_containers",
         "aretrieve_container",
         "adelete_container",
+        "acreate_skill",
+        "alist_skills",
+        "aget_skill",
+        "adelete_skill",
+        "aingest",
     ],
 ):
     """
@@ -168,8 +184,17 @@ async def route_request(
             "avideo_status",
             "avideo_content",
             "avideo_remix",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_delete",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
+            "aingest",
         ] and (data.get("model") is None or data.get("model") == ""):
-            # These video endpoints don't need a model, use custom_llm_provider
+            # These endpoints don't need a model, use custom_llm_provider directly
             return getattr(litellm, f"{route_type}")(**data)
         
         team_model_name = (
@@ -214,6 +239,12 @@ async def route_request(
                 "alist_input_items",
                 "avector_store_create",
                 "avector_store_search",
+                "avector_store_file_create",
+                "avector_store_file_list",
+                "avector_store_file_retrieve",
+                "avector_store_file_content",
+                "avector_store_file_update",
+                "avector_store_file_delete",
                 "asearch",
                 "acreate_container",
                 "alist_containers",

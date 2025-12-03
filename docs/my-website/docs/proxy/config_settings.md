@@ -104,6 +104,7 @@ general_settings:
   disable_responses_id_security: boolean  # turn off response ID security checks that prevent users from accessing other users' responses
   enable_jwt_auth: boolean  # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
   enforce_user_param: boolean  # requires all openai endpoint requests to have a 'user' param
+  reject_clientside_metadata_tags: boolean  # if true, rejects requests with client-side 'metadata.tags' to prevent users from influencing budgets
   allowed_routes: ["route1", "route2"]  # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
   key_management_system: google_kms  # either google_kms or azure_kms
   master_key: string
@@ -112,7 +113,7 @@ general_settings:
 
   # Database Settings
   database_url: string
-  database_connection_pool_limit: 0  # default 100
+  database_connection_pool_limit: 0  # default 10
   database_connection_timeout: 0  # default 60s
   allow_requests_on_db_unavailable: boolean  # if true, will allow requests that can not connect to the DB to verify Virtual Key to still work 
 
@@ -201,6 +202,7 @@ router_settings:
 | disable_responses_id_security | boolean | If true, disables response ID security checks that prevent users from accessing response IDs from other users. When false (default), response IDs are encrypted with user information to ensure users can only access their own responses. Applies to /v1/responses endpoints |
 | enable_jwt_auth | boolean | allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims. [Doc on JWT Tokens](token_auth) |
 | enforce_user_param | boolean | If true, requires all OpenAI endpoint requests to have a 'user' param. [Doc on call hooks](call_hooks)|
+| reject_clientside_metadata_tags | boolean | If true, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata. |
 | allowed_routes | array of strings | List of allowed proxy API routes a user can access [Doc on controlling allowed routes](enterprise#control-available-public-private-routes)|
 | key_management_system | string | Specifies the key management system. [Doc Secret Managers](../secret) |
 | master_key | string | The master key for the proxy [Set up Virtual Keys](virtual_keys) |
@@ -232,7 +234,7 @@ router_settings:
 | max_response_size_mb | int | The maximum size for responses in MB. LLM Responses above this size will not be sent. |
 | proxy_budget_rescheduler_min_time | int | The minimum time (in seconds) to wait before checking db for budget resets. **Default is 597 seconds** |
 | proxy_budget_rescheduler_max_time | int | The maximum time (in seconds) to wait before checking db for budget resets. **Default is 605 seconds** |
-| proxy_batch_write_at | int | Time (in seconds) to wait before batch writing spend logs to the db. **Default is 30 seconds** |
+| proxy_batch_write_at | int | Time (in seconds) to wait before batch writing spend logs to the db. **Default is 10 seconds** |
 | proxy_batch_polling_interval | int | Time (in seconds) to wait before polling a batch, to check if it's completed. **Default is 6000 seconds (1 hour)** |
 | alerting_args | dict | Args for Slack Alerting [Doc on Slack Alerting](./alerting.md) |
 | custom_key_generate | str | Custom function for key generation [Doc on custom key generation](./virtual_keys.md#custom--key-generate) |
@@ -473,6 +475,8 @@ router_settings:
 | DEFAULT_ALLOWED_FAILS | Maximum failures allowed before cooling down a model. Default is 3
 | DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS | Default maximum tokens for Anthropic chat completions. Default is 4096
 | DEFAULT_BATCH_SIZE | Default batch size for operations. Default is 512
+| DEFAULT_CHUNK_OVERLAP | Default chunk overlap for RAG text splitters. Default is 200
+| DEFAULT_CHUNK_SIZE | Default chunk size for RAG text splitters. Default is 1000
 | DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS | Timeout in seconds for checking client disconnection. Default is 1
 | DEFAULT_COOLDOWN_TIME_SECONDS | Duration in seconds to cooldown a model after failures. Default is 5
 | DEFAULT_CRON_JOB_LOCK_TTL_SECONDS | Time-to-live for cron job locks in seconds. Default is 60 (1 minute)
@@ -572,6 +576,8 @@ router_settings:
 | GENERIC_USER_PROVIDER_ATTRIBUTE | Attribute specifying the user's provider
 | GENERIC_USER_ROLE_ATTRIBUTE | Attribute specifying the user's role
 | GENERIC_USERINFO_ENDPOINT | Endpoint to fetch user information in generic OAuth
+| GENERIC_LOGGER_ENDPOINT | Endpoint URL for the Generic Logger callback to send logs to
+| GENERIC_LOGGER_HEADERS | JSON string of headers to include in Generic Logger callback requests
 | GEMINI_API_BASE | Base URL for Gemini API. Default is https://generativelanguage.googleapis.com
 | GALILEO_BASE_URL | Base URL for Galileo platform
 | GALILEO_PASSWORD | Password for Galileo authentication
@@ -655,6 +661,7 @@ router_settings:
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
 | LITELLM_MIGRATION_DIR | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.
 | LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
+| LITELLM_UI_API_DOC_BASE_URL | Optional override for the API Reference base URL (used in sample code/docs) when the admin UI runs on a different host than the proxy. Defaults to `PROXY_BASE_URL` when unset.
 | LITELM_ENVIRONMENT | Environment of LiteLLM Instance, used by logging services. Currently only used by DeepEval.
 | LITELLM_KEY_ROTATION_ENABLED | Enable auto-key rotation for LiteLLM (boolean). Default is false.
 | LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS | Interval in seconds for how often to run job that auto-rotates keys. Default is 86400 (24 hours).
@@ -678,7 +685,14 @@ router_settings:
 | LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
 | LITELM_ENVIRONMENT | Environment for LiteLLM Instance. This is currently only logged to DeepEval to determine the environment for DeepEval integration.
 | LOGFIRE_TOKEN | Token for Logfire logging service
+| LOGGING_WORKER_CONCURRENCY | Maximum number of concurrent coroutine slots for the logging worker on the asyncio event loop. Default is 100. Setting too high will flood the event loop with logging tasks which will lower the overall latency of the requests.
+| LOGGING_WORKER_MAX_QUEUE_SIZE | Maximum size of the logging worker queue. When the queue is full, the worker aggressively clears tasks to make room instead of dropping logs. Default is 50,000
+| LOGGING_WORKER_MAX_TIME_PER_COROUTINE | Maximum time in seconds allowed for each coroutine in the logging worker before timing out. Default is 20.0
+| LOGGING_WORKER_CLEAR_PERCENTAGE | Percentage of the queue to extract when clearing. Default is 50% 
 | MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
+| MAX_ITERATIONS_TO_CLEAR_QUEUE | Maximum number of iterations to attempt when clearing the logging worker queue during shutdown. Default is 200
+| MAX_TIME_TO_CLEAR_QUEUE | Maximum time in seconds to spend clearing the logging worker queue during shutdown. Default is 5.0
+| LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS | Cooldown time in seconds before allowing another aggressive clear operation when the queue is full. Default is 0.5 
 | MAX_STRING_LENGTH_PROMPT_IN_DB | Maximum length for strings in spend logs when sanitizing request bodies. Strings longer than this will be truncated. Default is 1000
 | MAX_IN_MEMORY_QUEUE_FLUSH_COUNT | Maximum count for in-memory queue flush operations. Default is 1000
 | MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES | Maximum length for the long side of high-resolution images. Default is 2000
@@ -749,7 +763,7 @@ router_settings:
 | PROMPTLAYER_API_KEY | API key for PromptLayer integration
 | PROXY_ADMIN_ID | Admin identifier for proxy server
 | PROXY_BASE_URL | Base URL for proxy service
-| PROXY_BATCH_WRITE_AT | Time in seconds to wait before batch writing spend logs to the database. Default is 30
+| PROXY_BATCH_WRITE_AT | Time in seconds to wait before batch writing spend logs to the database. Default is 10
 | PROXY_BATCH_POLLING_INTERVAL | Time in seconds to wait before polling a batch, to check if it's completed. Default is 6000s (1 hour)
 | PROXY_BUDGET_RESCHEDULER_MAX_TIME | Maximum time in seconds to wait before checking database for budget resets. Default is 605
 | PROXY_BUDGET_RESCHEDULER_MIN_TIME | Minimum time in seconds to wait before checking database for budget resets. Default is 597

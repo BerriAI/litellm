@@ -30,7 +30,10 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
 )
 from litellm.types.router import *
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import (
+    OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
+    LlmProviders,
+)
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -51,7 +54,7 @@ vertex_ai_files_instance = VertexAIFilesHandler()
 async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -95,7 +98,7 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock"]] = None,
+    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -155,13 +158,15 @@ def create_file(
                 api_key=optional_params.api_key,
                 logging_obj=logging_obj,
                 _is_async=_is_async,
-                client=client
-                if client is not None
-                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                else None,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
                 timeout=timeout,
             )
-        elif custom_llm_provider == "openai":
+        elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -272,7 +277,7 @@ def create_file(
 @client
 async def afile_retrieve(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "hosted_vllm"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -313,7 +318,7 @@ async def afile_retrieve(
 @client
 def file_retrieve(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "hosted_vllm"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -343,7 +348,7 @@ def file_retrieve(
 
         _is_async = kwargs.pop("is_async", False) is True
 
-        if custom_llm_provider == "openai":
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -441,12 +446,14 @@ async def afile_delete(
     """
     try:
         loop = asyncio.get_event_loop()
+        model = kwargs.pop("model", None)
         kwargs["is_async"] = True
 
         # Use a partial function to pass your keyword arguments
         func = partial(
             file_delete,
             file_id,
+            model,
             custom_llm_provider,
             extra_headers,
             extra_body,
@@ -470,7 +477,8 @@ async def afile_delete(
 @client
 def file_delete(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    model: Optional[str] = None,
+    custom_llm_provider: Union[Literal["openai", "azure"], str] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -481,6 +489,13 @@ def file_delete(
     LiteLLM Equivalent of DELETE https://api.openai.com/v1/files
     """
     try:
+        try:
+            if model is not None:
+                _, custom_llm_provider, _, _ = get_llm_provider(
+                    model, custom_llm_provider
+                )
+        except Exception:
+            pass
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params_dict = get_litellm_params(**kwargs)
         ### TIMEOUT LOGIC ###
@@ -500,7 +515,7 @@ def file_delete(
         elif timeout is None:
             timeout = 600.0
         _is_async = kwargs.pop("is_async", False) is True
-        if custom_llm_provider == "openai":
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -566,7 +581,7 @@ def file_delete(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'delete_batch'. Only 'openai' is supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
@@ -656,7 +671,7 @@ def file_list(
             timeout = 600.0
 
         _is_async = kwargs.pop("is_async", False) is True
-        if custom_llm_provider == "openai":
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -740,7 +755,7 @@ def file_list(
 @client
 async def afile_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -785,7 +800,7 @@ def file_content(
     file_id: str,
     model: Optional[str] = None,
     custom_llm_provider: Optional[
-        Union[Literal["openai", "azure", "vertex_ai"], str]
+        Union[Literal["openai", "azure", "vertex_ai", "hosted_vllm"], str]
     ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -832,7 +847,7 @@ def file_content(
 
         _is_async = kwargs.pop("afile_content", False) is True
 
-        if custom_llm_provider == "openai":
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
