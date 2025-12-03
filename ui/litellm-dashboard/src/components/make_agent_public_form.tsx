@@ -90,7 +90,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
     setLoading(true);
     try {
       const agentIdsToMakePublic = Array.from(selectedAgents);
-      
+
       // Make batch API call for all agents
       await makeAgentsPublicCall(accessToken, agentIdsToMakePublic);
 
@@ -127,8 +127,8 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
         </div>
 
         <Text className="text-sm text-gray-600">
-          Select the agents you want to be visible on the public model hub. Users will still require a valid API key to
-          use these agents.
+          Select the agents you want to be visible on the public model hub. Users will still require a valid Virtual Key
+          to use these agents.
         </Text>
 
         <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
@@ -141,10 +141,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
               agentHubData.map((agent) => {
                 const agentId = agent.agent_id || agent.name;
                 return (
-                  <div
-                    key={agentId}
-                    className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50"
-                  >
+                  <div key={agentId} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50">
                     <Checkbox
                       checked={selectedAgents.has(agentId)}
                       onChange={(e) => handleAgentSelection(agentId, e.target.checked)}
@@ -217,9 +214,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
                           </Badge>
                         )}
                       </div>
-                      {agent?.description && (
-                        <Text className="text-xs text-gray-600 mt-1">{agent.description}</Text>
-                      )}
+                      {agent?.description && <Text className="text-xs text-gray-600 mt-1">{agent.description}</Text>}
                     </div>
                   </div>
                 );
@@ -296,4 +291,3 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 };
 
 export default MakeAgentPublicForm;
-

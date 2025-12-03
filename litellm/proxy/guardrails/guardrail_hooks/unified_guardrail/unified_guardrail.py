@@ -13,6 +13,7 @@ from litellm.caching.caching import DualCache
 from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
@@ -176,6 +177,113 @@ class UnifiedLLMGuardrails(CustomLogger):
         See Aim guardrail implementation for an example - https://github.com/BerriAI/litellm/blob/d0e022cfacb8e9ebc5409bb652059b6fd97b45c0/litellm/proxy/guardrails/guardrail_hooks/aim.py#L168
 
         Triggered by mode: 'post_call'
+
+        Supports sampling_rate parameter to control how often chunks are processed.
+        sampling_rate=1 means every chunk, sampling_rate=5 means every 5th chunk, etc.
         """
+
+        global endpoint_guardrail_translation_mappings
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        guardrail_to_apply: CustomGuardrail = request_data.pop(
+            "guardrail_to_apply", None
+        )
+
+        # Get sampling rate from guardrail config or optional_params, default to 5
+        sampling_rate = 5
+        if guardrail_to_apply is not None:
+            # Check guardrail config first
+            guardrail_config = getattr(guardrail_to_apply, "guardrail_config", {})
+            sampling_rate = guardrail_config.get(
+                "streaming_sampling_rate", sampling_rate
+            )
+
+        # Also check optional_params as fallback
+        sampling_rate = self.optional_params.get(
+            "streaming_sampling_rate", sampling_rate
+        )
+
+        if guardrail_to_apply is None:
+            async for item in response:
+                yield item
+            return
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
+        if (
+            guardrail_to_apply.should_run_guardrail(
+                data=request_data, event_type=event_type
+            )
+            is not True
+        ):
+            verbose_proxy_logger.debug(
+                "UnifiedLLMGuardrails: Post-call streaming scanning disabled for %s",
+                guardrail_to_apply.guardrail_name,
+            )
+            async for item in response:
+                yield item
+            return
+
+        # Initialize translation mappings if needed
+        if endpoint_guardrail_translation_mappings is None:
+            endpoint_guardrail_translation_mappings = (
+                load_guardrail_translation_mappings()
+            )
+
+        # Infer call type from first chunk
+        call_type = None
+        chunk_counter = 0
+
         async for item in response:
-            yield item
+            chunk_counter += 1
+
+            # Infer call type from first chunk if not already done
+            if call_type is None and user_api_key_dict.request_route is not None:
+                call_types = get_call_types_for_route(user_api_key_dict.request_route)
+                if call_types is not None:
+                    call_type = call_types[0]
+
+                # If call type not supported, just pass through all chunks
+                if (
+                    call_type is None
+                    or CallTypes(call_type)
+                    not in endpoint_guardrail_translation_mappings
+                ):
+                    yield item
+                    async for remaining_item in response:
+                        yield remaining_item
+                    return
+
+            # Process chunk based on sampling rate
+            if chunk_counter % sampling_rate == 0:
+                verbose_proxy_logger.debug(
+                    "Processing streaming chunk %s (sampling_rate=%s) with guardrail %s",
+                    chunk_counter,
+                    sampling_rate,
+                    guardrail_to_apply.guardrail_name,
+                )
+
+                endpoint_translation = endpoint_guardrail_translation_mappings[
+                    CallTypes(call_type)
+                ]()
+
+                processed_item = (
+                    await endpoint_translation.process_output_streaming_response(
+                        response=item,
+                        guardrail_to_apply=guardrail_to_apply,
+                        litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                        user_api_key_dict=user_api_key_dict,
+                    )
+                )
+
+                # Add guardrail to applied guardrails header (only once, on first processed chunk)
+                if chunk_counter == sampling_rate:
+                    add_guardrail_to_applied_guardrails_header(
+                        request_data=request_data,
+                        guardrail_name=guardrail_to_apply.guardrail_name,
+                    )
+
+                yield processed_item
+            else:
+                yield item

@@ -14,6 +14,7 @@ Create a vector store which can be used to store and search document chunks for 
 | End-user Tracking | ✅ | |
 | Support LLM Providers (OpenAI `/vector_stores` API) | **OpenAI** | Full vector stores API support across providers |
 | Support LLM Providers (Passthrough API) | [**Azure AI**](/docs/providers/azure_ai/azure_ai_vector_stores_passthrough) | Full vector stores API support across providers |
+| Support LLM Providers (Dataset Management) | [**RAGFlow**](/docs/providers/ragflow_vector_store.md) | Dataset creation and management (search not supported) |
 
 ## Usage
 

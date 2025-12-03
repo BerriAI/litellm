@@ -297,7 +297,7 @@ export default function KeyInfoView({
           <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
             {backButtonText}
           </Button>
-          <Title>{currentKeyData.key_alias || "API Key"}</Title>
+          <Title>{currentKeyData.key_alias || "Virtual Key"}</Title>
 
           <div className="flex items-center cursor-pointer mb-2 space-y-6">
             <div>
@@ -381,7 +381,7 @@ export default function KeyInfoView({
       {/* Delete Confirmation Modal */}
       {isDeleteModalOpen &&
         (() => {
-          const keyName = currentKeyData?.key_alias || currentKeyData?.token_id || "API Key";
+          const keyName = currentKeyData?.key_alias || currentKeyData?.token_id || "Virtual Key";
           const isValid = deleteConfirmInput === keyName;
           return (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -415,7 +415,7 @@ export default function KeyInfoView({
                       </div>
                       <div>
                         <p className="text-base font-medium text-red-600">
-                          Warning: You are about to delete this API key.
+                          Warning: You are about to delete this Virtual Key.
                         </p>
                         <p className="text-base text-red-600 mt-2">
                           This action is irreversible and will immediately revoke access for any applications using this
@@ -423,7 +423,7 @@ export default function KeyInfoView({
                         </p>
                       </div>
                     </div>
-                    <p className="text-base text-gray-600 mb-5">Are you sure you want to delete this API key?</p>
+                    <p className="text-base text-gray-600 mb-5">Are you sure you want to delete this Virtual Key?</p>
                     <div className="mb-5">
                       <label className="block text-base font-medium text-gray-700 mb-2">
                         {`Type `}

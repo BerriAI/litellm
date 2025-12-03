@@ -14,16 +14,16 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.types.utils import Choices
+from litellm.types.utils import Choices, StreamingChoices
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.utils import ModelResponse
+    from litellm.types.utils import ModelResponse, ModelResponseStream
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -241,21 +241,79 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         return response
 
-    def _has_text_content(self, response: "ModelResponse") -> bool:
+    async def process_output_streaming_response(
+        self,
+        response: "ModelResponseStream",
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
+    ) -> Any:
+        """
+        Process output streaming response by applying guardrails to text content.
+
+        Args:
+            response: LiteLLM ModelResponseStream object
+            guardrail_to_apply: The guardrail instance to apply
+            litellm_logging_obj: Optional logging object
+            user_api_key_dict: User API key metadata to pass to guardrails
+
+        Returns:
+            Modified response with guardrail applied to content
+
+        Response Format Support:
+            - String content: choice.message.content = "text here"
+            - List content: choice.message.content = [{"type": "text", "text": "text here"}, ...]
+        """
+
+        # Step 0: Check if response has any text content to process
+        if not self._has_text_content(response):
+            return response
+
+        texts_to_check: List[str] = []
+        images_to_check: List[str] = []
+        task_mappings: List[Tuple[int, Optional[int]]] = []
+        # Track (choice_index, content_index) for each text
+
+        # Step 1: Extract all text content and images from response choices
+        for choice_idx, choice in enumerate(response.choices):
+
+            self._extract_output_text_and_images(
+                choice=choice,
+                choice_idx=choice_idx,
+                texts_to_check=texts_to_check,
+                images_to_check=images_to_check,
+                task_mappings=task_mappings,
+            )
+
+    def _has_text_content(
+        self, response: Union["ModelResponse", "ModelResponseStream"]
+    ) -> bool:
         """
         Check if response has any text content to process.
 
         Override this method to customize text content detection.
         """
-        for choice in response.choices:
-            if isinstance(choice, litellm.Choices):
-                if choice.message.content and isinstance(choice.message.content, str):
-                    return True
+        from litellm.types.utils import ModelResponse, ModelResponseStream
+
+        if isinstance(response, ModelResponse):
+            for choice in response.choices:
+                if isinstance(choice, litellm.Choices):
+                    if choice.message.content and isinstance(
+                        choice.message.content, str
+                    ):
+                        return True
+        elif isinstance(response, ModelResponseStream):
+            for choice in response.choices:
+                if isinstance(choice, litellm.Choices):
+                    if choice.message.content and isinstance(
+                        choice.message.content, str
+                    ):
+                        return True
         return False
 
     def _extract_output_text_and_images(
         self,
-        choice: Any,
+        choice: Union[Choices, StreamingChoices],
         choice_idx: int,
         texts_to_check: List[str],
         images_to_check: List[str],
@@ -266,21 +324,29 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         Override this method to customize text/image extraction logic.
         """
-        if not isinstance(choice, litellm.Choices):
-            return
-
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processing choice: %s", choice
         )
 
-        if choice.message.content and isinstance(choice.message.content, str):
+        # Determine content source based on choice type
+        content = None
+        if isinstance(choice, litellm.Choices):
+            content = choice.message.content
+        elif isinstance(choice, litellm.StreamingChoices):
+            content = choice.delta.content
+        else:
+            # Unknown choice type, skip processing
+            return
+
+        # Process content if it exists
+        if content and isinstance(content, str):
             # Simple string content
-            texts_to_check.append(choice.message.content)
+            texts_to_check.append(content)
             task_mappings.append((choice_idx, None))
 
-        elif choice.message.content and isinstance(choice.message.content, list):
+        elif content and isinstance(content, list):
             # List content (e.g., multimodal response)
-            for content_idx, content_item in enumerate(choice.message.content):
+            for content_idx, content_item in enumerate(content):
                 # Extract text
                 content_text = content_item.get("text")
                 if content_text:

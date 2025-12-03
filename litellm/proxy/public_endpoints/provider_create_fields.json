@@ -2608,6 +2608,16 @@
         "default_value": null
       },
       {
+        "key": "api_base",
+        "label": "Google Private API Endpoint",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
         "key": "vertex_credentials",
         "label": "Vertex Credentials",
         "placeholder": null,
