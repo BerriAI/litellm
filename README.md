@@ -117,10 +117,18 @@ LiteLLM also supports OpenAI's `/responses` format. Works with **all providers**
 ```python
 import litellm
 
+# OpenAI
 response = litellm.responses(
     model="openai/gpt-4o",
     input="Hello, how are you?"
 )
+
+# Anthropic
+response = litellm.responses(
+    model="anthropic/claude-sonnet-4-20250514",
+    input="Hello, how are you?"
+)
+
 print(response)
 ```
 
