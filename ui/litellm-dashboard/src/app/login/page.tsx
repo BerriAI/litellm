@@ -133,7 +133,7 @@ function LoginPageContent() {
                 block
                 size="large"
               >
-                {isLoginLoading ? "Loggin in..." : "Login"}
+                {isLoginLoading ? "Logging in..." : "Login"}
               </Button>
             </Form.Item>
           </Form>
