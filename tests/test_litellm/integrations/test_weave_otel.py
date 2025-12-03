@@ -100,7 +100,7 @@ def test_set_weave_specific_attributes_display_name_from_metadata():
         "model": "gpt-4",
     }
     
-    with patch("litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes.safe_set_attribute") as mock_safe_set:
+    with patch("litellm.integrations.weave.weave_otel.safe_set_attribute") as mock_safe_set:
         _set_weave_specific_attributes(mock_span, kwargs, None)
         
         # Should set display_name from metadata
@@ -117,7 +117,7 @@ def test_set_weave_specific_attributes_display_name_from_model():
         "metadata": {},
     }
     
-    with patch("litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes.safe_set_attribute") as mock_safe_set:
+    with patch("litellm.integrations.weave.weave_otel.safe_set_attribute") as mock_safe_set:
         _set_weave_specific_attributes(mock_span, kwargs, None)
         
         # Should set display_name from model
@@ -134,7 +134,7 @@ def test_set_weave_specific_attributes_thread_id_and_is_turn():
         "metadata": {"session_id": "session-123"},
     }
     
-    with patch("litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes.safe_set_attribute") as mock_safe_set:
+    with patch("litellm.integrations.weave.weave_otel.safe_set_attribute") as mock_safe_set:
         _set_weave_specific_attributes(mock_span, kwargs, None)
         
         # Should set thread_id and is_turn
