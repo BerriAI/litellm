@@ -214,7 +214,7 @@ jobs:
           github_token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           show_full_output: true
-          claude_args: "--model claude-opus-4-5-20250929 --max-turns 150 --allowed-tools Read,Write,Edit,Bash,Grep,Glob"
+          claude_args: "--model claude-opus-4-5-20251101 --max-turns 150 --allowed-tools Read,Write,Edit,Bash,Grep,Glob"
           prompt: |
             # Fix CI Failures in Upstream Sync Resolution PR
 
