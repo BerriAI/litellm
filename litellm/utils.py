@@ -2827,6 +2827,8 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             object = litellm.BedrockCohereEmbeddingConfig()
         elif "twelvelabs" in model or "marengo" in model:
             object = litellm.TwelveLabsMarengoEmbeddingConfig()
+        elif "nova" in model.lower():
+            object = litellm.AmazonNovaEmbeddingConfig()
         else:  # unmapped model
             supported_params = []
             _check_valid_arg(supported_params=supported_params)
@@ -4439,17 +4441,20 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
         responses_api_response = getattr(response_obj, "response", None)
         if responses_api_response and hasattr(responses_api_response, "output"):
             output_list = responses_api_response.output
-            response_str = ""
+            # Use list accumulation to avoid O(n^2) string concatenation:
+            # repeatedly doing `response_str += part` copies the full string each time
+            # because Python strings are immutable, so total work grows with n^2.
+            response_output_parts: List[str] = []
             for output_item in output_list:
                 # Handle output items with content array
                 if hasattr(output_item, "content"):
                     for content_part in output_item.content:
                         if hasattr(content_part, "text"):
-                            response_str += content_part.text
+                            response_output_parts.append(content_part.text)
                 # Handle output items with direct text field
                 elif hasattr(output_item, "text"):
-                    response_str += output_item.text
-            return response_str
+                    response_output_parts.append(output_item.text)
+            return "".join(response_output_parts)
 
     # Handle Responses API text delta events
     if hasattr(response_obj, "type") and hasattr(response_obj, "delta"):
@@ -4463,16 +4468,17 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
         response_obj.choices
     )
 
-    response_str = ""
+    # Use list accumulation to avoid O(n^2) string concatenation across choices
+    response_parts: List[str] = []
     for choice in _choices:
         if isinstance(choice, Choices):
             if choice.message.content is not None:
-                response_str += choice.message.content
+                response_parts.append(str(choice.message.content))
         elif isinstance(choice, StreamingChoices):
             if choice.delta.content is not None:
-                response_str += choice.delta.content
+                response_parts.append(str(choice.delta.content))
 
-    return response_str
+    return "".join(response_parts)
 
 
 def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
@@ -6959,11 +6965,11 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
         except Exception as e:
             if isinstance(e, KeyError):
                 raise Exception(
-                    f"Invalid message={m} at index {idx}. Please ensure all messages are valid OpenAI chat completion messages."
+                    f"Invalid message at index {idx}. Please ensure all messages are valid OpenAI chat completion messages."
                 )
             if "invalid content type" in str(e):
                 raise Exception(
-                    f"Invalid user message={m} at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
+                    f"Invalid user message at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
                 )
             else:
                 raise e
@@ -7151,8 +7157,6 @@ class ProviderConfigManager:
             return litellm.AzureAIStudioConfig()
         elif litellm.LlmProviders.AZURE_TEXT == provider:
             return litellm.AzureOpenAITextConfig()
-        elif litellm.LlmProviders.AZURE_ANTHROPIC == provider:
-            return litellm.AzureAnthropicConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMChatConfig()
         elif litellm.LlmProviders.NLP_CLOUD == provider:
@@ -7285,6 +7289,8 @@ class ProviderConfigManager:
             return litellm.SnowflakeEmbeddingConfig()
         elif litellm.LlmProviders.COMETAPI == provider:
             return litellm.CometAPIEmbeddingConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            return litellm.GithubCopilotEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
             from litellm.llms.sagemaker.embedding.transformation import (
                 SagemakerEmbeddingConfig,
@@ -7346,12 +7352,6 @@ class ProviderConfigManager:
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
-        elif litellm.LlmProviders.AZURE_ANTHROPIC == provider:
-            from litellm.llms.azure.anthropic.messages_transformation import (
-                AzureAnthropicMessagesConfig,
-            )
-
-            return AzureAnthropicMessagesConfig()
         return None
 
     @staticmethod
@@ -7380,6 +7380,18 @@ class ProviderConfigManager:
             )
 
             return HostedVLLMAudioTranscriptionConfig()
+        elif litellm.LlmProviders.WATSONX == provider:
+            from litellm.llms.watsonx.audio_transcription.transformation import (
+                IBMWatsonXAudioTranscriptionConfig,
+            )
+
+            return IBMWatsonXAudioTranscriptionConfig()
+        elif litellm.LlmProviders.OVHCLOUD == provider:
+            from litellm.llms.ovhcloud.audio_transcription.transformation import (
+                OVHCloudAudioTranscriptionConfig,
+            )
+
+            return OVHCloudAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -7613,6 +7625,12 @@ class ProviderConfigManager:
             )
 
             return MilvusVectorStoreConfig()
+        elif litellm.LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.vector_stores.transformation import (
+                GeminiVectorStoreConfig,
+            )
+
+            return GeminiVectorStoreConfig()
         return None
 
     @staticmethod
@@ -7892,6 +7910,12 @@ class ProviderConfigManager:
             )
 
             return RunwayMLTextToSpeechConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.text_to_speech.transformation import (
+                VertexAITextToSpeechConfig,
+            )
+
+            return VertexAITextToSpeechConfig()
         return None
 
     @staticmethod

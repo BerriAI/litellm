@@ -320,9 +320,11 @@ export default function UserInfoView({
               </Card>
 
               <Card>
-                <Text>API Keys</Text>
+                <Text>Virtual Keys</Text>
                 <div className="mt-2">
-                  <Text>{userData.keys?.length || 0} keys</Text>
+                  <Text>
+                    {userData.keys?.length || 0} {userData.keys?.length === 1 ? "Key" : "Keys"}
+                  </Text>
                 </div>
               </Card>
 
@@ -467,7 +469,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">API Keys</Text>
+                    <Text className="font-medium">Virtual Keys</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.keys?.length && userData.keys?.length > 0 ? (
                         userData.keys.map((key, index) => (
@@ -476,7 +478,7 @@ export default function UserInfoView({
                           </span>
                         ))
                       ) : (
-                        <Text>No API keys</Text>
+                        <Text>No Virtual Keys</Text>
                       )}
                     </div>
                   </div>

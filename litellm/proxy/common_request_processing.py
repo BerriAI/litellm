@@ -809,7 +809,24 @@ class ProxyBaseLLMRequestProcessing:
                 status_code=e.response.status_code,
                 detail={"error": error_text},
             )
-        error_msg = f"{str(e)}"
+        error_msg = f"{str(e)}"        
+        # Check for AttributeError in various places:
+        # 1. Direct AttributeError (already handled above)
+        # 2. In underlying exception (__cause__, __context__, original_exception)
+        has_attribute_error = (
+            (isinstance(e, Exception) and isinstance(getattr(e, "__cause__", None), AttributeError))
+            or (isinstance(e, Exception) and isinstance(getattr(e, "__context__", None), AttributeError))
+            or (isinstance(e, Exception) and isinstance(getattr(e, "original_exception", None), AttributeError))
+        )
+        
+        if has_attribute_error:
+            raise ProxyException(
+                message=f"Invalid request format: {error_msg}",
+                type="invalid_request_error",
+                param=None,
+                code=status.HTTP_400_BAD_REQUEST,
+                headers=headers,
+            )
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),

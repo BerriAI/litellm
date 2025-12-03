@@ -16,7 +16,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.proxy._types import NewTeamRequest
+from litellm.proxy._types import LiteLLM_UserTable, NewTeamRequest, NewUserResponse
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
@@ -2239,6 +2239,227 @@ class TestGenericResponseConvertorNestedAttributes:
             assert result.display_name == "user-sub-123"  # Top-level attribute works
 
 
+class TestGetGenericSSORedirectParams:
+    """Test _get_generic_sso_redirect_params state parameter priority handling"""
+
+    def test_state_priority_cli_state_provided(self):
+        """
+        Test that CLI state takes highest priority when provided
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        cli_state = "litellm-session-token:sk-test123"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": "env_state_value"}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=cli_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == cli_state
+            assert code_verifier is None  # PKCE not enabled by default
+
+    def test_state_priority_env_variable_when_no_cli_state(self):
+        """
+        Test that GENERIC_CLIENT_STATE environment variable is used when CLI state is not provided
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        env_state = "custom_env_state_value"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": env_state}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=None,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == env_state
+            assert code_verifier is None
+
+    def test_state_priority_generated_uuid_fallback(self):
+        """
+        Test that a UUID is generated when neither CLI state nor env variable is provided
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange - no CLI state and no env variable
+        with patch.dict(os.environ, {}, clear=False):
+            # Remove GENERIC_CLIENT_STATE if it exists
+            os.environ.pop("GENERIC_CLIENT_STATE", None)
+            
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=None,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert "state" in redirect_params
+            assert redirect_params["state"] is not None
+            assert len(redirect_params["state"]) == 32  # UUID hex is 32 chars
+            assert code_verifier is None
+
+    def test_state_with_pkce_enabled(self):
+        """
+        Test that PKCE parameters are generated when GENERIC_CLIENT_USE_PKCE is enabled
+        """
+        import base64
+        import hashlib
+
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        test_state = "test_state_123"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=test_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert state
+            assert redirect_params["state"] == test_state
+            
+            # Assert PKCE parameters
+            assert code_verifier is not None
+            assert len(code_verifier) == 43  # Standard PKCE verifier length
+            assert "code_challenge" in redirect_params
+            assert "code_challenge_method" in redirect_params
+            assert redirect_params["code_challenge_method"] == "S256"
+            
+            # Verify code_challenge is correctly derived from code_verifier
+            expected_challenge_bytes = hashlib.sha256(
+                code_verifier.encode("utf-8")
+            ).digest()
+            expected_challenge = (
+                base64.urlsafe_b64encode(expected_challenge_bytes)
+                .decode("utf-8")
+                .rstrip("=")
+            )
+            assert redirect_params["code_challenge"] == expected_challenge
+
+    def test_state_with_pkce_disabled(self):
+        """
+        Test that PKCE parameters are NOT generated when GENERIC_CLIENT_USE_PKCE is false
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        test_state = "test_state_456"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "false"}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=test_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == test_state
+            assert code_verifier is None
+            assert "code_challenge" not in redirect_params
+            assert "code_challenge_method" not in redirect_params
+
+    def test_state_priority_cli_state_overrides_env_with_pkce(self):
+        """
+        Test that CLI state takes priority over env variable even when PKCE is enabled
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        cli_state = "cli_state_priority"
+        env_state = "env_state_should_not_be_used"
+        
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": env_state,
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=cli_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert
+            assert redirect_params["state"] == cli_state  # CLI state takes priority
+            assert redirect_params["state"] != env_state
+            
+            # PKCE should still be generated
+            assert code_verifier is not None
+            assert "code_challenge" in redirect_params
+            assert "code_challenge_method" in redirect_params
+
+    def test_empty_string_state_uses_env_variable(self):
+        """
+        Test that empty string state is treated as None and uses env variable
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange
+        env_state = "env_state_for_empty_cli"
+        
+        with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": env_state}):
+            # Act
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state="",  # Empty string
+                    generic_authorization_endpoint="https://auth.example.com/authorize",
+                )
+            )
+
+            # Assert - empty string is falsy, so env variable should be used
+            # Note: This tests current implementation behavior
+            # If empty string should be treated differently, implementation needs update
+            assert redirect_params["state"] == env_state
+
+    def test_multiple_calls_generate_different_uuids(self):
+        """
+        Test that multiple calls without state generate different UUIDs
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Arrange - no state provided
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GENERIC_CLIENT_STATE", None)
+            
+            # Act
+            params1, _ = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                state=None,
+                generic_authorization_endpoint="https://auth.example.com/authorize",
+            )
+            params2, _ = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                state=None,
+                generic_authorization_endpoint="https://auth.example.com/authorize",
+            )
+
+            # Assert
+            assert params1["state"] != params2["state"]
+            assert len(params1["state"]) == 32
+            assert len(params2["state"]) == 32
+
+
 class TestPKCEFunctionality:
     """Test PKCE (Proof Key for Code Exchange) functionality"""
 
@@ -2352,3 +2573,210 @@ class TestPKCEFunctionality:
                 assert "code_challenge=" in updated_location
                 assert "code_challenge_method=S256" in updated_location
                 assert f"state={test_state}" in updated_location
+
+
+# Tests for SSO user team assignment bug (Issue: SSO Users Not Added to Entra-Synced Teams on First Login)
+class TestAddMissingTeamMember:
+    """Tests for the add_missing_team_member function"""
+
+    @pytest.mark.asyncio
+    async def test_add_missing_team_member_with_new_user_response_teams_none(self):
+        """
+        Bug reproduction: When a NewUserResponse has teams=None (new SSO user),
+        add_missing_team_member() should still add the user to the SSO teams.
+
+        Currently FAILS: The function returns early when teams is None.
+        """
+        from litellm.proxy._types import NewUserResponse
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        # Simulate a new SSO user - NewUserResponse has teams=None by default
+        new_user = NewUserResponse(
+            user_id="new-sso-user-123",
+            key="sk-xxxxx",
+            teams=None,  # This is the default for NewUserResponse
+        )
+
+        sso_teams = ["team-from-entra-1", "team-from-entra-2"]
+
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task"
+        ) as mock_add_task:
+            mock_add_task.return_value = AsyncMock()
+
+            await add_missing_team_member(user_info=new_user, sso_teams=sso_teams)
+
+            # Bug: This assertion currently FAILS - no teams are added
+            # because function returns early when teams is None
+            assert (
+                mock_add_task.call_count == 2
+            ), f"Expected 2 calls to add user to teams, but got {mock_add_task.call_count}"
+            called_team_ids = [call.args[0] for call in mock_add_task.call_args_list]
+            assert set(called_team_ids) == {
+                "team-from-entra-1",
+                "team-from-entra-2",
+            }
+
+    @pytest.mark.asyncio
+    async def test_add_missing_team_member_with_litellm_user_table_empty_teams(self):
+        """
+        Control test: When a LiteLLM_UserTable has teams=[] (existing user, no teams),
+        add_missing_team_member() should add the user to SSO teams.
+
+        This test PASSES because LiteLLM_UserTable defaults teams to [] not None.
+        """
+        from litellm.proxy._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        # Existing user has teams=[] by default (not None)
+        existing_user = LiteLLM_UserTable(
+            user_id="existing-user-456",
+            teams=[],  # Empty list, not None
+        )
+
+        sso_teams = ["team-from-entra-1", "team-from-entra-2"]
+
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task"
+        ) as mock_add_task:
+            mock_add_task.return_value = AsyncMock()
+
+            await add_missing_team_member(user_info=existing_user, sso_teams=sso_teams)
+
+            # This PASSES - teams are added because teams=[] not None
+            assert mock_add_task.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_add_user_to_teams_from_sso_response_new_user(self):
+        """
+        Integration test: Simulates the SSO response handler with a new user
+        that has teams=None from NewUserResponse.
+        """
+        from litellm.proxy._types import NewUserResponse
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        # SSO response with team_ids from Entra ID
+        sso_result = CustomOpenID(
+            id="new-sso-user-id",
+            email="newuser@example.com",
+            team_ids=["entra-group-1", "entra-group-2"],
+        )
+
+        # New user response (simulates what new_user() returns)
+        new_user_info = NewUserResponse(
+            user_id="new-sso-user-id",
+            key="sk-xxxxx",
+            teams=None,  # Bug: NewUserResponse defaults to None
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.add_missing_team_member"
+        ) as mock_add_member:
+            await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
+                result=sso_result,
+                user_info=new_user_info,
+            )
+
+            # Verify add_missing_team_member was called with correct args
+            mock_add_member.assert_called_once_with(
+                user_info=new_user_info, sso_teams=["entra-group-1", "entra-group-2"]
+            )
+
+    @pytest.mark.asyncio
+    async def test_sso_first_login_full_flow_adds_user_to_teams(self):
+        """
+        End-to-end test: Simulates complete first-time SSO login with Entra groups.
+        Verifies teams are created AND user is added as a member.
+        """
+        from litellm.proxy._types import NewUserResponse
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        team_member_calls = []
+
+        async def track_team_member_add(team_id, user_info):
+            team_member_calls.append(
+                {"team_id": team_id, "user_id": user_info.user_id}
+            )
+
+        # New SSO user with Entra groups
+        new_user = NewUserResponse(
+            user_id="first-time-sso-user",
+            key="sk-xxxxx",
+            teams=None,  # The problematic default
+        )
+
+        sso_teams = ["entra-team-alpha", "entra-team-beta"]
+
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task",
+            side_effect=track_team_member_add,
+        ):
+            await add_missing_team_member(user_info=new_user, sso_teams=sso_teams)
+
+        # Bug: With current code, team_member_calls will be empty
+        # After fix: Should have 2 entries
+        assert (
+            len(team_member_calls) == 2
+        ), f"Expected 2 teams to be added, but got {len(team_member_calls)}"
+        assert {c["team_id"] for c in team_member_calls} == {
+            "entra-team-alpha",
+            "entra-team-beta",
+        }
+        assert all(c["user_id"] == "first-time-sso-user" for c in team_member_calls)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "user_info_factory,teams_value,expected_teams_added",
+        [
+            # Bug case: NewUserResponse with teams=None
+            pytest.param(
+                lambda uid: NewUserResponse(user_id=uid, key="sk-xxx", teams=None),
+                None,
+                ["team-1", "team-2"],  # Should still add teams
+                id="new_user_teams_none",
+            ),
+            # Working case: LiteLLM_UserTable with teams=[]
+            pytest.param(
+                lambda uid: LiteLLM_UserTable(user_id=uid, teams=[]),
+                [],
+                ["team-1", "team-2"],
+                id="existing_user_empty_teams",
+            ),
+            # Existing user with some teams already
+            pytest.param(
+                lambda uid: LiteLLM_UserTable(user_id=uid, teams=["team-1"]),
+                ["team-1"],
+                ["team-2"],  # Only missing team should be added
+                id="existing_user_partial_teams",
+            ),
+        ],
+    )
+    async def test_add_missing_team_member_handles_all_user_types(
+        self, user_info_factory, teams_value, expected_teams_added
+    ):
+        """
+        Parametrized test ensuring add_missing_team_member works for all user types.
+        """
+        from litellm.proxy._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        user_info = user_info_factory("test-user-id")
+        sso_teams = ["team-1", "team-2"]
+
+        added_teams = []
+
+        async def mock_create_task(team_id, user):
+            added_teams.append(team_id)
+
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task",
+            side_effect=mock_create_task,
+        ):
+            await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
+
+        assert set(added_teams) == set(
+            expected_teams_added
+        ), f"Expected teams {expected_teams_added}, but got {added_teams}"
