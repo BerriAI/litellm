@@ -34,10 +34,10 @@ test("view internal user page", async ({ page }) => {
   // The UI renders badges in each row - we just verify the column structure exists
   const rowCount = await page.locator("tbody tr").count();
   expect(rowCount).toBeGreaterThan(0);
-  
-  // Verify table headers are present (including API Keys column)
-  const apiKeysHeader = page.locator("th", { hasText: "API Keys" });
-  await expect(apiKeysHeader).toBeVisible();
+
+  // Verify table headers are present (including Virtual Keys column)
+  const virtualKeysHeader = page.locator("th", { hasText: "Virtual Keys" });
+  await expect(virtualKeysHeader).toBeVisible();
 
   // test pagination
   // Wait for pagination controls to be visible
