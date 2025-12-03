@@ -84,3 +84,17 @@ class BaseTranslation(ABC):
             user_api_key_dict: User API key metadata (passed separately since response doesn't contain it)
         """
         pass
+
+    async def process_output_streaming_response(
+        self,
+        response: Any,
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+    ) -> Any:
+        """
+        Process output streaming response with guardrails.
+
+        Optional to override in subclasses.
+        """
+        return response
