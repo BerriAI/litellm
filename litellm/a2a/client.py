@@ -7,6 +7,7 @@ Provides a class-based interface for A2A agent invocation.
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
 
 if TYPE_CHECKING:
+    from a2a.client import A2AClient as A2AClientType
     from a2a.types import (
         AgentCard,
         SendMessageRequest,
@@ -15,24 +16,12 @@ if TYPE_CHECKING:
         SendStreamingMessageResponse,
     )
 
-# Runtime imports with availability check
-A2A_SDK_AVAILABLE = False
-
-try:
-    from a2a.client import A2ACardResolver
-    from a2a.client import A2AClient as _A2AClient
-
-    A2A_SDK_AVAILABLE = True
-except ImportError:
-    pass
-
 
 class A2AClient:
     """
     LiteLLM wrapper for A2A agent invocation.
 
-    Convenience class that wraps the standalone functions.
-    For logging/tracking integration, use the standalone functions in main.py.
+    Creates the underlying A2A client once on first use and reuses it.
 
     Example:
         ```python
@@ -61,27 +50,31 @@ class A2AClient:
         base_url: str,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
-        ssl_verify: Optional[bool] = None,
     ):
         """
-        Initialize the A2A client.
+        Initialize the A2A client wrapper.
 
         Args:
             base_url: The base URL of the A2A agent (e.g., "http://localhost:10001")
             timeout: Request timeout in seconds (default: 60.0)
             extra_headers: Optional additional headers to include in requests
-            ssl_verify: SSL verification setting (None uses default, False disables)
         """
-        if not A2A_SDK_AVAILABLE:
-            raise ImportError(
-                "The 'a2a' package is required for A2AClient. "
-                "Install it with: pip install a2a"
-            )
-
         self.base_url = base_url
         self.timeout = timeout
-        self.extra_headers = extra_headers or {}
-        self.ssl_verify = ssl_verify
+        self.extra_headers = extra_headers
+        self._a2a_client: Optional["A2AClientType"] = None
+
+    async def _get_client(self) -> "A2AClientType":
+        """Get or create the underlying A2A client."""
+        if self._a2a_client is None:
+            from litellm.a2a.main import create_a2a_client
+
+            self._a2a_client = await create_a2a_client(
+                base_url=self.base_url,
+                timeout=self.timeout,
+                extra_headers=self.extra_headers,
+            )
+        return self._a2a_client
 
     async def get_agent_card(self) -> "AgentCard":
         """Fetch the agent card from the server."""
@@ -91,7 +84,6 @@ class A2AClient:
             base_url=self.base_url,
             timeout=self.timeout,
             extra_headers=self.extra_headers,
-            ssl_verify=self.ssl_verify,
         )
 
     async def send_message(
@@ -100,13 +92,8 @@ class A2AClient:
         """Send a message to the A2A agent."""
         from litellm.a2a.main import asend_message
 
-        return await asend_message(
-            base_url=self.base_url,
-            request=request,
-            timeout=self.timeout,
-            extra_headers=self.extra_headers,
-            ssl_verify=self.ssl_verify,
-        )
+        a2a_client = await self._get_client()
+        return await asend_message(a2a_client=a2a_client, request=request)
 
     async def send_message_streaming(
         self, request: "SendStreamingMessageRequest"
@@ -114,11 +101,6 @@ class A2AClient:
         """Send a streaming message to the A2A agent."""
         from litellm.a2a.main import asend_message_streaming
 
-        async for chunk in asend_message_streaming(
-            base_url=self.base_url,
-            request=request,
-            timeout=self.timeout,
-            extra_headers=self.extra_headers,
-            ssl_verify=self.ssl_verify,
-        ):
+        a2a_client = await self._get_client()
+        async for chunk in asend_message_streaming(a2a_client=a2a_client, request=request):
             yield chunk

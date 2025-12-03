@@ -43,6 +43,7 @@ from litellm.a2a.main import (
     aget_agent_card,
     asend_message,
     asend_message_streaming,
+    create_a2a_client,
     send_message,
 )
 
@@ -52,4 +53,5 @@ __all__ = [
     "send_message",
     "asend_message_streaming",
     "aget_agent_card",
+    "create_a2a_client",
 ]
