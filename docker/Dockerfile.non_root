@@ -58,9 +58,12 @@ RUN cd /tmp/litellm_ui && \
 RUN cd /app/ui/litellm-dashboard && rm -rf ./out
 
 # Build package and wheel dependencies
+# Use prebuilt binary wheels to avoid compilation issues with minimal toolchain
+ENV GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1 \
+    GRPC_PYTHON_DISABLE_LIBC_COMPATIBILITY=1
 RUN rm -rf dist/* && python -m build && \
   pip install dist/*.whl && \
-  pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+  pip wheel --no-cache-dir --wheel-dir=/wheels/ --prefer-binary -r requirements.txt
 
 # -----------------
 # Runtime Stage
