@@ -303,7 +303,7 @@ class OpenAIFileObject(BaseModel):
     `fine-tune`, `fine-tune-results`, `vision`, and `user_data`.
     """
 
-    status: Literal["uploaded", "processed", "error"]
+    status: Optional[Literal["uploaded", "processed", "error"]]
     """Deprecated.
 
     The current status of the file, which can be either `uploaded`, `processed`, or
