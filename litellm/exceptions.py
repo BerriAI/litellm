@@ -152,7 +152,50 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+        
+class ConflictError(openai.ConflictError):  # type: ignore
+    def __init__(
+        self,
+        message,
+        model,
+        llm_provider,
+        response: Optional[httpx.Response] = None,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
+    ):
+        self.status_code = 409
+        self.message = "litellm.ConflictError: {}".format(message)
+        self.model = model
+        self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        self.response = response or httpx.Response(
+            status_code=self.status_code,
+            request=httpx.Request(
+                method="GET", url="https://litellm.ai"
+            ),  # mock request object
+        )
+        super().__init__(
+            self.message, response=self.response, body=None
+        )  # Call the base class constructor with the parameters it needs
 
+    def __str__(self):
+        _message = self.message
+        if self.num_retries:
+            _message += f" LiteLLM Retried: {self.num_retries} times"
+        if self.max_retries:
+            _message += f", LiteLLM Max Retries: {self.max_retries}"
+        return _message
+
+    def __repr__(self):
+        _message = self.message
+        if self.num_retries:
+            _message += f" LiteLLM Retried: {self.num_retries} times"
+        if self.max_retries:
+            _message += f", LiteLLM Max Retries: {self.max_retries}"
+        return _message
 
 class ImageFetchError(BadRequestError):
     def __init__(
@@ -807,6 +850,7 @@ LITELLM_EXCEPTION_TYPES = [
     AuthenticationError,
     NotFoundError,
     BadRequestError,
+    ConflictError,
     UnprocessableEntityError,
     UnsupportedParamsError,
     Timeout,
