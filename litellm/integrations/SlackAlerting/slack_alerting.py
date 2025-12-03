@@ -134,19 +134,25 @@ class SlackAlerting(CustomBatchLogger):
         if llm_router is not None:
             self.llm_router = llm_router
 
-    def _prepare_outage_value_for_cache(self, outage_value: Union[dict, ProviderRegionOutageModel, OutageModel]) -> dict:
+    def _prepare_outage_value_for_cache(
+        self, outage_value: Union[dict, ProviderRegionOutageModel, OutageModel]
+    ) -> dict:
         """
         Helper method to prepare outage value for Redis caching.
         Converts set objects to lists for JSON serialization.
         """
         # Convert to dict for processing
         cache_value = dict(outage_value)
-        
-        if "deployment_ids" in cache_value and isinstance(cache_value["deployment_ids"], set):
+
+        if "deployment_ids" in cache_value and isinstance(
+            cache_value["deployment_ids"], set
+        ):
             cache_value["deployment_ids"] = list(cache_value["deployment_ids"])
         return cache_value
 
-    def _restore_outage_value_from_cache(self, outage_value: Optional[dict]) -> Optional[dict]:
+    def _restore_outage_value_from_cache(
+        self, outage_value: Optional[dict]
+    ) -> Optional[dict]:
         """
         Helper method to restore outage value after retrieving from cache.
         Converts list objects back to sets for proper handling.
@@ -528,6 +534,7 @@ class SlackAlerting(CustomBatchLogger):
             "soft_budget",
             "user_budget",
             "team_budget",
+            "organization_budget",
             "proxy_budget",
             "projected_limit_exceeded",
         ],
@@ -1338,7 +1345,7 @@ Model Info:
             subject=email_event["subject"],
             html=email_event["html"],
         )
-        if webhook_event.event_group == "team":
+        if webhook_event.event_group == Litellm_EntityType.TEAM:
             from litellm.integrations.email_alerting import send_team_budget_alert
 
             await send_team_budget_alert(webhook_event=webhook_event)
@@ -1399,7 +1406,7 @@ Model Info:
         current_time = datetime.now().strftime("%H:%M:%S")
         _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
         # Use .name if it's an enum, otherwise use as is
-        alert_type_name = getattr(alert_type, 'name', alert_type)
+        alert_type_name = getattr(alert_type, "name", alert_type)
         alert_type_formatted = f"Alert type: `{alert_type_name}`"
         if alert_type == "daily_reports" or alert_type == "new_model_added":
             formatted_message = alert_type_formatted + message

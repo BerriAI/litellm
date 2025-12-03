@@ -627,6 +627,7 @@ const sidebars = {
         "providers/petals",
         "providers/publicai",
         "providers/predibase",
+        "providers/ragflow",
         "providers/recraft",
         "providers/replicate",
         {
@@ -820,10 +821,13 @@ const sidebars = {
               "Learn how to deploy + call models from different providers on LiteLLM",
             slug: "/project",
           },
-          items: [        
+          items: [
             "projects/smolagents",
             "projects/mini-swe-agent",
             "projects/openai-agents",
+            "projects/Google ADK",
+            "projects/Agent Lightning",
+            "projects/Harbor",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",
