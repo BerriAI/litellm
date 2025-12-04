@@ -171,9 +171,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
-    PassthroughResponseException,
-)
+from litellm.integrations.custom_guardrail import GuardrailPassthroughException
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -4948,7 +4946,7 @@ async def chat_completion(  # noqa: PLR0915
             return model_dump_with_preserved_fields(result, exclude_unset=True)
         else:
             return result
-    except PassthroughResponseException as e:
+    except GuardrailPassthroughException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -5094,7 +5092,7 @@ async def completion(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
-    except PassthroughResponseException as e:
+    except GuardrailPassthroughException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(

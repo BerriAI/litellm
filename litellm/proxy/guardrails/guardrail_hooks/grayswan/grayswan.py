@@ -31,29 +31,6 @@ class GraySwanGuardrailAPIError(Exception):
     """Raised when the Gray Swan API returns an error."""
 
 
-class PassthroughResponseException(Exception):
-    """
-    Raised when guardrail detects a violation in passthrough mode.
-
-    This exception carries the synthetic response that should be returned
-    to the user instead of calling the LLM. It should be caught by the
-    proxy and returned with a 200 status code.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        model: str,
-        request_data: Dict[str, Any],
-        detection_info: Optional[Dict[str, Any]] = None,
-    ):
-        self.message = message
-        self.model = model
-        self.request_data = request_data
-        self.detection_info = detection_info or {}
-        super().__init__(message)
-
-
 class GraySwanGuardrail(CustomGuardrail):
     """
     Guardrail that calls Gray Swan's Cygnal monitoring endpoint.
@@ -446,10 +423,8 @@ class GraySwanGuardrail(CustomGuardrail):
                     "Gray Swan Guardrail: Passthrough mode - raising exception to short-circuit LLM call"
                 )
                 violation_message = self._format_violation_message([detection_info])
-                model = data.get("model", "unknown") if data else "unknown"
-                raise PassthroughResponseException(
-                    message=violation_message,
-                    model=model,
+                self.raise_passthrough_exception(
+                    violation_message=violation_message,
                     request_data=data or {},
                     detection_info=detection_info,
                 )
