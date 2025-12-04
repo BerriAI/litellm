@@ -16,8 +16,13 @@ import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    LiteLLMAnthropicMessagesAdapter,
+)
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.types.guardrails import GenericGuardrailAPIInputs
+from litellm.types.llms.anthropic import AllAnthropicToolsValues
+from litellm.types.llms.openai import ChatCompletionToolParam
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -38,6 +43,10 @@ class AnthropicMessagesHandler(BaseTranslation):
     Methods can be overridden to customize behavior for different message formats.
     """
 
+    def __init__(self):
+        super().__init__()
+        self.adapter = LiteLLMAnthropicMessagesAdapter()
+
     async def process_input_messages(
         self,
         data: dict,
@@ -48,11 +57,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         Process input messages by applying guardrails to text content.
         """
         messages = data.get("messages")
+        tools = data.get("tools", None)
         if messages is None:
             return data
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
+        tools_to_check: List[ChatCompletionToolParam] = []
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (message_index, content_index) for each text
         # content_index is None for string content, int for list content
@@ -67,19 +78,27 @@ class AnthropicMessagesHandler(BaseTranslation):
                 task_mappings=task_mappings,
             )
 
+        if tools is not None:
+            self._extract_input_tools(
+                tools=tools,
+                tools_to_check=tools_to_check,
+            )
+
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
-            guardrailed_texts, guardrailed_images = (
-                await guardrail_to_apply.apply_guardrail(
-                    inputs=inputs,
-                    request_data=data,
-                    input_type="request",
-                    logging_obj=litellm_logging_obj,
-                )
+            if tools_to_check:
+                inputs["tools"] = tools_to_check
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs=inputs,
+                request_data=data,
+                input_type="request",
+                logging_obj=litellm_logging_obj,
             )
+
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
 
             # Step 3: Map guardrail responses back to original message structure
             await self._apply_guardrail_responses_to_input(
@@ -108,15 +127,17 @@ class AnthropicMessagesHandler(BaseTranslation):
         Override this method to customize text/image extraction logic.
         """
         content = message.get("content", None)
-        if content is None:
+        tools = message.get("tools", None)
+        if content is None and tools is None:
             return
 
-        if isinstance(content, str):
+        ## CHECK FOR TEXT + IMAGES
+        if content is not None and isinstance(content, str):
             # Simple string content
             texts_to_check.append(content)
             task_mappings.append((msg_idx, None))
 
-        elif isinstance(content, list):
+        elif content is not None and isinstance(content, list):
             # List content (e.g., multimodal with text and images)
             for content_idx, content_item in enumerate(content):
                 # Extract text
@@ -133,6 +154,22 @@ class AnthropicMessagesHandler(BaseTranslation):
                         data = source.get("data")
                         if data:
                             images_to_check.append(data)
+
+    def _extract_input_tools(
+        self,
+        tools: List[Dict[str, Any]],
+        tools_to_check: List[ChatCompletionToolParam],
+    ) -> None:
+        """
+        Extract tools from a message.
+        """
+        ## CHECK FOR TOOLS
+        if tools is not None and isinstance(tools, list):
+            # TRANSFORM ANTHROPIC TOOLS TO OPENAI TOOLS
+            openai_tools = self.adapter.translate_anthropic_tools_to_openai(
+                tools=cast(List[AllAnthropicToolsValues], tools)
+            )
+            tools_to_check.extend(openai_tools)
 
     async def _apply_guardrail_responses_to_input(
         self,
@@ -230,14 +267,14 @@ class AnthropicMessagesHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
-            guardrailed_texts, guardrailed_images = (
-                await guardrail_to_apply.apply_guardrail(
-                    inputs=inputs,
-                    request_data=request_data,
-                    input_type="response",
-                    logging_obj=litellm_logging_obj,
-                )
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="response",
+                logging_obj=litellm_logging_obj,
             )
+
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
 
             # Step 3: Map guardrail responses back to original response structure
             await self._apply_guardrail_responses_to_output(

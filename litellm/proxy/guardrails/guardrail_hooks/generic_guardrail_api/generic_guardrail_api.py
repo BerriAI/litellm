@@ -174,7 +174,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         # Extract texts and images from inputs
         texts = inputs.get("texts", [])
         images = inputs.get("images")
-        tool_calls = inputs.get("tools")
+        tools = inputs.get("tools")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
@@ -200,7 +200,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             texts=texts,
             request_data=user_metadata,
             images=images,
-            tool_calls=tool_calls,
+            tools=tools,
             additional_provider_specific_params=additional_params,
             input_type=input_type,
         )
@@ -248,8 +248,8 @@ class GenericGuardrailAPI(CustomGuardrail):
                 return_inputs["images"] = images
             if guardrail_response.tools:
                 return_inputs["tools"] = guardrail_response.tools
-            elif tool_calls:
-                return_inputs["tools"] = tool_calls
+            elif tools:
+                return_inputs["tools"] = tools
             return return_inputs
 
         except Exception as e:

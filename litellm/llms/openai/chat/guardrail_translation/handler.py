@@ -20,6 +20,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.types.guardrails import GenericGuardrailAPIInputs
+from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.types.utils import Choices, StreamingChoices
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
-        tool_calls_to_check: List[Dict[str, Any]] = []
+        tool_calls_to_check: List[ChatCompletionToolParam] = []
         text_task_mappings: List[Tuple[int, Optional[int]]] = []
         tool_call_task_mappings: List[Tuple[int, int]] = []
         # text_task_mappings: Track (message_index, content_index) for each text
@@ -120,7 +121,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         msg_idx: int,
         texts_to_check: List[str],
         images_to_check: List[str],
-        tool_calls_to_check: List[Dict[str, Any]],
+        tool_calls_to_check: List[ChatCompletionToolParam],
         text_task_mappings: List[Tuple[int, Optional[int]]],
         tool_call_task_mappings: List[Tuple[int, int]],
     ) -> None:
@@ -159,7 +160,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             for tool_call_idx, tool_call in enumerate(tool_calls):
                 if isinstance(tool_call, dict):
                     # Add the full tool call object to the list
-                    tool_calls_to_check.append(tool_call)
+                    tool_calls_to_check.append(ChatCompletionToolParam(**tool_call))
                     tool_call_task_mappings.append((msg_idx, int(tool_call_idx)))
 
     async def _apply_guardrail_responses_to_input_texts(

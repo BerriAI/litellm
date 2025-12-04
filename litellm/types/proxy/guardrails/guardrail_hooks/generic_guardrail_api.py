@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
@@ -60,7 +60,7 @@ class GenericGuardrailAPIRequest:
         litellm_trace_id: Optional[str],
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         images: Optional[List[str]] = None,
-        tool_calls: Optional[List[ChatCompletionToolCallChunk]] = None,
+        tools: Optional[List[ChatCompletionToolParam]] = None,
     ):
         self.texts = texts
         self.request_data = request_data
@@ -71,13 +71,14 @@ class GenericGuardrailAPIRequest:
         self.input_type = input_type
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id = litellm_trace_id
-        self.tool_calls = tool_calls
+        self.tools = tools
 
     def to_dict(self) -> dict:
         return {
             "texts": self.texts,
             "request_data": self.request_data,
             "images": self.images,
+            "tools": self.tools,
             "additional_provider_specific_params": self.additional_provider_specific_params,
             "input_type": self.input_type,
             "litellm_call_id": self.litellm_call_id,
@@ -90,7 +91,7 @@ class GenericGuardrailAPIResponse:
 
     texts: Optional[List[str]]
     images: Optional[List[str]]
-    tools: Optional[List[ChatCompletionToolCallChunk]]
+    tools: Optional[List[ChatCompletionToolParam]]
     action: str
     blocked_reason: Optional[str]
 
@@ -100,7 +101,7 @@ class GenericGuardrailAPIResponse:
         texts: Optional[List[str]] = None,
         blocked_reason: Optional[str] = None,
         images: Optional[List[str]] = None,
-        tools: Optional[List[ChatCompletionToolCallChunk]] = None,
+        tools: Optional[List[ChatCompletionToolParam]] = None,
     ):
         self.action = action
         self.blocked_reason = blocked_reason
