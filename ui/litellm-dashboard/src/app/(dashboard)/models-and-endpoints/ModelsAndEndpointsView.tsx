@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Text, Grid, Col } from "@tremor/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CredentialItem, credentialListCall, CredentialsResponse } from "@/components/networking";
+import { CredentialItem } from "@/components/networking";
 
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
 
@@ -23,6 +23,7 @@ import {
   allEndUsersCall,
 } from "@/components/networking";
 import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { Form } from "antd";
 import { Typography } from "antd";
 import { RefreshIcon } from "@heroicons/react/outline";
@@ -134,8 +135,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
 
-  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
-
   // Model Group Alias state
   const [modelGroupAlias, setModelGroupAlias] = useState<{ [key: string]: string }>({});
 
@@ -160,19 +159,12 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     isLoading: isLoadingModels,
     refetch: refetchModels,
   } = useModelsInfo(accessToken, userID, userRole);
+  const { data: credentialsResponse } = useCredentials(accessToken);
+  const credentialsList = credentialsResponse?.credentials || [];
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
     setProviderModels(_providerModels);
-  };
-
-  const fetchCredentials = async (accessToken: string) => {
-    try {
-      const response: CredentialsResponse = await credentialListCall(accessToken);
-      setCredentialsList(response.credentials);
-    } catch (error) {
-      console.error("Error fetching credentials:", error);
-    }
   };
 
   useEffect(() => {
@@ -686,12 +678,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   />
                 </TabPanel>
                 <TabPanel>
-                  <CredentialsPanel
-                    accessToken={accessToken}
-                    uploadProps={uploadProps}
-                    credentialList={credentialsList}
-                    fetchCredentials={fetchCredentials}
-                  />
+                  <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} />
                 </TabPanel>
                 <TabPanel>
                   <PassThroughSettings
