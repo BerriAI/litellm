@@ -60,7 +60,6 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
                     message=(
                         "Azure OpenAI does not support reasoning_effort='none' for this model. "
                         "Supported values are: 'low', 'medium', and 'high'. "
-                        "Note: gpt-5.1 does support reasoning_effort='none'. "
                         "To drop this parameter, set `litellm.drop_params=True` or for proxy:\n\n"
                         "`litellm_settings:\n drop_params: true`\n"
                         "Issue: https://github.com/BerriAI/litellm/issues/16704"
