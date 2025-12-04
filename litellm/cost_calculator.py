@@ -934,6 +934,17 @@ def completion_cost(  # noqa: PLR0915
                         prompt_tokens = token_counter(model=model, text=prompt)
                     completion_tokens = token_counter(model=model, text=completion)
 
+                # Handle A2A calls before model check - A2A doesn't require a model
+                if call_type in (
+                    CallTypes.asend_message.value,
+                    CallTypes.send_message.value,
+                ):
+                    from litellm.a2a.cost_calculator import A2ACostCalculator
+
+                    return A2ACostCalculator.calculate_a2a_cost(
+                        litellm_logging_obj=litellm_logging_obj
+                    )
+
                 if model is None:
                     raise ValueError(
                         f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
