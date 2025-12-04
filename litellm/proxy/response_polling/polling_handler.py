@@ -93,6 +93,18 @@ class ResponsePollingHandler:
         tool_choice: Optional[Any] = None,
         tools: Optional[list] = None,
         output: Optional[list] = None,
+        # Additional ResponsesAPIResponse fields
+        model: Optional[str] = None,
+        instructions: Optional[str] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        max_output_tokens: Optional[int] = None,
+        previous_response_id: Optional[str] = None,
+        text: Optional[Dict] = None,
+        truncation: Optional[str] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        user: Optional[str] = None,
+        store: Optional[bool] = None,
     ) -> None:
         """
         Update the polling state in Redis
@@ -110,6 +122,17 @@ class ResponsePollingHandler:
             tool_choice: Tool choice configuration from response.completed
             tools: Tools list from response.completed
             output: Full output list to replace current output
+            model: Model identifier
+            instructions: System instructions
+            temperature: Sampling temperature
+            top_p: Nucleus sampling parameter
+            max_output_tokens: Maximum output tokens
+            previous_response_id: ID of previous response in conversation
+            text: Text configuration
+            truncation: Truncation setting
+            parallel_tool_calls: Whether parallel tool calls are enabled
+            user: User identifier
+            store: Whether to store the response
         """
         if not self.redis_cache:
             return
@@ -155,6 +178,30 @@ class ResponsePollingHandler:
             state["tool_choice"] = tool_choice
         if tools is not None:
             state["tools"] = tools
+        
+        # Update additional ResponsesAPIResponse fields
+        if model is not None:
+            state["model"] = model
+        if instructions is not None:
+            state["instructions"] = instructions
+        if temperature is not None:
+            state["temperature"] = temperature
+        if top_p is not None:
+            state["top_p"] = top_p
+        if max_output_tokens is not None:
+            state["max_output_tokens"] = max_output_tokens
+        if previous_response_id is not None:
+            state["previous_response_id"] = previous_response_id
+        if text is not None:
+            state["text"] = text
+        if truncation is not None:
+            state["truncation"] = truncation
+        if parallel_tool_calls is not None:
+            state["parallel_tool_calls"] = parallel_tool_calls
+        if user is not None:
+            state["user"] = user
+        if store is not None:
+            state["store"] = store
         
         # Update cache with configured TTL
         await self.redis_cache.async_set_cache(
