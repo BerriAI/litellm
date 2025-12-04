@@ -1,10 +1,14 @@
 # Adding OpenAI-Compatible Providers
 
-For providers that follow the OpenAI API format, you can add support via a simple JSON configuration.
-
 ## Quick Start
 
-Edit `litellm/llms/openai_like/providers.json` and add your provider:
+For providers with OpenAI-compatible APIs, add them via JSON configuration instead of writing Python code.
+
+## Steps
+
+### 1. Add to JSON Config
+
+Edit `litellm/llms/openai_like/providers.json`:
 
 ```json
 {
@@ -15,55 +19,90 @@ Edit `litellm/llms/openai_like/providers.json` and add your provider:
 }
 ```
 
-That's it! The provider is now available.
+### 2. Add to Provider Enum
 
-## Usage
+Add one line to `litellm/types/utils.py`:
+
+```python
+class LlmProviders(str, Enum):
+    # ... existing providers ...
+    YOUR_PROVIDER = "your_provider"
+```
+
+### 3. Test It
 
 ```python
 import litellm
 import os
 
-os.environ["YOUR_PROVIDER_API_KEY"] = "your-api-key"
+os.environ["YOUR_PROVIDER_API_KEY"] = "your-key"
 
 response = litellm.completion(
     model="your_provider/model-name",
-    messages=[{"role": "user", "content": "Hello!"}],
+    messages=[{"role": "user", "content": "Hello"}]
 )
 ```
 
-## Configuration Options
+That's it! Your provider is now integrated.
 
-### Required Fields
+## Optional Configuration
 
-- **`base_url`**: API endpoint (e.g., `https://api.provider.com/v1`)
-- **`api_key_env`**: Environment variable name for the API key
+### Parameter Mappings
 
-### Optional Fields
+If your provider uses different parameter names:
 
 ```json
 {
   "your_provider": {
     "base_url": "https://api.yourprovider.com/v1",
     "api_key_env": "YOUR_PROVIDER_API_KEY",
-    
-    // Override base_url via environment variable
-    "api_base_env": "YOUR_PROVIDER_API_BASE",
-    
-    // Base class: "openai_gpt" (default) or "openai_like"
-    "base_class": "openai_gpt",
-    
-    // Map parameter names
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
-    },
-    
-    // Parameter constraints
+    }
+  }
+}
+```
+
+### API Base Override
+
+Allow users to override the base URL:
+
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.yourprovider.com/v1",
+    "api_key_env": "YOUR_PROVIDER_API_KEY",
+    "api_base_env": "YOUR_PROVIDER_API_BASE"
+  }
+}
+```
+
+### Temperature Constraints
+
+If your provider has different temperature limits:
+
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.yourprovider.com/v1",
+    "api_key_env": "YOUR_PROVIDER_API_KEY",
     "constraints": {
       "temperature_max": 1.0,
       "temperature_min": 0.0
-    },
-    
-    // Special handling flags
+    }
+  }
+}
+```
+
+### Content Format Conversion
+
+If your provider doesn't support content as a list:
+
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.yourprovider.com/v1",
+    "api_key_env": "YOUR_PROVIDER_API_KEY",
     "special_handling": {
       "convert_content_list_to_string": true
     }
@@ -71,43 +110,19 @@ response = litellm.completion(
 }
 ```
 
-## Examples
-
-### Simple Provider (Fully OpenAI-Compatible)
-
-```json
-{
-  "hyperbolic": {
-    "base_url": "https://api.hyperbolic.xyz/v1",
-    "api_key_env": "HYPERBOLIC_API_KEY"
-  }
-}
-```
-
-### Provider with Parameter Mapping
+## Complete Example
 
 ```json
 {
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
+    "api_base_env": "PUBLICAI_API_BASE",
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
-    }
-  }
-}
-```
-
-### Provider with Temperature Constraints
-
-```json
-{
-  "custom_provider": {
-    "base_url": "https://api.custom.com/v1",
-    "api_key_env": "CUSTOM_API_KEY",
-    "constraints": {
-      "temperature_max": 1.0,
-      "temperature_min": 0.1
+    },
+    "special_handling": {
+      "convert_content_list_to_string": true
     }
   }
 }
@@ -116,54 +131,48 @@ response = litellm.completion(
 ## When to Use Python Instead
 
 Use a Python config class if you need:
-- Custom authentication (OAuth, token rotation)
+- Custom authentication (OAuth, JWT, etc.)
 - Complex request/response transformations
 - Provider-specific streaming logic
 - Advanced tool calling transformations
 
-For simple OpenAI-compatible providers, JSON is recommended.
-
-## Testing Your Provider
-
-```python
-import litellm
-import os
-
-# Set API key
-os.environ["YOUR_PROVIDER_API_KEY"] = "your-key"
-
-# Test basic completion
-response = litellm.completion(
-    model="your_provider/model-name",
-    messages=[{"role": "user", "content": "test"}],
-    max_tokens=10,
-)
-print(response.choices[0].message.content)
-
-# Test streaming
-response = litellm.completion(
-    model="your_provider/model-name",
-    messages=[{"role": "user", "content": "test"}],
-    stream=True,
-)
-for chunk in response:
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="")
-```
+See existing providers in `litellm/llms/` for Python examples.
 
 ## Supported Features
 
-JSON-configured providers automatically support:
-- ✅ Basic completions
+All JSON-configured providers automatically support:
 - ✅ Streaming
-- ✅ Async operations
-- ✅ Parameter mapping
-- ✅ Environment variable overrides
-- ✅ Temperature constraints
-- ✅ Content format conversions
+- ✅ Async completion
+- ✅ Standard OpenAI parameters
+- ✅ Tool calling (if provider supports it)
+- ✅ Function calling
+- ✅ Response format (JSON mode)
 
-## File Location
+## Testing
 
-**Config file**: `litellm/llms/openai_like/providers.json`
+Test your provider with:
 
-**Add provider**: Edit the JSON file and add your configuration under a new key.
+```bash
+# Set your API key
+export YOUR_PROVIDER_API_KEY="your-key"
+
+# Test basic completion
+python -c "
+import litellm
+response = litellm.completion(
+    model='your_provider/model-name',
+    messages=[{'role': 'user', 'content': 'test'}]
+)
+print(response.choices[0].message.content)
+"
+```
+
+## Submit Your Provider
+
+Once tested:
+1. Add your provider to `providers.json`
+2. Add to `LlmProviders` enum
+3. Test with the command above
+4. Submit a PR
+
+Your PR will be reviewed quickly since it only changes 2 files!
