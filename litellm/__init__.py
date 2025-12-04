@@ -151,6 +151,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "mlflow",
     "langfuse",
     "langfuse_otel",
+    "weave_otel",
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
@@ -1056,57 +1057,10 @@ from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
-from .utils import (
-    client,
-    exception_type,
-    get_optional_params,
-    get_response_string,
-    token_counter,
-    create_pretrained_tokenizer,
-    create_tokenizer,
-    supports_function_calling,
-    supports_web_search,
-    supports_url_context,
-    supports_response_schema,
-    supports_parallel_function_calling,
-    supports_vision,
-    supports_audio_input,
-    supports_audio_output,
-    supports_system_messages,
-    supports_reasoning,
-    get_litellm_params,
-    acreate,
-    get_max_tokens,
-    get_model_info,
-    register_prompt_template,
-    validate_environment,
-    check_valid_key,
-    register_model,
-    encode,
-    decode,
-    _calculate_retry_after,
-    _should_retry,
-    get_supported_openai_params,
-    get_api_base,
-    get_first_chars_messages,
-    ModelResponse,
-    ModelResponseStream,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-    get_provider_fields,
-    ModelResponseListIterator,
-    get_valid_models,
-)
-
-ALL_LITELLM_RESPONSE_TYPES = [
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-]
+# client must be imported immediately as it's used as a decorator at function definition time
+from .utils import client
+# Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
+# (which imports tiktoken) at import time
 
 from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
@@ -1538,56 +1492,6 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 
 # Lazy loading system for heavy modules to reduce initial import time and memory usage
-def _lazy_import_cost_calculator(name: str) -> Any:
-    """Lazy import for cost_calculator functions."""
-    from .cost_calculator import (
-        completion_cost as _completion_cost,
-        cost_per_token as _cost_per_token,
-        response_cost_calculator as _response_cost_calculator,
-    )
-    
-    _cost_functions = {
-        "completion_cost": _completion_cost,
-        "cost_per_token": _cost_per_token,
-        "response_cost_calculator": _response_cost_calculator,
-    }
-    
-    func = _cost_functions[name]
-    globals()[name] = func
-    return func
-
-
-def _lazy_import_litellm_logging(name: str) -> Any:
-    """Lazy import for litellm_logging module."""
-    try:
-        from litellm.litellm_core_utils.litellm_logging import (
-            Logging as _Logging,
-            modify_integration as _modify_integration,
-        )
-        
-        _logging_objects = {
-            "Logging": _Logging,
-            "modify_integration": _modify_integration,
-        }
-        
-        obj = _logging_objects[name]
-        globals()[name] = obj
-        return obj
-    except Exception as e:
-        raise AttributeError(
-            f"module {__name__!r} has no attribute {name!r}. "
-            f"Lazy import failed: {e}"
-        ) from e
-
-
-_LAZY_LOAD_REGISTRY: Dict[str, Callable[[str], Any]] = {
-    "completion_cost": _lazy_import_cost_calculator,
-    "cost_per_token": _lazy_import_cost_calculator,
-    "response_cost_calculator": _lazy_import_cost_calculator,
-    "Logging": _lazy_import_litellm_logging,
-    "modify_integration": _lazy_import_litellm_logging,
-}
-
 
 if TYPE_CHECKING:
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -1598,7 +1502,45 @@ if TYPE_CHECKING:
 
 def __getattr__(name: str) -> Any:
     """Lazy import handler for cost_calculator and litellm_logging functions."""
-    if name in _LAZY_LOAD_REGISTRY:
-        return _LAZY_LOAD_REGISTRY[name](name)
+    # Lazy load cost_calculator functions
+    _cost_calculator_names = (
+        "completion_cost",
+        "cost_per_token",
+        "response_cost_calculator",
+    )
+    if name in _cost_calculator_names:
+        from ._lazy_imports import _lazy_import_cost_calculator
+        return _lazy_import_cost_calculator(name)
+    
+    # Lazy load litellm_logging functions
+    _litellm_logging_names = (
+        "Logging",
+        "modify_integration",
+    )
+    if name in _litellm_logging_names:
+        from ._lazy_imports import _lazy_import_litellm_logging
+        return _lazy_import_litellm_logging(name)
+    
+    # Lazy load utils functions
+    _utils_names = (
+        "exception_type", "get_optional_params", "get_response_string", "token_counter",
+        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+        "supports_web_search", "supports_url_context", "supports_response_schema",
+        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+        "supports_audio_output", "supports_system_messages", "supports_reasoning",
+        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+        "register_prompt_template", "validate_environment", "check_valid_key",
+        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+        "ModelResponseListIterator", "get_valid_models",
+    )
+    if name in _utils_names:
+        from ._lazy_imports import _lazy_import_utils
+        return _lazy_import_utils(name)
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time

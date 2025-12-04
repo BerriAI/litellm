@@ -436,9 +436,7 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = _get_httpx_client(
-                        params={"timeout": timeout}
-                    )
+                    client = _get_httpx_client(params={"timeout": timeout})
                 else:
                     client = client
 
@@ -528,9 +526,7 @@ class ModelResponseIterator:
             usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
         )
 
-    def _content_block_delta_helper(
-        self, chunk: dict
-    ) -> Tuple[
+    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
