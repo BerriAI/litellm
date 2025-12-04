@@ -15,7 +15,6 @@ from typing import (
     List,
     Literal,
     Optional,
-    Tuple,
     Union,
 )
 
@@ -30,7 +29,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GenericGuardrailAPIInputs, GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIProcessedResult,
     EnkryptAIResponse,
@@ -481,27 +480,28 @@ class EnkryptAIGuardrails(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        texts: List[str],
+        inputs: "GenericGuardrailAPIInputs",
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        images: Optional[List[str]] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> "GenericGuardrailAPIInputs":
         """
         Apply EnkryptAI guardrail to a batch of texts.
 
         Args:
-            texts: List of texts to check for attacks
+            inputs: Dictionary containing texts and optional images
             request_data: Request data dictionary containing metadata
             input_type: Whether this is a "request" or "response"
-            images: Optional list of images (not used by EnkryptAI)
+            logging_obj: Optional logging object
 
         Returns:
-            Tuple of (texts, images) - texts unchanged if passed, images unchanged
+            GenericGuardrailAPIInputs - texts unchanged if passed, images unchanged
 
         Raises:
             ValueError: If any attacks are detected
         """
+        texts = inputs.get("texts", [])
+
         # Check each text for attacks
         for text in texts:
             result = await self._call_enkryptai_guardrails(
@@ -517,7 +517,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 error_message = self._create_error_message(processed_result)
                 raise ValueError(error_message)
 
-        return texts, images
+        return inputs
 
     async def async_post_call_streaming_iterator_hook(
         self,
