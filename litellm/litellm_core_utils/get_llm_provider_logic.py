@@ -252,7 +252,7 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
-                    elif endpoint == "platform.publicai.co/v1":
+                    elif endpoint == "api.publicai.co/v1":
                         custom_llm_provider = "publicai"
                         dynamic_api_key = get_secret_str("PUBLICAI_API_KEY")
                     elif endpoint == "https://api.v0.dev/v1":

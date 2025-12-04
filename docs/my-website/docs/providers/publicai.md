@@ -10,13 +10,13 @@ import TabItem from '@theme/TabItem';
 | Description | PublicAI provides large language models including essential models like the swiss-ai apertus model. |
 | Provider Route on LiteLLM | `publicai/` |
 | Link to Provider Doc | [PublicAI ↗](https://platform.publicai.co/) |
-| Base URL | `https://platform.publicai.co/` |
+| Base URL | `https://api.publicai.co/` |
 | Supported Operations | [`/chat/completions`](#sample-usage) |
 
 <br />
 <br />
 
-https://platform.publicai.co/
+https://api.publicai.co/
 
 **We support ALL PublicAI models, just set `publicai/` as a prefix when sending completion requests**
 
@@ -29,7 +29,7 @@ os.environ["PUBLICAI_API_KEY"] = ""  # your PublicAI API key
 You can overwrite the base url with:
 
 ```
-os.environ["PUBLICAI_API_BASE"] = "https://platform.publicai.co/v1"
+os.environ["PUBLICAI_API_BASE"] = "https://api.publicai.co/v1"
 ```
 
 ## Usage - LiteLLM Python SDK

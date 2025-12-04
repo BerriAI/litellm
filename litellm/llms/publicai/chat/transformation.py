@@ -51,7 +51,7 @@ class PublicAIChatConfig(OpenAIGPTConfig):
         api_base = (
             api_base
             or get_secret_str("PUBLICAI_API_BASE")
-            or "https://platform.publicai.co/v1"
+            or "https://api.publicai.co/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("PUBLICAI_API_KEY")
         return api_base, dynamic_api_key
@@ -69,7 +69,7 @@ class PublicAIChatConfig(OpenAIGPTConfig):
         If api_base is not provided, use the default PublicAI /chat/completions endpoint.
         """
         if not api_base:
-            api_base = "https://platform.publicai.co/v1"
+            api_base = "https://api.publicai.co/v1"
 
         if not api_base.endswith("/chat/completions"):
             api_base = f"{api_base}/chat/completions"

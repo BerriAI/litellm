@@ -120,7 +120,7 @@ class TestPublicAIConfig:
             stream=False
         )
         
-        assert url == "https://platform.publicai.co/v1/chat/completions"
+        assert url == "https://api.publicai.co/v1/chat/completions"
 
     def test_get_complete_url_with_custom_base(self):
         """
