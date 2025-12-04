@@ -3811,6 +3811,8 @@ async def count_tokens_with_anthropic_api(
     model_to_use: str,
     messages: Optional[List[Dict[str, Any]]],
     deployment: Optional[Dict[str, Any]] = None,
+    system: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Helper function to count tokens using Anthropic API directly.
@@ -3819,6 +3821,8 @@ async def count_tokens_with_anthropic_api(
         model_to_use: The model name to use for token counting
         messages: The messages to count tokens for
         deployment: Optional deployment configuration containing API key
+        system: Optional system prompt to include in token count
+        tools: Optional list of tools to include in token count
 
     Returns:
         Optional dict with token count and tokenizer info, or None if failed
@@ -3836,6 +3840,11 @@ async def count_tokens_with_anthropic_api(
         if deployment is not None:
             anthropic_api_key = deployment.get("litellm_params", {}).get("api_key")
 
+            # Resolve os.environ/ prefix if present (same pattern as get_llm_provider_logic.py)
+            if anthropic_api_key and anthropic_api_key.startswith("os.environ/"):
+                from litellm.secret_managers.main import get_secret_str
+                anthropic_api_key = get_secret_str(anthropic_api_key)
+
         # Fallback to environment variable
         if not anthropic_api_key:
             anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -3844,13 +3853,24 @@ async def count_tokens_with_anthropic_api(
             # Call Anthropic API directly for more accurate token counting
             client = anthropic.Anthropic(api_key=anthropic_api_key)
 
+            # Build kwargs for count_tokens call
+            count_tokens_kwargs: Dict[str, Any] = {
+                "model": model_to_use,
+                "messages": messages,
+                "betas": ["token-counting-2024-11-01"],
+            }
+
+            # Add system prompt if provided
+            if system:
+                count_tokens_kwargs["system"] = system
+
+            # Add tools if provided
+            if tools:
+                count_tokens_kwargs["tools"] = tools
+
             # Call with explicit parameters to satisfy type checking
             # Type ignore for now since messages come from generic dict input
-            response = client.beta.messages.count_tokens(
-                model=model_to_use,
-                messages=messages,  # type: ignore
-                betas=["token-counting-2024-11-01"],
-            )
+            response = client.beta.messages.count_tokens(**count_tokens_kwargs)  # type: ignore
             total_tokens = response.input_tokens
             tokenizer_used = "anthropic_api"
 

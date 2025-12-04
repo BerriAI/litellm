@@ -2432,6 +2432,16 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
     """
 
+    system: Optional[str] = None
+    """
+    System prompt for Anthropic token counting
+    """
+
+    tools: Optional[List[dict]] = None
+    """
+    Tool definitions for Anthropic token counting
+    """
+
 
 class CallInfo(LiteLLMPydanticObjectBase):
     """Used for slack budget alerting"""
