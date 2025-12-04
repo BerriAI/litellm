@@ -1327,7 +1327,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             _get_parent_otel_span_from_kwargs,
         )
         from litellm.proxy.common_utils.callback_utils import (
-            get_metadata_variable_name_from_kwargs,
             get_model_group_from_litellm_kwargs,
         )
         from litellm.types.caching import RedisPipelineIncrementOperation

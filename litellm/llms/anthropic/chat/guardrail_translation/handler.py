@@ -302,7 +302,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
         """
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
+        _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
             inputs={"texts": [string_so_far]},
             request_data={},
             input_type="response",
