@@ -115,6 +115,16 @@ async def get_agent_card(
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@router.post(
+    "/a2a/{agent_id}/message/send",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/v1/a2a/{agent_id}/message/send",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def invoke_agent_a2a(
     agent_id: str,
     request: Request,
