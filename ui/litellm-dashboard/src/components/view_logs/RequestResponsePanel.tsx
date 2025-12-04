@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { LogEntry } from "./columns";
 import NotificationsManager from "../molecules/notifications_manager";
-import { JsonView, defaultStyles } from "react-json-view-lite";
-import "react-json-view-lite/dist/index.css";
+import { CheckIcon, ClipboardIcon } from "lucide-react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface RequestResponsePanelProps {
   row: {
@@ -24,6 +26,9 @@ export function RequestResponsePanel({
   getRawRequest,
   formattedResponse,
 }: RequestResponsePanelProps) {
+  const [copiedRequest, setCopiedRequest] = useState(false);
+  const [copiedResponse, setCopiedResponse] = useState(false);
+
   const copyToClipboard = async (text: string) => {
     try {
       // Try modern clipboard API first
@@ -57,6 +62,8 @@ export function RequestResponsePanel({
   const handleCopyRequest = async () => {
     const success = await copyToClipboard(JSON.stringify(getRawRequest(), null, 2));
     if (success) {
+      setCopiedRequest(true);
+      setTimeout(() => setCopiedRequest(false), 2000);
       NotificationsManager.success("Request copied to clipboard");
     } else {
       NotificationsManager.fromBackend("Failed to copy request");
@@ -66,6 +73,8 @@ export function RequestResponsePanel({
   const handleCopyResponse = async () => {
     const success = await copyToClipboard(JSON.stringify(formattedResponse(), null, 2));
     if (success) {
+      setCopiedResponse(true);
+      setTimeout(() => setCopiedResponse(false), 2000);
       NotificationsManager.success("Response copied to clipboard");
     } else {
       NotificationsManager.fromBackend("Failed to copy response");
@@ -73,67 +82,89 @@ export function RequestResponsePanel({
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 w-full max-w-full overflow-hidden box-border">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full max-w-full overflow-hidden box-border">
       {/* Request Side */}
-      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
-        <div className="flex justify-between items-center p-4 border-b">
-          <h3 className="text-lg font-medium">Request</h3>
-          <button onClick={handleCopyRequest} className="p-1 hover:bg-gray-200 rounded" title="Copy request">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
+      <div className="flex flex-col w-full max-w-full overflow-hidden">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="text-base font-semibold text-gray-900">Request</h3>
+          <button
+            onClick={handleCopyRequest}
+            className="p-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
+            title="Copy request"
+            aria-label="Copy request"
+          >
+            {copiedRequest ? <CheckIcon size={16} /> : <ClipboardIcon size={16} />}
           </button>
         </div>
-        <div className="p-4 overflow-auto max-h-96 w-full max-w-full box-border">
-          <JsonView data={getRawRequest()} style={defaultStyles} clickToExpandNode={true} />
+        <div className="relative rounded-lg border border-gray-200 overflow-hidden w-full max-w-full">
+          <div className="overflow-auto max-h-[500px] w-full max-w-full">
+            <SyntaxHighlighter
+              language="json"
+              style={oneLight}
+              customStyle={{
+                margin: 0,
+                padding: "1.25rem",
+                borderRadius: "0.5rem",
+                fontSize: "0.875rem",
+                backgroundColor: "#fafafa",
+                lineHeight: "1.6",
+              }}
+              showLineNumbers={false}
+              wrapLines={true}
+              wrapLongLines={true}
+            >
+              {JSON.stringify(getRawRequest(), null, 2)}
+            </SyntaxHighlighter>
+          </div>
         </div>
       </div>
 
       {/* Response Side */}
-      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
-        <div className="flex justify-between items-center p-4 border-b">
-          <h3 className="text-lg font-medium">
+      <div className="flex flex-col w-full max-w-full overflow-hidden">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="text-base font-semibold text-gray-900">
             Response
-            {hasError && <span className="ml-2 text-sm text-red-600">• HTTP code {errorInfo?.error_code || 400}</span>}
+            {hasError && (
+              <span className="ml-2 text-sm font-normal text-red-600">
+                • HTTP {errorInfo?.error_code || 400}
+              </span>
+            )}
           </h3>
           <button
             onClick={handleCopyResponse}
-            className="p-1 hover:bg-gray-200 rounded"
+            className="p-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Copy response"
+            aria-label="Copy response"
             disabled={!hasResponse}
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
+            {copiedResponse ? <CheckIcon size={16} /> : <ClipboardIcon size={16} />}
           </button>
         </div>
-        <div className="p-4 overflow-auto max-h-96 w-full max-w-full box-border">
+        <div className="relative rounded-lg border border-gray-200 overflow-hidden w-full max-w-full">
           {hasResponse ? (
-            <JsonView data={formattedResponse()} style={defaultStyles} clickToExpandNode={true} />
+            <div className="overflow-auto max-h-[500px] w-full max-w-full">
+              <SyntaxHighlighter
+                language="json"
+                style={oneLight}
+                customStyle={{
+                  margin: 0,
+                  padding: "1.25rem",
+                  borderRadius: "0.5rem",
+                  fontSize: "0.875rem",
+                  backgroundColor: "#fafafa",
+                  lineHeight: "1.6",
+                }}
+                showLineNumbers={false}
+                wrapLines={true}
+                wrapLongLines={true}
+              >
+                {JSON.stringify(formattedResponse(), null, 2)}
+              </SyntaxHighlighter>
+            </div>
           ) : (
-            <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>
+            <div className="p-8 text-center bg-gray-50">
+              <p className="text-gray-500 text-sm italic">Response data not available</p>
+            </div>
           )}
         </div>
       </div>

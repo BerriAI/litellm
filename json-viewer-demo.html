@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polished JSON Viewer - LiteLLM Logs</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+        }
+        .prism-code {
+            background-color: #fafafa !important;
+            border-radius: 0.5rem;
+            padding: 1.25rem;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            overflow-x: auto;
+        }
+        pre[class*="language-"] {
+            margin: 0;
+            background: #fafafa;
+        }
+        code[class*="language-"] {
+            background: none;
+        }
+        .json-viewer-container {
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            overflow: hidden;
+            background: white;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 p-8">
+    <div class="max-w-7xl mx-auto">
+        <div class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-900 mb-2">Polished JSON Viewer</h1>
+            <p class="text-gray-600">Updated logs viewer with cleaner, more professional styling matching the API Reference page</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Request Side -->
+            <div class="flex flex-col">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-base font-semibold text-gray-900">Request</h3>
+                    <button class="p-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div class="json-viewer-container">
+                    <div class="overflow-auto max-h-[500px]">
+                        <pre class="prism-code"><code class="language-json">{
+  "model": "a2a_agent/Ishaan-Jaffer",
+  "custom_llm_provider": "a2a_agent",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Create an outline for a post about Java"
+    }
+  ],
+  "temperature": 0.7,
+  "max_tokens": 2048,
+  "stream": false
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Response Side -->
+            <div class="flex flex-col">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-base font-semibold text-gray-900">
+                        Response
+                        <span class="ml-2 text-sm font-normal text-gray-500">• 200 OK</span>
+                    </h3>
+                    <button class="p-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div class="json-viewer-container">
+                    <div class="overflow-auto max-h-[500px]">
+                        <pre class="prism-code"><code class="language-json">{
+  "id": "f53f56f4-b096-4cd6-953e-482a4a094e4b",
+  "error": null,
+  "result": {
+    "eventId": "bc9-64f3-4d8a-95c5-33ed1d974984",
+    "kind": "task",
+    "status": {
+      "state": "completed",
+      "timestamp": "2025-12-04T00:16:01.442801+00:00"
+    },
+    "history": [
+      {
+        "kind": "message",
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Create an outline for a short, upbeat..."
+          }
+        ],
+        "taskId": "10d8dbc9-64f3-4d8a-95c5-33ed1d974984",
+        "contextId": "bd84e10f-7673-4aed-ad97-0de7be5ffd86",
+        "messageId": "40e68b4abb3f4ea6b068d602a35ee1d1"
+      }
+    ]
+  }
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Key Improvements Section -->
+        <div class="mt-12 bg-white rounded-lg border border-gray-200 p-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4">Key Improvements</h2>
+            <ul class="space-y-3 text-gray-700">
+                <li class="flex items-start">
+                    <svg class="w-5 h-5 text-green-500 mr-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span><strong>Cleaner Visual Design:</strong> Light gray background (#fafafa) with subtle border matches API Reference styling</span>
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-5 h-5 text-green-500 mr-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span><strong>Better Typography:</strong> Consistent font sizing (0.875rem) and improved line height (1.6) for readability</span>
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-5 h-5 text-green-500 mr-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span><strong>Enhanced Copy Button:</strong> Visual feedback with check icon when copied, better hover states</span>
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-5 h-5 text-green-500 mr-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span><strong>Professional Syntax Highlighting:</strong> Using react-syntax-highlighter with oneLight theme for consistent coloring</span>
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-5 h-5 text-green-500 mr-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span><strong>Improved Spacing:</strong> Better gap between panels (gap-6) and refined padding throughout</span>
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-5 h-5 text-green-500 mr-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span><strong>Better Header Design:</strong> More refined typography with semibold font and improved color contrast</span>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+</body>
+</html>

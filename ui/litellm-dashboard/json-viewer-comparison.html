@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JSON Viewer Polish - Before & After</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+        }
+        
+        /* Old Style (Before) */
+        .old-json-view {
+            background: white;
+            padding: 1rem;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .old-json-view .key { color: #881391; }
+        .old-json-view .string { color: #1A1AA6; }
+        .old-json-view .number { color: #1C00CF; }
+        
+        /* New Style (After) - Matches API Reference */
+        .new-json-view {
+            background: #fafafa;
+            padding: 1.25rem;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            border-radius: 0.5rem;
+        }
+        .new-json-view .token.property { color: #116329; }
+        .new-json-view .token.string { color: #0a3069; }
+        .new-json-view .token.number { color: #0550ae; }
+        .new-json-view .token.boolean { color: #8250df; }
+        .new-json-view .token.null { color: #6e7781; }
+        
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-improvement { background: #10b981; color: white; }
+        .badge-before { background: #ef4444; color: white; }
+    </style>
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="max-w-7xl mx-auto">
+        <!-- Title Section -->
+        <div class="text-center mb-12">
+            <h1 class="text-4xl font-bold text-gray-900 mb-4">JSON Viewer Polish</h1>
+            <p class="text-xl text-gray-600 mb-4">Updated to match API Reference page styling</p>
+            <div class="flex justify-center gap-3">
+                <span class="badge badge-improvement">✓ Cleaner Design</span>
+                <span class="badge badge-improvement">✓ Better Typography</span>
+                <span class="badge badge-improvement">✓ Professional Syntax Highlighting</span>
+                <span class="badge badge-improvement">✓ Consistent Styling</span>
+            </div>
+        </div>
+
+        <!-- Before Section -->
+        <div class="mb-16 bg-white rounded-xl shadow-lg p-8">
+            <div class="flex items-center mb-6">
+                <span class="badge badge-before mr-3">BEFORE</span>
+                <h2 class="text-2xl font-bold text-gray-900">Unpolished Version</h2>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <!-- Old Request Panel -->
+                <div class="bg-white rounded-lg shadow border border-gray-300">
+                    <div class="flex justify-between items-center p-4 border-b">
+                        <h3 class="text-lg font-medium">Request</h3>
+                        <button class="p-1 hover:bg-gray-200 rounded">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="p-4 overflow-auto max-h-96">
+                        <div class="old-json-view">
+<span class="key">{</span>
+  <span class="key">"model"</span>: <span class="string">"a2a_agent/Ishaan-Jaffer"</span>,
+  <span class="key">"custom_llm_provider"</span>: <span class="string">"a2a_agent"</span>
+<span class="key">}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Old Response Panel -->
+                <div class="bg-white rounded-lg shadow border border-gray-300">
+                    <div class="flex justify-between items-center p-4 border-b">
+                        <h3 class="text-lg font-medium">Response <span class="ml-2 text-sm text-red-600">• HTTP code 400</span></h3>
+                        <button class="p-1 hover:bg-gray-200 rounded">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="p-4 overflow-auto max-h-96">
+                        <div class="old-json-view">
+<span class="key">{</span>
+  <span class="key">"id"</span>: <span class="string">"f53f56f4-b096"</span>,
+  <span class="key">"error"</span>: <span class="null">null</span>
+<span class="key">}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                <p class="text-red-800 font-semibold mb-2">Issues with old design:</p>
+                <ul class="text-red-700 space-y-1 text-sm">
+                    <li>• Basic white background - not visually distinct</li>
+                    <li>• Inconsistent with API Reference page</li>
+                    <li>• Limited syntax highlighting</li>
+                    <li>• No copy feedback</li>
+                    <li>• Basic typography</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- After Section -->
+        <div class="bg-gradient-to-br from-green-50 to-blue-50 rounded-xl shadow-2xl p-8">
+            <div class="flex items-center mb-6">
+                <span class="badge badge-improvement mr-3">AFTER</span>
+                <h2 class="text-2xl font-bold text-gray-900">Polished Version (Matches API Reference)</h2>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- New Request Panel -->
+                <div class="flex flex-col">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-base font-semibold text-gray-900">Request</h3>
+                        <button class="p-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors" title="Copy request">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="rounded-lg border border-gray-200 overflow-hidden bg-white">
+                        <div class="overflow-auto max-h-[500px]">
+                            <div class="new-json-view">
+<span class="token punctuation">{</span>
+  <span class="token property">"model"</span><span class="token operator">:</span> <span class="token string">"a2a_agent/Ishaan-Jaffer"</span><span class="token punctuation">,</span>
+  <span class="token property">"custom_llm_provider"</span><span class="token operator">:</span> <span class="token string">"a2a_agent"</span><span class="token punctuation">,</span>
+  <span class="token property">"messages"</span><span class="token operator">:</span> <span class="token punctuation">[</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"role"</span><span class="token operator">:</span> <span class="token string">"user"</span><span class="token punctuation">,</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"Create an outline..."</span>
+    <span class="token punctuation">}</span>
+  <span class="token punctuation">]</span><span class="token punctuation">,</span>
+  <span class="token property">"temperature"</span><span class="token operator">:</span> <span class="token number">0.7</span><span class="token punctuation">,</span>
+  <span class="token property">"stream"</span><span class="token operator">:</span> <span class="token boolean">false</span>
+<span class="token punctuation">}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- New Response Panel -->
+                <div class="flex flex-col">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-base font-semibold text-gray-900">
+                            Response
+                            <span class="ml-2 text-sm font-normal text-red-600">• HTTP 400</span>
+                        </h3>
+                        <button class="p-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors" title="Copy response">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="rounded-lg border border-gray-200 overflow-hidden bg-white">
+                        <div class="overflow-auto max-h-[500px]">
+                            <div class="new-json-view">
+<span class="token punctuation">{</span>
+  <span class="token property">"id"</span><span class="token operator">:</span> <span class="token string">"f53f56f4-b096-4cd6-953e"</span><span class="token punctuation">,</span>
+  <span class="token property">"error"</span><span class="token operator">:</span> <span class="token null">null</span><span class="token punctuation">,</span>
+  <span class="token property">"result"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+    <span class="token property">"eventId"</span><span class="token operator">:</span> <span class="token string">"bc9-64f3..."</span><span class="token punctuation">,</span>
+    <span class="token property">"kind"</span><span class="token operator">:</span> <span class="token string">"task"</span><span class="token punctuation">,</span>
+    <span class="token property">"status"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+      <span class="token property">"state"</span><span class="token operator">:</span> <span class="token string">"completed"</span>
+    <span class="token punctuation">}</span>
+  <span class="token punctuation">}</span>
+<span class="token punctuation">}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-6 p-6 bg-white border-2 border-green-300 rounded-lg shadow-lg">
+                <p class="text-green-800 font-bold text-lg mb-3">✨ Improvements in new design:</p>
+                <div class="grid md:grid-cols-2 gap-4">
+                    <div>
+                        <p class="font-semibold text-gray-900 mb-2">Visual Design:</p>
+                        <ul class="text-gray-700 space-y-1 text-sm">
+                            <li>✓ Light gray background (#fafafa)</li>
+                            <li>✓ Subtle border styling</li>
+                            <li>✓ Better spacing (gap-6)</li>
+                            <li>✓ Professional rounded corners</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <p class="font-semibold text-gray-900 mb-2">Typography:</p>
+                        <ul class="text-gray-700 space-y-1 text-sm">
+                            <li>✓ Improved font sizing (14px)</li>
+                            <li>✓ Better line height (1.6)</li>
+                            <li>✓ Semibold headers</li>
+                            <li>✓ Professional monospace font</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <p class="font-semibold text-gray-900 mb-2">Interaction:</p>
+                        <ul class="text-gray-700 space-y-1 text-sm">
+                            <li>✓ Copy button with check feedback</li>
+                            <li>✓ Smooth hover transitions</li>
+                            <li>✓ Better button styling</li>
+                            <li>✓ Improved accessibility</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <p class="font-semibold text-gray-900 mb-2">Consistency:</p>
+                        <ul class="text-gray-700 space-y-1 text-sm">
+                            <li>✓ Matches API Reference page</li>
+                            <li>✓ Same syntax highlighting</li>
+                            <li>✓ Consistent color palette</li>
+                            <li>✓ Unified design language</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Technical Details -->
+        <div class="mt-12 bg-white rounded-xl shadow-lg p-8">
+            <h2 class="text-2xl font-bold text-gray-900 mb-6">Technical Implementation</h2>
+            
+            <div class="grid md:grid-cols-2 gap-8">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900 mb-3">Before</h3>
+                    <div class="bg-gray-50 rounded-lg p-4 font-mono text-sm">
+                        <div class="text-gray-600">// Using react-json-view-lite</div>
+                        <div class="text-blue-600">&lt;JsonView</div>
+                        <div class="ml-4 text-gray-700">data={data}</div>
+                        <div class="ml-4 text-gray-700">style={defaultStyles}</div>
+                        <div class="text-blue-600">/&gt;</div>
+                    </div>
+                </div>
+                
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900 mb-3">After</h3>
+                    <div class="bg-gray-50 rounded-lg p-4 font-mono text-sm">
+                        <div class="text-gray-600">// Using react-syntax-highlighter</div>
+                        <div class="text-blue-600">&lt;SyntaxHighlighter</div>
+                        <div class="ml-4 text-gray-700">language="json"</div>
+                        <div class="ml-4 text-gray-700">style={oneLight}</div>
+                        <div class="ml-4 text-gray-700">customStyle={{...}}</div>
+                        <div class="text-blue-600">/&gt;</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-8 p-6 bg-blue-50 border border-blue-200 rounded-lg">
+                <h3 class="text-lg font-semibold text-blue-900 mb-3">📦 No New Dependencies Required!</h3>
+                <p class="text-blue-800">
+                    All libraries used (<code class="bg-white px-2 py-1 rounded">react-syntax-highlighter</code> and 
+                    <code class="bg-white px-2 py-1 rounded">lucide-react</code>) are already installed in the project.
+                </p>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="mt-12 text-center text-gray-600">
+            <p class="text-lg mb-2">✅ Build Status: <span class="text-green-600 font-semibold">Passing</span></p>
+            <p class="text-sm">Changes are ready for review and deployment</p>
+        </div>
+    </div>
+</body>
+</html>

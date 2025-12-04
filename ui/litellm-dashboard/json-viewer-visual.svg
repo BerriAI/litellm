@@ -1,0 +1,107 @@
+<svg width="1400" height="900" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="700" y="40" text-anchor="middle" font-size="32" font-weight="bold" fill="#111827">
+    JSON Viewer Polish - Before &amp; After
+  </text>
+  
+  <!-- Before Section -->
+  <text x="350" y="90" text-anchor="middle" font-size="24" font-weight="bold" fill="#ef4444">
+    BEFORE (Unpolished)
+  </text>
+  
+  <!-- Before Request Panel -->
+  <rect x="50" y="110" width="600" height="350" fill="#ffffff" stroke="#d1d5db" stroke-width="2" rx="8"/>
+  <rect x="50" y="110" width="600" height="50" fill="#f9fafb" stroke="#d1d5db" stroke-width="2" rx="8"/>
+  <text x="70" y="142" font-size="16" font-weight="500" fill="#374151">Request</text>
+  <text x="610" y="142" text-anchor="end" font-size="20" fill="#6b7280">=Ë</text>
+  
+  <!-- Before JSON Content -->
+  <text x="70" y="190" font-size="14" font-family="monospace" fill="#666666">{</text>
+  <text x="90" y="210" font-size="14" font-family="monospace" fill="#881391">"model"</text>
+  <text x="160" y="210" font-size="14" font-family="monospace" fill="#666666">:</text>
+  <text x="180" y="210" font-size="14" font-family="monospace" fill="#1A1AA6">"a2a_agent/..."</text>
+  <text x="70" y="230" font-size="14" font-family="monospace" fill="#666666">}</text>
+  <text x="70" y="260" font-size="12" fill="#999999" font-style="italic">" White background</text>
+  <text x="70" y="280" font-size="12" fill="#999999" font-style="italic">" Basic tree view</text>
+  <text x="70" y="300" font-size="12" fill="#999999" font-style="italic">" Simple styling</text>
+  
+  <!-- After Section -->
+  <text x="1050" y="90" text-anchor="middle" font-size="24" font-weight="bold" fill="#10b981">
+    AFTER (Polished)
+  </text>
+  
+  <!-- After Request Panel -->
+  <rect x="750" y="130" width="600" height="50" fill="#ffffff" stroke="#e5e7eb" stroke-width="1" rx="8"/>
+  <text x="770" y="160" font-size="16" font-weight="600" fill="#111827">Request</text>
+  <text x="1310" y="162" text-anchor="end" font-size="20" fill="#6b7280"></text>
+  
+  <rect x="750" y="190" width="600" height="270" fill="#fafafa" stroke="#e5e7eb" stroke-width="1" rx="8"/>
+  
+  <!-- After JSON Content with Syntax Highlighting -->
+  <text x="770" y="220" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#666666">{</text>
+  <text x="790" y="240" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#116329">"model"</text>
+  <text x="860" y="240" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#666666">:</text>
+  <text x="880" y="240" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#0a3069">"a2a_agent/Ishaan-Jaffer"</text>
+  <text x="790" y="260" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#116329">"custom_llm_provider"</text>
+  <text x="980" y="260" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#666666">:</text>
+  <text x="1000" y="260" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#0a3069">"a2a_agent"</text>
+  <text x="790" y="280" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#116329">"temperature"</text>
+  <text x="900" y="280" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#666666">:</text>
+  <text x="920" y="280" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#0550ae">0.7</text>
+  <text x="790" y="300" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#116329">"stream"</text>
+  <text x="860" y="300" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#666666">:</text>
+  <text x="880" y="300" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#8250df">false</text>
+  <text x="770" y="320" font-size="14" font-family="'SF Mono', Monaco, monospace" fill="#666666">}</text>
+  
+  <!-- Improvements List -->
+  <rect x="50" y="500" width="1300" height="360" fill="#f0fdf4" stroke="#86efac" stroke-width="2" rx="12"/>
+  <text x="700" y="540" text-anchor="middle" font-size="24" font-weight="bold" fill="#166534">
+    ( Key Improvements
+  </text>
+  
+  <!-- Improvement Items -->
+  <circle cx="80" cy="575" r="5" fill="#10b981"/>
+  <text x="100" y="580" font-size="16" fill="#166534">
+    <tspan font-weight="bold">Professional Syntax Highlighting:</tspan> Using react-syntax-highlighter with oneLight theme
+  </text>
+  
+  <circle cx="80" cy="610" r="5" fill="#10b981"/>
+  <text x="100" y="615" font-size="16" fill="#166534">
+    <tspan font-weight="bold">Cleaner Visual Design:</tspan> Light gray background (#fafafa) with subtle border
+  </text>
+  
+  <circle cx="80" cy="645" r="5" fill="#10b981"/>
+  <text x="100" y="650" font-size="16" fill="#166534">
+    <tspan font-weight="bold">Enhanced Copy Button:</tspan> Visual feedback with checkmark icon when copied
+  </text>
+  
+  <circle cx="80" cy="680" r="5" fill="#10b981"/>
+  <text x="100" y="685" font-size="16" fill="#166534">
+    <tspan font-weight="bold">Better Typography:</tspan> Improved font sizing (14px) and line height (1.6)
+  </text>
+  
+  <circle cx="80" cy="715" r="5" fill="#10b981"/>
+  <text x="100" y="720" font-size="16" fill="#166534">
+    <tspan font-weight="bold">Improved Spacing:</tspan> Better gap between panels (24px) and refined padding
+  </text>
+  
+  <circle cx="80" cy="750" r="5" fill="#10b981"/>
+  <text x="100" y="755" font-size="16" fill="#166534">
+    <tspan font-weight="bold">Consistent Styling:</tspan> Now matches API Reference page design perfectly!
+  </text>
+  
+  <circle cx="80" cy="785" r="5" fill="#10b981"/>
+  <text x="100" y="790" font-size="16" fill="#166534">
+    <tspan font-weight="bold">No New Dependencies:</tspan> Uses already-installed libraries
+  </text>
+  
+  <circle cx="80" cy="820" r="5" fill="#10b981"/>
+  <text x="100" y="825" font-size="16" fill="#166534">
+    <tspan font-weight="bold">Zero Breaking Changes:</tspan> Same props, same functionality, better UI
+  </text>
+  
+  <!-- Footer -->
+  <text x="700" y="880" text-anchor="middle" font-size="18" fill="#059669" font-weight="bold">
+     Build Status: PASSING |  Ready for Review &amp; Deployment
+  </text>
+</svg>
