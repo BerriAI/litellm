@@ -20,29 +20,28 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         module_name = ".".join(parts[:-1])
         instance_name = parts[-1]
 
-        # If config_file_path is provided, use it to determine the module spec and load the module
+        # If config_file_path is provided, try to load from file first, then fallback to Python import
         if config_file_path is not None:
             directory = os.path.dirname(config_file_path)
             module_file_path = os.path.join(directory, *module_name.split("."))
             module_file_path += ".py"
 
-            # Check if the file exists before trying to load it
-            if not os.path.exists(module_file_path):
-                raise ImportError(
-                    f"Could not find module file {module_file_path}"
-                )
-
-            spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
-            if spec is None:
-                raise ImportError(
-                    f"Could not find a module specification for {module_file_path}"
-                )
-            module = importlib.util.module_from_spec(spec)  # type: ignore
-            if spec.loader is None:
-                raise ImportError(
-                    f"Could not find a module loader for {module_file_path}"
-                )
-            spec.loader.exec_module(module)  # type: ignore
+            # Check if the file exists - if so, load from file; otherwise fallback to Python import
+            if os.path.exists(module_file_path):
+                spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
+                if spec is None:
+                    raise ImportError(
+                        f"Could not find a module specification for {module_file_path}"
+                    )
+                module = importlib.util.module_from_spec(spec)  # type: ignore
+                if spec.loader is None:
+                    raise ImportError(
+                        f"Could not find a module loader for {module_file_path}"
+                    )
+                spec.loader.exec_module(module)  # type: ignore
+            else:
+                # Fallback to Python import if file not found in config directory
+                module = importlib.import_module(module_name)
         else:
             # Dynamically import the module
             module = importlib.import_module(module_name)
