@@ -528,3 +528,35 @@ class TestStreamingEventProcessing:
         assert UPDATE_INTERVAL == 0.150
         assert UPDATE_INTERVAL * 1000 == 150  # 150 milliseconds
 
+
+class TestBackgroundStreamingModule:
+    """Test cases for background_streaming module imports and structure"""
+
+    def test_background_streaming_task_can_be_imported(self):
+        """Test that background_streaming_task can be imported from the module"""
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+        
+        assert background_streaming_task is not None
+        assert callable(background_streaming_task)
+
+    def test_module_exports_from_init(self):
+        """Test that the module exports are available from __init__"""
+        from litellm.proxy.response_polling import (
+            ResponsePollingHandler,
+            background_streaming_task,
+        )
+        
+        assert ResponsePollingHandler is not None
+        assert background_streaming_task is not None
+
+    def test_background_streaming_task_is_async(self):
+        """Test that background_streaming_task is an async function"""
+        import asyncio
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+        
+        assert asyncio.iscoroutinefunction(background_streaming_task)
+
