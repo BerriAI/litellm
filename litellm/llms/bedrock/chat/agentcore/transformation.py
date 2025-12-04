@@ -16,6 +16,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -30,14 +31,12 @@ from litellm.types.utils import Choices, Delta, Message, ModelResponse, Streamin
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-    from litellm.utils import CustomStreamWrapper
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
     HTTPHandler = Any
     AsyncHTTPHandler = Any
-    CustomStreamWrapper = Any
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
@@ -586,8 +585,6 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         # Wrap the generator in CustomStreamWrapper
-        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-
         return CustomStreamWrapper(
             completion_stream=self._stream_agentcore_response_sync(response, model),
             model=model,
@@ -745,8 +742,6 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         # Wrap the async generator in CustomStreamWrapper
-        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-
         return CustomStreamWrapper(
             completion_stream=self._stream_agentcore_response(response, model),
             model=model,
