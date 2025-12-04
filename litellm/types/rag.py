@@ -127,9 +127,48 @@ class VertexAIVectorStoreOptions(TypedDict, total=False):
     import_timeout: Optional[int]  # Timeout in seconds (default: 600)
 
 
+class RAGFlowVectorStoreOptions(TypedDict, total=False):
+    """
+    RAGFlow dataset configuration.
+
+    Example (use existing dataset):
+        {"custom_llm_provider": "ragflow", "vector_store_id": "dataset_id_123"}
+
+    Example (with chunk method and parser config):
+        {
+            "custom_llm_provider": "ragflow",
+            "vector_store_id": "dataset_id_123",
+            "chunk_method": "naive",
+            "parser_config": {
+                "chunk_token_num": 256,
+                "layout_recognize": True
+            },
+            "auto_parse": True
+        }
+
+    Requires:
+    - RAGFlow API key (set RAGFLOW_API_KEY env var or pass api_key)
+    - RAGFlow API base URL (set RAGFLOW_API_BASE env var or pass api_base, default: http://localhost:9380)
+    - Existing dataset ID (vector_store_id is required)
+    """
+
+    custom_llm_provider: Literal["ragflow"]
+    vector_store_id: str  # Dataset ID (required - must be an existing RAGFlow dataset)
+
+    # RAGFlow-specific options
+    chunk_method: Optional[str]  # Parsing method: naive, manual, qa, table, paper, book, laws, presentation, picture, one, email
+    parser_config: Optional[Dict[str, Any]]  # Parser configuration (chunk_token_num, delimiter, layout_recognize, html4excel, raptor, etc.)
+    auto_parse: Optional[bool]  # Whether to automatically trigger parsing after upload (default: True)
+
+    # Credentials (loaded from litellm.credential_list if litellm_credential_name is provided)
+    litellm_credential_name: Optional[str]  # Credential name to load from litellm.credential_list
+    api_key: Optional[str]  # Direct API key (alternative to litellm_credential_name)
+    api_base: Optional[str]  # Direct API base (alternative to litellm_credential_name, default: http://localhost:9380)
+
+
 # Union type for vector store options
 RAGIngestVectorStoreOptions = Union[
-    OpenAIVectorStoreOptions, BedrockVectorStoreOptions, VertexAIVectorStoreOptions
+    OpenAIVectorStoreOptions, BedrockVectorStoreOptions, VertexAIVectorStoreOptions, RAGFlowVectorStoreOptions
 ]
 
 
