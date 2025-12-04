@@ -18,6 +18,7 @@ test.describe("User Info View", () => {
       state: "hidden",
       timeout: 10000,
     });
+    await page.waitForLoadState("networkidle");
     page.screenshot({ path: "test-results/view_user_info_after_loading.png" });
     // Wait for users table to load
     await page.waitForSelector("table");
@@ -33,6 +34,7 @@ test.describe("User Info View", () => {
 
     // Click on the user ID
     await firstUserIdCell.click();
+    await page.waitForLoadState("networkidle");
 
     // Check for tabs
     await expect(page.locator('button:has-text("Overview")')).toBeVisible({
