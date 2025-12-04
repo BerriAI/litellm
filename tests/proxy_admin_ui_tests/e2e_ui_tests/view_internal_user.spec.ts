@@ -12,10 +12,10 @@ test("view internal user page", async ({ page }) => {
   page.screenshot({ path: "test-results/view_internal_user_before_login.png" });
 
   // Enter "admin" in the username input field
-  await page.fill('input[name="username"]', "admin");
+  await page.fill('input[placeholder="Enter your username"]', "admin");
 
   // Enter "gm" in the password input field
-  await page.fill('input[name="password"]', "gm");
+  await page.fill('input[placeholder="Enter your password"]', "gm");
 
   // Click the login button
   const loginButton = page.getByRole("button", { name: "Login" });

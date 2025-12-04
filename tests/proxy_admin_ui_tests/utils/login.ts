@@ -8,11 +8,13 @@ export async function loginToUI(page: Page) {
 
   page.screenshot({ path: "test-results/login_utils_before.png" });
   // Wait for login form to be visible
-  await page.waitForSelector('input[name="username"]', { timeout: 10000 });
+  await page.waitForSelector('input[placeholder="Enter your username"]', {
+    timeout: 10000,
+  });
   console.log("Login form is visible");
 
-  await page.fill('input[name="username"]', "admin");
-  await page.fill('input[name="password"]', "gm");
+  await page.fill('input[placeholder="Enter your username"]', "admin");
+  await page.fill('input[placeholder="Enter your password"]', "gm");
   console.log("Filled login credentials");
 
   const loginButton = page.getByRole("button", { name: "Login" });
