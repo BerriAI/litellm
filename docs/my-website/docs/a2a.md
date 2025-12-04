@@ -76,6 +76,53 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+### Streaming Responses
+
+For streaming responses, use `send_message_streaming`:
+
+```python showLineNumbers title="invoke_a2a_agent_streaming.py"
+from uuid import uuid4
+import httpx
+import asyncio
+from a2a.client import A2ACardResolver, A2AClient
+from a2a.types import MessageSendParams, SendStreamingMessageRequest
+
+# === CONFIGURE THESE ===
+LITELLM_BASE_URL = "http://localhost:4000"  # Your LiteLLM proxy URL
+LITELLM_VIRTUAL_KEY = "sk-1234"             # Your LiteLLM Virtual Key
+LITELLM_AGENT_NAME = "ij-local"             # Agent name registered in LiteLLM
+# =======================
+
+async def main():
+    base_url = f"{LITELLM_BASE_URL}/a2a/{LITELLM_AGENT_NAME}"
+    headers = {"Authorization": f"Bearer {LITELLM_VIRTUAL_KEY}"}
+    
+    async with httpx.AsyncClient(headers=headers) as httpx_client:
+        # Resolve agent card and create client
+        resolver = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
+        agent_card = await resolver.get_agent_card()
+        client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
+
+        # Send a streaming message
+        request = SendStreamingMessageRequest(
+            id=str(uuid4()),
+            params=MessageSendParams(
+                message={
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "Hello, what can you do?"}],
+                    "messageId": uuid4().hex,
+                }
+            ),
+        )
+        
+        # Stream the response
+        async for chunk in client.send_message_streaming(request):
+            print(chunk.model_dump(mode="json", exclude_none=True))
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
 ## Tracking Agent Logs
 
 After invoking an agent, you can view the request logs in the LiteLLM **Logs** tab.
