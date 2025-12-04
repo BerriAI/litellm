@@ -32,7 +32,7 @@ The **Generic Guardrail API** lets you integrate with LiteLLM **instantly** by i
 
 ### Endpoint
 
-Implement `POST /beta/litellm_basic_guardrail_api`
+Implement `POST /beta/litellm_guardrail` (or `/v1/litellm_guardrail` for v1 API version)
 
 ### Request Format
 
@@ -87,12 +87,22 @@ litellm_settings:
         guardrail: generic_guardrail_api
         mode: pre_call  # or post_call, during_call
         api_base: https://your-guardrail-api.com
+        api_version: beta  # optional: "beta" (default) or "v1"
         api_key: os.environ/YOUR_GUARDRAIL_API_KEY  # optional
         additional_provider_specific_params:
           # your custom parameters
           threshold: 0.8
           language: "en"
 ```
+
+**Configuration Parameters:**
+- `api_base`: Base URL of your guardrail API (required, can also be set via `GENERIC_GUARDRAIL_API_BASE` environment variable)
+- `api_version`: API version to use - `"beta"` (default) or `"v1"` (optional)
+  - `beta`: Uses endpoint `/beta/litellm_guardrail`
+  - `v1`: Uses endpoint `/v1/litellm_guardrail`
+- `api_key`: Authentication key for your guardrail API (optional)
+- `mode`: When to apply the guardrail - `pre_call`, `post_call`, or `during_call`
+- `additional_provider_specific_params`: Custom parameters to pass to your guardrail API
 
 ## Usage
 
@@ -150,7 +160,7 @@ class GuardrailResponse(BaseModel):
     texts: Optional[List[str]] = None
     images: Optional[List[str]] = None
 
-@app.post("/beta/litellm_basic_guardrail_api")
+@app.post("/beta/litellm_guardrail")
 async def apply_guardrail(request: GuardrailRequest):
     # Your guardrail logic here
     for text in request.texts:
@@ -161,6 +171,11 @@ async def apply_guardrail(request: GuardrailRequest):
             )
     
     return GuardrailResponse(action="NONE")
+
+# If you want to support both beta and v1 versions:
+@app.post("/v1/litellm_guardrail")
+async def apply_guardrail_v1(request: GuardrailRequest):
+    return await apply_guardrail(request)
 ```
 
 ## When to Use This

@@ -53,6 +53,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         self,
         headers: Optional[Dict[str, Any]] = None,
         api_base: Optional[str] = None,
+        api_version: Optional[Literal["beta", "v1"]] = "beta",
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
@@ -69,9 +70,14 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
 
         # Append the endpoint path if not already present
-        if not base_url.endswith("/beta/litellm_basic_guardrail_api"):
+        endpoint = (
+            "beta/litellm_guardrail"
+            if api_version == "beta"
+            else "v1/litellm_guardrail"
+        )
+        if not base_url.endswith(endpoint):
             base_url = base_url.rstrip("/")
-            self.api_base = f"{base_url}/beta/litellm_basic_guardrail_api"
+            self.api_base = f"{base_url}/{endpoint}"
         else:
             self.api_base = base_url
 

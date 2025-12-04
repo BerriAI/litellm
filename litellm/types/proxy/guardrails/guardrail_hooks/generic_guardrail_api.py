@@ -24,6 +24,10 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         default=None,
         description="Additional provider-specific parameters to send with the guardrail request",
     )
+    api_version: Optional[Literal["beta", "v1"]] = Field(
+        default="beta",
+        description="API version to use - `beta` (default) or `v1`",
+    )
 
 
 class GenericGuardrailAPIConfigModel(

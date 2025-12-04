@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -11,6 +11,12 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
+    if litellm_params.api_version is not None and litellm_params.api_version not in [
+        "beta",
+        "v1",
+    ]:
+        raise ValueError("Invalid API version. Please use 'beta' or 'v1'")
+
     _generic_guardrail_api_callback = GenericGuardrailAPI(
         api_base=litellm_params.api_base,
         headers=getattr(litellm_params, "headers", None),
@@ -20,6 +26,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        api_version=cast(Literal["beta", "v1"], litellm_params.api_version or "beta"),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(

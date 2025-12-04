@@ -9,6 +9,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+    GenericGuardrailAPIConfigModel,
     GenericGuardrailAPIOptionalParams,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
@@ -62,6 +63,7 @@ class SupportedGuardrailIntegrations(Enum):
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
+    GENERIC_GUARDRAIL_API_V1 = "generic_guardrail_api_v1"
 
 
 class Role(Enum):
@@ -527,7 +529,7 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
 
     experimental_use_latest_role_message_only: Optional[bool] = Field(
         default=False,
-        description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
+        description="When GuardrailConfigModelTrue, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
     )
 
     # Lakera specific params
