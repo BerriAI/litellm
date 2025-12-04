@@ -35,6 +35,7 @@ class RedisSemanticCache(BaseCache):
     """
 
     DEFAULT_REDIS_INDEX_NAME: str = "litellm_semantic_cache_index"
+    DEFAULT_REDIS_EMBEDDINGS_CACHE_NAME: str = "litellm_redis_semantic_embeddings_cache"
 
     def __init__(
         self,
@@ -98,9 +99,8 @@ class RedisSemanticCache(BaseCache):
         # Embeddings cache configuration
         self.embedding_cache_enabled: bool = embedding_cache_enabled
         self.embedding_cache_ttl: Optional[int] = embedding_cache_ttl
-        self.embedding_cache_name: str = (
-            embedding_cache_name or "litellm_redis_semantic_embeddings_cache"
-        )
+        if embedding_cache_name is None:
+            self.embedding_cache_name = self.DEFAULT_REDIS_EMBEDDINGS_CACHE_NAME
         self._embeddings_cache: Optional[EmbeddingsCache] = None
 
         # Set up Redis connection
