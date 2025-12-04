@@ -32,7 +32,7 @@ async def test_asend_message_with_client_decorator():
     This tests the LiteLLM logging integration.
     """
     litellm._turn_on_debug()
-    from litellm.a2a import asend_message, create_a2a_client
+    from litellm.a2a_protocol import asend_message, create_a2a_client
 
     # Create the A2A client first
     a2a_client = await create_a2a_client(base_url="http://localhost:10001")
@@ -97,7 +97,7 @@ async def test_a2a_logging_payload():
     test_logger = TestA2ALogger()
     litellm.callbacks = [test_logger]
 
-    from litellm.a2a import asend_message, create_a2a_client
+    from litellm.a2a_protocol import asend_message, create_a2a_client
 
     # Create the A2A client first
     a2a_client = await create_a2a_client(base_url="http://localhost:10001")
