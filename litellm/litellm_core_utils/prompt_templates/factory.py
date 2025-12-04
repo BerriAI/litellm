@@ -3446,8 +3446,25 @@ class BedrockConverseMessagesProcessor:
     @staticmethod
     def _initial_message_setup(
         messages: List,
+        model: str,
+        llm_provider: str,
         user_continue_message: Optional[ChatCompletionUserMessage] = None,
     ) -> List:
+        # gracefully handle base case of no messages at all
+        if len(messages) == 0:
+            if user_continue_message is not None:
+                messages.append(user_continue_message)
+            elif litellm.modify_params:
+                messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+            else:
+                raise litellm.BadRequestError(
+                    message=BAD_MESSAGE_ERROR_STR
+                    + "bedrock requires at least one non-system message",
+                    model=model,
+                    llm_provider=llm_provider,
+                )
+
+        # if initial message is assistant message
         if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
             if user_continue_message is not None:
                 messages.insert(0, user_continue_message)
@@ -3475,18 +3492,8 @@ class BedrockConverseMessagesProcessor:
         contents: List[BedrockMessageBlock] = []
         msg_i = 0
 
-        ## BASE CASE ##
-        if len(messages) == 0:
-            raise litellm.BadRequestError(
-                message=BAD_MESSAGE_ERROR_STR
-                + "bedrock requires at least one non-system message",
-                model=model,
-                llm_provider=llm_provider,
-            )
-
-        # if initial message is assistant message
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
-            messages, user_continue_message
+            messages, model, llm_provider, user_continue_message
         )
 
         while msg_i < len(messages):
@@ -3847,28 +3854,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
     contents: List[BedrockMessageBlock] = []
     msg_i = 0
 
-    ## BASE CASE ##
-    if len(messages) == 0:
-        raise litellm.BadRequestError(
-            message=BAD_MESSAGE_ERROR_STR
-            + "bedrock requires at least one non-system message",
-            model=model,
-            llm_provider=llm_provider,
-        )
-
-    # if initial message is assistant message
-    if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
-        if user_continue_message is not None:
-            messages.insert(0, user_continue_message)
-        elif litellm.modify_params:
-            messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
-
-    # if final message is assistant message
-    if messages[-1].get("role") is not None and messages[-1]["role"] == "assistant":
-        if user_continue_message is not None:
-            messages.append(user_continue_message)
-        elif litellm.modify_params:
-            messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+    messages = BedrockConverseMessagesProcessor._initial_message_setup(
+        messages, model, llm_provider, user_continue_message
+    )
 
     while msg_i < len(messages):
         user_content: List[BedrockContentBlock] = []
