@@ -1293,12 +1293,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data,
             )
 
-            bedrock_response = await self.make_bedrock_api_request(
-                source="INPUT",
-                messages=mock_messages,
-                request_data=request_data,
-            )
-
             if bedrock_response.get("action") == "BLOCKED":
                 raise Exception(
                     f"Content blocked by Bedrock guardrail: {bedrock_response.get('reason', 'Unknown reason')}"

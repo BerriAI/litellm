@@ -31,6 +31,7 @@ from typing import (
 from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
+    AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
@@ -187,6 +188,7 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 from litellm.proxy._types import *
+from litellm.proxy.agent_endpoints.a2a_endpoints import router as a2a_router
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_router
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -627,21 +629,26 @@ async def proxy_shutdown_event():
 
 
 async def _initialize_shared_aiohttp_session():
-    """Initialize shared aiohttp session for connection reuse."""
+    """Initialize shared aiohttp session for connection reuse with connection limits."""
     try:
         from aiohttp import ClientSession, TCPConnector
 
-        # Create connector with connection pooling settings optimized for long-lived connections
-        connector = TCPConnector(
-            limit=AIOHTTP_CONNECTOR_LIMIT,
-            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
-            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
-            enable_cleanup_closed=AIOHTTP_NEEDS_CLEANUP_CLOSED,
-        )
-
+        connector_kwargs = {
+            "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
+            "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
+            "enable_cleanup_closed": True,
+        }
+        if AIOHTTP_CONNECTOR_LIMIT > 0:
+            connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
+        if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
+            connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+        
+        connector = TCPConnector(**connector_kwargs)
         session = ClientSession(connector=connector)
+        
         verbose_proxy_logger.info(
-            f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)})"
+            f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)}, "
+            f"limit={AIOHTTP_CONNECTOR_LIMIT}, limit_per_host={AIOHTTP_CONNECTOR_LIMIT_PER_HOST})"
         )
         return session
     except Exception as e:
@@ -8267,257 +8274,97 @@ async def fallback_login(request: Request):
 )  # hidden since this is a helper for UI sso login
 async def login(request: Request):  # noqa: PLR0915
     global premium_user, general_settings, master_key
-    from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.utils import get_custom_url
 
-    if master_key is None:
-        raise ProxyException(
-            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
-            type=ProxyErrorTypes.auth_error,
-            param="master_key",
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
     form = await request.form()
     username = str(form.get("username"))
     password = str(form.get("password"))
-    ui_username = os.getenv("UI_USERNAME", "admin")
-    ui_password = os.getenv("UI_PASSWORD", None)
-    if ui_password is None:
-        ui_password = str(master_key) if master_key is not None else None
-    if ui_password is None:
-        raise ProxyException(
-            message="set Proxy master key to use UI. https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
-            type=ProxyErrorTypes.auth_error,
-            param="UI_PASSWORD",
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
 
-    # check if we can find the `username` in the db. on the ui, users can enter username=their email
-    _user_row: Optional[LiteLLM_UserTable] = None
-    user_role: Optional[
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ]
-    ] = None
-    if prisma_client is not None:
-        _user_row = cast(
-            Optional[LiteLLM_UserTable],
-            await prisma_client.db.litellm_usertable.find_first(
-                where={"user_email": {"equals": username}}
-            ),
-        )
-    disabled_non_admin_personal_key_creation = (
-        get_disabled_non_admin_personal_key_creation()
+    # Authenticate user and get login result
+    login_result = await authenticate_user(
+        username=username,
+        password=password,
+        master_key=master_key,
+        prisma_client=prisma_client,
     )
-    """
-    To login to Admin UI, we support the following
-    - Login with UI_USERNAME and UI_PASSWORD
-    - Login with Invite Link `user_email` and `password` combination
-    """
-    if secrets.compare_digest(username, ui_username) and secrets.compare_digest(
-        password, ui_password
-    ):
-        # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
-        user_role = LitellmUserRoles.PROXY_ADMIN
-        user_id = litellm_proxy_admin_name
 
-        # we want the key created to have PROXY_ADMIN_PERMISSIONS
-        key_user_id = litellm_proxy_admin_name
-        if (
-            os.getenv("PROXY_ADMIN_ID", None) is not None
-            and os.environ["PROXY_ADMIN_ID"] == user_id
-        ) or user_id == litellm_proxy_admin_name:
-            # checks if user is admin
-            key_user_id = os.getenv("PROXY_ADMIN_ID", litellm_proxy_admin_name)
+    # Create UI token object
+    returned_ui_token_object = create_ui_token_object(
+        login_result=login_result,
+        general_settings=general_settings,
+        premium_user=premium_user,
+    )
 
-        # Admin is Authe'd in - generate key for the UI to access Proxy
+    # Generate JWT token
+    import jwt
 
-        # ensure this user is set as the proxy admin, in this route there is no sso, we can assume this user is only the admin
-        await user_update(
-            data=UpdateUserRequest(
-                user_id=key_user_id,
-                user_role=user_role,
-            ),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-            ),
-        )
-        if os.getenv("DATABASE_URL") is not None:
-            response = await generate_key_helper_fn(
-                request_type="key",
-                **{
-                    "user_role": LitellmUserRoles.PROXY_ADMIN,
-                    "duration": "24hr",
-                    "key_max_budget": litellm.max_ui_session_budget,
-                    "models": [],
-                    "aliases": {},
-                    "config": {},
-                    "spend": 0,
-                    "user_id": key_user_id,
-                    "team_id": "litellm-dashboard",
-                },  # type: ignore
-            )
-        else:
-            raise ProxyException(
-                message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
-                type=ProxyErrorTypes.auth_error,
-                param="DATABASE_URL",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        key = response["token"]  # type: ignore
-        litellm_dashboard_ui = get_custom_url(str(request.base_url))
-        if litellm_dashboard_ui.endswith("/"):
-            litellm_dashboard_ui += "ui/"
-        else:
-            litellm_dashboard_ui += "/ui/"
-        import jwt
+    jwt_token = jwt.encode(  # type: ignore
+        cast(dict, returned_ui_token_object),
+        master_key,
+        algorithm="HS256",
+    )
 
-        if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
-            user_info: Optional[LiteLLM_UserTable] = None
-            if _user_row is not None:
-                user_info = _user_row
-            elif (
-                user_id is not None
-            ):  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
-                user_info = LiteLLM_UserTable(
-                    user_id=user_id,
-                    user_role=user_role,
-                    models=[],
-                    max_budget=litellm.max_ui_session_budget,
-                )
-            if user_info is None:
-                raise HTTPException(
-                    status_code=401,
-                    detail={
-                        "error": "User Information is required for experimental UI login"
-                    },
-                )
-
-            key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
-                user_info
-            )
-
-        returned_ui_token_object = ReturnedUITokenObject(
-            user_id=user_id,
-            key=key,
-            user_email=None,
-            user_role=user_role,
-            login_method="username_password",
-            premium_user=premium_user,
-            auth_header_name=general_settings.get(
-                "litellm_key_header_name", "Authorization"
-            ),
-            disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
-            server_root_path=get_server_root_path(),
-        )
-
-        jwt_token = jwt.encode(  # type: ignore
-            cast(dict, returned_ui_token_object),
-            master_key,
-            algorithm="HS256",
-        )
-        litellm_dashboard_ui += "?login=success"
-        redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
-        return redirect_response
-    elif _user_row is not None:
-        """
-        When sharing invite links
-
-        -> if the user has no role in the DB assume they are only a viewer
-        """
-        user_id = getattr(_user_row, "user_id", "unknown")
-        user_role = getattr(
-            _user_row, "user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-        )
-        user_email = getattr(_user_row, "user_email", "unknown")
-        _password = getattr(_user_row, "password", "unknown")
-
-        if _password is None:
-            raise ProxyException(
-                message="User has no password set. Please set a password for the user via `/user/update`.",
-                type=ProxyErrorTypes.auth_error,
-                param="password",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        # check if password == _user_row.password
-        hash_password = hash_token(token=password)
-        if secrets.compare_digest(password, _password) or secrets.compare_digest(
-            hash_password, _password
-        ):
-            if os.getenv("DATABASE_URL") is not None:
-                response = await generate_key_helper_fn(
-                    request_type="key",
-                    **{  # type: ignore
-                        "user_role": user_role,
-                        "duration": "24hr",
-                        "key_max_budget": litellm.max_ui_session_budget,
-                        "models": [],
-                        "aliases": {},
-                        "config": {},
-                        "spend": 0,
-                        "user_id": user_id,
-                        "team_id": "litellm-dashboard",
-                    },
-                )
-            else:
-                raise ProxyException(
-                    message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
-                    type=ProxyErrorTypes.auth_error,
-                    param="DATABASE_URL",
-                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-            key = response["token"]  # type: ignore
-            litellm_dashboard_ui = get_custom_url(str(request.base_url))
-            if litellm_dashboard_ui.endswith("/"):
-                litellm_dashboard_ui += "ui/"
-            else:
-                litellm_dashboard_ui += "/ui/"
-            import jwt
-
-            returned_ui_token_object = ReturnedUITokenObject(
-                user_id=user_id,
-                key=key,
-                user_email=user_email,
-                user_role=cast(str, user_role),
-                login_method="username_password",
-                premium_user=premium_user,
-                auth_header_name=general_settings.get(
-                    "litellm_key_header_name", "Authorization"
-                ),
-                disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
-                server_root_path=get_server_root_path(),
-            )
-
-            jwt_token = jwt.encode(  # type: ignore
-                cast(dict, returned_ui_token_object),
-                master_key,
-                algorithm="HS256",
-            )
-            litellm_dashboard_ui += "?login=success"
-            redirect_response = RedirectResponse(
-                url=litellm_dashboard_ui, status_code=303
-            )
-            redirect_response.set_cookie(key="token", value=jwt_token)
-            return redirect_response
-        else:
-            raise ProxyException(
-                message=f"Invalid credentials used to access UI.\nNot valid credentials for {username}",
-                type=ProxyErrorTypes.auth_error,
-                param="invalid_credentials",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
+    # Build redirect URL
+    litellm_dashboard_ui = get_custom_url(str(request.base_url))
+    if litellm_dashboard_ui.endswith("/"):
+        litellm_dashboard_ui += "ui/"
     else:
-        raise ProxyException(
-            message="Invalid credentials used to access UI.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
-            type=ProxyErrorTypes.auth_error,
-            param="invalid_credentials",
-            code=status.HTTP_401_UNAUTHORIZED,
-        )
+        litellm_dashboard_ui += "/ui/"
+    litellm_dashboard_ui += "?login=success"
 
+    # Create redirect response with cookie
+    redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+    redirect_response.set_cookie(key="token", value=jwt_token)
+    return redirect_response
+
+
+@router.post(
+    "/v2/login", include_in_schema=False
+)  # hidden helper for UI logins via API
+async def login_v2(request: Request):  # noqa: PLR0915
+    global premium_user, general_settings, master_key
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.utils import get_custom_url
+
+    body = await request.json()
+    username = str(body.get("username"))
+    password = str(body.get("password"))
+
+    login_result = await authenticate_user(
+        username=username,
+        password=password,
+        master_key=master_key,
+        prisma_client=prisma_client,
+    )
+
+    returned_ui_token_object = create_ui_token_object(
+        login_result=login_result,
+        general_settings=general_settings,
+        premium_user=premium_user,
+    )
+
+    import jwt
+
+    jwt_token = jwt.encode(  # type: ignore
+        cast(dict, returned_ui_token_object),
+        master_key,
+        algorithm="HS256",
+    )
+
+    litellm_dashboard_ui = get_custom_url(str(request.base_url))
+    if litellm_dashboard_ui.endswith("/"):
+        litellm_dashboard_ui += "ui/"
+    else:
+        litellm_dashboard_ui += "/ui/"
+    litellm_dashboard_ui += "?login=success"
+
+    json_response = JSONResponse(
+        content={"redirect_url": litellm_dashboard_ui},
+        status_code=status.HTTP_200_OK,
+    )
+    json_response.set_cookie(key="token", value=jwt_token)
+    return json_response
 
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str, request: Request):
@@ -10222,6 +10069,7 @@ app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_endpoints_router)
+app.include_router(a2a_router)
 ########################################################
 # MCP Server
 ########################################################

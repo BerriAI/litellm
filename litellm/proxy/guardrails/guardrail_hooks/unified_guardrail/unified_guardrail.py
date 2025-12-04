@@ -249,19 +249,22 @@ class UnifiedLLMGuardrails(CustomLogger):
                 if call_types is not None:
                     call_type = call_types[0]
 
-                # If call type not supported, just pass through all chunks
-                if (
-                    call_type is None
-                    or CallTypes(call_type)
-                    not in endpoint_guardrail_translation_mappings
-                ):
-                    yield item
-                    async for remaining_item in response:
-                        yield remaining_item
-                    return
+            if call_type is None:
+                call_type = _infer_call_type(call_type=None, completion_response=item)
+
+            # If call type not supported, just pass through all chunks
+            if (
+                call_type is None
+                or CallTypes(call_type) not in endpoint_guardrail_translation_mappings
+            ):
+                yield item
+                async for remaining_item in response:
+                    yield remaining_item
+                return
 
             # Process chunk based on sampling rate
             if chunk_counter % sampling_rate == 0:
+
                 verbose_proxy_logger.debug(
                     "Processing streaming chunk %s (sampling_rate=%s) with guardrail %s",
                     chunk_counter,
