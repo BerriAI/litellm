@@ -24,7 +24,12 @@ from litellm.types.llms.openai import (
     ResponseText,
 )
 from litellm.types.responses.main import DecodedResponseId
-from litellm.types.utils import PromptTokensDetails, SpecialEnums, Usage
+from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
+    PromptTokensDetails,
+    SpecialEnums,
+    Usage,
+)
 
 
 class ResponsesAPIRequestUtils:
@@ -366,10 +371,11 @@ class ResponsesAPIRequestUtils:
         Headers from tools.headers in request body should be passed to MCP server.
         """
         from starlette.datastructures import Headers
+
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
-        
+
         # Extract headers from secret_fields which contains the original request headers
         raw_headers_from_request: Optional[Dict[str, str]] = None
         if secret_fields and isinstance(secret_fields, dict):
@@ -445,11 +451,20 @@ class ResponseAPILoggingUtils:
                 cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
                 audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
             )
+        completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+        if response_api_usage.output_tokens_details:
+            completion_tokens_details = CompletionTokensDetailsWrapper(
+                reasoning_tokens=getattr(
+                    response_api_usage.output_tokens_details, "reasoning_tokens", None
+                )
+            )
+            
         chat_usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
+            completion_tokens_details=completion_tokens_details,
         )
 
         # Preserve cost attribute if it exists on ResponseAPIUsage

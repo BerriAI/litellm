@@ -185,6 +185,7 @@ const sidebars = {
           label: "Architecture",
           items: [
             "proxy/architecture",
+            "proxy/multi_tenant_architecture",
             "proxy/control_plane_and_data_plane",
             "proxy/db_deadlocks",
             "proxy/db_info",
