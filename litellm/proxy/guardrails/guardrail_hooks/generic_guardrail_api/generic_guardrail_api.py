@@ -14,7 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GenericGuardrailAPIInputs, GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
@@ -144,22 +144,24 @@ class GenericGuardrailAPI(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        texts: List[str],
+        inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        images: Optional[List[str]] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> GenericGuardrailAPIInputs:
         """
-        Apply the Generic Guardrail API to the given text.
+        Apply the Generic Guardrail API to the given inputs.
 
         This is the main method that gets called by the framework.
 
         Args:
-            texts: List of texts to check
+            inputs: Dictionary containing:
+                - texts: List of texts to check
+                - images: Optional list of images to check
+                - tool_calls: Optional list of tool calls to check
             request_data: Request data dictionary containing user_api_key_dict and other metadata
             input_type: Whether this is a "request" or "response" guardrail
-            images: Optional list of images to check
+            logging_obj: Optional logging object for tracking the guardrail execution
 
         Returns:
             Tuple of (processed texts, processed images)
@@ -168,6 +170,11 @@ class GenericGuardrailAPI(CustomGuardrail):
             Exception: If the guardrail blocks the request
         """
         verbose_proxy_logger.debug("Generic Guardrail API: Applying guardrail to text")
+
+        # Extract texts and images from inputs
+        texts = inputs.get("texts", [])
+        images = inputs.get("images")
+        tools = inputs.get("tools")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
@@ -193,6 +200,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             texts=texts,
             request_data=user_metadata,
             images=images,
+            tools=tools,
             additional_provider_specific_params=additional_params,
             input_type=input_type,
         )
@@ -230,17 +238,19 @@ class GenericGuardrailAPI(CustomGuardrail):
                 )
                 raise Exception(f"Content blocked by guardrail: {error_message}")
 
-            elif guardrail_response.action == "GUARDRAIL_INTERVENED":
-                # Content was modified by the guardrail
-                if guardrail_response.texts:
-                    verbose_proxy_logger.debug("Generic Guardrail API modified text")
-                    return guardrail_response.texts, guardrail_response.images
-
             # Action is NONE or no modifications needed
-            return (
-                guardrail_response.texts or texts,
-                guardrail_response.images or images,
-            )
+            return_inputs = GenericGuardrailAPIInputs(texts=texts)
+            if guardrail_response.texts:
+                return_inputs["texts"] = guardrail_response.texts
+            if guardrail_response.images:
+                return_inputs["images"] = guardrail_response.images
+            elif images:
+                return_inputs["images"] = images
+            if guardrail_response.tools:
+                return_inputs["tools"] = guardrail_response.tools
+            elif tools:
+                return_inputs["tools"] = tools
+            return return_inputs
 
         except Exception as e:
             # Check if it's already an exception we raised

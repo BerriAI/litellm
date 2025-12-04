@@ -137,7 +137,7 @@ class VertexEmbedding(VertexBase):
         self,
         model: str,
         input: Union[list, str],
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObject,
         optional_params: dict,
         custom_llm_provider: Literal[
@@ -152,7 +152,7 @@ class VertexEmbedding(VertexBase):
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
         encoding=None,
-    ) -> litellm.EmbeddingResponse:
+    ) -> EmbeddingResponse:
         """
         Async embedding implementation
         """

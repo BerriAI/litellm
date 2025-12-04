@@ -7,7 +7,7 @@ with guardrail transformations.
 
 import os
 import sys
-from typing import Any
+from typing import Any, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,6 +15,8 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../../../../../..")
 )  # Adds the parent directory to the system path
+
+from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping
@@ -27,11 +29,28 @@ from litellm.types.utils import CallTypes
 
 
 class MockGuardrail(CustomGuardrail):
-    """Mock guardrail for testing that transforms text"""
+    """Mock guardrail for testing that transforms text for requests and blocks responses"""
 
-    async def apply_guardrail(self, text: str) -> str:
-        """Append [GUARDRAILED] to text"""
-        return f"{text} [GUARDRAILED]"
+    async def apply_guardrail(
+        self,
+        texts: List[str],
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+        images: Optional[List[str]] = None,
+    ) -> Tuple[List[str], Optional[List[str]]]:
+        """
+        For requests: Append [GUARDRAILED] to text
+        For responses: Block by raising HTTPException (masking responses is no longer supported)
+        """
+        if input_type == "response":
+            # Responses should be blocked, not masked
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Response blocked by guardrail", "texts": texts},
+            )
+        # For requests, we can still mask/transform
+        return ([f"{text} [GUARDRAILED]" for text in texts], None)
 
 
 class TestOpenAIResponsesHandlerDiscovery:
@@ -167,11 +186,15 @@ class TestOpenAIResponsesHandlerOutputProcessing:
 
     @pytest.mark.asyncio
     async def test_process_output_response_simple(self):
-        """Test processing simple output response"""
+        """Test processing simple output response - should block, not mask
+
+        After unified_guardrail.py changes, responses can only be blocked/rejected, not masked.
+        This test verifies that the guardrail properly blocks responses.
+        """
         handler = OpenAIResponsesHandler()
         guardrail = MockGuardrail(guardrail_name="test")
 
-        # Create a mock response
+        # Create a mock response with dict format (works with current handler)
         response = ResponsesAPIResponse(
             id="resp_123",
             created_at=1234567890,
@@ -179,30 +202,36 @@ class TestOpenAIResponsesHandlerOutputProcessing:
             object="response",
             status="completed",
             output=[
-                GenericResponseOutputItem(
-                    type="message",
-                    id="msg_123",
-                    status="completed",
-                    role="assistant",
-                    content=[
-                        OutputText(
-                            type="output_text", text="Hello user", annotations=None
-                        ),
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Hello user"},
                     ],
-                )
+                }
             ],
         )
 
-        result = await handler.process_output_response(response, guardrail)
+        # Response should be blocked, not masked
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.process_output_response(response, guardrail)
 
-        assert result.output[0].content[0].text == "Hello user [GUARDRAILED]"
+        assert exc_info.value.status_code == 400
+        assert "Response blocked by guardrail" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_process_output_response_multiple_items(self):
-        """Test processing output response with multiple output items"""
+        """Test processing output response with multiple output items - should block, not mask
+
+        After unified_guardrail.py changes, responses can only be blocked/rejected, not masked.
+        This test verifies that the guardrail properly blocks responses with multiple items.
+        """
         handler = OpenAIResponsesHandler()
         guardrail = MockGuardrail(guardrail_name="test")
 
+        # Use dict format (works with current handler)
         response = ResponsesAPIResponse(
             id="resp_123",
             created_at=1234567890,
@@ -210,46 +239,45 @@ class TestOpenAIResponsesHandlerOutputProcessing:
             object="response",
             status="completed",
             output=[
-                GenericResponseOutputItem(
-                    type="message",
-                    id="msg_123",
-                    status="completed",
-                    role="assistant",
-                    content=[
-                        OutputText(
-                            type="output_text",
-                            text="First message",
-                            annotations=None,
-                        ),
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "First message"},
                     ],
-                ),
-                GenericResponseOutputItem(
-                    type="message",
-                    id="msg_124",
-                    status="completed",
-                    role="assistant",
-                    content=[
-                        OutputText(
-                            type="output_text",
-                            text="Second message",
-                            annotations=None,
-                        ),
+                },
+                {
+                    "type": "message",
+                    "id": "msg_124",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Second message"},
                     ],
-                ),
+                },
             ],
         )
 
-        result = await handler.process_output_response(response, guardrail)
+        # Response should be blocked, not masked
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.process_output_response(response, guardrail)
 
-        assert result.output[0].content[0].text == "First message [GUARDRAILED]"
-        assert result.output[1].content[0].text == "Second message [GUARDRAILED]"
+        assert exc_info.value.status_code == 400
+        assert "Response blocked by guardrail" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_process_output_response_multiple_content_items(self):
-        """Test processing output response with multiple content items in one output"""
+        """Test processing output response with multiple content items - should block, not mask
+
+        After unified_guardrail.py changes, responses can only be blocked/rejected, not masked.
+        This test verifies that the guardrail properly blocks responses with multiple content items.
+        """
         handler = OpenAIResponsesHandler()
         guardrail = MockGuardrail(guardrail_name="test")
 
+        # Use dict format (works with current handler)
         response = ResponsesAPIResponse(
             id="resp_123",
             created_at=1234567890,
@@ -257,27 +285,33 @@ class TestOpenAIResponsesHandlerOutputProcessing:
             object="response",
             status="completed",
             output=[
-                GenericResponseOutputItem(
-                    type="message",
-                    id="msg_123",
-                    status="completed",
-                    role="assistant",
-                    content=[
-                        OutputText(type="output_text", text="Part 1", annotations=None),
-                        OutputText(type="output_text", text="Part 2", annotations=None),
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Part 1"},
+                        {"type": "output_text", "text": "Part 2"},
                     ],
-                )
+                }
             ],
         )
 
-        result = await handler.process_output_response(response, guardrail)
+        # Response should be blocked, not masked
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.process_output_response(response, guardrail)
 
-        assert result.output[0].content[0].text == "Part 1 [GUARDRAILED]"
-        assert result.output[0].content[1].text == "Part 2 [GUARDRAILED]"
+        assert exc_info.value.status_code == 400
+        assert "Response blocked by guardrail" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_process_output_response_with_dict_format(self):
-        """Test processing output response where content items are dicts instead of OutputText objects"""
+        """Test processing output response with dict format - should block, not mask
+
+        After unified_guardrail.py changes, responses can only be blocked/rejected, not masked.
+        This test verifies blocking works even when content items are dicts instead of OutputText objects.
+        """
         handler = OpenAIResponsesHandler()
         guardrail = MockGuardrail(guardrail_name="test")
 
@@ -301,9 +335,12 @@ class TestOpenAIResponsesHandlerOutputProcessing:
             ],
         )
 
-        result = await handler.process_output_response(response, guardrail)
+        # Response should be blocked, not masked
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.process_output_response(response, guardrail)
 
-        assert result.output[0]["content"][0]["text"] == "Hello from dict [GUARDRAILED]"
+        assert exc_info.value.status_code == 400
+        assert "Response blocked by guardrail" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_process_output_response_no_text_content(self):
@@ -450,7 +487,10 @@ class TestOpenAIResponsesHandlerEdgeCases:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "List content"},
-                        {"type": "image_url", "image_url": {"url": "http://example.com"}},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "http://example.com"},
+                        },
                     ],
                     "type": "message",
                 },
@@ -492,4 +532,3 @@ class TestOpenAIResponsesHandlerEdgeCases:
 
         # Should skip processing and return unchanged
         assert result == response
-

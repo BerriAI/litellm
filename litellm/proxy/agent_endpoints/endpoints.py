@@ -29,7 +29,7 @@ router = APIRouter()
 
 @router.get(
     "/v1/agents",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=List[AgentResponse],
 )
@@ -101,7 +101,7 @@ from litellm.proxy.agent_endpoints.agent_registry import (
 
 @router.post(
     "/v1/agents",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -196,7 +196,7 @@ async def create_agent(
 
 @router.get(
     "/v1/agents/{agent_id}",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -239,7 +239,7 @@ async def get_agent_by_id(agent_id: str):
 
 @router.put(
     "/v1/agents/{agent_id}",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -328,7 +328,7 @@ async def update_agent(
 
 @router.patch(
     "/v1/agents/{agent_id}",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -471,7 +471,7 @@ async def delete_agent(agent_id: str):
 
 @router.post(
     "/v1/agents/{agent_id}/make_public",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentMakePublicResponse,
 )
@@ -585,7 +585,7 @@ async def make_agent_public(
 
 @router.post(
     "/v1/agents/make_public",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentMakePublicResponse,
 )
