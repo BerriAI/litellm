@@ -1,18 +1,15 @@
----
-id: add_openai_compatible_provider
-title: Add OpenAI-Compatible Provider
-sidebar_label: Add OpenAI-Compatible Provider
----
+# Adding OpenAI-Compatible Providers via JSON
 
-# Add an OpenAI-Compatible Provider
+## Overview
 
-For providers that follow OpenAI's API format, you can add support by editing a single JSON file.
+For providers that are OpenAI-compatible (same API format as OpenAI), you can add support by simply editing a JSON file - no Python code required.
 
 ## Quick Start
 
-1. **Edit the JSON file**: `litellm/llms/openai_like/providers.json`
+### 1. Edit the JSON Configuration
 
-2. **Add your provider**:
+Edit `litellm/llms/openai_like/providers.json` and add your provider:
+
 ```json
 {
   "your_provider": {
@@ -22,89 +19,107 @@ For providers that follow OpenAI's API format, you can add support by editing a 
 }
 ```
 
-3. **Add to provider enum**: Edit `litellm/types/utils.py`
+### 2. Add to Provider Enum
+
+Add your provider to `litellm/types/utils.py`:
+
 ```python
 class LlmProviders(str, Enum):
     # ... existing providers ...
     YOUR_PROVIDER = "your_provider"
 ```
 
-4. **Test it**:
+### 3. Test It
+
 ```python
 import litellm
 import os
 
-os.environ["YOUR_PROVIDER_API_KEY"] = "your-key"
+os.environ["YOUR_PROVIDER_API_KEY"] = "your-api-key"
 
 response = litellm.completion(
     model="your_provider/model-name",
-    messages=[{"role": "user", "content": "Hello"}]
+    messages=[{"role": "user", "content": "Hello!"}]
 )
+print(response.choices[0].message.content)
 ```
 
-That's it! 🎉
+That's it! ✅
 
 ## Optional Configuration
 
-### Override Base URL
-```json
-{
-  "your_provider": {
-    "base_url": "https://api.yourprovider.com/v1",
-    "api_key_env": "YOUR_PROVIDER_API_KEY",
-    "api_base_env": "YOUR_PROVIDER_API_BASE"  // Allow users to override base_url
-  }
-}
-```
-
 ### Parameter Mapping
-If the provider uses different parameter names:
+
+If the provider uses different parameter names than OpenAI:
+
 ```json
 {
   "your_provider": {
     "base_url": "https://api.yourprovider.com/v1",
     "api_key_env": "YOUR_PROVIDER_API_KEY",
     "param_mappings": {
-      "max_completion_tokens": "max_tokens"  // Map OpenAI param to provider param
+      "max_completion_tokens": "max_tokens"
     }
   }
 }
 ```
 
-### Base Class Selection
+### Environment Variable Override
+
+Allow users to override the base URL:
+
 ```json
 {
   "your_provider": {
     "base_url": "https://api.yourprovider.com/v1",
     "api_key_env": "YOUR_PROVIDER_API_KEY",
-    "base_class": "openai_gpt"  // or "openai_like" (default: "openai_gpt")
+    "api_base_env": "YOUR_PROVIDER_API_BASE"
+  }
+}
+```
+
+### Base Class Selection
+
+Choose between `openai_gpt` (default) or `openai_like`:
+
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.yourprovider.com/v1",
+    "api_key_env": "YOUR_PROVIDER_API_KEY",
+    "base_class": "openai_like"
   }
 }
 ```
 
 ### Temperature Constraints
+
+If the provider has different temperature limits:
+
 ```json
 {
   "your_provider": {
     "base_url": "https://api.yourprovider.com/v1",
     "api_key_env": "YOUR_PROVIDER_API_KEY",
     "constraints": {
-      "temperature_max": 1.0,              // Clamp max temperature
-      "temperature_min": 0.0,              // Clamp min temperature
-      "temperature_min_with_n_gt_1": 0.3  // Min temp when n > 1
+      "temperature_max": 1.0,
+      "temperature_min": 0.0
     }
   }
 }
 ```
 
 ### Content Format Conversion
+
+If the provider doesn't support content as a list:
+
 ```json
 {
   "your_provider": {
     "base_url": "https://api.yourprovider.com/v1",
     "api_key_env": "YOUR_PROVIDER_API_KEY",
     "special_handling": {
-      "convert_content_list_to_string": true  // Convert content arrays to strings
+      "convert_content_list_to_string": true
     }
   }
 }
@@ -131,70 +146,38 @@ If the provider uses different parameter names:
 
 ## When to Use Python Instead
 
-Use a Python config class if you need:
+Use a Python config class if your provider needs:
 - Custom authentication (OAuth, rotating tokens)
 - Complex request/response transformations
 - Provider-specific streaming logic
-- Advanced tool calling modifications
+- Custom tool calling formats
 
-For these cases, see existing providers in `litellm/llms/` for examples.
+See existing providers in `litellm/llms/` for Python implementation examples.
 
-## Adding to Constants
+## Testing Your Provider
 
-Add your provider to `litellm/constants.py`:
+Run the test to verify everything works:
 
-```python
-openai_compatible_endpoints: List = [
-    # ... existing endpoints ...
-    "https://api.yourprovider.com/v1",
-]
-
-openai_compatible_providers: List = [
-    # ... existing providers ...
-    "your_provider",
-]
-```
-
-## Testing
-
-Run the test suite:
 ```bash
-pytest tests/test_litellm/llms/openai_like/test_json_providers.py -v
-```
-
-Or test manually:
-```python
-import litellm
+python3 -c "
 import os
+import litellm
 
-os.environ["YOUR_PROVIDER_API_KEY"] = "test-key"
+os.environ['YOUR_PROVIDER_API_KEY'] = 'your-key'
 
-# Basic test
 response = litellm.completion(
-    model="your_provider/model-name",
-    messages=[{"role": "user", "content": "test"}],
-    max_tokens=5
+    model='your_provider/model-name',
+    messages=[{'role': 'user', 'content': 'test'}]
 )
-print(response.choices[0].message.content)
-
-# Streaming test
-response = litellm.completion(
-    model="your_provider/model-name",
-    messages=[{"role": "user", "content": "test"}],
-    max_tokens=5,
-    stream=True
-)
-for chunk in response:
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="")
+print('✓ Success:', response.choices[0].message.content)
+"
 ```
 
-## Submit PR
+## Submit Your PR
 
 1. Add your provider to `providers.json`
 2. Add to `LlmProviders` enum
-3. Add to constants lists
-4. Test with real API
-5. Submit pull request
+3. Test with real API
+4. Submit PR with test results
 
-Your PR will be reviewed quickly since it's just a JSON change!
+That's all you need! 🚀
