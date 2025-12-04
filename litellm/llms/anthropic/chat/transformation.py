@@ -715,15 +715,25 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["metadata"] = {"user_id": value}
             if param == "thinking":
                 optional_params["thinking"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
-                # For Claude Opus 4.5, map reasoning_effort to output_config
-                if self._is_claude_opus_4_5(model):
-                    optional_params["output_config"] = {"effort": value}
+            elif param == "reasoning_effort":
+                # Accept both dict and string formats for compatibility with SDKs
+                # that pass {"effort": "...", "summary": "..."}
+                if isinstance(value, dict):
+                    effort_value = value.get("effort")
+                    # Note: "summary" is ignored - Anthropic doesn't support configurable summary
+                    # (Claude 4 returns summarized thinking by default)
                 else:
-                    # For other models, map to thinking parameter
-                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                        value
-                    )
+                    effort_value = value
+
+                if effort_value is not None:
+                    # For Claude Opus 4.5, map reasoning_effort to output_config
+                    if self._is_claude_opus_4_5(model):
+                        optional_params["output_config"] = {"effort": effort_value}
+                    else:
+                        # For other models, map to thinking parameter
+                        optional_params["thinking"] = (
+                            AnthropicConfig._map_reasoning_effort(effort_value)
+                        )
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
