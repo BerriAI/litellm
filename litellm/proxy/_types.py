@@ -511,6 +511,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/predict/spend/logs",
         "/global/spend/report",
         "/global/spend/provider",
+        "/global/spend/tags",
     ]
 
     public_routes = set(
@@ -547,6 +548,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/logs",
         "/global/spend/keys",
         "/global/spend/models",
+        "/global/spend/tags",
         "/global/predict/spend/logs",
         "/global/activity",
         "/health/services",
