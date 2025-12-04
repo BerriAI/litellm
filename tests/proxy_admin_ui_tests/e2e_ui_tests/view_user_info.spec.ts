@@ -5,40 +5,47 @@ test.describe("User Info View", () => {
   test("should display user info when clicking on user ID", async ({
     page,
   }) => {
-    test.setTimeout(60000);
-
-    // Enable console logging
-    page.on("console", (msg) => console.log("PAGE LOG:", msg.text()));
-
-    // Login first
     await page.goto("http://localhost:4000/ui");
     await page.waitForLoadState("networkidle");
-    console.log("Navigated to login page");
 
-    // Wait for login form to be visible
-    await page.waitForSelector('input[placeholder="Enter your username"]', {
-      timeout: 10000,
+    page.screenshot({
+      path: "test-results/view_user_info_before_login.png",
     });
-    console.log("Login form is visible");
 
+    // Enter "admin" in the username input field
     await page.fill('input[placeholder="Enter your username"]', "admin");
-    await page.fill('input[placeholder="Enter your password"]', "gm");
-    console.log("Filled login credentials");
+    page.screenshot({
+      path: "test-results/view_user_info_after_username_input.png",
+    });
 
+    // Enter "gm" in the password input field
+    await page.fill('input[placeholder="Enter your password"]', "gm");
+    page.screenshot({
+      path: "test-results/view_user_info_after_password_input.png",
+    });
+
+    // Click the login button
     const loginButton = page.getByRole("button", { name: "Login" });
     await expect(loginButton).toBeEnabled();
     await loginButton.click();
-    console.log("Clicked login button");
+    page.screenshot({
+      path: "test-results/view_user_info_after_login_button_click.png",
+    });
 
     // Wait for navigation to complete and dashboard to load
     await page.waitForLoadState("networkidle");
-    await page.goto("http://localhost:4000/ui?page=users");
+    const tabElement = page.locator("span.ant-menu-title-content", {
+      hasText: "Internal User",
+    });
+    await tabElement.click();
+    page.screenshot({
+      path: "test-results/view_user_info_after_internal_user_tab_click.png",
+    });
     // Wait for loading state to disappear
     await page.waitForSelector('text="🚅 Loading users..."', {
       state: "hidden",
       timeout: 10000,
     });
-    await page.waitForLoadState("networkidle");
     page.screenshot({ path: "test-results/view_user_info_after_loading.png" });
     // Wait for users table to load
     await page.waitForSelector("table");
