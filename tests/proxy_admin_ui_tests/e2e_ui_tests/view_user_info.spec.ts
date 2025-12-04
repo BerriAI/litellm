@@ -2,17 +2,37 @@ import { test, expect } from "@playwright/test";
 import { loginToUI } from "../utils/login";
 
 test.describe("User Info View", () => {
-  test.beforeEach(async ({ page }) => {
-    await loginToUI(page);
-    // Navigate to users page
-    page.screenshot({ path: "test-results/view_user_info_before_nav.png" });
-    await page.goto("http://localhost:4000/ui?page=users");
-    page.screenshot({ path: "test-results/view_user_info_after_nav.png" });
-  });
-
   test("should display user info when clicking on user ID", async ({
     page,
   }) => {
+    test.setTimeout(60000);
+
+    // Enable console logging
+    page.on("console", (msg) => console.log("PAGE LOG:", msg.text()));
+
+    // Login first
+    await page.goto("http://localhost:4000/ui");
+    await page.waitForLoadState("networkidle");
+    console.log("Navigated to login page");
+
+    // Wait for login form to be visible
+    await page.waitForSelector('input[placeholder="Enter your username"]', {
+      timeout: 10000,
+    });
+    console.log("Login form is visible");
+
+    await page.fill('input[placeholder="Enter your username"]', "admin");
+    await page.fill('input[placeholder="Enter your password"]', "gm");
+    console.log("Filled login credentials");
+
+    const loginButton = page.getByRole("button", { name: "Login" });
+    await expect(loginButton).toBeEnabled();
+    await loginButton.click();
+    console.log("Clicked login button");
+
+    // Wait for navigation to complete and dashboard to load
+    await page.waitForLoadState("networkidle");
+    await page.goto("http://localhost:4000/ui?page=users");
     // Wait for loading state to disappear
     await page.waitForSelector('text="🚅 Loading users..."', {
       state: "hidden",
