@@ -205,6 +205,7 @@ export interface PublicModelHubInfo {
 export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
+  auto_redirect_to_sso: boolean;
 }
 
 export interface CredentialsResponse {

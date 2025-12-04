@@ -10,7 +10,7 @@ import { test, expect } from "@playwright/test";
 
 test("admin login test", async ({ page }) => {
   // Go to the specified URL
-  await page.goto("http://localhost:4000/ui");
+  await page.goto("http://localhost:4000/ui/login");
 
   // Enter "admin" in the username input field
   await page.fill('input[name="username"]', "admin");
@@ -19,7 +19,7 @@ test("admin login test", async ({ page }) => {
   await page.fill('input[name="password"]', "gm");
 
   // Optionally, you can add an assertion to verify the login button is enabled
-  const loginButton = page.locator('input[type="submit"]');
+  const loginButton = page.locator('button[type="submit"]');
   await expect(loginButton).toBeEnabled();
 
   // Optionally, you can click the login button to submit the form
