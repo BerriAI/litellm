@@ -729,9 +729,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[
-            Union[BedrockGuardrailResponse, str]
-        ] = None
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
+        )
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -801,9 +801,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[
-            Union[BedrockGuardrailResponse, str]
-        ] = None
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
+        )
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -1276,10 +1276,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             masked_texts = []
 
-            for text in texts:
-                mock_messages: List[AllMessageValues] = [
-                    ChatCompletionUserMessage(role="user", content=text)
-                ]
+            mock_messages: List[AllMessageValues] = [
+                ChatCompletionUserMessage(role="user", content=text) for text in texts
+            ]
             request_messages = mock_messages
             filter_result = self._prepare_guardrail_messages_for_role(
                 messages=request_messages
@@ -1292,19 +1291,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data,
             )
 
-            bedrock_response = await self.make_bedrock_api_request(
-                source="INPUT",
-                messages=mock_messages,
-                request_data=request_data,
-            )
-
             if bedrock_response.get("action") == "BLOCKED":
                 raise Exception(
                     f"Content blocked by Bedrock guardrail: {bedrock_response.get('reason', 'Unknown reason')}"
                 )
 
             # Apply any masking that was applied by the guardrail
-            masked_text = text
             output_list = bedrock_response.get("output")
             if output_list:
                 # If the guardrail returned modified content, use that
@@ -1312,7 +1304,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     text_content = output_item.get("text")
                     if text_content:
                         masked_text = str(text_content)
-                        break
+                        masked_texts.append(masked_text)
             else:
                 outputs_list = bedrock_response.get("outputs")
                 if outputs_list:
@@ -1321,9 +1313,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         text_content = output_item.get("text")
                         if text_content:
                             masked_text = str(text_content)
-                            break
-
-            masked_texts.append(masked_text)
+                            masked_texts.append(masked_text)
 
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Successfully applied guardrail"
