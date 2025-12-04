@@ -3619,15 +3619,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
 
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, ArizePhoenixLogger)
                     and callback.callback_name == "arize_phoenix"
                 ):
                     return callback  # type: ignore
-            _otel_logger = OpenTelemetry(
+            _arize_phoenix_otel_logger = ArizePhoenixLogger(
                 config=otel_config, callback_name="arize_phoenix"
             )
-            _in_memory_loggers.append(_otel_logger)
-            return _otel_logger  # type: ignore
+            _in_memory_loggers.append(_arize_phoenix_otel_logger)
+            return _arize_phoenix_otel_logger  # type: ignore
         elif logging_integration == "otel":
             from litellm.integrations.opentelemetry import OpenTelemetry
 
