@@ -196,3 +196,9 @@ LiteLLM follows the [A2A JSON-RPC 2.0 specification](https://github.com/google/A
   }
 }
 ```
+
+## Agent Registry
+
+Want to create a central registry so your team can discover what agents are available within your company?
+
+Use the [AI Hub](./proxy/ai_hub) to make agents public and discoverable across your organization. This allows developers to browse available agents without needing to rebuild them.
