@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polished JSON Viewer with Expand/Collapse</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+        }
+        
+        /* Polished JSON Viewer Styles - Matches API Reference */
+        .polished-json-container {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            color: #24292f;
+            background-color: #fafafa;
+            padding: 1.25rem;
+            border-radius: 0.5rem;
+        }
+        
+        .polished-json-label {
+            color: #116329;
+            font-weight: 500;
+        }
+        
+        .polished-json-string {
+            color: #0a3069;
+        }
+        
+        .polished-json-number {
+            color: #0550ae;
+        }
+        
+        .polished-json-boolean {
+            color: #8250df;
+        }
+        
+        .polished-json-null {
+            color: #6e7781;
+            font-style: italic;
+        }
+        
+        .polished-json-punctuation {
+            color: #24292f;
+        }
+        
+        .json-key {
+            color: #116329;
+            font-weight: 500;
+        }
+        
+        .json-string-value {
+            color: #0a3069;
+        }
+        
+        .json-number-value {
+            color: #0550ae;
+        }
+        
+        .json-boolean-value {
+            color: #8250df;
+        }
+        
+        .json-null-value {
+            color: #6e7781;
+            font-style: italic;
+        }
+        
+        .collapse-toggle {
+            cursor: pointer;
+            user-select: none;
+            color: #656d76;
+            display: inline-block;
+            width: 1rem;
+            transition: color 0.2s, transform 0.2s;
+        }
+        
+        .collapse-toggle:hover {
+            color: #0969da;
+        }
+        
+        .collapse-toggle.collapsed {
+            transform: rotate(-90deg);
+        }
+        
+        .json-collapsed-preview {
+            color: #656d76;
+            font-style: italic;
+            margin-left: 0.5rem;
+        }
+        
+        .json-line {
+            margin-left: 1rem;
+        }
+        
+        .demo-section {
+            transition: all 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 p-8">
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <div class="mb-8 text-center">
+            <h1 class="text-3xl font-bold text-gray-900 mb-2">✨ Polished JSON Viewer</h1>
+            <p class="text-xl text-gray-600 mb-4">With Expand/Collapse Functionality</p>
+            <div class="inline-flex items-center gap-2 px-4 py-2 bg-green-100 text-green-800 rounded-full">
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+                <span class="font-semibold">Interactive • Click to expand/collapse</span>
+            </div>
+        </div>
+
+        <!-- Demo -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Request Panel -->
+            <div class="flex flex-col">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-base font-semibold text-gray-900">Request</h3>
+                    <button class="p-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors" onclick="copyText('request')">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div class="rounded-lg border border-gray-200 overflow-hidden bg-white">
+                    <div class="overflow-auto max-h-[500px]">
+                        <div class="polished-json-container">
+                            <div id="request-json">
+                                <span class="polished-json-punctuation">{</span>
+                                <div class="json-line">
+                                    <span class="json-key">"id"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"34a4eb1e-568a-4cf2-a4ac-082b38f1ac66"</span><span class="polished-json-punctuation">,</span>
+                                </div>
+                                <div class="json-line">
+                                    <span class="json-key">"model"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"a2a_agent/Ishaan Jaffer"</span><span class="polished-json-punctuation">,</span>
+                                </div>
+                                <div class="json-line">
+                                    <span class="json-key">"method"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"message/send"</span><span class="polished-json-punctuation">,</span>
+                                </div>
+                                <div class="json-line">
+                                    <span class="collapse-toggle" onclick="toggleCollapse('params')">▼</span>
+                                    <span class="json-key">"params"</span><span class="polished-json-punctuation">: {</span>
+                                    <div id="params" class="json-line">
+                                        <div class="json-line">
+                                            <span class="collapse-toggle" onclick="toggleCollapse('message')">▼</span>
+                                            <span class="json-key">"message"</span><span class="polished-json-punctuation">: {</span>
+                                            <div id="message" class="json-line">
+                                                <div class="json-line">
+                                                    <span class="json-key">"kind"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"message"</span><span class="polished-json-punctuation">,</span>
+                                                </div>
+                                                <div class="json-line">
+                                                    <span class="json-key">"role"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"user"</span><span class="polished-json-punctuation">,</span>
+                                                </div>
+                                                <div class="json-line">
+                                                    <span class="collapse-toggle" onclick="toggleCollapse('parts')">▼</span>
+                                                    <span class="json-key">"parts"</span><span class="polished-json-punctuation">: [</span>
+                                                    <div id="parts" class="json-line">
+                                                        <div class="json-line">
+                                                            <span class="collapse-toggle" onclick="toggleCollapse('part0')">▼</span>
+                                                            <span class="polished-json-punctuation">{</span>
+                                                            <div id="part0" class="json-line">
+                                                                <div class="json-line">
+                                                                    <span class="json-key">"kind"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"text"</span><span class="polished-json-punctuation">,</span>
+                                                                </div>
+                                                                <div class="json-line">
+                                                                    <span class="json-key">"text"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"Create an outline for a short, upbeat..."</span>
+                                                                </div>
+                                                            </div>
+                                                            <span class="polished-json-punctuation">}</span>
+                                                        </div>
+                                                    </div>
+                                                    <span class="polished-json-punctuation">],</span>
+                                                </div>
+                                                <div class="json-line">
+                                                    <span class="json-key">"messageId"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"595aeaea82024b2cb45731e1cf68bc34"</span>
+                                                </div>
+                                            </div>
+                                            <span class="polished-json-punctuation">}</span>
+                                        </div>
+                                    </div>
+                                    <span class="polished-json-punctuation">},</span>
+                                </div>
+                                <div class="json-line">
+                                    <span class="json-key">"jsonrpc"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"2.0"</span><span class="polished-json-punctuation">,</span>
+                                </div>
+                                <div class="json-line">
+                                    <span class="json-key">"custom_llm_provider"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"a2a_agent"</span>
+                                </div>
+                                <span class="polished-json-punctuation">}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Response Panel -->
+            <div class="flex flex-col">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-base font-semibold text-gray-900">
+                        Response
+                        <span class="ml-2 text-sm font-normal text-gray-500">• 200 OK</span>
+                    </h3>
+                    <button class="p-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors" onclick="copyText('response')">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div class="rounded-lg border border-gray-200 overflow-hidden bg-white">
+                    <div class="overflow-auto max-h-[500px]">
+                        <div class="polished-json-container">
+                            <div id="response-json">
+                                <span class="polished-json-punctuation">{</span>
+                                <div class="json-line">
+                                    <span class="json-key">"id"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"f53f56f4-b096-4cd6-953e-482a4a094e4b"</span><span class="polished-json-punctuation">,</span>
+                                </div>
+                                <div class="json-line">
+                                    <span class="json-key">"error"</span><span class="polished-json-punctuation">: </span><span class="json-null-value">null</span><span class="polished-json-punctuation">,</span>
+                                </div>
+                                <div class="json-line">
+                                    <span class="collapse-toggle" onclick="toggleCollapse('result')">▼</span>
+                                    <span class="json-key">"result"</span><span class="polished-json-punctuation">: {</span>
+                                    <div id="result" class="json-line">
+                                        <div class="json-line">
+                                            <span class="json-key">"id"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"e5830e48-e9fa-49b2-942b-e423db2d37a6"</span><span class="polished-json-punctuation">,</span>
+                                        </div>
+                                        <div class="json-line">
+                                            <span class="json-key">"kind"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"task"</span><span class="polished-json-punctuation">,</span>
+                                        </div>
+                                        <div class="json-line">
+                                            <span class="collapse-toggle" onclick="toggleCollapse('status')">▼</span>
+                                            <span class="json-key">"status"</span><span class="polished-json-punctuation">: {</span>
+                                            <div id="status" class="json-line">
+                                                <div class="json-line">
+                                                    <span class="json-key">"state"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"completed"</span><span class="polished-json-punctuation">,</span>
+                                                </div>
+                                                <div class="json-line">
+                                                    <span class="json-key">"timestamp"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"2025-12-04T00:16:01.442801+00:00"</span>
+                                                </div>
+                                            </div>
+                                            <span class="polished-json-punctuation">},</span>
+                                        </div>
+                                        <div class="json-line">
+                                            <span class="collapse-toggle" onclick="toggleCollapse('history')">▼</span>
+                                            <span class="json-key">"history"</span><span class="polished-json-punctuation">: [</span>
+                                            <div id="history" class="json-line">
+                                                <div class="json-line">
+                                                    <span class="collapse-toggle" onclick="toggleCollapse('historyItem')">▼</span>
+                                                    <span class="polished-json-punctuation">{</span>
+                                                    <div id="historyItem" class="json-line">
+                                                        <div class="json-line">
+                                                            <span class="json-key">"kind"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"message"</span><span class="polished-json-punctuation">,</span>
+                                                        </div>
+                                                        <div class="json-line">
+                                                            <span class="json-key">"role"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"user"</span><span class="polished-json-punctuation">,</span>
+                                                        </div>
+                                                        <div class="json-line">
+                                                            <span class="json-key">"taskId"</span><span class="polished-json-punctuation">: </span><span class="json-string-value">"10d8dbc9-64f3-4d8a-95c5-33ed1d974984"</span>
+                                                        </div>
+                                                    </div>
+                                                    <span class="polished-json-punctuation">}</span>
+                                                </div>
+                                            </div>
+                                            <span class="polished-json-punctuation">]</span>
+                                        </div>
+                                    </div>
+                                    <span class="polished-json-punctuation">}</span>
+                                </div>
+                                <span class="polished-json-punctuation">}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Feature Highlights -->
+        <div class="mt-12 bg-white rounded-xl shadow-lg p-8">
+            <h2 class="text-2xl font-bold text-gray-900 mb-6 text-center">✨ Best of Both Worlds</h2>
+            
+            <div class="grid md:grid-cols-2 gap-8">
+                <div class="space-y-4">
+                    <h3 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <svg class="w-6 h-6 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                        </svg>
+                        Functionality Preserved
+                    </h3>
+                    <ul class="space-y-2 text-gray-700">
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-500 font-bold">✓</span>
+                            <span>Interactive expand/collapse on click</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-500 font-bold">✓</span>
+                            <span>Nested object navigation</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-500 font-bold">✓</span>
+                            <span>Array item expansion</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-500 font-bold">✓</span>
+                            <span>Copy to clipboard</span>
+                        </li>
+                    </ul>
+                </div>
+                
+                <div class="space-y-4">
+                    <h3 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <svg class="w-6 h-6 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M4 2a2 2 0 00-2 2v11a3 3 0 106 0V4a2 2 0 00-2-2H4zm1 14a1 1 0 100-2 1 1 0 000 2zm5-1.757l4.9-4.9a2 2 0 000-2.828L13.485 5.1a2 2 0 00-2.828 0L10 5.757v8.486zM16 18H9.071l6-6H16a2 2 0 012 2v2a2 2 0 01-2 2z" clip-rule="evenodd"/>
+                        </svg>
+                        Polished Design
+                    </h3>
+                    <ul class="space-y-2 text-gray-700">
+                        <li class="flex items-start gap-2">
+                            <span class="text-blue-500 font-bold">✓</span>
+                            <span>Light gray background (#fafafa)</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-blue-500 font-bold">✓</span>
+                            <span>Professional syntax colors</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-blue-500 font-bold">✓</span>
+                            <span>Better typography (SF Mono, 14px)</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-blue-500 font-bold">✓</span>
+                            <span>Matches API Reference style</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Instructions -->
+        <div class="mt-8 bg-blue-50 border border-blue-200 rounded-lg p-6">
+            <h3 class="text-lg font-semibold text-blue-900 mb-3">💡 Try it out!</h3>
+            <p class="text-blue-800">
+                Click the <span class="font-mono bg-blue-100 px-2 py-1 rounded">▼</span> arrows to collapse sections.
+                Click again to expand. The styling now matches the API Reference page while keeping full functionality!
+            </p>
+        </div>
+    </div>
+
+    <script>
+        function toggleCollapse(id) {
+            const element = document.getElementById(id);
+            const toggle = event.target;
+            
+            if (element.style.display === 'none') {
+                element.style.display = 'block';
+                toggle.textContent = '▼';
+                toggle.classList.remove('collapsed');
+            } else {
+                element.style.display = 'none';
+                toggle.textContent = '▶';
+                toggle.classList.add('collapsed');
+            }
+        }
+        
+        function copyText(type) {
+            alert(`${type.charAt(0).toUpperCase() + type.slice(1)} copied to clipboard!`);
+        }
+    </script>
+</body>
+</html>
