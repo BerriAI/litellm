@@ -186,7 +186,7 @@ export default function CreateKeyPage() {
   useEffect(() => {
     if (redirectToLogin) {
       // Replace instead of assigning to avoid back-button loops
-      const dest = (proxyBaseUrl || "") + "/sso/key/generate";
+      const dest = (proxyBaseUrl || "") + "/ui/login";
       window.location.replace(dest);
     }
   }, [redirectToLogin]);
