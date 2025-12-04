@@ -18,6 +18,7 @@ from litellm import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
+from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
@@ -47,6 +48,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
+bedrock_files_instance = BedrockFilesHandler()
 #################################################
 
 
@@ -755,7 +757,7 @@ def file_list(
 @client
 async def afile_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -800,7 +802,7 @@ def file_content(
     file_id: str,
     model: Optional[str] = None,
     custom_llm_provider: Optional[
-        Union[Literal["openai", "azure", "vertex_ai", "hosted_vllm"], str]
+        Union[Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"], str]
     ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -938,9 +940,18 @@ def file_content(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "bedrock":
+            response = bedrock_files_instance.file_content(
+                _is_async=_is_async,
+                file_content_request=_file_content_request,
+                api_base=optional_params.api_base,
+                optional_params=litellm_params_dict,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'custom_llm_provider'. Supported providers are 'openai', 'azure', 'vertex_ai'.".format(
+                message="LiteLLM doesn't support {} for 'custom_llm_provider'. Supported providers are 'openai', 'azure', 'vertex_ai', 'bedrock'.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
