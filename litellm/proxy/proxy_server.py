@@ -188,6 +188,7 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 from litellm.proxy._types import *
+from litellm.proxy.agent_endpoints.a2a_endpoints import router as a2a_router
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_router
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -10068,6 +10069,7 @@ app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_endpoints_router)
+app.include_router(a2a_router)
 ########################################################
 # MCP Server
 ########################################################

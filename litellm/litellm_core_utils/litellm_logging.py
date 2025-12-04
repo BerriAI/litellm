@@ -71,6 +71,7 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1738,6 +1739,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and logging_result.get("object") == "search"  # Search API (dict format)
             or isinstance(logging_result, VideoObject)
             or isinstance(logging_result, ContainerObject)
+            or isinstance(logging_result, LiteLLMSendMessageResponse)  # A2A
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True
