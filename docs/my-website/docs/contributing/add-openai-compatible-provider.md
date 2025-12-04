@@ -1,10 +1,10 @@
-# Adding OpenAI-Compatible Providers
+# Adding an OpenAI-Compatible Provider
 
-For providers with OpenAI-compatible APIs, you can add support via JSON configuration without writing Python code.
+For simple OpenAI-compatible providers (like Hyperbolic, Nscale, etc.), you can add support by editing a single JSON file.
 
 ## Quick Start
 
-### 1. Add to JSON Configuration
+### 1. Add Provider Configuration
 
 Edit `litellm/llms/openai_like/providers.json`:
 
@@ -19,18 +19,7 @@ Edit `litellm/llms/openai_like/providers.json`:
 
 ### 2. Add to Provider List
 
-Add to `litellm/constants.py`:
-
-```python
-openai_compatible_providers: List = [
-    # ... existing providers ...
-    "your_provider",
-]
-```
-
-### 3. Add to Provider Enum
-
-Add to `litellm/types/utils.py`:
+Add your provider to `litellm/types/utils.py`:
 
 ```python
 class LlmProviders(str, Enum):
@@ -38,25 +27,28 @@ class LlmProviders(str, Enum):
     YOUR_PROVIDER = "your_provider"
 ```
 
-### 4. Test
+### 3. Test It
 
 ```python
 import litellm
 import os
 
-os.environ["YOUR_PROVIDER_API_KEY"] = "your-key"
+os.environ["YOUR_PROVIDER_API_KEY"] = "sk-..."
 
 response = litellm.completion(
     model="your_provider/model-name",
-    messages=[{"role": "user", "content": "Hello"}],
+    messages=[{"role": "user", "content": "Hello"}]
 )
+print(response.choices[0].message.content)
 ```
+
+That's it! No Python code needed.
 
 ## Optional Configuration
 
 ### Parameter Mappings
 
-If your provider uses different parameter names:
+If the provider uses different parameter names:
 
 ```json
 {
@@ -84,42 +76,9 @@ Allow users to override the base URL:
 }
 ```
 
-### Base Class Selection
+### Content Format Conversion
 
-Choose between two base classes:
-- `openai_gpt` (default) - For most providers
-- `openai_like` - For providers needing OpenAI-like handling
-
-```json
-{
-  "your_provider": {
-    "base_url": "https://api.yourprovider.com/v1",
-    "api_key_env": "YOUR_PROVIDER_API_KEY",
-    "base_class": "openai_like"
-  }
-}
-```
-
-### Parameter Constraints
-
-If your provider has stricter limits than OpenAI:
-
-```json
-{
-  "your_provider": {
-    "base_url": "https://api.yourprovider.com/v1",
-    "api_key_env": "YOUR_PROVIDER_API_KEY",
-    "constraints": {
-      "temperature_max": 1.0,
-      "temperature_min": 0.0
-    }
-  }
-}
-```
-
-### Content Transformations
-
-If your provider doesn't support content as a list:
+If the provider doesn't support content as a list:
 
 ```json
 {
@@ -133,7 +92,25 @@ If your provider doesn't support content as a list:
 }
 ```
 
-## Complete Example
+### Parameter Constraints
+
+For providers with parameter limits:
+
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.yourprovider.com/v1",
+    "api_key_env": "YOUR_PROVIDER_API_KEY",
+    "constraints": {
+      "temperature_max": 1.0,
+      "temperature_min": 0.0,
+      "temperature_min_with_n_gt_1": 0.3
+    }
+  }
+}
+```
+
+## Complete Example: PublicAI
 
 ```json
 {
@@ -154,31 +131,53 @@ If your provider doesn't support content as a list:
 
 ## When to Use Python Instead
 
-Use a Python config class if your provider needs:
-- Custom authentication (OAuth, token rotation)
+Use a full Python implementation if you need:
+
+- Custom authentication (OAuth, rotating tokens, etc.)
 - Complex request/response transformations
 - Provider-specific streaming logic
 - Advanced tool calling transformations
 
-## Testing
+For those cases, follow the standard provider implementation pattern in `litellm/llms/`.
 
-Run the integration test:
+## Testing Your Provider
 
-```bash
-python3 -c "
-import litellm
+Create a simple test:
+
+```python
 import os
+import litellm
 
-os.environ['YOUR_PROVIDER_API_KEY'] = 'test-key'
+os.environ["YOUR_PROVIDER_API_KEY"] = "your-test-key"
 
+# Test basic completion
 response = litellm.completion(
-    model='your_provider/test-model',
-    messages=[{'role': 'user', 'content': 'Hello'}],
+    model="your_provider/test-model",
+    messages=[{"role": "user", "content": "Say hello"}],
+    max_tokens=10
 )
-print(response.choices[0].message.content)
-"
+assert response.choices[0].message.content
+
+# Test streaming
+response = litellm.completion(
+    model="your_provider/test-model",
+    messages=[{"role": "user", "content": "Count to 3"}],
+    max_tokens=20,
+    stream=True
+)
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
 ```
 
-## Reference
+## Submitting Your PR
 
-See `litellm/llms/openai_like/providers.json` for more examples.
+1. Add your provider to `providers.json`
+2. Add to `LlmProviders` enum
+3. Test with real API
+4. Submit PR with:
+   - Provider configuration
+   - Basic test showing it works
+   - Model pricing info (if available)
+
+That's it! The JSON system handles everything else automatically.
