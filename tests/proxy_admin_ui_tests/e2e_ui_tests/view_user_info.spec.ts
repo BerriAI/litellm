@@ -5,7 +5,9 @@ test.describe("User Info View", () => {
   test.beforeEach(async ({ page }) => {
     await loginToUI(page);
     // Navigate to users page
+    page.screenshot({ path: "test-results/view_user_info_before_nav.png" });
     await page.goto("http://localhost:4000/ui?page=users");
+    page.screenshot({ path: "test-results/view_user_info_after_nav.png" });
   });
 
   test("should display user info when clicking on user ID", async ({
@@ -16,9 +18,12 @@ test.describe("User Info View", () => {
       state: "hidden",
       timeout: 10000,
     });
+    page.screenshot({ path: "test-results/view_user_info_after_loading.png" });
     // Wait for users table to load
     await page.waitForSelector("table");
-
+    page.screenshot({
+      path: "test-results/view_user_info_after_table_load.png",
+    });
     // Get the first user ID cell
     const firstUserIdCell = page.locator(
       "table tbody tr:first-child td:first-child"
