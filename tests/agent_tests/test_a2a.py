@@ -133,6 +133,35 @@ async def test_a2a_logging_payload():
     print(f"standard_logging_payload: {test_logger.standard_logging_payload}")
     print(f"logged kwargs: {json.dumps(test_logger.logged_kwargs, indent=4, default=str)}")
 
+    # Verify logging was called
+    assert test_logger.log_success_called is True
     assert test_logger.standard_logging_payload is not None
 
-    
+    # Verify standard_logging_payload exists
+    slp = test_logger.standard_logging_payload
+    assert slp is not None
+
+    # Get values from standard logging payload
+    logged_model = slp.get("model") if isinstance(slp, dict) else getattr(slp, "model", None)
+    logged_provider = slp.get("custom_llm_provider") if isinstance(slp, dict) else getattr(slp, "custom_llm_provider", None)
+    call_type = slp.get("call_type") if isinstance(slp, dict) else getattr(slp, "call_type", None)
+    response_cost = slp.get("response_cost") if isinstance(slp, dict) else getattr(slp, "response_cost", None)
+
+    print(f"\n=== Standard Logging Payload Validation ===")
+    print(f"model: {logged_model}")
+    print(f"custom_llm_provider: {logged_provider}")
+    print(f"call_type: {call_type}")
+    print(f"response_cost: {response_cost}")
+
+    # Verify model and custom_llm_provider are set correctly
+    assert logged_model is not None, "model should be set"
+    assert "a2a_agent/" in logged_model, f"model should contain 'a2a_agent/', got: {logged_model}"
+    assert logged_provider == "a2a_agent", f"custom_llm_provider should be 'a2a_agent', got: {logged_provider}"
+
+    # Verify call_type is correct for A2A
+    assert call_type == "asend_message", f"call_type should be 'asend_message', got: {call_type}"
+
+    # Verify response_cost is set to 0.0 (not None, not an error)
+    # This confirms the A2A cost calculator is working
+    assert response_cost is not None, "response_cost should not be None"
+    assert response_cost == 0.0, f"response_cost should be 0.0 for A2A, got: {response_cost}"
