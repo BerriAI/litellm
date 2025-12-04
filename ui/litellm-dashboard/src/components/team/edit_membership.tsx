@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Modal, Form, Button as AntButton, message } from 'antd';
+import React, { useEffect } from "react";
+import { Modal, Form, Button as AntButton } from "antd";
 import { Select, SelectItem, TextInput } from "@tremor/react";
-import { Card, Text } from "@tremor/react";
-import NotificationsManager from "../molecules/notifications_manager";
+import { Text } from "@tremor/react";
 import NumericalInput from "../shared/numerical_input";
 
 interface BaseMember {
@@ -23,7 +22,7 @@ interface ModalConfig {
   additionalFields?: Array<{
     name: string;
     label: string | React.ReactNode;
-    type: 'input' | 'select' | 'numerical';
+    type: "input" | "select" | "numerical";
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
     step?: number;
@@ -37,7 +36,7 @@ interface MemberModalProps<T extends BaseMember> {
   onCancel: () => void;
   onSubmit: (data: T) => void;
   initialData?: T | null;
-  mode: 'add' | 'edit';
+  mode: "add" | "edit";
   config: ModalConfig;
 }
 
@@ -47,7 +46,7 @@ const MemberModal = <T extends BaseMember>({
   onSubmit,
   initialData,
   mode,
-  config
+  config,
 }: MemberModalProps<T>) => {
   const [form] = Form.useForm();
 
@@ -56,7 +55,7 @@ const MemberModal = <T extends BaseMember>({
   // Reset form and set initial values when modal becomes visible or initialData changes
   useEffect(() => {
     if (visible) {
-      if (mode === 'edit' && initialData) {
+      if (mode === "edit" && initialData) {
         // For edit mode, use the initialData values
         const formValues = {
           ...initialData,
@@ -73,7 +72,7 @@ const MemberModal = <T extends BaseMember>({
         // For add mode, reset to defaults
         form.resetFields();
         form.setFieldsValue({
-          role: config.defaultRole || config.roleOptions[0]?.value
+          role: config.defaultRole || config.roleOptions[0]?.value,
         });
       }
     }
@@ -83,10 +82,10 @@ const MemberModal = <T extends BaseMember>({
     try {
       // Trim string values and clean up form data
       const formData = Object.entries(values).reduce((acc, [key, value]) => {
-        if (typeof value === 'string') {
+        if (typeof value === "string") {
           const trimmedValue = value.trim();
           // For empty strings on optional numeric fields, set to null
-          if (trimmedValue === '' && (key === 'max_budget_in_team' || key === 'tpm_limit' || key === 'rpm_limit')) {
+          if (trimmedValue === "" && (key === "max_budget_in_team" || key === "tpm_limit" || key === "rpm_limit")) {
             return { ...acc, [key]: null };
           }
           return { ...acc, [key]: trimmedValue };
@@ -94,26 +93,26 @@ const MemberModal = <T extends BaseMember>({
         // For numeric values from NumericalInput, use as-is (already numbers)
         return { ...acc, [key]: value };
       }, {}) as T;
-      
+
       console.log("Submitting form data:", formData);
       onSubmit(formData);
       form.resetFields();
       // NotificationsManager.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);
     } catch (error) {
       // NotificationManager.fromBackend('Failed to submit form');
-      console.error('Form submission error:', error);
+      console.error("Form submission error:", error);
     }
   };
 
   // Helper function to get role label from value
   const getRoleLabel = (value: string) => {
-    return config.roleOptions.find(option => option.value === value)?.label || value;
+    return config.roleOptions.find((option) => option.value === value)?.label || value;
   };
 
   const renderField = (field: {
     name: string;
     label: string | React.ReactNode;
-    type: 'input' | 'select' | 'numerical';
+    type: "input" | "select" | "numerical";
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
     step?: number;
@@ -121,13 +120,9 @@ const MemberModal = <T extends BaseMember>({
     placeholder?: string;
   }) => {
     switch (field.type) {
-      case 'input':
-        return (
-          <TextInput
-            placeholder={field.placeholder}
-          />
-        );
-      case 'numerical':
+      case "input":
+        return <TextInput placeholder={field.placeholder} />;
+      case "numerical":
         return (
           <NumericalInput
             step={field.step || 1}
@@ -136,10 +131,10 @@ const MemberModal = <T extends BaseMember>({
             placeholder={field.placeholder || "Enter a numerical value"}
           />
         );
-      case 'select':
+      case "select":
         return (
           <Select>
-            {field.options?.map(option => (
+            {field.options?.map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 {option.label}
               </SelectItem>
@@ -153,31 +148,21 @@ const MemberModal = <T extends BaseMember>({
 
   return (
     <Modal
-      title={config.title || (mode === 'add' ? "Add Member" : "Edit Member")}
+      title={config.title || (mode === "add" ? "Add Member" : "Edit Member")}
       open={visible}
       width={1000}
       footer={null}
       onCancel={onCancel}
     >
-      <Form
-        form={form}
-        onFinish={handleSubmit}
-        labelCol={{ span: 8 }}
-        wrapperCol={{ span: 16 }}
-        labelAlign="left"
-      >
+      <Form form={form} onFinish={handleSubmit} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
         {config.showEmail && (
-          <Form.Item 
-            label="Email" 
+          <Form.Item
+            label="Email"
             name="user_email"
             className="mb-4"
-            rules={[
-              { type: 'email', message: 'Please enter a valid email!' }
-            ]}
+            rules={[{ type: "email", message: "Please enter a valid email!" }]}
           >
-            <TextInput
-              placeholder="user@example.com"
-            />
+            <TextInput placeholder="user@example.com" />
           </Form.Item>
         )}
 
@@ -188,47 +173,37 @@ const MemberModal = <T extends BaseMember>({
         )}
 
         {config.showUserId && (
-          <Form.Item 
-            label="User ID" 
-            name="user_id"
-            className="mb-4"
-          >
-            <TextInput
-              placeholder="user_123"
-            />
+          <Form.Item label="User ID" name="user_id" className="mb-4">
+            <TextInput placeholder="user_123" />
           </Form.Item>
         )}
 
-        <Form.Item 
+        <Form.Item
           label={
             <div className="flex items-center gap-2">
               <span>Role</span>
-              {mode === 'edit' && initialData && (
-                <span className="text-gray-500 text-sm">
-                  (Current: {getRoleLabel(initialData.role)})
-                </span>
+              {mode === "edit" && initialData && (
+                <span className="text-gray-500 text-sm">(Current: {getRoleLabel(initialData.role)})</span>
               )}
             </div>
           }
           name="role"
           className="mb-4"
-          rules={[
-            { required: true, message: 'Please select a role!' }
-          ]}
+          rules={[{ required: true, message: "Please select a role!" }]}
         >
           <Select>
-            {mode === 'edit' && initialData
+            {mode === "edit" && initialData
               ? [
                   // Current role first
-                  ...config.roleOptions.filter(option => option.value === initialData.role),
+                  ...config.roleOptions.filter((option) => option.value === initialData.role),
                   // Then all other roles
-                  ...config.roleOptions.filter(option => option.value !== initialData.role)
-                ].map(option => (
+                  ...config.roleOptions.filter((option) => option.value !== initialData.role),
+                ].map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}
                   </SelectItem>
                 ))
-              : config.roleOptions.map(option => (
+              : config.roleOptions.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}
                   </SelectItem>
@@ -236,30 +211,18 @@ const MemberModal = <T extends BaseMember>({
           </Select>
         </Form.Item>
 
-        {config.additionalFields?.map(field => (
-          <Form.Item
-            key={field.name}
-            label={field.label}
-            name={field.name}
-            className="mb-4"
-            rules={field.rules}
-          >
+        {config.additionalFields?.map((field) => (
+          <Form.Item key={field.name} label={field.label} name={field.name} className="mb-4" rules={field.rules}>
             {renderField(field)}
           </Form.Item>
         ))}
 
         <div className="text-right mt-6">
-          <AntButton 
-            onClick={onCancel} 
-            className="mr-2"
-          >
+          <AntButton onClick={onCancel} className="mr-2">
             Cancel
           </AntButton>
-          <AntButton 
-            type="default" 
-            htmlType="submit"
-          >
-            {mode === 'add' ? 'Add Member' : 'Save Changes'}
+          <AntButton type="default" htmlType="submit">
+            {mode === "add" ? "Add Member" : "Save Changes"}
           </AntButton>
         </div>
       </Form>

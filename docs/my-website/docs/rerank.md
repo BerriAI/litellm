@@ -6,6 +6,18 @@ LiteLLM Follows the [cohere api request / response for the rerank api](https://c
 
 :::
 
+## Overview
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input query only (not documents) |
+| Supported Providers | Cohere, Together AI, Azure AI, DeepInfra, Nvidia NIM, Infinity | |
+
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
 
@@ -109,6 +121,8 @@ curl http://0.0.0.0:4000/rerank \
 
 ## **Supported Providers**
 
+#### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
+
 | Provider    | Link to Usage      |
 |-------------|--------------------|
 | Cohere (v1 + v2 clients)      |   [Usage](#quick-start)                 |
@@ -119,4 +133,5 @@ curl http://0.0.0.0:4000/rerank \
 | HuggingFace|   [Usage](../docs/providers/huggingface_rerank)                 |  
 | Infinity|   [Usage](../docs/providers/infinity)                 |  
 | vLLM|   [Usage](../docs/providers/vllm#rerank-endpoint)                 |  
-| DeepInfra|   [Usage](../docs/providers/deepinfra#rerank-endpoint)                 |  
+| DeepInfra|   [Usage](../docs/providers/deepinfra#rerank-endpoint)                 |
+| Vertex AI|   [Usage](../docs/providers/vertex#rerank-api)                 |  

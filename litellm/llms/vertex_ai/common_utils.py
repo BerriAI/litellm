@@ -1,10 +1,12 @@
 import re
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
 
 import httpx
 
 import litellm
-from litellm import supports_response_schema, supports_system_messages, verbose_logger
+from litellm.utils import supports_response_schema, supports_system_messages
+from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -22,6 +24,71 @@ class VertexAIError(BaseLLMException):
         headers: Optional[Union[Dict, httpx.Headers]] = None,
     ):
         super().__init__(message=message, status_code=status_code, headers=headers)
+
+
+class VertexAIModelRoute(str, Enum):
+    """Enum for Vertex AI model routing"""
+
+    PARTNER_MODELS = "partner_models"
+    GEMINI = "gemini"
+    GEMMA = "gemma"
+    MODEL_GARDEN = "model_garden"
+    NON_GEMINI = "non_gemini"
+
+
+def get_vertex_ai_model_route(
+    model: str, litellm_params: Optional[dict] = None
+) -> VertexAIModelRoute:
+    """
+    Determine which handler to use for a Vertex AI model based on the model name.
+
+    Args:
+        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "openai/gpt-oss-120b")
+        litellm_params: Optional litellm parameters dict that may contain base_model for routing
+
+    Returns:
+        VertexAIModelRoute: The route enum indicating which handler should be used
+
+    Examples:
+        >>> get_vertex_ai_model_route("llama3-405b")
+        VertexAIModelRoute.PARTNER_MODELS
+
+        >>> get_vertex_ai_model_route("gemini-pro")
+        VertexAIModelRoute.GEMINI
+
+        >>> get_vertex_ai_model_route("gemma/gemma-3-12b-it")
+        VertexAIModelRoute.GEMMA
+
+        >>> get_vertex_ai_model_route("openai/gpt-oss-120b")
+        VertexAIModelRoute.MODEL_GARDEN
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    # Check base_model in litellm_params for gemini override
+    if litellm_params and litellm_params.get("base_model") is not None:
+        if "gemini" in litellm_params["base_model"]:
+            return VertexAIModelRoute.GEMINI
+
+    # Check for partner models (llama, mistral, claude, etc.)
+    if VertexAIPartnerModels.is_vertex_partner_model(model=model):
+        return VertexAIModelRoute.PARTNER_MODELS
+
+    # Check for gemma models
+    if "gemma/" in model:
+        return VertexAIModelRoute.GEMMA
+
+    # Check for model garden openai models
+    if "openai" in model:
+        return VertexAIModelRoute.MODEL_GARDEN
+
+    # Check for gemini models
+    if "gemini" in model:
+        return VertexAIModelRoute.GEMINI
+
+    # Default to non-gemini (legacy vertex models like chat-bison, text-bison, etc.)
+    return VertexAIModelRoute.NON_GEMINI
 
 
 def get_supports_system_message(
@@ -176,12 +243,12 @@ def _check_text_in_content(parts: List[PartType]) -> bool:
     """
     check that user_content has 'text' parameter.
         - Known Vertex Error: Unable to submit request because it must have a text parameter.
-        - 'text' param needs to be len > 0
+        - 'text' param needs to be present (empty strings are valid)
         - Relevant Issue: https://github.com/BerriAI/litellm/issues/5515
     """
     has_text_param = False
     for part in parts:
-        if "text" in part and part.get("text"):
+        if "text" in part and part.get("text") is not None:
             has_text_param = True
 
     return has_text_param
@@ -190,8 +257,10 @@ def _check_text_in_content(parts: List[PartType]) -> bool:
 def _fix_enum_empty_strings(schema, depth=0):
     """Fix empty strings in enum values by replacing them with None. Gemini doesn't accept empty strings in enums."""
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
-    
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema."
+        )
+
     if "enum" in schema and isinstance(schema["enum"], list):
         schema["enum"] = [None if value == "" else value for value in schema["enum"]]
 
@@ -204,6 +273,57 @@ def _fix_enum_empty_strings(schema, depth=0):
     items = schema.get("items", None)
     if items is not None:
         _fix_enum_empty_strings(items, depth=depth + 1)
+
+
+def _fix_enum_types(schema, depth=0):
+    """Remove `enum` fields when the schema type is not string.
+
+    Gemini / Vertex APIs only allow enums for string-typed fields. When an enum
+    is present on a non-string typed property (or when `anyOf` types do not
+    include a string type), remove the enum to avoid provider validation errors.
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema."
+        )
+
+    if not isinstance(schema, dict):
+        return
+
+    # If enum exists but type is not string (and anyOf doesn't include string), drop enum
+    if "enum" in schema and isinstance(schema["enum"], list):
+        schema_type = schema.get("type")
+        keep_enum = False
+        if isinstance(schema_type, str) and schema_type.lower() == "string":
+            keep_enum = True
+        else:
+            anyof = schema.get("anyOf")
+            if isinstance(anyof, list):
+                for item in anyof:
+                    if isinstance(item, dict):
+                        item_type = item.get("type")
+                        if isinstance(item_type, str) and item_type.lower() == "string":
+                            keep_enum = True
+                            break
+
+        if not keep_enum:
+            schema.pop("enum", None)
+
+    # Recurse into nested structures
+    properties = schema.get("properties", None)
+    if properties is not None:
+        for _, value in properties.items():
+            _fix_enum_types(value, depth=depth + 1)
+
+    items = schema.get("items", None)
+    if items is not None:
+        _fix_enum_types(items, depth=depth + 1)
+
+    anyof = schema.get("anyOf", None)
+    if anyof is not None and isinstance(anyof, list):
+        for item in anyof:
+            if isinstance(item, dict):
+                _fix_enum_types(item, depth=depth + 1)
 
 
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
@@ -238,6 +358,9 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
 
     # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
     _fix_enum_empty_strings(parameters)
+
+    # Remove enums for non-string typed fields (Gemini requires enum only on strings)
+    _fix_enum_types(parameters)
 
     # Handle empty items objects
     process_items(parameters)
@@ -466,19 +589,18 @@ def _convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
 def _convert_schema_types(schema, depth=0):
     """
     Convert type arrays and lowercase types for Vertex AI compatibility.
-    
-    Transforms OpenAI-style schemas to Vertex AI format by converting type arrays 
+
+    Transforms OpenAI-style schemas to Vertex AI format by converting type arrays
     like ["string", "number"] to anyOf format and converting all types to uppercase.
     """
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
-    
+
     if not isinstance(schema, dict):
         return
 
-    
     # Handle type field
     if "type" in schema:
         type_val = schema["type"]
@@ -490,7 +612,7 @@ def _convert_schema_types(schema, depth=0):
             schema["type"] = type_val[0]
         elif isinstance(type_val, str):
             schema["type"] = type_val
-    
+
     # Recursively process nested properties, items, and anyOf
     for key in ["properties", "items", "anyOf"]:
         if key in schema:
@@ -503,6 +625,7 @@ def _convert_schema_types(schema, depth=0):
             elif key == "anyOf" and isinstance(value, list):
                 for anyof_schema in value:
                     _convert_schema_types(anyof_schema, depth + 1)
+
 
 def get_vertex_project_id_from_url(url: str) -> Optional[str]:
     """
@@ -602,17 +725,18 @@ def is_global_only_vertex_model(model: str) -> bool:
         return False
     return "global" in supported_regions
 
-class VertexAIModelInfo(BaseLLMModelInfo):    
+
+class VertexAIModelInfo(BaseLLMModelInfo):
     def get_token_counter(self) -> Optional[BaseTokenCounter]:
         """
         Factory method to create a token counter for this provider.
-        
+
         Returns:
             Optional TokenCounterInterface implementation for this provider,
             or None if token counting is not supported.
         """
         return VertexAITokenCounter()
-    
+
     def validate_environment(
         self,
         headers: dict,
@@ -624,7 +748,7 @@ class VertexAIModelInfo(BaseLLMModelInfo):
         api_base: Optional[str] = None,
     ) -> dict:
         raise NotImplementedError("Vertex AI models are not supported yet")
-    
+
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
@@ -643,8 +767,6 @@ class VertexAIModelInfo(BaseLLMModelInfo):
     ) -> Optional[str]:
         raise NotImplementedError("Vertex AI models are not supported yet")
 
-
-
     @staticmethod
     def get_base_model(model: str) -> Optional[str]:
         """
@@ -658,13 +780,15 @@ class VertexAIModelInfo(BaseLLMModelInfo):
 
 class VertexAITokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
+
     def should_use_token_counting_api(
-        self, 
+        self,
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
         from litellm.types.utils import LlmProviders
+
         return custom_llm_provider == LlmProviders.VERTEX_AI.value
-    
+
     async def count_tokens(
         self,
         model_to_use: str,
@@ -675,25 +799,68 @@ class VertexAITokenCounter(BaseTokenCounter):
     ) -> Optional[TokenCountResponse]:
         import copy
 
-        from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
-        deployment = deployment or {}
-        count_tokens_params_request = copy.deepcopy(deployment.get("litellm_params", {}))
-        count_tokens_params = {
-            "model": model_to_use,
-            "contents": contents,
-        }
-        count_tokens_params_request.update(count_tokens_params)
-        result = await VertexAITokenCounter().acount_tokens(
-            **count_tokens_params_request,
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+            VertexAIPartnerModels,
         )
-        
-        if result is not None:
-            return TokenCountResponse(
-                total_tokens=result.get("totalTokens", 0),
-                request_model=request_model,
-                model_used=model_to_use,
-                tokenizer_type=result.get("tokenizer_used", ""),
-                original_response=result,
+
+        deployment = deployment or {}
+        count_tokens_params_request = copy.deepcopy(
+            deployment.get("litellm_params", {})
+        )
+
+        # Check if this is a partner model (Claude, Mistral, etc.)
+        if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
+            # Use partner models token counter
+            partner_models_handler = VertexAIPartnerModels()
+
+            # Extract vertex-specific params from litellm_params
+            vertex_project = count_tokens_params_request.get(
+                "vertex_project"
+            ) or count_tokens_params_request.get("vertex_ai_project")
+            vertex_location = count_tokens_params_request.get(
+                "vertex_location"
+            ) or count_tokens_params_request.get("vertex_ai_location")
+            vertex_credentials = count_tokens_params_request.get(
+                "vertex_credentials"
+            ) or count_tokens_params_request.get("vertex_ai_credentials")
+
+            result = await partner_models_handler.count_tokens(
+                model=model_to_use,
+                messages=messages or [],
+                litellm_params=count_tokens_params_request,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_credentials=vertex_credentials,
             )
-        
+
+            if result is not None:
+                return TokenCountResponse(
+                    total_tokens=result.get("input_tokens", 0),
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type=result.get("tokenizer_used", ""),
+                    original_response=result,
+                )
+        else:
+            # Use standard Vertex AI (Gemini) token counter
+            from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
+
+            count_tokens_params = {
+                "model": model_to_use,
+                "contents": contents,
+            }
+            count_tokens_params_request.update(count_tokens_params)
+            result = await VertexAITokenCounter().acount_tokens(
+                **count_tokens_params_request,
+            )
+
+            if result is not None:
+                return TokenCountResponse(
+                    total_tokens=result.get("totalTokens", 0),
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type=result.get("tokenizer_used", ""),
+                    original_response=result,
+                )
+
         return None

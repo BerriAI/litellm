@@ -4,9 +4,11 @@ from typing import Any, Optional, cast
 
 import litellm
 from litellm import get_llm_provider
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -15,8 +17,8 @@ from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.openai.realtime.handler import OpenAIRealtime
-from litellm.types.realtime import RealtimeQueryParams
 from ..utils import client as wrapper_client
+from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
 azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
@@ -100,16 +102,27 @@ async def _arealtime(
             or get_secret_str("AZURE_API_KEY")
         )
 
+        api_version = (
+            api_version
+            or litellm_params.api_version
+            or "2024-10-01-preview"
+        )
+        
+        realtime_protocol = (
+            kwargs.get("realtime_protocol")
+            or "beta"
+        )
         await azure_realtime.async_realtime(
             model=model,
             websocket=websocket,
             api_base=api_base,
             api_key=api_key,
-            api_version="2024-10-01-preview",
+            api_version=api_version,
             azure_ad_token=None,
             client=None,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
+            realtime_protocol=realtime_protocol,
         )
     elif _custom_llm_provider == "openai":
         api_base = (
@@ -146,6 +159,7 @@ async def _realtime_health_check(
     api_key: Optional[str],
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
+    realtime_protocol: Optional[str] = None,
 ):
     """
     Health check for realtime API - tries connection to the realtime API websocket
@@ -156,6 +170,7 @@ async def _realtime_health_check(
         api_version: Optional[str] - api version
         api_key: str - api key
         custom_llm_provider: str - custom llm provider
+        realtime_protocol: Optional[str] - protocol version ("GA"/"v1" for GA path, "beta"/None for beta path)
 
     Returns:
         bool - True if connection is successful, False otherwise
@@ -170,6 +185,7 @@ async def _realtime_health_check(
             api_base=api_base or "",
             model=model,
             api_version=api_version or "2024-10-01-preview",
+            realtime_protocol=realtime_protocol,
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
@@ -177,10 +193,13 @@ async def _realtime_health_check(
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
+    ssl_context = get_shared_realtime_ssl_context()
     async with websockets.connect(  # type: ignore
         url,
         extra_headers={
             "api-key": api_key,  # type: ignore
         },
+        max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+        ssl=ssl_context,
     ):
         return True

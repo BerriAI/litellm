@@ -439,3 +439,24 @@ def test_multiple_tools_streaming_has_index_zero():
             assert (
                 parsed.choices[0].index == 0
             ), f"Expected index=0, got {parsed.choices[0].index}"
+
+
+def test_streaming_chunks_have_stable_ids():
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    first_chunk = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello"},
+    }
+    second_chunk = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " world"},
+    }
+
+    response_one = iterator.chunk_parser(chunk=first_chunk)
+    response_two = iterator.chunk_parser(chunk=second_chunk)
+
+    assert response_one.id == response_two.id == iterator.response_id

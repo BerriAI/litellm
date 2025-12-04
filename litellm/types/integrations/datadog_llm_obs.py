@@ -3,14 +3,16 @@ Payloads for Datadog LLM Observability Service (LLMObs)
 
 API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=example#api-standards
 """
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional
+
+from typing_extensions import TypedDict
 
 from litellm.types.integrations.custom_logger import StandardCustomLoggerInitParams
 
 
 class InputMeta(TypedDict):
     messages: List[
-        Dict[str, str]
+        Dict[str, Any]  # changed to fit with tool calls
     ]  # Relevant Issue: https://github.com/BerriAI/litellm/issues/9494
 
 
@@ -20,6 +22,7 @@ class OutputMeta(TypedDict):
 
 class DDLLMObsError(TypedDict, total=False):
     """Error information on the span according to DD LLM Obs API spec"""
+
     message: str  # The error message
     stack: Optional[str]  # The stack trace
     type: Optional[str]  # The error type
@@ -46,6 +49,7 @@ class LLMMetrics(TypedDict, total=False):
 class LLMObsPayload(TypedDict, total=False):
     parent_id: str
     trace_id: str
+    apm_id: str
     span_id: str
     name: str
     meta: Meta
@@ -53,7 +57,7 @@ class LLMObsPayload(TypedDict, total=False):
     duration: int
     metrics: LLMMetrics
     tags: List
-    status: Literal["ok", "error"] # Error status ("ok" or "error"). Defaults to "ok".
+    status: Literal["ok", "error"]  # Error status ("ok" or "error"). Defaults to "ok".
 
 
 class DDSpanAttributes(TypedDict):
@@ -71,6 +75,7 @@ class DatadogLLMObsInitParams(StandardCustomLoggerInitParams):
     """
     Params for initializing a DatadogLLMObs logger on litellm
     """
+
     pass
 
 
@@ -78,3 +83,10 @@ class DDLLMObsLatencyMetrics(TypedDict, total=False):
     time_to_first_token_ms: float
     litellm_overhead_time_ms: float
     guardrail_overhead_time_ms: float
+
+
+class DDLLMObsSpendMetrics(TypedDict, total=False):
+    response_cost: float
+    user_api_key_spend: float
+    user_api_key_max_budget: float
+    user_api_key_budget_reset_at: str

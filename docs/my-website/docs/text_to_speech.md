@@ -4,6 +4,18 @@ import TabItem from '@theme/TabItem';
 
 # /audio/speech
 
+## Overview
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input text (non-streaming only) |
+| Supported Providers | OpenAI, Azure OpenAI, Vertex AI | |
+
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
 
@@ -88,8 +100,10 @@ litellm --config /path/to/config.yaml
 |-------------|--------------------|
 | OpenAI      |   [Usage](#quick-start)                 |
 | Azure OpenAI|   [Usage](../docs/providers/azure#azure-text-to-speech-tts)                 |
+| Azure AI Speech Service (AVA)|   [Usage](../docs/providers/azure_ai_speech)                 |
 | Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
 | Gemini      |   [Usage](#gemini-text-to-speech)                 |
+| ElevenLabs  |   [Usage](../docs/providers/elevenlabs#text-to-speech-tts)                 |
 
 ## `/audio/speech` to `/chat/completions` Bridge
 

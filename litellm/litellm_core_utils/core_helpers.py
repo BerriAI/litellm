@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 
 import httpx
 
@@ -138,6 +138,22 @@ def add_missing_spend_metadata_to_litellm_metadata(
     return litellm_metadata
 
 
+def get_metadata_variable_name_from_kwargs(
+    kwargs: dict,
+) -> Literal["metadata", "litellm_metadata"]:
+    """
+    Helper to return what the "metadata" field should be called in the request data
+
+    - New endpoints return `litellm_metadata`
+    - Old endpoints return `metadata`
+
+    Context:
+    - LiteLLM used `metadata` as an internal field for storing metadata
+    - OpenAI then started using this field for their metadata
+    - LiteLLM is now moving to using `litellm_metadata` for our metadata
+    """
+    return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+    
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
@@ -218,7 +234,8 @@ def preserve_upstream_non_openai_attributes(
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
-    expected_keys = set(model_response.model_fields.keys()).union({"usage"})
+    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
+    expected_keys = set(type(model_response).model_fields.keys()).union({"usage"})
     for key, value in original_chunk.model_dump().items():
         if key not in expected_keys:
             setattr(model_response, key, value)
@@ -228,9 +245,11 @@ def safe_deep_copy(data):
     """
     Safe Deep Copy
 
-    The LiteLLM Request has some object that can-not be pickled / deep copied
-
-    Use this function to safely deep copy the LiteLLM Request
+    The LiteLLM request may contain objects that cannot be pickled/deep-copied
+    (e.g., tracing spans, locks, clients). 
+    
+    This helper deep-copies each top-level key independently; on failure keeps
+    original ref
     """
     import copy
 
@@ -255,9 +274,22 @@ def safe_deep_copy(data):
                 "litellm_parent_otel_span"
             )
             data["litellm_metadata"]["litellm_parent_otel_span"] = "placeholder"
-    new_data = copy.deepcopy(data)
 
-    # Step 2: re-add the litellm_parent_otel_span after doing a deep copy
+    # Step 2: Per-key deepcopy with fallback
+    if isinstance(data, dict):
+        new_data = {}
+        for k, v in data.items():
+            try:
+                new_data[k] = copy.deepcopy(v)
+            except Exception:
+                new_data[k] = v
+    else:
+        try:
+            new_data = copy.deepcopy(data)
+        except Exception:
+            new_data = data
+
+    # Step 3: re-add the litellm_parent_otel_span after doing a deep copy
     if isinstance(data, dict) and litellm_parent_otel_span is not None:
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
             data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span

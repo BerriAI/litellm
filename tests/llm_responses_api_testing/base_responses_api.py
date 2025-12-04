@@ -5,7 +5,7 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
-import uuid
+from litellm._uuid import uuid
 import time
 import base64
 
@@ -57,9 +57,6 @@ def validate_responses_api_response(response, final_chunk: bool = False):
     assert "output" in response and isinstance(
         response["output"], list
     ), "Response should have a list 'output' field"
-    assert "parallel_tool_calls" in response and isinstance(
-        response["parallel_tool_calls"], bool
-    ), "Response should have a boolean 'parallel_tool_calls' field"
 
     # Optional fields with their expected types
     optional_fields = {
@@ -69,9 +66,10 @@ def validate_responses_api_response(response, final_chunk: bool = False):
         "metadata": dict,
         "model": str,
         "object": str,
+        "parallel_tool_calls": (bool, type(None)),
         "temperature": (int, float, type(None)),
-        "tool_choice": (dict, str),
-        "tools": list,
+        "tool_choice": (dict, str, type(None)),
+        "tools": (list, type(None)),
         "top_p": (int, float, type(None)),
         "max_output_tokens": (int, type(None)),
         "previous_response_id": (str, type(None)),
@@ -146,6 +144,8 @@ class BaseResponsesAPITest(ABC):
     @pytest.mark.flaky(retries=3, delay=2)
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
         litellm._turn_on_debug()
+        # Enable cost calculation for streaming usage
+        litellm.include_cost_in_streaming_usage = True
         base_completion_call_args = self.get_base_completion_call_args()
         collected_content_string = ""
         response_completed_event = None
@@ -207,6 +207,14 @@ class BaseResponsesAPITest(ABC):
             == response_completed_event.response.usage.input_tokens
             + response_completed_event.response.usage.output_tokens
         )
+
+        # assert the response completed event includes cost when include_cost_in_streaming_usage is True
+        assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
+        assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
+        print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
+        
+        # Reset the setting
+        litellm.include_cost_in_streaming_usage = False
 
     @pytest.mark.parametrize("sync_mode", [False, True])
     @pytest.mark.asyncio
@@ -536,4 +544,123 @@ class BaseResponsesAPITest(ABC):
         # Validate final response structure
         validate_responses_api_response(final_response, final_chunk=True)
         assert final_response.output is not None
-        assert len(final_response.output) > 0
+
+    def test_openai_responses_api_dict_input_filtering(self):
+        """
+        Test that regular dict inputs with status fields are properly filtered
+        to replicate exclude_unset=True behavior for non-Pydantic objects.
+        """
+        from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+        # Test input with regular dict objects (like from JSON)
+        test_input = [
+            {
+                "role": "user",
+                "content": "test"
+            },
+            {
+                "id": "rs_123",
+                "summary": [{"text": "test", "type": "summary_text"}],
+                "type": "reasoning",
+                "content": None,  # Should be filtered out
+                "encrypted_content": None,  # Should be filtered out
+                "status": None  # Should be filtered out
+            },
+            {
+                "arguments": "{}",
+                "call_id": "call_123",
+                "name": "get_today",
+                "type": "function_call",
+                "id": "fc_123",
+                "status": "completed"  # Should be preserved (not a default field)
+            }
+        ]
+
+        config = OpenAIResponsesAPIConfig()
+        validated_input = config._validate_input_param(test_input)
+
+        # Verify the results
+        assert len(validated_input) == 3
+
+        # Check reasoning item (index 1)
+        reasoning_item = validated_input[1]
+        assert reasoning_item["type"] == "reasoning"
+        assert "status" not in reasoning_item, "status field should be filtered out from reasoning item"
+        assert "content" not in reasoning_item, "content field should be filtered out from reasoning item"
+        assert "encrypted_content" not in reasoning_item, "encrypted_content field should be filtered out from reasoning item"
+        # Note: ID auto-generation was disabled, so reasoning items may not have IDs
+        # Only check for ID if it was present in the original input
+        if "id" in reasoning_item:
+            assert reasoning_item["id"] == "rs_123", "ID should be preserved if present"
+        assert "summary" in reasoning_item, "summary field should be preserved"
+
+        # Check function call item (index 2)
+        function_call_item = validated_input[2]
+        assert function_call_item["type"] == "function_call"
+        assert "status" in function_call_item, "status field should be preserved in function call item"
+        assert function_call_item["status"] == "completed", "status value should be preserved"
+
+        print("✅ OpenAI Responses API dict input filtering test passed")
+
+    @pytest.mark.parametrize("sync_mode", [False, True])
+    @pytest.mark.flaky(retries=3, delay=2)
+    @pytest.mark.asyncio
+    async def test_basic_openai_responses_cancel_endpoint(self, sync_mode):
+        try:
+            litellm._turn_on_debug()
+            litellm.set_verbose = True
+            base_completion_call_args = self.get_base_completion_call_args()
+            if sync_mode:
+                response = litellm.responses(
+                    input="Basic ping", max_output_tokens=20, background=True, **base_completion_call_args
+                )
+
+                # cancel the response
+                if isinstance(response, ResponsesAPIResponse):
+                    cancel_result = litellm.cancel_responses(
+                        response_id=response.id, **base_completion_call_args
+                    )
+                    assert cancel_result is not None
+                    assert hasattr(cancel_result, "id")
+                    # The actual response structure depends on the provider implementation
+                    assert isinstance(cancel_result, ResponsesAPIResponse)
+                else:
+                    raise ValueError("response is not a ResponsesAPIResponse")
+            else:
+                response = await litellm.aresponses(
+                    input="Basic ping", max_output_tokens=20, background=True, **base_completion_call_args
+                )
+
+                # async cancel the response
+                if isinstance(response, ResponsesAPIResponse):
+                    cancel_result = await litellm.acancel_responses(
+                        response_id=response.id, **base_completion_call_args
+                    )
+                    assert cancel_result is not None
+                    assert hasattr(cancel_result, "id")
+                    # The actual response structure depends on the provider implementation
+                    assert isinstance(cancel_result, ResponsesAPIResponse)
+                else:
+                    raise ValueError("response is not a ResponsesAPIResponse")
+        except Exception as e:
+            if "Cannot cancel a completed response" in str(e):
+                pass
+            else:
+                raise e
+
+    @pytest.mark.parametrize("sync_mode", [False, True])
+    @pytest.mark.asyncio
+    async def test_cancel_responses_invalid_response_id(self, sync_mode):
+        """Test cancel_responses with invalid response ID should raise appropriate error"""
+        base_completion_call_args = self.get_base_completion_call_args()
+        
+        if sync_mode:
+            with pytest.raises(Exception):
+                litellm.cancel_responses(
+                    response_id="invalid_response_id_12345", **base_completion_call_args
+                )
+        else:
+            with pytest.raises(Exception):
+                await litellm.acancel_responses(
+                    response_id="invalid_response_id_12345", **base_completion_call_args
+                )

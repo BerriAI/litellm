@@ -19,7 +19,12 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import Choices, LLMResponseTypes, ModelResponse, TextCompletionResponse
+from litellm.types.utils import (
+    Choices,
+    LLMResponseTypes,
+    ModelResponse,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -92,7 +97,7 @@ class PangeaHandler(CustomGuardrail):
 
         # Pass relevant kwargs to the parent class
         super().__init__(guardrail_name=guardrail_name, **kwargs)
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Initialized Pangea Guardrail: name={guardrail_name}, recipe={pangea_input_recipe}, api_base={self.api_base}"
         )
 
@@ -147,7 +152,7 @@ class PangeaHandler(CustomGuardrail):
                     "guardrail_name": self.guardrail_name,
                 },
             )
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Pangea Guardrail ({hook_name}): Request passed. Response: {result.get('result', {}).get('detectors')}"
         )
 

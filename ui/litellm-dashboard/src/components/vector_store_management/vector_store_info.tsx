@@ -1,25 +1,7 @@
 import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Text,
-  Title,
-  Button,
-  Badge,
-  TabGroup,
-  TabList,
-  Tab,
-  TabPanels,
-  TabPanel,
-} from "@tremor/react";
-import {
-  Form,
-  Input,
-  Select as Select2,
-  message,
-  Tooltip,
-  Button as AntButton,
-} from "antd";
-import { InfoCircleOutlined } from '@ant-design/icons';
+import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { Form, Input, Select as Select2, Tooltip, Button as AntButton } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { vectorStoreInfoCall, vectorStoreUpdateCall, credentialListCall, CredentialItem } from "../networking";
 import { VectorStore } from "./types";
@@ -55,15 +37,16 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       const response = await vectorStoreInfoCall(accessToken, vectorStoreId);
       if (response && response.vector_store) {
         setVectorStoreDetails(response.vector_store);
-        
+
         // If metadata exists and is an object, stringify it for display/editing
         if (response.vector_store.vector_store_metadata) {
-          const metadata = typeof response.vector_store.vector_store_metadata === 'string'
-            ? JSON.parse(response.vector_store.vector_store_metadata)
-            : response.vector_store.vector_store_metadata;
+          const metadata =
+            typeof response.vector_store.vector_store_metadata === "string"
+              ? JSON.parse(response.vector_store.vector_store_metadata)
+              : response.vector_store.vector_store_metadata;
           setMetadataString(JSON.stringify(metadata, null, 2));
         }
-        
+
         if (editVectorStore) {
           form.setFieldsValue({
             vector_store_id: response.vector_store.vector_store_id,
@@ -106,7 +89,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
         NotificationsManager.fromBackend("Invalid JSON in metadata field");
         return;
       }
-      
+
       const updateData = {
         vector_store_id: values.vector_store_id,
         custom_llm_provider: values.custom_llm_provider,
@@ -139,10 +122,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
           <Title>Vector Store ID: {vectorStoreDetails.vector_store_id}</Title>
           <Text className="text-gray-500">{vectorStoreDetails.vector_store_description || "No description"}</Text>
         </div>
-        {is_admin && !isEditing && (
-          <Button onClick={() => setIsEditing(true)}>Edit Vector Store</Button>
-        )}
-
+        {is_admin && !isEditing && <Button onClick={() => setIsEditing(true)}>Edit Vector Store</Button>}
       </div>
 
       <TabGroup>
@@ -150,7 +130,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
           <Tab>Details</Tab>
           <Tab>Test Vector Store</Tab>
         </TabList>
-        
+
         <TabPanels>
           {/* Details Tab */}
           <TabPanel>
@@ -160,12 +140,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                   <Title>Edit Vector Store</Title>
                 </div>
                 <Card>
-                  <Form
-                    form={form}
-                    onFinish={handleSave}
-                    layout="vertical"
-                    initialValues={vectorStoreDetails}
-                  >
+                  <Form form={form} onFinish={handleSave} layout="vertical" initialValues={vectorStoreDetails}>
                     <Form.Item
                       label="Vector Store ID"
                       name="vector_store_id"
@@ -174,26 +149,20 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                       <Input disabled />
                     </Form.Item>
 
-                    <Form.Item
-                      label="Vector Store Name"
-                      name="vector_store_name"
-                    >
+                    <Form.Item label="Vector Store Name" name="vector_store_name">
                       <Input />
                     </Form.Item>
 
-                    <Form.Item
-                      label="Description"
-                      name="vector_store_description"
-                    >
+                    <Form.Item label="Description" name="vector_store_description">
                       <Input.TextArea rows={4} />
                     </Form.Item>
 
                     <Form.Item
                       label={
                         <span>
-                          Provider{' '}
+                          Provider{" "}
                           <Tooltip title="Select the provider for this vector store">
-                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                           </Tooltip>
                         </span>
                       }
@@ -203,7 +172,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                       <Select2>
                         {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => {
                           // Currently only showing Bedrock since it's the only supported provider
-                          if (providerEnum === 'Bedrock') {
+                          if (providerEnum === "Bedrock") {
                             return (
                               <Select2.Option key={providerEnum} value={provider_map[providerEnum]}>
                                 <div className="flex items-center space-x-2">
@@ -216,8 +185,9 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                                       const target = e.target as HTMLImageElement;
                                       const parent = target.parentElement;
                                       if (parent) {
-                                        const fallbackDiv = document.createElement('div');
-                                        fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                        const fallbackDiv = document.createElement("div");
+                                        fallbackDiv.className =
+                                          "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
                                         fallbackDiv.textContent = providerDisplayName.charAt(0);
                                         parent.replaceChild(fallbackDiv, target);
                                       }
@@ -240,23 +210,20 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                       </Text>
                     </div>
 
-                    <Form.Item
-                      label="Existing Credentials"
-                      name="litellm_credential_name"
-                    >
+                    <Form.Item label="Existing Credentials" name="litellm_credential_name">
                       <Select2
                         showSearch
                         placeholder="Select or search for existing credentials"
                         optionFilterProp="children"
                         filterOption={(input, option) =>
-                          (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                          (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
                         }
                         options={[
-                          { value: null, label: 'None' },
+                          { value: null, label: "None" },
                           ...credentials.map((credential) => ({
                             value: credential.credential_name,
-                            label: credential.credential_name
-                          }))
+                            label: credential.credential_name,
+                          })),
                         ]}
                         allowClear
                       />
@@ -271,15 +238,15 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                     <Form.Item
                       label={
                         <span>
-                          Metadata{' '}
+                          Metadata{" "}
                           <Tooltip title="JSON metadata for the vector store">
-                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                           </Tooltip>
                         </span>
                       }
                     >
-                      <Input.TextArea 
-                        rows={4} 
+                      <Input.TextArea
+                        rows={4}
                         value={metadataString}
                         onChange={(e) => setMetadataString(e.target.value)}
                         placeholder='{"key": "value"}'
@@ -288,7 +255,9 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
 
                     <div className="flex justify-end space-x-2">
                       <AntButton onClick={() => setIsEditing(false)}>Cancel</AntButton>
-                      <AntButton type="primary" htmlType="submit">Save Changes</AntButton>
+                      <AntButton type="primary" htmlType="submit">
+                        Save Changes
+                      </AntButton>
                     </div>
                   </Form>
                 </Card>
@@ -297,9 +266,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
               <div>
                 <div className="flex justify-between items-center mb-4">
                   <Title>Vector Store Details</Title>
-                  {is_admin && (
-                    <Button onClick={() => setIsEditing(true)}>Edit Vector Store</Button>
-                  )}
+                  {is_admin && <Button onClick={() => setIsEditing(true)}>Edit Vector Store</Button>}
                 </div>
                 <Card>
                   <div className="space-y-4">
@@ -323,33 +290,34 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                           const { displayName, logo } = (() => {
                             // Find the enum key by matching provider_map values
                             const enumKey = Object.keys(provider_map).find(
-                              key => provider_map[key].toLowerCase() === provider.toLowerCase()
+                              (key) => provider_map[key].toLowerCase() === provider.toLowerCase(),
                             );
-                            
+
                             if (!enumKey) {
                               return { displayName: provider, logo: "" };
                             }
-                            
+
                             // Get the display name from Providers enum and logo from map
                             const displayName = Providers[enumKey as keyof typeof Providers];
                             const logo = providerLogoMap[displayName];
-                            
+
                             return { displayName, logo };
                           })();
-                          
+
                           return (
                             <>
                               {logo && (
-                                <img 
-                                  src={logo} 
-                                  alt={`${displayName} logo`} 
+                                <img
+                                  src={logo}
+                                  alt={`${displayName} logo`}
                                   className="w-5 h-5"
                                   onError={(e) => {
                                     const target = e.target as HTMLImageElement;
                                     const parent = target.parentElement;
                                     if (parent) {
-                                      const fallbackDiv = document.createElement('div');
-                                      fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                      const fallbackDiv = document.createElement("div");
+                                      fallbackDiv.className =
+                                        "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
                                       fallbackDiv.textContent = displayName.charAt(0);
                                       parent.replaceChild(fallbackDiv, target);
                                     }
@@ -370,24 +338,25 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                     </div>
                     <div>
                       <Text className="font-medium">Created</Text>
-                      <Text>{vectorStoreDetails.created_at ? new Date(vectorStoreDetails.created_at).toLocaleString() : "-"}</Text>
+                      <Text>
+                        {vectorStoreDetails.created_at ? new Date(vectorStoreDetails.created_at).toLocaleString() : "-"}
+                      </Text>
                     </div>
                     <div>
                       <Text className="font-medium">Last Updated</Text>
-                      <Text>{vectorStoreDetails.updated_at ? new Date(vectorStoreDetails.updated_at).toLocaleString() : "-"}</Text>
+                      <Text>
+                        {vectorStoreDetails.updated_at ? new Date(vectorStoreDetails.updated_at).toLocaleString() : "-"}
+                      </Text>
                     </div>
                   </div>
                 </Card>
               </div>
             )}
           </TabPanel>
-          
+
           {/* Test Tab */}
           <TabPanel>
-            <VectorStoreTester
-              vectorStoreId={vectorStoreDetails.vector_store_id}
-              accessToken={accessToken || ""}
-            />
+            <VectorStoreTester vectorStoreId={vectorStoreDetails.vector_store_id} accessToken={accessToken || ""} />
           </TabPanel>
         </TabPanels>
       </TabGroup>
@@ -395,4 +364,4 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   );
 };
 
-export default VectorStoreInfoView; 
+export default VectorStoreInfoView;

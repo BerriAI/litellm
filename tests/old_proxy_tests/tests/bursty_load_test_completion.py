@@ -1,6 +1,6 @@
 import time, asyncio
 from openai import AsyncOpenAI
-import uuid
+from litellm._uuid import uuid
 import traceback
 
 

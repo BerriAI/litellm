@@ -220,7 +220,7 @@ class QdrantSemanticCache(BaseCache):
 
     def set_cache(self, key, value, **kwargs):
         print_verbose(f"qdrant semantic-cache set_cache, kwargs: {kwargs}")
-        import uuid
+        from litellm._uuid import uuid
 
         # get the prompt
         messages = kwargs["messages"]
@@ -331,7 +331,7 @@ class QdrantSemanticCache(BaseCache):
         pass
 
     async def async_set_cache(self, key, value, **kwargs):
-        import uuid
+        from litellm._uuid import uuid
 
         from litellm.proxy.proxy_server import llm_model_list, llm_router
 

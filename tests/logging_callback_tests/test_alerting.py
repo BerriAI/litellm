@@ -8,7 +8,7 @@ import os
 import random
 import sys
 import time
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -477,6 +477,7 @@ async def test_send_daily_reports_all_zero_or_none():
         "token_budget",
         "user_budget",
         "team_budget",
+        "organization_budget",
         "proxy_budget",
         "projected_limit_exceeded",
     ],
@@ -514,6 +515,7 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
         "token_budget",
         "user_budget",
         "team_budget",
+        "organization_budget",
         "proxy_budget",
         "projected_limit_exceeded",
     ],

@@ -9,7 +9,11 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, safe_divide
+from litellm.litellm_core_utils.core_helpers import (
+    get_litellm_metadata_from_kwargs,
+    safe_divide,
+    safe_deep_copy
+) 
 
 
 def test_get_litellm_metadata_from_kwargs():
@@ -127,3 +131,43 @@ def test_safe_divide_weight_scenario():
     expected_zero = [0, 0, 0]
     
     assert normalized_zero_weights == expected_zero, f"Expected {expected_zero}, got {normalized_zero_weights}"
+
+
+def test_safe_deep_copy_with_non_pickleables_and_span():
+    """
+    Verify safe_deep_copy:
+    - does not crash when non-pickleables are present,
+    - preserves structure/keys,
+    - deep-copies JSON-y payloads (e.g., messages),
+    - keeps non-pickleables by reference,
+    - redacts OTEL span in the copy and restores it in the original.
+    """
+    import threading
+    rlock = threading.RLock()
+    data = {
+        "metadata": {"litellm_parent_otel_span": rlock, "x": 1},
+        "messages": [{"role": "user", "content": "hi"}],
+        "optional_params": {"handle": rlock},
+        "ok": True,
+    }
+
+    copied = safe_deep_copy(data)
+
+    # Structure preserved
+    assert set(copied.keys()) == set(data.keys())
+
+    # Messages are deep-copied (new object, same content)
+    assert copied["messages"] is not data["messages"]
+    assert copied["messages"][0] == data["messages"][0]
+
+    # Non-pickleable subtree kept by reference (no crash)
+    assert copied["optional_params"] is data["optional_params"]
+    assert copied["optional_params"]["handle"] is rlock
+
+    # OTEL span: redacted in the copy, restored in original
+    assert copied["metadata"]["litellm_parent_otel_span"] == "placeholder"
+    assert data["metadata"]["litellm_parent_otel_span"] is rlock
+
+    # Other simple fields unchanged
+    assert copied["ok"] is True
+    assert copied["metadata"]["x"] == 1

@@ -1,5 +1,7 @@
+from typing import Any, Dict, List, Optional, Union
+
 import requests
-from typing import Dict, Any, Optional, Union, List
+
 from .exceptions import UnauthorizedError
 
 
@@ -220,6 +222,67 @@ class KeysManagementClient:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
             raise
+
+    def update(
+        self,
+        key: str,
+        models: Optional[List[str]] = None,
+        aliases: Optional[Dict[str, str]] = None,
+        spend: Optional[float] = None,
+        duration: Optional[str] = None,
+        key_alias: Optional[str] = None,
+        team_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Union[Dict[str, Any], requests.Request]:
+        """
+        Update an existing API key's parameters.
+
+        Args:
+            models: Optional[List[str]] = None,
+            aliases: Optional[Dict[str, str]] = None,
+            spend: Optional[float] = None,
+            duration: Optional[str] = None,
+            key_alias: Optional[str] = None,
+            team_id: Optional[str] = None,
+            user_id: Optional[str] = None,
+
+        Returns:
+            Union[Dict[str, Any], requests.Request]: Either the response from the server or
+            a prepared request object if return_request is True
+
+        Raises:
+            UnauthorizedError: If the request fails with a 401 status code
+            requests.exceptions.RequestException: If the request fails with any other error
+        """
+        url = f"{self._base_url}/key/update"
+
+        data: Dict[str, Any] = {"key": key}
+        
+        if key_alias is not None:
+            data["key_alias"] = key_alias
+        if user_id is not None:
+            data["user_id"] = user_id
+        if team_id is not None:
+            data["team_id"] = team_id
+        if models is not None:
+            data["models"] = models
+        if spend is not None:
+            data["spend"] = spend
+        if duration is not None:
+            data["duration"] = duration
+        if aliases is not None:
+            data["aliases"] = aliases
+        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        session = requests.Session()
+        response_text: Optional[str] = None
+        try:
+            response = session.send(request.prepare())
+            response_text = response.text
+            response.raise_for_status()
+            return response.json()
+        except Exception:
+            raise Exception(f"Error updating key: {response_text}")
+
 
     def info(self, key: str, return_request: bool = False) -> Union[Dict[str, Any], requests.Request]:
         """

@@ -107,13 +107,13 @@ def test_openai_embedding_3():
 @pytest.mark.parametrize(
     "model, api_base, api_key",
     [
-        # ("azure/azure-embedding-model", None, None),
-        ("together_ai/togethercomputer/m2-bert-80M-8k-retrieval", None, None),
+        # ("azure/text-embedding-ada-002", None, None),
+        ("together_ai/BAAI/bge-base-en-v1.5", None, None),  # Updated to current Together AI embedding model
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_openai_azure_embedding_simple(model, api_base, api_key, sync_mode):
+async def test_together_ai_embedding(model, api_base, api_key, sync_mode):
     try:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -253,7 +253,7 @@ async def test_azure_ai_embedding_image(model, api_base, api_key, sync_mode):
 def test_openai_azure_embedding_timeouts():
     try:
         response = embedding(
-            model="azure/azure-embedding-model",
+            model="azure/text-embedding-ada-002",
             input=["good morning from litellm"],
             timeout=0.00001,
         )
@@ -301,7 +301,7 @@ def test_openai_azure_embedding():
         os.environ["AZURE_API_KEY"] = ""
 
         response = embedding(
-            model="azure/azure-embedding-model",
+            model="azure/text-embedding-ada-002",
             input=["good morning from litellm", "this is another item"],
             api_key=api_key,
             api_base=api_base,
@@ -380,8 +380,16 @@ def test_openai_azure_embedding_optional_arg():
             azure_ad_token="test",
         )
 
-        assert mock_client.called_once_with(model="test", input=["test"], timeout=600)
+        mock_client.assert_called_once_with(
+            model="test", 
+            input=["test"], 
+            extra_body={"azure_ad_token": "test"}, 
+            timeout=600, 
+            extra_headers={"X-Stainless-Raw-Response": "true"}
+        )
+        # Verify azure_ad_token is passed in extra_body, not as a direct parameter
         assert "azure_ad_token" not in mock_client.call_args.kwargs
+        assert mock_client.call_args.kwargs["extra_body"]["azure_ad_token"] == "test"
 
 
 # test_openai_azure_embedding()
@@ -726,7 +734,7 @@ def test_aembedding_azure():
         async def embedding_call():
             try:
                 response = await litellm.aembedding(
-                    model="azure/azure-embedding-model",
+                    model="azure/text-embedding-ada-002",
                     input=["good morning from litellm", "this is another item"],
                 )
                 print(response)
@@ -821,12 +829,26 @@ def test_fireworks_embeddings():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_watsonx_embeddings():
+def test_watsonx_embeddings(monkeypatch):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
+    # Mock the IAM token generation to avoid actual API calls
+    monkeypatch.setenv("WATSONX_API_KEY", "mock-api-key")
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
+
     client = HTTPHandler()
+    
+    # Track the actual request made
+    captured_request = {}
 
     def mock_wx_embed_request(url: str, **kwargs):
+        # Capture request details for verification
+        captured_request["url"] = url
+        captured_request["headers"] = kwargs.get("headers", {})
+        captured_request["data"] = kwargs.get("data")
+        
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
@@ -844,12 +866,16 @@ def test_watsonx_embeddings():
             response = litellm.embedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
-                token="secret-token",
                 client=client,
             )
 
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
+        
+        # Verify the request was made correctly
+        assert "Authorization" in captured_request["headers"]
+        assert captured_request["headers"]["Authorization"] == "Bearer mock-watsonx-token"
+        assert "us-south.ml.cloud.ibm.com" in captured_request["url"]
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -857,8 +883,14 @@ def test_watsonx_embeddings():
 
 
 @pytest.mark.asyncio
-async def test_watsonx_aembeddings():
+async def test_watsonx_aembeddings(monkeypatch):
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    # Mock the IAM token generation to avoid actual API calls
+    monkeypatch.setenv("WATSONX_API_KEY", "mock-api-key")
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
 
     client = AsyncHTTPHandler()
 
@@ -889,7 +921,6 @@ async def test_watsonx_aembeddings():
             response = await litellm.aembedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
-                token="secret-token",
                 client=client,
             )
             mock_client.assert_called_once()
@@ -1099,7 +1130,7 @@ async def test_lm_studio_embedding(monkeypatch, sync_mode):
     "model",
     [
         "text-embedding-ada-002",
-        "azure/azure-embedding-model",
+        "azure/text-embedding-ada-002",
     ],
 )
 def test_embedding_response_ratelimit_headers(model):

@@ -12,6 +12,12 @@ This tutorial is based on [Anthropic's official LiteLLM configuration documentat
 
 :::
 
+<br />
+
+### Video Walkthrough
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/3c17d683cdb74d36a3698763cc558f56" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) installed
@@ -83,10 +89,16 @@ curl -X POST http://0.0.0.0:4000/v1/messages \
 
 Configure Claude Code to use LiteLLM's unified endpoint:
 
+Either a virtual key / master key can be used here
+
 ```bash
 export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
 export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 ```
+
+:::tip
+LITELLM_MASTER_KEY gives claude access to all proxy models, whereas a virtual key would be limited to the models set in UI
+:::
 
 #### Method 2: Provider-specific Pass-through Endpoint
 
@@ -198,3 +210,97 @@ claude --model claude-bedrock
 </Tabs>
 
 <Image img={require('../../img/release_notes/claude_code_demo.png')} style={{ width: '500px', height: 'auto' }} />
+
+
+## Connecting MCP Servers
+
+You can also connect MCP servers to Claude Code via LiteLLM Proxy.
+
+:::note
+
+Limitations:
+
+- Currently, only HTTP MCP servers are supported
+
+:::
+
+1. Add the MCP server to your `config.yaml`
+
+<Tabs>
+<TabItem value="github" label="GitHub MCP">
+
+In this example, we'll add the Github MCP server to our `config.yaml`
+
+```yaml title="config.yaml" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+```
+
+</TabItem>
+<TabItem value="atlassian" label="Atlassian MCP">
+
+In this example, we'll add the Atlassian MCP server to our `config.yaml`
+
+```yaml title="config.yaml" showLineNumbers
+atlassian_mcp:
+  server_id: atlassian_mcp_id
+  url: "https://mcp.atlassian.com/v1/sse"
+  transport: "sse"
+  auth_type: oauth2
+```
+
+</TabItem>
+</Tabs>
+
+2. Start LiteLLM Proxy
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Use the MCP server in Claude Code
+
+```bash
+claude mcp add --transport http litellm_proxy http://0.0.0.0:4000/github_mcp/mcp --header "Authorization: Bearer sk-LITELLM_VIRTUAL_KEY"
+```
+
+For MCP servers that require dynamic client registration (such as Atlassian), please set `x-litellm-api-key: Bearer sk-LITELLM_VIRTUAL_KEY` instead of using `Authorization: Bearer LITELLM_VIRTUAL_KEY`.
+
+4. Authenticate via Claude Code
+
+a. Start Claude Code
+
+```bash
+claude
+```
+
+b. Authenticate via Claude Code
+
+```bash
+/mcp
+```
+
+c. Select the MCP server
+
+```bash
+> litellm_proxy
+```
+
+d. Start Oauth flow via Claude Code
+
+```bash
+> 1. Authenticate
+ 2. Reconnect
+ 3. Disable             
+```
+
+e. Once completed, you should see this success message:
+
+<Image img={require('../../img/oauth_2_success.png')} style={{ width: '500px', height: 'auto' }} />
+

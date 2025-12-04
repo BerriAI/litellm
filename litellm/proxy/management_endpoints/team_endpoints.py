@@ -12,7 +12,6 @@ All /team management endpoints
 import asyncio
 import json
 import traceback
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -22,11 +21,13 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (
     BlockTeamRequest,
     CommonProxyErrors,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
     LiteLLM_OrganizationTable,
@@ -59,6 +60,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     can_org_access_model,
+    get_org_object,
     get_team_object,
     get_user_object,
 )
@@ -66,6 +68,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
+    _update_metadata_field,
     _upsert_budget_and_membership,
     _user_has_admin_view,
 )
@@ -73,6 +76,7 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission,
     handle_update_object_permission_common,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -82,11 +86,7 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import (
-    PrismaClient,
-    _premium_user_check,
-    handle_exception_on_proxy,
-)
+from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
 from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -105,7 +105,7 @@ router = APIRouter()
 
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
-    
+
     @staticmethod
     def should_create_budget(
         team_member_budget: Optional[float] = None,
@@ -113,12 +113,14 @@ class TeamMemberBudgetHandler:
         team_member_tpm_limit: Optional[int] = None,
     ) -> bool:
         """Check if any team member limits are provided"""
-        return any([
-            team_member_budget is not None,
-            team_member_rpm_limit is not None,
-            team_member_tpm_limit is not None,
-        ])
-    
+        return any(
+            [
+                team_member_budget is not None,
+                team_member_rpm_limit is not None,
+                team_member_tpm_limit is not None,
+            ]
+        )
+
     @staticmethod
     async def create_team_member_budget_table(
         data: Union[NewTeamRequest, LiteLLM_TeamTable],
@@ -146,7 +148,7 @@ class TeamMemberBudgetHandler:
             budget_id=budget_id,
             budget_duration=data.budget_duration,
         )
-        
+
         if team_member_budget is not None:
             budget_request.max_budget = team_member_budget
         if team_member_rpm_limit is not None:
@@ -165,12 +167,12 @@ class TeamMemberBudgetHandler:
         new_team_data_json["metadata"][
             "team_member_budget_id"
         ] = team_member_budget_table.budget_id
-        
+
         # Remove team member fields from new_team_data_json
         TeamMemberBudgetHandler._clean_team_member_fields(new_team_data_json)
 
         return new_team_data_json
-    
+
     @staticmethod
     async def upsert_team_member_budget_table(
         team_table: LiteLLM_TeamTable,
@@ -193,14 +195,14 @@ class TeamMemberBudgetHandler:
         if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
             # Budget exists - create update request with only provided values
             budget_request = BudgetNewRequest(budget_id=team_member_budget_id)
-            
+
             if team_member_budget is not None:
                 budget_request.max_budget = team_member_budget
             if team_member_rpm_limit is not None:
                 budget_request.rpm_limit = team_member_rpm_limit
             if team_member_tpm_limit is not None:
                 budget_request.tpm_limit = team_member_tpm_limit
-                
+
             budget_row = await update_budget(
                 budget_obj=budget_request,
                 user_api_key_dict=user_api_key_dict,
@@ -221,11 +223,11 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
             )
-        
+
         # Remove team member fields from updated_kv
         TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
         return updated_kv
-    
+
     @staticmethod
     def _clean_team_member_fields(data_dict: dict) -> None:
         """Remove team member fields from data dictionary"""
@@ -267,6 +269,367 @@ async def get_all_team_memberships(
     return returned_tm
 
 
+def _check_team_model_specific_limits(
+    teams: List[LiteLLM_TeamTable],
+    data: Union[NewTeamRequest, UpdateTeamRequest],
+    entity_rpm_limit: Optional[int],
+    entity_tpm_limit: Optional[int],
+    entity_model_rpm_limit_dict: Dict[str, int],
+    entity_model_tpm_limit_dict: Dict[str, int],
+    entity_type: str,  # "organization"
+) -> None:
+    """
+    Generic function to check if a team is allocating model specific limits.
+    Raises an error if we're overallocating.
+    """
+    model_rpm_limit = getattr(data, "model_rpm_limit", None) or (
+        data.metadata.get("model_rpm_limit", None) if data.metadata else None
+    )
+    model_tpm_limit = getattr(data, "model_tpm_limit", None) or (
+        data.metadata.get("model_tpm_limit", None) if data.metadata else None
+    )
+    if model_rpm_limit is None and model_tpm_limit is None:
+        return
+
+    # get total model specific tpm/rpm limit
+    model_specific_rpm_limit: Dict[str, int] = {}
+    model_specific_tpm_limit: Dict[str, int] = {}
+
+    for team in teams:
+        if team.metadata and team.metadata.get("model_rpm_limit", None) is not None:
+            for model, rpm_limit in team.metadata.get("model_rpm_limit", {}).items():
+                model_specific_rpm_limit[model] = (
+                    model_specific_rpm_limit.get(model, 0) + rpm_limit
+                )
+        if team.metadata and team.metadata.get("model_tpm_limit", None) is not None:
+            for model, tpm_limit in team.metadata.get("model_tpm_limit", {}).items():
+                model_specific_tpm_limit[model] = (
+                    model_specific_tpm_limit.get(model, 0) + tpm_limit
+                )
+
+    if model_rpm_limit is not None:
+        for model, rpm_limit in model_rpm_limit.items():
+            if (
+                entity_rpm_limit is not None
+                and model_specific_rpm_limit.get(model, 0) + rpm_limit
+                > entity_rpm_limit
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Team RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_rpm_limit}",
+                )
+            elif entity_model_rpm_limit_dict:
+                entity_model_specific_rpm_limit = entity_model_rpm_limit_dict.get(model)
+                if (
+                    entity_model_specific_rpm_limit
+                    and model_specific_rpm_limit.get(model, 0) + rpm_limit
+                    > entity_model_specific_rpm_limit
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Team RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_model_specific_rpm_limit}",
+                    )
+
+    if model_tpm_limit is not None:
+        for model, tpm_limit in model_tpm_limit.items():
+            if (
+                entity_tpm_limit is not None
+                and model_specific_tpm_limit.get(model, 0) + tpm_limit
+                > entity_tpm_limit
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Team TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_tpm_limit}",
+                )
+            elif entity_model_tpm_limit_dict:
+                entity_model_specific_tpm_limit = entity_model_tpm_limit_dict.get(model)
+                if (
+                    entity_model_specific_tpm_limit
+                    and model_specific_tpm_limit.get(model, 0) + tpm_limit
+                    > entity_model_specific_tpm_limit
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Team TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_model_specific_tpm_limit}",
+                    )
+
+
+def _check_team_rpm_tpm_limits(
+    teams: List[LiteLLM_TeamTable],
+    data: Union[NewTeamRequest, UpdateTeamRequest],
+    entity_rpm_limit: Optional[int],
+    entity_tpm_limit: Optional[int],
+    entity_type: str,  # "organization"
+) -> None:
+    """
+    Generic function to check if a team is allocating rpm/tpm limits.
+    Raises an error if we're overallocating.
+    """
+    if teams is not None and len(teams) > 0:
+        allocated_tpm = sum(
+            team.tpm_limit for team in teams if team.tpm_limit is not None
+        )
+        allocated_rpm = sum(
+            team.rpm_limit for team in teams if team.rpm_limit is not None
+        )
+    else:
+        allocated_tpm = 0
+        allocated_rpm = 0
+
+    if (
+        data.tpm_limit is not None
+        and entity_tpm_limit is not None
+        and data.tpm_limit + allocated_tpm > entity_tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allocated TPM limit={allocated_tpm} + Team TPM limit={data.tpm_limit} is greater than {entity_type} TPM limit={entity_tpm_limit}",
+        )
+    if (
+        data.rpm_limit is not None
+        and entity_rpm_limit is not None
+        and data.rpm_limit + allocated_rpm > entity_rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allocated RPM limit={allocated_rpm} + Team RPM limit={data.rpm_limit} is greater than {entity_type} RPM limit={entity_rpm_limit}",
+        )
+
+
+def check_org_team_model_specific_limits(
+    teams: List[LiteLLM_TeamTable],
+    org_table: LiteLLM_OrganizationTable,
+    data: Union[NewTeamRequest, UpdateTeamRequest],
+) -> None:
+    """
+    Check if the organization team is allocating model specific limits. If so, raise an error if we're overallocating.
+    """
+
+    # Get org limits from budget table if available
+    entity_rpm_limit = None
+    entity_tpm_limit = None
+    entity_model_rpm_limit_dict = {}
+    entity_model_tpm_limit_dict = {}
+
+    if org_table.litellm_budget_table is not None:
+        entity_rpm_limit = org_table.litellm_budget_table.rpm_limit
+        entity_tpm_limit = org_table.litellm_budget_table.tpm_limit
+
+    if org_table.metadata:
+        entity_model_rpm_limit_dict = org_table.metadata.get("model_rpm_limit", {})
+        entity_model_tpm_limit_dict = org_table.metadata.get("model_tpm_limit", {})
+
+    _check_team_model_specific_limits(
+        teams=teams,
+        data=data,
+        entity_rpm_limit=entity_rpm_limit,
+        entity_tpm_limit=entity_tpm_limit,
+        entity_model_rpm_limit_dict=entity_model_rpm_limit_dict,
+        entity_model_tpm_limit_dict=entity_model_tpm_limit_dict,
+        entity_type="organization",
+    )
+
+
+def check_org_team_rpm_tpm_limits(
+    teams: List[LiteLLM_TeamTable],
+    org_table: LiteLLM_OrganizationTable,
+    data: Union[NewTeamRequest, UpdateTeamRequest],
+) -> None:
+    """
+    Check if the organization team is allocating rpm/tpm limits. If so, raise an error if we're overallocating.
+    """
+    # Get org limits from budget table if available
+    entity_rpm_limit = None
+    entity_tpm_limit = None
+
+    if org_table.litellm_budget_table is not None:
+        entity_rpm_limit = org_table.litellm_budget_table.rpm_limit
+        entity_tpm_limit = org_table.litellm_budget_table.tpm_limit
+
+    _check_team_rpm_tpm_limits(
+        teams=teams,
+        data=data,
+        entity_rpm_limit=entity_rpm_limit,
+        entity_tpm_limit=entity_tpm_limit,
+        entity_type="organization",
+    )
+
+
+async def _check_org_team_limits(
+    org_table: LiteLLM_OrganizationTable,
+    data: Union[NewTeamRequest, UpdateTeamRequest],
+    prisma_client: PrismaClient,
+) -> None:
+    """
+    Check organization team limits including:
+    - Team budget vs organization's max_budget
+    - Team models vs organization's allowed models
+    - Guaranteed throughput limits (tpm/rpm) if applicable
+    """
+
+    # Validate team budget against organization's max_budget
+    if (
+        data.max_budget is not None
+        and org_table.litellm_budget_table is not None
+        and org_table.litellm_budget_table.max_budget is not None
+        and data.max_budget > org_table.litellm_budget_table.max_budget
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Team max_budget ({data.max_budget}) exceeds organization's max_budget ({org_table.litellm_budget_table.max_budget}). Organization: {org_table.organization_id}"
+            },
+        )
+
+    # Validate team models against organization's allowed models
+    if data.models is not None and len(org_table.models) > 0:
+        for m in data.models:
+            if m not in org_table.models:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Model '{m}' not in organization's allowed models. Organization allowed models={org_table.models}. Organization: {org_table.organization_id}"
+                    },
+                )
+
+    # Validate team TPM/RPM against organization's TPM/RPM limits (direct comparison)
+    if (
+        data.tpm_limit is not None
+        and org_table.litellm_budget_table is not None
+        and org_table.litellm_budget_table.tpm_limit is not None
+        and data.tpm_limit > org_table.litellm_budget_table.tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Team tpm_limit ({data.tpm_limit}) exceeds organization's tpm_limit ({org_table.litellm_budget_table.tpm_limit}). Organization: {org_table.organization_id}"
+            },
+        )
+
+    if (
+        data.rpm_limit is not None
+        and org_table.litellm_budget_table is not None
+        and org_table.litellm_budget_table.rpm_limit is not None
+        and data.rpm_limit > org_table.litellm_budget_table.rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Team rpm_limit ({data.rpm_limit}) exceeds organization's rpm_limit ({org_table.litellm_budget_table.rpm_limit}). Organization: {org_table.organization_id}"
+            },
+        )
+
+    # Check guaranteed throughput limits (only if applicable)
+    rpm_limit_type = getattr(data, "rpm_limit_type", None) or (
+        data.metadata.get("rpm_limit_type", None) if data.metadata else None
+    )
+    tpm_limit_type = getattr(data, "tpm_limit_type", None) or (
+        data.metadata.get("tpm_limit_type", None) if data.metadata else None
+    )
+
+    if (
+        tpm_limit_type != "guaranteed_throughput"
+        and rpm_limit_type != "guaranteed_throughput"
+    ):
+        return
+    # get all organization teams
+    # calculate allocated tpm/rpm limit
+    # check if specified tpm/rpm limit is greater than allocated tpm/rpm limit
+
+    teams = await prisma_client.db.litellm_teamtable.find_many(
+        where={"organization_id": org_table.organization_id},
+    )
+
+    # Convert teams to LiteLLM_TeamTable objects
+    team_objs: List[LiteLLM_TeamTable] = []
+    for team in teams:
+        team_objs.append(LiteLLM_TeamTable(**team.model_dump()))
+
+    check_org_team_model_specific_limits(
+        teams=team_objs,
+        org_table=org_table,
+        data=data,
+    )
+    check_org_team_rpm_tpm_limits(
+        teams=team_objs,
+        org_table=org_table,
+        data=data,
+    )
+
+
+async def _check_user_team_limits(
+    data: Union[NewTeamRequest, UpdateTeamRequest],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: Any,
+) -> None:
+    """
+    Check user team limits for standalone teams (not org-scoped).
+
+    This validates:
+    - Team budget vs user's max_budget
+    - Team models vs user's allowed models
+
+    Should only be called for standalone teams (when organization_id is None).
+    For org-scoped teams, use _check_org_team_limits() instead.
+    """
+    # Validate team budget against user's max_budget
+    if data.max_budget is not None and user_api_key_dict.user_id is not None:
+        user_obj = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+        )
+
+        if (
+            user_obj is not None
+            and user_obj.max_budget is not None
+            and data.max_budget > user_obj.max_budget
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
+                },
+            )
+
+    # Validate team models against user's allowed models
+    if data.models is not None and len(user_api_key_dict.models) > 0:
+        for m in data.models:
+            if m not in user_api_key_dict.models:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
+                    },
+                )
+
+    # Validate team TPM/RPM against user's TPM/RPM limits
+    if (
+        data.tpm_limit is not None
+        and user_api_key_dict.tpm_limit is not None
+        and data.tpm_limit > user_api_key_dict.tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}. User role={user_api_key_dict.user_role}"
+            },
+        )
+
+    if (
+        data.rpm_limit is not None
+        and user_api_key_dict.rpm_limit is not None
+        and data.rpm_limit > user_api_key_dict.rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}. User role={user_api_key_dict.user_role}"
+            },
+        )
+
 
 #### TEAM MANAGEMENT ####
 @router.post(
@@ -297,8 +660,12 @@ async def new_team(  # noqa: PLR0915
     - members_with_roles: List[{"role": "admin" or "user", "user_id": "<user-id>"}] - A list of users and their roles in the team. Get user_id when making a new user via `/user/new`.
     - team_member_permissions: Optional[List[str]] - A list of routes that non-admin team members can access. example: ["/key/generate", "/key/update", "/key/delete"]
     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
+    - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team. 
+    - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit for this team - applied across all keys for this team.
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
+    - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
+    - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -309,14 +676,19 @@ async def new_team(  # noqa: PLR0915
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - prompts: Optional[List[str]] - List of allowed prompts for the team. If specified, the team will only be able to use these specific prompts.
+    - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+
     
+
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
 
@@ -354,6 +726,7 @@ async def new_team(  # noqa: PLR0915
             create_audit_log_for_update,
             litellm_proxy_admin_name,
             prisma_client,
+            user_api_key_cache,
         )
 
         if prisma_client is None:
@@ -384,55 +757,51 @@ async def new_team(  # noqa: PLR0915
                     },
                 )
 
+        # check org key limits - done here to handle inheriting org id from team
+        if data.organization_id is not None and prisma_client is not None:
+            org_table = await get_org_object(
+                org_id=data.organization_id,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
+            if org_table is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Organization not found for organization_id={data.organization_id}",
+                )
+
+            await _check_org_team_limits(
+                org_table=org_table,
+                data=data,
+                prisma_client=prisma_client,
+            )
+
+        # If max_budget is not explicitly provided in the request,
+        # check for a default value in the proxy configuration.
+        if data.max_budget is None:
+            if (
+                isinstance(litellm.default_team_settings, list)
+                and len(litellm.default_team_settings) > 0
+                and isinstance(litellm.default_team_settings[0], dict)
+            ):
+                default_settings = litellm.default_team_settings[0]
+                default_budget = default_settings.get("max_budget")
+                if default_budget is not None:
+                    data.max_budget = default_budget
+
         if (
             user_api_key_dict.user_role is None
             or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
         ):  # don't restrict proxy admin
-            if (
-                data.tpm_limit is not None
-                and user_api_key_dict.tpm_limit is not None
-                and data.tpm_limit > user_api_key_dict.tpm_limit
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}. User role={user_api_key_dict.user_role}"
-                    },
+            # Only validate user budget/models/tpm/rpm for standalone teams (not org-scoped)
+            # For org-scoped teams, validation is done by _check_org_team_limits()
+            if data.organization_id is None:
+                await _check_user_team_limits(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
                 )
-
-            if (
-                data.rpm_limit is not None
-                and user_api_key_dict.rpm_limit is not None
-                and data.rpm_limit > user_api_key_dict.rpm_limit
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}. User role={user_api_key_dict.user_role}"
-                    },
-                )
-
-            if (
-                data.max_budget is not None
-                and user_api_key_dict.max_budget is not None
-                and data.max_budget > user_api_key_dict.max_budget
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}. User role={user_api_key_dict.user_role}"
-                    },
-                )
-
-            if data.models is not None and len(user_api_key_dict.models) > 0:
-                for m in data.models:
-                    if m not in user_api_key_dict.models:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
-                            },
-                        )
 
         if user_api_key_dict.user_id is not None:
             creating_user_in_list = False
@@ -459,14 +828,15 @@ async def new_team(  # noqa: PLR0915
 
             _model_id = model_dict.id
 
+        ## Create Team Member Budget Table
+        data_json = data.json()
+
         ## Handle Object Permission - MCP, Vector Stores etc.
-        object_permission_id = await _set_object_permission(
-            data=data,
+        data_json = await _set_object_permission(
+            data_json=data_json,
             prisma_client=prisma_client,
         )
 
-        ## Create Team Member Budget Table
-        data_json = data.json()
         if TeamMemberBudgetHandler.should_create_budget(
             team_member_budget=data.team_member_budget,
             team_member_rpm_limit=data.team_member_rpm_limit,
@@ -485,12 +855,19 @@ async def new_team(  # noqa: PLR0915
         complete_team_data = LiteLLM_TeamTable(
             **data_json,
             model_id=_model_id,
-            object_permission_id=object_permission_id,
         )
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-            if getattr(data, field) is not None:
+            if getattr(data, field, None) is not None:
+                _set_object_metadata_field(
+                    object_data=complete_team_data,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
+
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+            if getattr(data, field, None) is not None:
                 _set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
@@ -566,6 +943,50 @@ async def new_team(  # noqa: PLR0915
         raise handle_exception_on_proxy(e)
 
 
+async def _create_team_update_audit_log(
+    existing_team_row: LiteLLM_TeamTable,
+    updated_kv: dict,
+    team_id: str,
+    litellm_changed_by: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> None:
+    """
+    Create an audit log entry for team update operations.
+
+    Args:
+        existing_team_row: The team row before the update
+        updated_kv: Dictionary of updated key-value pairs
+        team_id: The ID of the team being updated
+        litellm_changed_by: Optional header indicating who made the change
+        user_api_key_dict: User API key authentication details
+        litellm_proxy_admin_name: Name of the proxy admin
+    """
+    from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+
+    _before_value = existing_team_row.json(exclude_none=True)
+    _before_value = json.dumps(_before_value, default=str)
+    _after_value: str = json.dumps(updated_kv, default=str)
+
+    asyncio.create_task(
+        create_audit_log_for_update(
+            request_data=LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=litellm_changed_by
+                or user_api_key_dict.user_id
+                or litellm_proxy_admin_name,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                object_id=team_id,
+                action="updated",
+                updated_values=_after_value,
+                before_value=_before_value,
+            )
+        )
+    )
+
+
 async def _update_model_table(
     data: UpdateTeamRequest,
     model_id: Optional[str],
@@ -602,28 +1023,52 @@ async def _update_model_table(
     return _model_id
 
 
-async def _set_object_permission(
-    data: NewTeamRequest,
-    prisma_client: Optional[PrismaClient],
-) -> Optional[str]:
+async def fetch_and_validate_organization(
+    organization_id: str,
+    existing_team_row: Any,
+    llm_router: Optional[Router],
+    prisma_client: Any,
+) -> Any:
     """
-    Creates the LiteLLM_ObjectPermissionTable record for the team.
-    - Handles permissions for vector stores and mcp servers.
+    Fetch and validate an organization for team update operations.
 
-    Returns the object_permission_id if created, otherwise None.
+    Args:
+        organization_id: The organization ID to fetch
+        existing_team_row: The existing team row being updated
+        llm_router: The LLM router instance
+        prisma_client: The Prisma database client
+
+    Returns:
+        The organization row from the database
+
+    Raises:
+        HTTPException: If llm_router is None, organization not found, or validation fails
     """
-    if prisma_client is None:
-        return None
-
-    if data.object_permission is not None:
-        created_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.create(
-                data=data.object_permission.model_dump(exclude_none=True),
-            )
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
         )
-        del data.object_permission
-        return created_object_permission.object_permission_id
-    return None
+
+    organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
+        where={"organization_id": organization_id},
+        include={"litellm_budget_table": True, "users": True},
+    )
+
+    if organization_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Organization not found, passed organization_id={organization_id}"
+            },
+        )
+
+    validate_team_org_change(
+        team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+        organization=LiteLLM_OrganizationTable(**organization_row.model_dump()),
+        llm_router=llm_router,
+    )
+
+    return organization_row
 
 
 def validate_team_org_change(
@@ -754,13 +1199,19 @@ async def update_team(
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
+    - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+    - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
+    - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
     Example - update team TPM Limit
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
@@ -783,166 +1234,187 @@ async def update_team(
     }'
     ```
     """
-    from litellm.proxy.auth.auth_checks import _cache_team_object
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        litellm_proxy_admin_name,
-        llm_router,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+    try:
+        from litellm.proxy.auth.auth_checks import _cache_team_object
+        from litellm.proxy.proxy_server import (
+            litellm_proxy_admin_name,
+            llm_router,
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
         )
 
-    if data.team_id is None:
-        raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
-    verbose_proxy_logger.debug("/team/update - %s", data)
-
-    existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": data.team_id}
-    )
-
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found, passed team_id={data.team_id}"},
-        )
-
-    if (
-        data.organization_id is not None and len(data.organization_id) > 0
-    ):  # allow unsetting the organization_id
-        if llm_router is None:
+        if prisma_client is None:
             raise HTTPException(
-                status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
-            where={"organization_id": data.organization_id},
-            include={"litellm_budget_table": True, "users": True},
+
+        if data.team_id is None:
+            raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+        verbose_proxy_logger.debug("/team/update - %s", data)
+
+        existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": data.team_id}
         )
-        if organization_row is None:
+
+        if existing_team_row is None:
             raise HTTPException(
                 status_code=404,
-                detail={
-                    "error": f"Organization not found, passed organization_id={data.organization_id}"
-                },
+                detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
-        validate_team_org_change(
-            team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
-            organization=LiteLLM_OrganizationTable(**organization_row.model_dump()),
-            llm_router=llm_router,
+
+        if (
+            data.organization_id is not None and len(data.organization_id) > 0
+        ):  # allow unsetting the organization_id
+            await fetch_and_validate_organization(
+                organization_id=data.organization_id,
+                existing_team_row=existing_team_row,
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+            )
+        elif data.organization_id is not None and len(data.organization_id) == 0:
+            # unsetting the organization_id
+            data.organization_id = None
+
+        # check org team limits - if updating team that belongs to an org
+        org_id_to_check = (
+            data.organization_id
+            if data.organization_id is not None
+            else existing_team_row.organization_id
         )
-    elif data.organization_id is not None and len(data.organization_id) == 0:
-        # unsetting the organization_id
-        data.organization_id = None
+        if (
+            org_id_to_check is not None
+            and isinstance(org_id_to_check, str)
+            and prisma_client is not None
+        ):
+            org_table = await get_org_object(
+                org_id=org_id_to_check,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
+            if org_table is not None:
+                await _check_org_team_limits(
+                    org_table=org_table,
+                    data=data,
+                    prisma_client=prisma_client,
+                )
 
-    updated_kv = data.json(exclude_unset=True)
+        # Check user limits for standalone teams (not org-scoped)
+        # Skip for PROXY_ADMIN users
+        if (
+            user_api_key_dict.user_role is None
+            or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        ):
+            # Only validate user budget/models for standalone teams
+            # For org-scoped teams, validation is done by _check_org_team_limits() above
+            if org_id_to_check is None:
+                await _check_user_team_limits(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
 
-    # Check budget_duration and budget_reset_at
-    if data.budget_duration is not None:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+        updated_kv = data.json(exclude_unset=True)
 
-        reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
+        # Check budget_duration and budget_reset_at
+        if data.budget_duration is not None:
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-        # set the budget_reset_at in DB
-        updated_kv["budget_reset_at"] = reset_at
+            reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
 
-    if TeamMemberBudgetHandler.should_create_budget(
-        team_member_budget=data.team_member_budget,
-        team_member_rpm_limit=data.team_member_rpm_limit,
-        team_member_tpm_limit=data.team_member_tpm_limit,
-    ):
-        updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
-            team_table=existing_team_row,
-            user_api_key_dict=user_api_key_dict,
-            updated_kv=updated_kv,
+            # set the budget_reset_at in DB
+            updated_kv["budget_reset_at"] = reset_at
+
+        if TeamMemberBudgetHandler.should_create_budget(
             team_member_budget=data.team_member_budget,
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
-        )
-    else:
-        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
-
-    # Check object permission
-    if data.object_permission is not None:
-        updated_kv = await handle_update_object_permission(
-            data_json=updated_kv,
-            existing_team_row=existing_team_row,
-        )
-
-    # update team metadata fields
-    _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
-    for field in _team_metadata_fields:
-        if field in updated_kv and updated_kv[field] is not None:
-            _update_team_metadata_field(
+        ):
+            updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+                team_table=existing_team_row,
+                user_api_key_dict=user_api_key_dict,
                 updated_kv=updated_kv,
-                field_name=field,
+                team_member_budget=data.team_member_budget,
+                team_member_rpm_limit=data.team_member_rpm_limit,
+                team_member_tpm_limit=data.team_member_tpm_limit,
+            )
+        else:
+            TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+
+        # Check object permission
+        if data.object_permission is not None:
+            updated_kv = await handle_update_object_permission(
+                data_json=updated_kv,
+                existing_team_row=existing_team_row,
             )
 
-    if "model_aliases" in updated_kv:
-        updated_kv.pop("model_aliases")
-        _model_id = await _update_model_table(
-            data=data,
-            model_id=existing_team_row.model_id,
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-        )
-        if _model_id is not None:
-            updated_kv["model_id"] = _model_id
-
-    updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-    team_row: Optional[LiteLLM_TeamTable] = (
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
-        )
-    )
-
-    if team_row is None or team_row.team_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Team doesn't exist. Got={}".format(team_row)},
-        )
-
-    verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
-    await _cache_team_object(
-        team_id=team_row.team_id,
-        team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-    # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-    if litellm.store_audit_logs is True:
-        _before_value = existing_team_row.json(exclude_none=True)
-        _before_value = json.dumps(_before_value, default=str)
-        _after_value: str = json.dumps(updated_kv, default=str)
-
-        asyncio.create_task(
-            create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
-                    or litellm_proxy_admin_name,
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                    object_id=data.team_id,
-                    action="updated",
-                    updated_values=_after_value,
-                    before_value=_before_value,
+        # update team metadata fields
+        _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
+        for field in _team_metadata_fields:
+            if field in updated_kv and updated_kv[field] is not None:
+                _update_metadata_field(
+                    updated_kv=updated_kv,
+                    field_name=field,
                 )
+
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+            if field in updated_kv and updated_kv[field] is not None:
+                _update_metadata_field(
+                    updated_kv=updated_kv,
+                    field_name=field,
+                )
+
+        if "model_aliases" in updated_kv:
+            updated_kv.pop("model_aliases")
+            _model_id = await _update_model_table(
+                data=data,
+                model_id=existing_team_row.model_id,
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+            )
+            if _model_id is not None:
+                updated_kv["model_id"] = _model_id
+
+        updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
+        team_row: Optional[LiteLLM_TeamTable] = (
+            await prisma_client.db.litellm_teamtable.update(
+                where={"team_id": data.team_id},
+                data=updated_kv,
+                include={"litellm_model_table": True},  # type: ignore
             )
         )
 
-    return {"team_id": team_row.team_id, "data": team_row}
+        if team_row is None or team_row.team_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Team doesn't exist. Got={}".format(team_row)},
+            )
+
+        verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
+        await _cache_team_object(
+            team_id=team_row.team_id,
+            team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+        if litellm.store_audit_logs is True:
+            await _create_team_update_audit_log(
+                existing_team_row=existing_team_row,
+                updated_kv=updated_kv,
+                team_id=data.team_id,
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+            )
+
+        return {"team_id": team_row.team_id, "data": team_row}
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
 
 
 async def handle_update_object_permission(
@@ -1506,6 +1978,15 @@ async def team_member_delete(
     for _uid in user_ids_to_delete:
         await prisma_client.db.litellm_teammembership.delete_many(
             where={"team_id": data.team_id, "user_id": _uid}
+        )
+
+    ## DELETE KEYS CREATED BY USER FOR THIS TEAM
+    if user_ids_to_delete:
+        await prisma_client.db.litellm_verificationtoken.delete_many(
+            where={
+                "user_id": {"in": list(user_ids_to_delete)},
+                "team_id": data.team_id,
+            }
         )
 
     return existing_team_row
@@ -2608,26 +3089,6 @@ async def get_paginated_teams(
         return [], 0
 
 
-def _update_team_metadata_field(updated_kv: dict, field_name: str) -> None:
-    """
-    Helper function to update metadata fields that require premium user checks in the update endpoint
-
-    Args:
-        updated_kv: The key-value dict being used for the update
-        field_name: Name of the metadata field being updated
-    """
-    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check()
-
-    if field_name in updated_kv and updated_kv[field_name] is not None:
-        # remove field from updated_kv
-        _value = updated_kv.pop(field_name)
-        if "metadata" in updated_kv and updated_kv["metadata"] is not None:
-            updated_kv["metadata"][field_name] = _value
-        else:
-            updated_kv["metadata"] = {field_name: _value}
-
-
 @router.get(
     "/team/filter/ui",
     tags=["team management"],
@@ -2898,11 +3359,6 @@ async def team_member_permissions(
         check_cache_only=False,
         check_db_only=True,
     )
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found for team_id={team_id}"},
-        )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
@@ -2971,11 +3427,6 @@ async def update_team_member_permissions(
         check_cache_only=False,
         check_db_only=True,
     )
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team not found for team_id={data.team_id}"},
-        )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 

@@ -1026,7 +1026,7 @@ def test_auth_with_aws_role_irsa_environment():
 def test_auth_with_aws_role_same_role_irsa():
     """Test that when IRSA role matches the requested role, we skip assumption"""
     base_llm = BaseAWSLLM()
-    
+
     # Set IRSA environment variables
     with patch.dict(os.environ, {
         'AWS_ROLE_ARN': 'arn:aws:iam::111111111111:role/LitellmRole',
@@ -1037,7 +1037,7 @@ def test_auth_with_aws_role_same_role_irsa():
         mock_creds.access_key = 'irsa-access-key'
         mock_creds.secret_key = 'irsa-secret-key'
         mock_creds.token = 'irsa-session-token'
-        
+
         with patch.object(base_llm, '_auth_with_env_vars', return_value=(mock_creds, None)) as mock_env_auth:
             # Call get_credentials instead of _auth_with_aws_role directly
             # This tests the full flow
@@ -1048,9 +1048,146 @@ def test_auth_with_aws_role_same_role_irsa():
                 aws_session_name='test-session',
                 aws_region_name='us-east-1'
             )
-            
+
             # Verify it used the env vars auth (no role assumption)
             mock_env_auth.assert_called_once()
-            
+
             # Verify the returned credentials
             assert creds.access_key == 'irsa-access-key'
+
+
+def test_assume_role_with_external_id():
+    """Test that assume_role STS call includes ExternalId parameter when provided"""
+    base_aws_llm = BaseAWSLLM()
+
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    mock_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    mock_sts_response = {
+        "Credentials": {
+            "AccessKeyId": "test-access-key",
+            "SecretAccessKey": "test-secret-key",
+            "SessionToken": "test-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    mock_sts_client.assume_role.return_value = mock_sts_response
+
+    with patch("boto3.client", return_value=mock_sts_client):
+        # Call _auth_with_aws_role with external ID
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_session_token=None,
+            aws_role_name="arn:aws:iam::123456789012:role/ExampleRole",
+            aws_session_name="test-session",
+            aws_external_id="UniqueExternalID123"
+        )
+
+        # Verify assume_role was called with ExternalId
+        mock_sts_client.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::123456789012:role/ExampleRole",
+            RoleSessionName="test-session",
+            ExternalId="UniqueExternalID123"
+        )
+
+
+def test_assume_role_without_external_id():
+    """Test that assume_role STS call excludes ExternalId parameter when not provided"""
+    base_aws_llm = BaseAWSLLM()
+
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    mock_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    mock_sts_response = {
+        "Credentials": {
+            "AccessKeyId": "test-access-key",
+            "SecretAccessKey": "test-secret-key",
+            "SessionToken": "test-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    mock_sts_client.assume_role.return_value = mock_sts_response
+
+    with patch("boto3.client", return_value=mock_sts_client):
+        # Call _auth_with_aws_role without external ID
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_session_token=None,
+            aws_role_name="arn:aws:iam::123456789012:role/ExampleRole",
+            aws_session_name="test-session"
+        )
+
+        # Verify assume_role was called without ExternalId
+        mock_sts_client.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::123456789012:role/ExampleRole",
+            RoleSessionName="test-session"
+        )
+
+
+def test_converse_handler_external_id_extraction():
+    """Test that BedrockConverseLLM properly extracts and passes aws_external_id parameter"""
+    from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
+
+    converse_llm = BedrockConverseLLM()
+
+    # Mock get_credentials to capture parameters
+    def mock_get_credentials(**kwargs):
+        mock_get_credentials.called_kwargs = kwargs
+        mock_credentials = MagicMock()
+        mock_credentials.access_key = "test-access-key"
+        mock_credentials.secret_key = "test-secret-key"
+        mock_credentials.token = "test-session-token"
+        return mock_credentials
+
+    with patch.object(converse_llm, 'get_credentials', side_effect=mock_get_credentials):
+        with patch.object(converse_llm, '_get_aws_region_name', return_value="us-west-2"):
+            with patch.object(converse_llm, 'get_runtime_endpoint', return_value=("https://test", "https://test")):
+                with patch('litellm.AmazonConverseConfig') as mock_config:
+                    mock_config.return_value._transform_request.return_value = {"test": "data"}
+                    with patch.object(converse_llm, 'get_request_headers') as mock_headers:
+                        mock_headers.return_value = MagicMock()
+                        mock_headers.return_value.headers = {"Authorization": "test"}
+                        with patch('litellm.llms.custom_httpx.http_handler._get_httpx_client') as mock_client:
+                            mock_http_client = MagicMock()
+                            mock_response = MagicMock()
+                            mock_response.raise_for_status.return_value = None
+                            mock_http_client.post.return_value = mock_response
+                            mock_client.return_value = mock_http_client
+
+                            # Mock the transform_response method
+                            mock_config.return_value._transform_response.return_value = MagicMock()
+
+                            # Call completion with aws_external_id in optional_params
+                            optional_params = {
+                                "aws_role_name": "arn:aws:iam::123456789012:role/ExampleRole",
+                                "aws_session_name": "test-session",
+                                "aws_external_id": "TestExternalID123"
+                            }
+
+                            try:
+                                converse_llm.completion(
+                                    model="anthropic.claude-3-sonnet-20240229-v1:0",
+                                    messages=[{"role": "user", "content": "Hello"}],
+                                    api_base=None,
+                                    custom_prompt_dict={},
+                                    model_response=MagicMock(),
+                                    encoding="utf-8",
+                                    logging_obj=MagicMock(),
+                                    optional_params=optional_params,
+                                    acompletion=False,
+                                    timeout=None,
+                                    litellm_params={}
+                                )
+                            except Exception:
+                                # We expect this to fail due to mocking, but that's OK
+                                # We just want to verify the parameter extraction
+                                pass
+
+                            # Verify aws_external_id was extracted and passed to get_credentials
+                            assert hasattr(mock_get_credentials, 'called_kwargs')
+                            assert "aws_external_id" in mock_get_credentials.called_kwargs
+                            assert mock_get_credentials.called_kwargs["aws_external_id"] == "TestExternalID123"

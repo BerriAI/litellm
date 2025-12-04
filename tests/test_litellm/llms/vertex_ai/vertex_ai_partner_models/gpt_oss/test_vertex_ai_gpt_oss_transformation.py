@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -51,9 +51,12 @@ async def test_vertex_ai_gpt_oss_simple_request():
     with the correct request body.
     """
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
 
     # Mock response
-    mock_response = AsyncMock()
+    mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {}
     mock_response.json.return_value = {
@@ -80,7 +83,11 @@ async def test_vertex_ai_gpt_oss_simple_request():
     
     client = AsyncHTTPHandler()
     
-    with patch.object(client, "post", return_value=mock_response) as mock_post:
+    async def mock_post_func(*args, **kwargs):
+        return mock_response
+    
+    with patch.object(client, "post", side_effect=mock_post_func) as mock_post, \
+         patch.object(VertexLLM, "_ensure_access_token", return_value=("fake-token", "pathrise-convert-1606954137718")):
         response = await litellm.acompletion(
             model="vertex_ai/openai/gpt-oss-20b-maas",
             messages=[
@@ -103,7 +110,8 @@ async def test_vertex_ai_gpt_oss_simple_request():
         
         # Get the call arguments
         call_args = mock_post.call_args
-        called_url = call_args[0][0]  # First positional argument is the URL
+        # For side_effect, the URL is passed as kwargs['url']
+        called_url = call_args.kwargs["url"]
         request_body = json.loads(call_args.kwargs["data"])
         
         # Verify the URL
@@ -128,7 +136,7 @@ async def test_vertex_ai_gpt_oss_simple_request():
         assert request_body == expected_request_body
         
         # Verify response structure
-        assert response.model == "vertex_ai/openai/gpt-oss-20b-maas"
+        assert response.model == "openai/gpt-oss-20b-maas"
         assert len(response.choices) == 1
         assert response.choices[0].message.role == "assistant"
 
@@ -140,9 +148,12 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
     for GPT-OSS models.
     """
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
 
     # Mock response
-    mock_response = AsyncMock()
+    mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {}
     mock_response.json.return_value = {
@@ -169,7 +180,11 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
     
     client = AsyncHTTPHandler()
     
-    with patch.object(client, "post", return_value=mock_response) as mock_post:
+    async def mock_post_func(*args, **kwargs):
+        return mock_response
+    
+    with patch.object(client, "post", side_effect=mock_post_func) as mock_post, \
+         patch.object(VertexLLM, "_ensure_access_token", return_value=("fake-token", "pathrise-convert-1606954137718")):
         response = await litellm.acompletion(
             model="vertex_ai/openai/gpt-oss-20b-maas",
             messages=[
@@ -218,6 +233,6 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
         assert request_body == expected_request_body
         
         # Verify response structure
-        assert response.model == "vertex_ai/openai/gpt-oss-20b-maas"
+        assert response.model == "openai/gpt-oss-20b-maas"
         assert len(response.choices) == 1
         assert response.choices[0].message.role == "assistant"

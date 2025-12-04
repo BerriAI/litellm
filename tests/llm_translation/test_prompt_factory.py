@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from typing import Union
+from typing import Union, List
 
 # from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 import litellm
@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     claude_2_1_pt,
     convert_to_anthropic_image_obj,
     convert_url_to_base64,
+    create_anthropic_image_param,
     llama_2_chat_pt,
     prompt_factory,
 )
@@ -28,6 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
+from litellm.types.llms.openai import AllMessageValues
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -204,6 +206,125 @@ def test_base64_image_input(url, expected_media_type):
     response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
 
     assert response["media_type"] == expected_media_type
+
+
+def test_create_anthropic_image_param_with_http_url():
+    """Test that HTTP/HTTPS URLs are passed as URL references, not base64."""
+    image_param = create_anthropic_image_param(
+        "https://example.com/image.jpg", format=None
+    )
+    
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "url"
+    assert image_param["source"]["url"] == "https://example.com/image.jpg"
+
+
+def test_create_anthropic_image_param_with_https_url():
+    """Test that HTTPS URLs are passed as URL references."""
+    image_param = create_anthropic_image_param(
+        "https://example.com/image.png", format=None
+    )
+    
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "url"
+    assert image_param["source"]["url"] == "https://example.com/image.png"
+
+
+def test_create_anthropic_image_param_with_dict_input():
+    """Test that dict input with URL is handled correctly."""
+    image_param = create_anthropic_image_param(
+        {"url": "https://example.com/image.jpg", "format": "image/jpeg"}, format=None
+    )
+    
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "url"
+    assert image_param["source"]["url"] == "https://example.com/image.jpg"
+
+
+def test_create_anthropic_image_param_with_base64_data_uri():
+    """Test that data URIs are converted to base64."""
+    image_param = create_anthropic_image_param(
+        "data:image/jpeg;base64,/9j/4AAQSkZJRg==", format=None
+    )
+    
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "base64"
+    assert image_param["source"]["media_type"] == "image/jpeg"
+    assert image_param["source"]["data"] == "/9j/4AAQSkZJRg=="
+
+
+def test_create_anthropic_image_param_with_format_override():
+    """Test that format parameter can override media type."""
+    image_param = create_anthropic_image_param(
+        "data:image/jpeg;base64,1234", format="image/png"
+    )
+    
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "base64"
+    assert image_param["source"]["media_type"] == "image/png"
+
+
+def test_anthropic_messages_pt_with_url_image():
+    """Test that anthropic_messages_pt correctly handles HTTP/HTTPS URLs as URL references."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": "https://example.com/image.jpg",
+                },
+            ],
+        }
+    ]
+    
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic"
+    )
+    
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert len(result[0]["content"]) == 2
+    
+    # Check text content
+    assert result[0]["content"][0]["type"] == "text"
+    
+    # Check image content - should be URL reference, not base64
+    assert result[0]["content"][1]["type"] == "image"
+    assert result[0]["content"][1]["source"]["type"] == "url"
+    assert result[0]["content"][1]["source"]["url"] == "https://example.com/image.jpg"
+
+
+def test_anthropic_messages_pt_with_base64_image():
+    """Test that anthropic_messages_pt correctly handles data URIs as base64."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": "data:image/jpeg;base64,/9j/4AAQSkZJRg==",
+                },
+            ],
+        }
+    ]
+    
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic"
+    )
+    
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert len(result[0]["content"]) == 2
+    
+    # Check image content - should be base64, not URL
+    assert result[0]["content"][1]["type"] == "image"
+    assert result[0]["content"][1]["source"]["type"] == "base64"
+    assert result[0]["content"][1]["source"]["media_type"] == "image/jpeg"
 
 
 def test_anthropic_messages_tool_call():
@@ -455,7 +576,7 @@ def test_vertex_only_image_user_message():
                 {
                     "inline_data": {
                         "data": "/9j/2wCEAAgGBgcGBQ",
-                        "mime_type": "image/jpeg",
+                        "mimeType": "image/jpeg",
                     }
                 },
                 {"text": " "},
@@ -470,6 +591,20 @@ def test_vertex_only_image_user_message():
         ), "Invalid gemini input. Got={}, Expected={}".format(
             content, expected_response[idx]
         )
+
+
+def test_no_messages_yields_user_text():
+    """
+    Test that contents are not empty and have text when called without messages
+    This is to support blha blah
+    """
+    messages: List[AllMessageValues] = []
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+
+    expected_output = [{"role": "user", "parts": [{"text": " "}]}]
+
+    assert contents == expected_output
 
 
 def test_convert_url():
@@ -630,7 +765,6 @@ def test_azure_tool_call_invoke_helper():
 def test_ensure_alternating_roles(
     messages, expected_messages, user_continue_message, assistant_continue_message
 ):
-
     messages = get_completion_messages(
         messages=messages,
         assistant_continue_message=assistant_continue_message,
@@ -651,7 +785,7 @@ def test_alternating_roles_e2e():
     http_handler = HTTPHandler()
 
     with patch.object(http_handler, "post", new=MagicMock()) as mock_post:
-        try: 
+        try:
             response = litellm.completion(
                 **{
                     "model": "databricks/databricks-meta-llama-3-1-70b-instruct",
@@ -663,7 +797,10 @@ def test_alternating_roles_e2e():
                         },
                         {"role": "user", "content": "What is Databricks?"},
                         {"role": "user", "content": "What is Azure?"},
-                        {"role": "assistant", "content": "I don't know anyything, do you?"},
+                        {
+                            "role": "assistant",
+                            "content": "I don't know anyything, do you?",
+                        },
                         {"role": "assistant", "content": "I can't repeat sentences."},
                     ],
                     "user_continue_message": {
@@ -712,7 +849,7 @@ def test_alternating_roles_e2e():
                         "role": "user",
                         "content": "Ok",
                     },
-                ]
+                ],
             }
         )
 

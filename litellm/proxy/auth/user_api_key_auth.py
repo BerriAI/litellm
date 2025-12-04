@@ -25,6 +25,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_key_object,
+    _delete_cache_key_object,
     _get_user_role,
     _is_user_proxy_admin,
     _virtual_key_max_budget_check,
@@ -47,13 +48,15 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
-from litellm.proxy.auth.oauth2_check import check_oauth2_token
+from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
+    populate_request_with_path_params,
 )
+from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
@@ -127,17 +130,38 @@ def _get_bearer_token(
     return api_key
 
 
+def _apply_budget_limits_to_end_user_params(
+    end_user_params: dict,
+    budget_info: LiteLLM_BudgetTable,
+    end_user_id: str,
+) -> None:
+    """
+    Helper function to apply budget limits to end user parameters.
+    
+    Args:
+        end_user_params: Dictionary to update with budget parameters
+        budget_info: Budget table object containing limits
+        end_user_id: ID of the end user for logging
+    """
+    if budget_info.tpm_limit is not None:
+        end_user_params["end_user_tpm_limit"] = budget_info.tpm_limit
+    
+    if budget_info.rpm_limit is not None:
+        end_user_params["end_user_rpm_limit"] = budget_info.rpm_limit
+    
+    if budget_info.max_budget is not None:
+        end_user_params["end_user_max_budget"] = budget_info.max_budget
+    
+    verbose_proxy_logger.debug(
+        f"Applied budget limits to end user {end_user_id}"
+    )
+
+
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
-    request = Request(
-        scope={
-            "type": "http",
-            "headers": [
-                (k.lower().encode(), v.encode()) for k, v in websocket.headers.items()
-            ],
-        }
-    )
+    scope_headers = list(websocket.scope.get("headers") or [])
+    request = Request(scope={"type": "http", "headers": scope_headers})
 
     request._url = websocket.url
 
@@ -145,12 +169,12 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 
     model = query_params.get("model")
 
+    
     async def return_body():
-        return_string = f'{{"model": "{model}"}}'
-        # return string as bytes
-        return return_string.encode()
-
+        return _realtime_request_body(model)
+    
     request.body = return_body  # type: ignore
+
 
     authorization = websocket.headers.get("authorization")
     # If no Authorization header, try the api-key header
@@ -390,7 +414,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
-        passed_in_key: Optional[str] = None
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
         api_key, passed_in_key = get_api_key(
             custom_litellm_key_header=custom_litellm_key_header,
@@ -456,17 +479,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
 
         if general_settings.get("enable_oauth2_auth", False) is True:
-            # return UserAPIKeyAuth object
-            # helper to check if the api_key is a valid oauth2 token
-            from litellm.proxy.proxy_server import premium_user
+            # Only apply OAuth2 M2M authentication to LLM API routes, not UI/management routes
+            # This allows UI SSO to work separately from API M2M authentication
+            if RouteChecks.is_llm_api_route(route=route):
+                # return UserAPIKeyAuth object
+                # helper to check if the api_key is a valid oauth2 token
+                from litellm.proxy.proxy_server import premium_user
 
-            if premium_user is not True:
-                raise ValueError(
-                    "Oauth2 token validation is only available for premium users"
-                    + CommonProxyErrors.not_premium_user.value
-                )
+                if premium_user is not True:
+                    raise ValueError(
+                        "Oauth2 token validation is only available for premium users"
+                        + CommonProxyErrors.not_premium_user.value
+                    )
 
-            return await check_oauth2_token(token=api_key)
+                return await Oauth2Handler.check_oauth2_token(token=api_key)
 
         if general_settings.get("enable_oauth2_proxy_auth", False) is True:
             return await handle_oauth2_proxy_request(request=request)
@@ -502,7 +528,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 end_user_object = result["end_user_object"]
                 org_id = result["org_id"]
                 token = result["token"]
-                team_membership: Optional[LiteLLM_TeamMembership] = result.get("team_membership", None)
+                team_membership: Optional[LiteLLM_TeamMembership] = result.get(
+                    "team_membership", None
+                )
 
                 global_proxy_spend = await get_global_proxy_spend(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
@@ -537,10 +565,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
                     end_user_id=end_user_id,
-                    user_tpm_limit=user_object.tpm_limit if user_object is not None else None,
-                    user_rpm_limit=user_object.rpm_limit if user_object is not None else None,
-                    team_member_rpm_limit=team_membership.safe_get_team_member_rpm_limit() if team_membership is not None else None,
-                    team_member_tpm_limit=team_membership.safe_get_team_member_tpm_limit() if team_membership is not None else None,
+                    user_tpm_limit=(
+                        user_object.tpm_limit if user_object is not None else None
+                    ),
+                    user_rpm_limit=(
+                        user_object.rpm_limit if user_object is not None else None
+                    ),
+                    team_member_rpm_limit=(
+                        team_membership.safe_get_team_member_rpm_limit()
+                        if team_membership is not None
+                        else None
+                    ),
+                    team_member_tpm_limit=(
+                        team_membership.safe_get_team_member_tpm_limit()
+                        if team_membership is not None
+                        else None
+                    ),
+                    team_metadata=team_object.metadata if team_object is not None else None,
                 )
                 # run through common checks
                 _ = await common_checks(
@@ -627,19 +668,28 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         _end_user_object.allowed_model_region
                     )
                     if _end_user_object.litellm_budget_table is not None:
-                        budget_info = _end_user_object.litellm_budget_table
-                        if budget_info.tpm_limit is not None:
-                            end_user_params["end_user_tpm_limit"] = (
-                                budget_info.tpm_limit
-                            )
-                        if budget_info.rpm_limit is not None:
-                            end_user_params["end_user_rpm_limit"] = (
-                                budget_info.rpm_limit
-                            )
-                        if budget_info.max_budget is not None:
-                            end_user_params["end_user_max_budget"] = (
-                                budget_info.max_budget
-                            )
+                        _apply_budget_limits_to_end_user_params(
+                            end_user_params=end_user_params,
+                            budget_info=_end_user_object.litellm_budget_table,
+                            end_user_id=end_user_id,
+                        )
+                elif litellm.max_end_user_budget_id is not None:
+                    # End user doesn't exist yet, but apply default budget limits if configured
+                    from litellm.proxy.auth.auth_checks import (
+                        get_default_end_user_budget,
+                    )
+
+                    default_budget = await get_default_end_user_budget(
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                    )
+                    if default_budget is not None:
+                        _apply_budget_limits_to_end_user_params(
+                            end_user_params=end_user_params,
+                            budget_info=default_budget,
+                            end_user_id=end_user_id,
+                        )
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
@@ -677,7 +727,29 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             and isinstance(valid_token, UserAPIKeyAuth)
             and valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
-            # update end-user params on valid token
+            if valid_token.expires is not None:
+                current_time = datetime.now(timezone.utc)
+                if isinstance(valid_token.expires, datetime):
+                    expiry_time = valid_token.expires
+                else:
+                    expiry_time = datetime.fromisoformat(valid_token.expires)
+                if (
+                    expiry_time.tzinfo is None
+                    or expiry_time.tzinfo.utcoffset(expiry_time) is None
+                ):
+                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                if expiry_time < current_time:
+                    await _delete_cache_key_object(
+                        hashed_token=hash_token(api_key),
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                    raise ProxyException(
+                        message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                        type=ProxyErrorTypes.expired_key,
+                        code=400,
+                        param=api_key,
+                    )
             valid_token = update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
             )
@@ -982,7 +1054,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
 
             # Check 4. Token Spend is under budget
-            if route in LiteLLMRoutes.llm_api_routes.value:
+            if RouteChecks.is_llm_api_route(route=route):
                 await _virtual_key_max_budget_check(
                     valid_token=valid_token,
                     proxy_logging_obj=proxy_logging_obj,
@@ -1024,6 +1096,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     blocked=valid_token.team_blocked,
                     models=valid_token.team_models,
                     metadata=valid_token.team_metadata,
+                    object_permission_id=valid_token.team_object_permission_id,
                 )
             else:
                 _team_obj = None
@@ -1130,6 +1203,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
 
 
+
+
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
@@ -1151,6 +1226,9 @@ async def user_api_key_auth(
     """
 
     request_data = await _read_request_body(request=request)
+    request_data = populate_request_with_path_params(
+        request_data=request_data, request=request
+    )
     route: str = get_request_route(request=request)
 
     ## CHECK IF ROUTE IS ALLOWED

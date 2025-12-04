@@ -1,5 +1,18 @@
 import base64
-from typing import Any, Dict, List, Optional, Union, cast, get_type_hints, overload
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Type,
+    Union,
+    cast,
+    get_type_hints,
+    overload,
+)
+
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -8,9 +21,10 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ResponseText,
 )
 from litellm.types.responses.main import DecodedResponseId
-from litellm.types.utils import SpecialEnums, Usage
+from litellm.types.utils import PromptTokensDetails, SpecialEnums, Usage
 
 
 class ResponsesAPIRequestUtils:
@@ -24,7 +38,6 @@ class ResponsesAPIRequestUtils:
         custom_llm_provider: Optional[str],
         model: str,
     ):
-
         if supported_params is None:
             return
         unsupported_params = {}
@@ -135,9 +148,11 @@ class ResponsesAPIRequestUtils:
         if "metadata" in non_default_params:
             from litellm.utils import add_openai_metadata
 
-            non_default_params["metadata"] = add_openai_metadata(
-                non_default_params["metadata"]
-            )
+            converted_metadata = add_openai_metadata(non_default_params["metadata"])
+            if converted_metadata is not None:
+                non_default_params["metadata"] = converted_metadata
+            else:
+                non_default_params.pop("metadata", None)
 
         return cast(ResponsesAPIOptionalRequestParams, non_default_params)
 
@@ -302,6 +317,99 @@ class ResponsesAPIRequestUtils:
         )
         return decoded_response_id.get("response_id", previous_response_id)
 
+    @staticmethod
+    def convert_text_format_to_text_param(
+        text_format: Optional[Union[Type["BaseModel"], dict]],
+        text: Optional["ResponseText"] = None,
+    ) -> Optional["ResponseText"]:
+        """
+        Convert text_format parameter to text parameter for the responses API.
+
+        Args:
+            text_format: Pydantic model class or dict to convert to response format
+            text: Existing text parameter (if provided, text_format is ignored)
+
+        Returns:
+            ResponseText object with the converted format, or None if conversion fails
+        """
+        if text_format is not None and text is None:
+            from litellm.llms.base_llm.base_utils import type_to_response_format_param
+
+            # Convert Pydantic model to response format
+            response_format = type_to_response_format_param(text_format)
+            if response_format is not None:
+                # Create ResponseText object with the format
+                # The responses API expects the format to have name at the top level
+                text = {
+                    "format": {
+                        "type": response_format["type"],
+                        "name": response_format["json_schema"]["name"],
+                        "schema": response_format["json_schema"]["schema"],
+                        "strict": response_format["json_schema"]["strict"],
+                    }
+                }
+                return text
+        return text
+
+    @staticmethod
+    def extract_mcp_headers_from_request(
+        secret_fields: Optional[Dict[str, Any]],
+        tools: Optional[Iterable[Any]],
+    ) -> tuple[
+        Optional[str],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+    ]:
+        """
+        Extract MCP auth headers from the request to pass to MCP server.
+        Headers from tools.headers in request body should be passed to MCP server.
+        """
+        from starlette.datastructures import Headers
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        
+        # Extract headers from secret_fields which contains the original request headers
+        raw_headers_from_request: Optional[Dict[str, str]] = None
+        if secret_fields and isinstance(secret_fields, dict):
+            raw_headers_from_request = secret_fields.get("raw_headers")
+        
+        # Extract MCP-specific headers using MCPRequestHandler methods
+        mcp_auth_header: Optional[str] = None
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
+        oauth2_headers: Optional[Dict[str, str]] = None
+        
+        if raw_headers_from_request:
+            headers_obj = Headers(raw_headers_from_request)
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
+            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+
+        if tools:
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("type") == "mcp":
+                    tool_headers = tool.get("headers", {})
+                    if tool_headers and isinstance(tool_headers, dict):
+                        # Merge tool headers into mcp_server_auth_headers
+                        # Extract server-specific headers from tool.headers
+                        headers_obj_from_tool = Headers(tool_headers)
+                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj_from_tool)
+                        if tool_mcp_server_auth_headers:
+                            if mcp_server_auth_headers is None:
+                                mcp_server_auth_headers = {}
+                            # Merge the headers from tool into existing headers
+                            for server_alias, headers_dict in tool_mcp_server_auth_headers.items():
+                                if server_alias not in mcp_server_auth_headers:
+                                    mcp_server_auth_headers[server_alias] = {}
+                                mcp_server_auth_headers[server_alias].update(headers_dict)
+                        # Also merge raw headers (non-prefixed headers from tool.headers)
+                        if raw_headers_from_request is None:
+                            raw_headers_from_request = {}
+                        raw_headers_from_request.update(tool_headers)
+        
+        return mcp_auth_header, mcp_server_auth_headers, oauth2_headers, raw_headers_from_request
+
 
 class ResponseAPILoggingUtils:
     @staticmethod
@@ -315,22 +423,37 @@ class ResponseAPILoggingUtils:
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
-        usage: Optional[Union[dict, ResponseAPIUsage]],
+        usage_input: Optional[Union[dict, ResponseAPIUsage]],
     ) -> Usage:
         """Tranforms the ResponseAPIUsage object to a Usage object"""
-        if usage is None:
+        if usage_input is None:
             return Usage(
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
             )
         response_api_usage: ResponseAPIUsage = (
-            ResponseAPIUsage(**usage) if isinstance(usage, dict) else usage
+            ResponseAPIUsage(**usage_input)
+            if isinstance(usage_input, dict)
+            else usage_input
         )
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
-        return Usage(
+        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        if response_api_usage.input_tokens_details:
+            prompt_tokens_details = PromptTokensDetails(
+                cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
+                audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
+            )
+        chat_usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=prompt_tokens_details,
         )
+
+        # Preserve cost attribute if it exists on ResponseAPIUsage
+        if hasattr(response_api_usage, "cost") and response_api_usage.cost is not None:
+            setattr(chat_usage, "cost", response_api_usage.cost)
+
+        return chat_usage

@@ -1,6 +1,6 @@
-import copy
+from __future__ import annotations
+
 import json
-import os
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
@@ -9,6 +9,15 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.bedrock.image.amazon_nova_canvas_transformation import (
+    AmazonNovaCanvasConfig,
+)
+from litellm.llms.bedrock.image.amazon_stability3_transformation import (
+    AmazonStability3Config,
+)
+from litellm.llms.bedrock.image.amazon_titan_transformation import (
+    AmazonTitanImageGenerationConfig,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -37,10 +46,29 @@ class BedrockImagePreparedRequest(BaseModel):
     data: dict
 
 
+BedrockImageConfigClass = Union[
+    type[AmazonTitanImageGenerationConfig],
+    type[AmazonNovaCanvasConfig],
+    type[AmazonStability3Config],
+    type[litellm.AmazonStabilityConfig],
+]
+
+
 class BedrockImageGeneration(BaseAWSLLM):
     """
     Bedrock Image Generation handler
     """
+
+    @classmethod
+    def get_config_class(cls, model: str | None) -> BedrockImageConfigClass:
+        if AmazonTitanImageGenerationConfig._is_titan_model(model):
+            return AmazonTitanImageGenerationConfig
+        elif AmazonNovaCanvasConfig._is_nova_model(model):
+            return AmazonNovaCanvasConfig
+        elif AmazonStability3Config._is_stability_3_model(model):
+            return AmazonStability3Config
+        else:
+            return litellm.AmazonStabilityConfig
 
     def image_generation(
         self,
@@ -63,7 +91,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             extra_headers=extra_headers,
             logging_obj=logging_obj,
             prompt=prompt,
-            api_key=api_key
+            api_key=api_key,
         )
 
         if aimg_generation is True:
@@ -174,8 +202,14 @@ class BedrockImageGeneration(BaseAWSLLM):
             optional_params, model
         )
 
+        # Use the existing ARN-aware provider detection method
+        bedrock_provider = self.get_bedrock_invoke_provider(model)
         ### SET RUNTIME ENDPOINT ###
-        modelId = model
+        modelId = self.get_bedrock_model_id(
+            model=model,
+            provider=bedrock_provider,
+            optional_params=optional_params,
+        )
         _, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=boto3_credentials_info.aws_bedrock_runtime_endpoint,
@@ -183,14 +217,16 @@ class BedrockImageGeneration(BaseAWSLLM):
         )
         proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
         data = self._get_request_body(
-            model=model, prompt=prompt, optional_params=optional_params
+            model=model,
+            prompt=prompt,
+            optional_params=optional_params,
         )
 
         # Make POST Request
         body = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
-            headers = {"Content-Type": "application/json", **extra_headers} 
+            headers = {"Content-Type": "application/json", **extra_headers}
 
         prepped = self.get_request_headers(
             credentials=boto3_credentials_info.credentials,
@@ -201,7 +237,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             headers=headers,
             api_key=api_key,
         )
-            
+
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,
@@ -233,42 +269,9 @@ class BedrockImageGeneration(BaseAWSLLM):
         Returns:
             dict: The request body to use for the Bedrock Image Generation API
         """
-        provider = model.split(".")[0]
-        inference_params = copy.deepcopy(optional_params)
-        inference_params.pop(
-            "user", None
-        )  # make sure user is not passed in for bedrock call
-        data = {}
-        if provider == "stability":
-            if litellm.AmazonStability3Config._is_stability_3_model(model):
-                request_body = litellm.AmazonStability3Config.transform_request_body(
-                    prompt=prompt, optional_params=optional_params
-                )
-                return dict(request_body)
-            else:
-                prompt = prompt.replace(os.linesep, " ")
-                ## LOAD CONFIG
-                config = litellm.AmazonStabilityConfig.get_config()
-                for k, v in config.items():
-                    if (
-                        k not in inference_params
-                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                        inference_params[k] = v
-                data = {
-                    "text_prompts": [{"text": prompt, "weight": 1}],
-                    **inference_params,
-                }
-        elif provider == "amazon":
-            return dict(
-                litellm.AmazonNovaCanvasConfig.transform_request_body(
-                    text=prompt, optional_params=optional_params
-                )
-            )
-        else:
-            raise BedrockError(
-                status_code=422, message=f"Unsupported model={model}, passed in"
-            )
-        return data
+        config_class = self.get_config_class(model=model)
+        request_body = config_class.transform_request_body(text=prompt, optional_params=optional_params)
+        return dict(request_body)
 
     def _transform_response_dict_to_openai_response(
         self,
@@ -296,15 +299,8 @@ class BedrockImageGeneration(BaseAWSLLM):
         if response_dict is None:
             raise ValueError("Error in response object format, got None")
 
-        config_class = (
-            litellm.AmazonStability3Config
-            if litellm.AmazonStability3Config._is_stability_3_model(model=model)
-            else (
-                litellm.AmazonNovaCanvasConfig
-                if litellm.AmazonNovaCanvasConfig._is_nova_model(model=model)
-                else litellm.AmazonStabilityConfig
-            )
-        )
+        config_class = self.get_config_class(model=model)
+
         config_class.transform_response_dict_to_openai_response(
             model_response=model_response,
             response_dict=response_dict,

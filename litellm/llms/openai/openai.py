@@ -10,12 +10,16 @@ from typing import (
     List,
     Literal,
     Optional,
+    TYPE_CHECKING,
     Union,
     cast,
 )
 from urllib.parse import urlparse
 
 import httpx
+
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
 import openai
 from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant_deleted import AssistantDeleted
@@ -355,6 +359,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: Optional[int] = DEFAULT_MAX_RETRIES,
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
         client_initialization_params: Dict = locals()
         if client is None:
@@ -379,7 +384,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_async_http_client(),
+                    http_client=OpenAIChatCompletion._get_async_http_client(
+                        shared_session=shared_session
+                    ),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -437,6 +444,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 headers = {}
             response = raw_response.parse()
+            if not hasattr(response, "model_dump"):
+                raise OpenAIError(
+                    status_code=500,
+                    message=f"Empty or invalid response from LLM endpoint. Received: {response!r}. Check the reverse proxy or model server configuration.",
+                )
             return headers, response
         except openai.APITimeoutError as e:
             end_time = time.time()
@@ -470,7 +482,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 headers = {}
             response = raw_response.parse()
+            if not hasattr(response, "model_dump"):
+                raise OpenAIError(
+                    status_code=500,
+                    message=f"Empty or invalid response from LLM endpoint. Received: {response!r}. Check the reverse proxy or model server configuration.",
+                )
             return headers, response
+        except OpenAIError:
+            raise
         except Exception as e:
             if raw_response is not None:
                 raise Exception(
@@ -522,8 +541,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         organization: Optional[str] = None,
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
-        super().completion()
+        super().completion(shared_session=shared_session)
         try:
             fake_stream: bool = False
             inference_params = optional_params.copy()
@@ -606,6 +626,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                                 organization=organization,
                                 drop_params=drop_params,
                                 fake_stream=fake_stream,
+                                shared_session=shared_session,
                             )
 
                     data = provider_config.transform_request(
@@ -771,6 +792,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         drop_params: Optional[bool] = None,
         stream_options: Optional[dict] = None,
         fake_stream: bool = False,
+        shared_session: Optional["ClientSession"] = None,
     ):
         response = None
         data = await provider_config.async_transform_request(
@@ -793,6 +815,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     max_retries=max_retries,
                     organization=organization,
                     client=client,
+                    shared_session=shared_session,
                 )
 
                 ## LOGGING
@@ -1114,6 +1137,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_base: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         max_retries=None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         try:
             openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
@@ -1123,6 +1147,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 client=client,
+                shared_session=shared_session,
             )
             headers, response = await self.make_openai_embedding_request(
                 openai_aclient=openai_aclient,
@@ -1186,10 +1211,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         aembedding=None,
         max_retries: Optional[int] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> EmbeddingResponse:
         super().embedding()
         try:
-            model = model
             data = {"model": model, "input": input, **optional_params}
             max_retries = max_retries or litellm.DEFAULT_MAX_RETRIES
             if not isinstance(max_retries, int):
@@ -1212,6 +1237,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     timeout=timeout,
                     client=client,
                     max_retries=max_retries,
+                    shared_session=shared_session,
                 )
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore
@@ -1271,6 +1297,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_base: Optional[str] = None,
         client=None,
         max_retries=None,
+        organization: Optional[str] = None,
     ):
         response = None
         try:
@@ -1280,6 +1307,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 api_base=api_base,
                 timeout=timeout,
                 max_retries=max_retries,
+                organization=organization,
                 client=client,
             )
 
@@ -1314,17 +1342,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model_response: Optional[ImageResponse] = None,
         client=None,
         aimg_generation=None,
+        organization: Optional[str] = None,
     ) -> ImageResponse:
         data = {}
         try:
-            model = model
             data = {"model": model, "prompt": prompt, **optional_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
             if aimg_generation is True:
-                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
+                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries, organization=organization)  # type: ignore
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
@@ -1332,6 +1360,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 api_base=api_base,
                 timeout=timeout,
                 max_retries=max_retries,
+                organization=organization,
                 client=client,
             )
 
@@ -1397,6 +1426,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: Union[float, httpx.Timeout],
         aspeech: Optional[bool] = None,
         client=None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> HttpxBinaryResponseContent:
         if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
@@ -1411,6 +1441,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 max_retries=max_retries,
                 timeout=timeout,
                 client=client,
+                shared_session=shared_session,
             )  # type: ignore
 
         openai_client = self._get_openai_client(
@@ -1420,6 +1451,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             timeout=timeout,
             max_retries=max_retries,
             client=client,
+            shared_session=shared_session,
         )
 
         response = cast(OpenAI, openai_client).audio.speech.create(
@@ -1443,6 +1475,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
         client=None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> HttpxBinaryResponseContent:
         openai_client = cast(
             AsyncOpenAI,
@@ -1453,6 +1486,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 client=client,
+                shared_session=shared_session,
             ),
         )
 

@@ -23,8 +23,12 @@ from prometheus_client import REGISTRY
 
 import litellm
 from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
+
 try:
-    from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger, prometheus_label_factory
+    from litellm.integrations.prometheus import (
+        PrometheusLogger,
+        prometheus_label_factory,
+    )
 except Exception:
     PrometheusLogger = None
     prometheus_label_factory = None
@@ -375,6 +379,7 @@ def test_basic_functionality():
 # VALIDATION TESTS - Test the new validation logic for metrics and labels
 # ==============================================================================
 
+
 def test_invalid_metric_name_validation():
     """Test that invalid metric names are caught and raise ValueError"""
     # Clear registry before test
@@ -383,7 +388,7 @@ def test_invalid_metric_name_validation():
     # Set up test configuration with invalid metric name
     test_config = [
         {
-            "group": "service_metrics", 
+            "group": "service_metrics",
             "metrics": [
                 "invalid_metric_name_that_does_not_exist",
                 "litellm_deployment_total_requests",  # valid metric
@@ -397,7 +402,7 @@ def test_invalid_metric_name_validation():
     # Creating PrometheusLogger should raise ValueError due to invalid metric
     with pytest.raises(ValueError) as exc_info:
         PrometheusLogger()
-    
+
     # Verify error message contains information about invalid metric
     assert "invalid_metric_name_that_does_not_exist" in str(exc_info.value)
     assert "Configuration validation failed" in str(exc_info.value)
@@ -426,7 +431,7 @@ def test_invalid_labels_validation():
     # Creating PrometheusLogger should raise ValueError due to invalid labels
     with pytest.raises(ValueError) as exc_info:
         PrometheusLogger()
-    
+
     # Verify error message contains information about invalid labels
     assert "invalid_label_name" in str(exc_info.value)
     assert "Configuration validation failed" in str(exc_info.value)
@@ -447,7 +452,7 @@ def test_valid_configuration_passes_validation():
             ],
             "include_labels": [
                 "litellm_model_name",
-                "api_provider", 
+                "api_provider",
                 "requested_model",
             ],
         }
@@ -460,9 +465,9 @@ def test_valid_configuration_passes_validation():
         logger = PrometheusLogger()
         # Verify the logger was created successfully
         assert logger is not None
-        assert hasattr(logger, 'enabled_metrics')
-        assert 'litellm_deployment_total_requests' in logger.enabled_metrics
-        assert 'litellm_deployment_failure_responses' in logger.enabled_metrics
+        assert hasattr(logger, "enabled_metrics")
+        assert "litellm_deployment_total_requests" in logger.enabled_metrics
+        assert "litellm_deployment_failure_responses" in logger.enabled_metrics
     except Exception as e:
         pytest.fail(f"Valid configuration should not raise exception: {e}")
 
@@ -837,4 +842,101 @@ async def test_spend_counter_semantics(mock_prometheus_logger):
 
 # ==============================================================================
 # END SEMANTIC VALIDATION TESTS
+# ==============================================================================
+
+
+# ==============================================================================
+# CALLBACK FAILURE METRICS TESTS
+# ==============================================================================
+
+
+def test_callback_failure_metric_increments(prometheus_logger):
+    """
+    Test that the callback logging failure metric can be incremented.
+
+    This tests the litellm_callback_logging_failures_metric counter.
+    """
+    # Get initial value
+    initial_value = 0
+    try:
+        initial_value = (
+            prometheus_logger.litellm_callback_logging_failures_metric.labels(
+                callback_name="S3Logger"
+            )._value.get()
+        )
+    except Exception:
+        initial_value = 0
+
+    # Increment the metric
+    prometheus_logger.increment_callback_logging_failure(callback_name="S3Logger")
+
+    # Verify it incremented by 1
+    current_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+        callback_name="S3Logger"
+    )._value.get()
+
+    assert (
+        current_value == initial_value + 1
+    ), f"Expected callback failure metric to increment by 1, got {current_value - initial_value}"
+
+    # Increment again for different callback
+    prometheus_logger.increment_callback_logging_failure(callback_name="LangFuseLogger")
+
+    langfuse_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+        callback_name="LangFuseLogger"
+    )._value.get()
+
+    assert langfuse_value == 1, "LangFuseLogger metric should be 1"
+
+    # S3Logger should still be initial + 1
+    s3_value = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+        callback_name="S3Logger"
+    )._value.get()
+    assert s3_value == initial_value + 1, "S3Logger metric should not change"
+
+    print(
+        f"✓ Callback failure metric test passed: S3Logger={s3_value}, LangFuseLogger={langfuse_value}"
+    )
+
+
+def test_callback_failure_metric_different_callbacks(prometheus_logger):
+    """
+    Test that different callbacks are tracked separately with their own labels.
+    """
+    callbacks_to_test = [
+        "S3Logger",
+        "LangFuseLogger",
+        "DataDogLogger",
+        "CustomCallback",
+    ]
+
+    for callback_name in callbacks_to_test:
+        # Get initial value
+        initial = 0
+        try:
+            initial = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+                callback_name=callback_name
+            )._value.get()
+        except Exception:
+            initial = 0
+
+        # Increment
+        prometheus_logger.increment_callback_logging_failure(
+            callback_name=callback_name
+        )
+
+        # Verify incremented
+        current = prometheus_logger.litellm_callback_logging_failures_metric.labels(
+            callback_name=callback_name
+        )._value.get()
+
+        assert current == initial + 1, f"{callback_name} should increment by 1"
+
+    print(
+        f"✓ Multiple callback tracking test passed for {len(callbacks_to_test)} callbacks"
+    )
+
+
+# ==============================================================================
+# END CALLBACK FAILURE METRICS TESTS
 # ==============================================================================

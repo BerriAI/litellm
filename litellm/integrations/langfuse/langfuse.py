@@ -1,6 +1,5 @@
 #### What this does ####
 #    On success, logs events to Langfuse
-import copy
 import os
 import traceback
 from datetime import datetime
@@ -11,11 +10,12 @@ from packaging.version import Version
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -196,6 +196,7 @@ class LangFuseLogger:
             TranscriptionResponse,
             RerankResponse,
             HttpxBinaryResponseContent,
+            ResponsesAPIResponse,
         ],
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
@@ -221,12 +222,14 @@ class LangFuseLogger:
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
             metadata = self.add_metadata_from_header(litellm_params, metadata)
-            optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
+            optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
 
             prompt = {"messages": kwargs.get("messages")}
 
             functions = optional_params.pop("functions", None)
             tools = optional_params.pop("tools", None)
+            # Remove secret_fields to prevent leaking sensitive data (e.g., authorization headers)
+            optional_params.pop("secret_fields", None)
             if functions is not None:
                 prompt["functions"] = functions
             if tools is not None:
@@ -305,6 +308,7 @@ class LangFuseLogger:
             TranscriptionResponse,
             RerankResponse,
             HttpxBinaryResponseContent,
+            ResponsesAPIResponse,
         ],
         prompt: dict,
         level: str,
@@ -369,6 +373,11 @@ class LangFuseLogger:
         ):
             input = prompt
             output = response_obj.results
+        elif response_obj is not None and isinstance(
+            response_obj, litellm.ResponsesAPIResponse
+        ):
+            input = prompt
+            output = self._get_responses_api_content_for_langfuse(response_obj)
         elif (
             kwargs.get("call_type") is not None
             and kwargs.get("call_type") == "_arealtime"
@@ -664,6 +673,7 @@ class LangFuseLogger:
 
             generation_id = None
             usage = None
+            usage_details = None
             if response_obj is not None:
                 if (
                     hasattr(response_obj, "id")
@@ -675,11 +685,36 @@ class LangFuseLogger:
                 _usage_obj = getattr(response_obj, "usage", None)
 
                 if _usage_obj:
+                    # Safely get usage values, defaulting None to 0 for Langfuse compatibility.
+                    # Some providers may return null for token counts.
+                    prompt_tokens = getattr(_usage_obj, "prompt_tokens", None) or 0
+                    completion_tokens = (
+                        getattr(_usage_obj, "completion_tokens", None) or 0
+                    )
+                    total_tokens = getattr(_usage_obj, "total_tokens", None) or 0
+
+                    cache_creation_input_tokens = (
+                        _usage_obj.get("cache_creation_input_tokens") or 0
+                    )
+                    cache_read_input_tokens = (
+                        _usage_obj.get("cache_read_input_tokens") or 0
+                    )
+
                     usage = {
-                        "prompt_tokens": _usage_obj.prompt_tokens,
-                        "completion_tokens": _usage_obj.completion_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
                         "total_cost": cost if self._supports_costs() else None,
                     }
+                    # According to langfuse documentation: "the input value must be reduced by the number of cache_read_input_tokens"
+                    input_tokens = prompt_tokens - cache_read_input_tokens
+                    usage_details = LangfuseUsageDetails(
+                        input=input_tokens,
+                        output=completion_tokens,
+                        total=total_tokens,
+                        cache_creation_input_tokens=cache_creation_input_tokens,
+                        cache_read_input_tokens=cache_read_input_tokens,
+                    )
+
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
                 # if `generation_name` is None, use sensible default values
@@ -712,6 +747,7 @@ class LangFuseLogger:
                 "input": input if not mask_input else "redacted-by-litellm",
                 "output": output if not mask_output else "redacted-by-litellm",
                 "usage": usage,
+                "usage_details": usage_details,
                 "metadata": log_requester_metadata(clean_metadata),
                 "level": level,
                 "version": clean_metadata.pop("version", None),
@@ -765,6 +801,19 @@ class LangFuseLogger:
         """
         if response_obj.choices and len(response_obj.choices) > 0:
             return response_obj.choices[0].text
+        else:
+            return None
+
+    @staticmethod
+    def _get_responses_api_content_for_langfuse(
+        response_obj: ResponsesAPIResponse,
+    ):
+        """
+        Get the responses API content for Langfuse logging
+        """
+        if hasattr(response_obj, "output") and response_obj.output:
+            # ResponsesAPIResponse.output is a list of strings
+            return response_obj.output
         else:
             return None
 
@@ -852,29 +901,44 @@ class LangFuseLogger:
         guardrail_information = standard_logging_object.get(
             "guardrail_information", None
         )
-        if guardrail_information is None:
+        if not guardrail_information:
             verbose_logger.debug(
-                "Not logging guardrail information as span because guardrail_information is None"
+                "Not logging guardrail information as span because guardrail_information is empty"
             )
             return
 
-        span = trace.span(
-            name="guardrail",
-            input=guardrail_information.get("guardrail_request", None),
-            output=guardrail_information.get("guardrail_response", None),
-            metadata={
-                "guardrail_name": guardrail_information.get("guardrail_name", None),
-                "guardrail_mode": guardrail_information.get("guardrail_mode", None),
-                "guardrail_masked_entity_count": guardrail_information.get(
-                    "masked_entity_count", None
-                ),
-            },
-            start_time=guardrail_information.get("start_time", None),  # type: ignore
-            end_time=guardrail_information.get("end_time", None),  # type: ignore
-        )
+        if not isinstance(guardrail_information, list):
+            verbose_logger.debug(
+                "Not logging guardrail information as span because guardrail_information is not a list: %s",
+                type(guardrail_information),
+            )
+            return
 
-        verbose_logger.debug(f"Logged guardrail information as span: {span}")
-        span.end()
+        for guardrail_entry in guardrail_information:
+            if not isinstance(guardrail_entry, dict):
+                verbose_logger.debug(
+                    "Skipping guardrail entry with unexpected type: %s",
+                    type(guardrail_entry),
+                )
+                continue
+
+            span = trace.span(
+                name="guardrail",
+                input=guardrail_entry.get("guardrail_request", None),
+                output=guardrail_entry.get("guardrail_response", None),
+                metadata={
+                    "guardrail_name": guardrail_entry.get("guardrail_name", None),
+                    "guardrail_mode": guardrail_entry.get("guardrail_mode", None),
+                    "guardrail_masked_entity_count": guardrail_entry.get(
+                        "masked_entity_count", None
+                    ),
+                },
+                start_time=guardrail_entry.get("start_time", None),  # type: ignore
+                end_time=guardrail_entry.get("end_time", None),  # type: ignore
+            )
+
+            verbose_logger.debug(f"Logged guardrail information as span: {span}")
+            span.end()
 
 
 def _add_prompt_to_generation_params(

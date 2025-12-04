@@ -13,8 +13,8 @@ sys.path.insert(
 from unittest.mock import patch
 
 import litellm
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app
-from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
 from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
 
 client = TestClient(app)
@@ -25,7 +25,9 @@ async def test_create_and_get_tag():
     """
     Test creation of a new tag and retrieving its information
     """
-    # Mock the user authentication
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     
     mock_user_auth = UserAPIKeyAuth(
@@ -35,21 +37,38 @@ async def test_create_and_get_tag():
     app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
     
     try:
-        # Mock the prisma client and _get_tags_config and _save_tags_config
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
             "litellm.proxy.proxy_server.llm_router"
         ) as mock_router, patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints._get_tags_config"
-        ) as mock_get_tags, patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints._save_tags_config"
-        ) as mock_save_tags, patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints._add_tag_to_deployment"
-        ) as mock_add_tag, patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints._get_model_names"
-        ) as mock_get_models:
-            # Setup mocks
-            mock_get_tags.return_value = {}
-            mock_get_models.return_value = {"model-1": "gpt-3.5-turbo"}
+            "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
+        ), patch(
+            "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
+        ) as mock_get_deployments:
+            # Setup prisma mocks
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+            
+            # Mock find_unique to return None (tag doesn't exist)
+            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
+            
+            # Mock find_many for model lookup
+            mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+            
+            # Mock create to return the created tag
+            created_tag = Mock()
+            created_tag.tag_name = "test-tag"
+            created_tag.description = "Test tag for unit testing"
+            created_tag.models = ["model-1"]
+            created_tag.model_info = {}
+            created_tag.spend = 0.0
+            created_tag.budget_id = None
+            created_tag.created_at = datetime.now()
+            created_tag.updated_at = datetime.now()
+            created_tag.created_by = "test-user-123"
+            mock_db.litellm_tagtable.create = AsyncMock(return_value=created_tag)
+            
+            # Mock get_deployments_by_model to return empty list
+            mock_get_deployments.return_value = []
 
             # Create a new tag
             tag_data = {
@@ -58,27 +77,29 @@ async def test_create_and_get_tag():
                 "models": ["model-1"],
             }
 
-            # Set admin access for the test
-            headers = {"Authorization": f"Bearer sk-1234"}
+            headers = {"Authorization": "Bearer sk-1234"}
 
             # Test tag creation
             response = client.post("/tag/new", json=tag_data, headers=headers)
-            print(f"response: {response.text}")
             assert response.status_code == 200
             result = response.json()
             assert result["message"] == "Tag test-tag created successfully"
             assert result["tag"]["name"] == "test-tag"
             assert result["tag"]["description"] == "Test tag for unit testing"
 
-            # Mock updated tag config for the get request
-            mock_get_tags.return_value = {
-                "test-tag": {
-                    "name": "test-tag",
-                    "description": "Test tag for unit testing",
-                    "models": ["model-1"],
-                    "model_info": {"model-1": "gpt-3.5-turbo"},
-                }
-            }
+            # Mock find_many for tag info retrieval
+            retrieved_tag = Mock()
+            retrieved_tag.tag_name = "test-tag"
+            retrieved_tag.description = "Test tag for unit testing"
+            retrieved_tag.models = ["model-1"]
+            retrieved_tag.model_info = "{}"
+            retrieved_tag.spend = 0.0
+            retrieved_tag.budget_id = None
+            retrieved_tag.created_at = datetime.now()
+            retrieved_tag.updated_at = datetime.now()
+            retrieved_tag.created_by = "test-user-123"
+            retrieved_tag.litellm_budget_table = None
+            mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[retrieved_tag])
 
             # Test retrieving tag info
             info_data = {"names": ["test-tag"]}
@@ -97,7 +118,9 @@ async def test_update_tag():
     """
     Test updating an existing tag
     """
-    # Mock the user authentication
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     
     mock_user_auth = UserAPIKeyAuth(
@@ -107,26 +130,41 @@ async def test_update_tag():
     app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
     
     try:
-        # Mock the prisma client and _get_tags_config and _save_tags_config
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints._get_tags_config"
-        ) as mock_get_tags, patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints._save_tags_config"
-        ) as mock_save_tags, patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints._get_model_names"
-        ) as mock_get_models:
-            # Setup mocks for existing tag
-            mock_get_tags.return_value = {
-            "test-tag": {
-                "name": "test-tag",
-                "description": "Original description",
-                "models": ["model-1"],
-                "created_at": "2023-01-01T00:00:00",
-                "updated_at": "2023-01-01T00:00:00",
-                "created_by": "user-123",
-            }
-            }
-            mock_get_models.return_value = {"model-1": "gpt-3.5-turbo", "model-2": "gpt-4"}
+            "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
+        ):
+            # Setup prisma mocks
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+            
+            # Mock existing tag
+            existing_tag = Mock()
+            existing_tag.tag_name = "test-tag"
+            existing_tag.description = "Original description"
+            existing_tag.models = ["model-1"]
+            existing_tag.budget_id = None
+            existing_tag.created_at = datetime.now()
+            existing_tag.updated_at = datetime.now()
+            existing_tag.created_by = "user-123"
+            
+            # Mock find_unique to return existing tag
+            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+            
+            # Mock find_many for model lookup
+            mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+            
+            # Mock update to return updated tag
+            updated_tag = Mock()
+            updated_tag.tag_name = "test-tag"
+            updated_tag.description = "Updated description"
+            updated_tag.models = ["model-1", "model-2"]
+            updated_tag.model_info = {}
+            updated_tag.spend = 0.0
+            updated_tag.budget_id = None
+            updated_tag.created_at = datetime.now()
+            updated_tag.updated_at = datetime.now()
+            updated_tag.created_by = "user-123"
+            mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
 
             # Update tag data
             update_data = {
@@ -135,8 +173,7 @@ async def test_update_tag():
                 "models": ["model-1", "model-2"],
             }
 
-            # Set admin access for the test
-            headers = {"Authorization": f"Bearer sk-1234"}
+            headers = {"Authorization": "Bearer sk-1234"}
 
             # Test tag update
             response = client.post("/tag/update", json=update_data, headers=headers)
@@ -156,7 +193,9 @@ async def test_delete_tag():
     """
     Test deleting a tag
     """
-    # Mock the user authentication
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     
     mock_user_auth = UserAPIKeyAuth(
@@ -166,29 +205,30 @@ async def test_delete_tag():
     app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
     
     try:
-        # Mock the prisma client and _get_tags_config and _save_tags_config
-        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints._get_tags_config"
-        ) as mock_get_tags, patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints._save_tags_config"
-        ) as mock_save_tags:
-            # Setup mocks for existing tag
-            mock_get_tags.return_value = {
-            "test-tag": {
-                "name": "test-tag",
-                "description": "Test tag for deletion",
-                "models": ["model-1"],
-                "created_at": "2023-01-01T00:00:00",
-                "updated_at": "2023-01-01T00:00:00",
-                "created_by": "user-123",
-            }
-            }
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            # Setup prisma mocks
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+            
+            # Mock existing tag
+            existing_tag = Mock()
+            existing_tag.tag_name = "test-tag"
+            existing_tag.description = "Test tag for deletion"
+            existing_tag.models = ["model-1"]
+            existing_tag.created_at = datetime.now()
+            existing_tag.updated_at = datetime.now()
+            existing_tag.created_by = "user-123"
+            
+            # Mock find_unique to return existing tag
+            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+            
+            # Mock delete
+            mock_db.litellm_tagtable.delete = AsyncMock(return_value=existing_tag)
 
             # Delete tag data
             delete_data = {"name": "test-tag"}
 
-            # Set admin access for the test
-            headers = {"Authorization": f"Bearer sk-1234"}
+            headers = {"Authorization": "Bearer sk-1234"}
 
             # Test tag deletion
             response = client.post("/tag/delete", json=delete_data, headers=headers)
@@ -196,8 +236,8 @@ async def test_delete_tag():
             result = response.json()
             assert result["message"] == "Tag test-tag deleted successfully"
 
-            # Verify _save_tags_config was called without the deleted tag
-            mock_save_tags.assert_called_once()
+            # Verify delete was called
+            mock_db.litellm_tagtable.delete.assert_called_once()
     finally:
         # Clean up dependency overrides
         app.dependency_overrides.clear()

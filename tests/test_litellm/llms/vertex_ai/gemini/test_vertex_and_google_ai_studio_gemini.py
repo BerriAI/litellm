@@ -390,6 +390,58 @@ def test_streaming_chunk_includes_reasoning_content():
     )
 
 
+def test_streaming_chunk_with_tool_calls_includes_reasoning_content():
+    """
+    Test for issue #16805: Ensure that when Gemini returns a streaming chunk with
+    tool calls AND thoughtSignature, the reasoning_content is included in the delta.
+
+    Previously, thinking_blocks were only added to non-streaming responses, causing
+    reasoning_content to be missing in streaming mode when tools were enabled.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    litellm_logging = MagicMock()
+
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_current_time",
+                                "args": {"timezone": "America/New_York"},
+                            },
+                            "thoughtSignature": "EsEDCr4DAdHtim...",  # Base64 signature
+                        }
+                    ]
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 68,
+            "candidatesTokenCount": 120,
+            "totalTokenCount": 188,
+        },
+    }
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    # Verify that reasoning_content is present in the streaming delta
+    assert streaming_chunk.choices[0].delta.reasoning_content is not None
+
+    # Verify tool calls are also present
+    assert streaming_chunk.choices[0].delta.tool_calls is not None
+    assert len(streaming_chunk.choices[0].delta.tool_calls) == 1
+    assert streaming_chunk.choices[0].delta.tool_calls[0].function.name == "get_current_time"
+
+
 def test_check_finish_reason():
     finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
     for k, v in finish_reason_mappings.items():
@@ -425,6 +477,86 @@ def test_vertex_ai_usage_metadata_response_token_count():
     assert result.completion_tokens_details.text_tokens == 74
 
 
+def test_vertex_ai_usage_metadata_with_image_tokens():
+    """Test candidatesTokensDetails with IMAGE modality (e.g., Imagen models)
+
+    This test simulates the case where candidatesTokenCount is EXCLUSIVE of thoughtsTokenCount.
+    Gemini API returns: totalTokenCount = promptTokenCount + candidatesTokenCount + thoughtsTokenCount
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 14,
+        "candidatesTokenCount": 1442,  # Does NOT include thoughtsTokenCount
+        "totalTokenCount": 1614,  # 14 + 1442 + 158
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 14}],
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1120},
+            {"modality": "TEXT", "tokenCount": 322}  # 1442 - 1120 = 322
+        ],
+        "thoughtsTokenCount": 158
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    print("result", result)
+
+    # Verify basic token counts
+    assert result.prompt_tokens == 14
+    # completion_tokens = candidatesTokenCount + thoughtsTokenCount (when exclusive)
+    assert result.completion_tokens == 1600  # 1442 + 158
+    assert result.total_tokens == 1614
+
+    # Verify detailed token breakdown
+    assert result.completion_tokens_details.image_tokens == 1120
+    assert result.completion_tokens_details.text_tokens == 322
+    assert result.completion_tokens_details.reasoning_tokens == 158
+
+    # Verify the math: completion_tokens = image + text + reasoning
+    # 1600 = 1120 (image) + 322 (text) + 158 (reasoning)
+    assert (
+        result.completion_tokens_details.image_tokens
+        + result.completion_tokens_details.text_tokens
+        + result.completion_tokens_details.reasoning_tokens
+        == result.completion_tokens
+    )
+
+
+def test_vertex_ai_usage_metadata_with_image_tokens_auto_calculated_text():
+    """Test that text_tokens is auto-calculated when only IMAGE modality is provided
+
+    This test verifies the auto-calculation logic at line 1367-1372 in vertex_and_google_ai_studio_gemini.py
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 14,
+        "candidatesTokenCount": 1442,
+        "totalTokenCount": 1614,  # 14 + 1442 + 158 (exclusive)
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 14}],
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1120}
+            # TEXT modality omitted - should be auto-calculated
+        ],
+        "thoughtsTokenCount": 158
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    print("result", result)
+
+    # Verify basic token counts
+    assert result.prompt_tokens == 14
+    assert result.completion_tokens == 1600  # 1442 + 158
+    assert result.total_tokens == 1614
+
+    # Verify image_tokens is set
+    assert result.completion_tokens_details.image_tokens == 1120
+
+    # Verify text_tokens is auto-calculated: candidatesTokenCount - image_tokens
+    # Note: reasoning_tokens is NOT subtracted here because candidatesTokenCount is exclusive
+    # 1442 - 1120 = 322
+    expected_text_tokens = 1442 - 1120
+    assert result.completion_tokens_details.text_tokens == expected_text_tokens
+    assert result.completion_tokens_details.reasoning_tokens == 158
+
+
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     """
     If budget_tokens is 0, do not set includeThoughts to True
@@ -444,12 +576,14 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
 
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
-    tools = v._map_function(value=[{"code_execution": {}}])
+    optional_params = {}
+    tools = v._map_function(value=[{"code_execution": {}}], optional_params=optional_params)
     assert len(tools) == 1
     assert tools[0]["code_execution"] == {}
     print(tools)
 
-    new_tools = v._map_function(value=[{"codeExecution": {}}])
+    new_optional_params = {}
+    new_tools = v._map_function(value=[{"codeExecution": {}}], optional_params=new_optional_params)
     assert len(new_tools) == 1
     print("new_tools", new_tools)
     assert new_tools[0]["code_execution"] == {}
@@ -465,6 +599,7 @@ def test_vertex_ai_map_tool_with_anyof():
     Ensure if anyof is present, only the anyof field and its contents are kept - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
     """
     v = VertexGeminiConfig()
+    optional_params = {}
     value = [
         {
             "type": "function",
@@ -488,7 +623,7 @@ def test_vertex_ai_map_tool_with_anyof():
             },
         }
     ]
-    tools = v._map_function(value=value)
+    tools = v._map_function(value=value, optional_params=optional_params)
 
     assert tools[0]["function_declarations"][0]["parameters"]["properties"][
         "base_branch"
@@ -496,6 +631,7 @@ def test_vertex_ai_map_tool_with_anyof():
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
 
+    new_optional_params = {}
     new_value = [
         {
             "type": "function",
@@ -518,7 +654,7 @@ def test_vertex_ai_map_tool_with_anyof():
             },
         }
     ]
-    new_tools = v._map_function(value=new_value)
+    new_tools = v._map_function(value=new_value, optional_params=new_optional_params)
 
     assert new_tools[0]["function_declarations"][0]["parameters"]["properties"][
         "base_branch"
@@ -1044,7 +1180,7 @@ def test_vertex_ai_code_line_length():
     # Find the line that generates the ID
     id_line = None
     for line in source_lines:
-        if 'id=f"call_{uuid.uuid4().hex' in line:
+        if '"id": f"call_' in line and 'uuid.uuid4().hex[:28]' in line:
             id_line = line.strip()  # Remove indentation for length check
             break
     
@@ -1056,3 +1192,873 @@ def test_vertex_ai_code_line_length():
     
     # Verify it contains the expected UUID format
     assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
+
+
+def test_vertex_ai_map_google_maps_tool_simple():
+    """
+    Test googleMaps tool transformation without location data.
+    
+    Input:
+        value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
+        optional_params={}
+    
+    Expected Output:
+        tools=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
+        optional_params={} (unchanged)
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+    
+    tools = v._map_function(
+        value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}],
+        optional_params=optional_params
+    )
+    
+    assert len(tools) == 1
+    assert "googleMaps" in tools[0]
+    assert tools[0]["googleMaps"]["enableWidget"] == "ENABLE_WIDGET"
+    assert "toolConfig" not in optional_params
+
+
+def test_vertex_ai_map_google_maps_tool_with_location():
+    """
+    Test googleMaps tool transformation with location data.
+    Verifies latitude/longitude/languageCode are extracted to toolConfig.retrievalConfig.
+    
+    Input:
+        value=[{
+            "googleMaps": {
+                "enableWidget": "ENABLE_WIDGET",
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US"
+            }
+        }]
+        optional_params={}
+    
+    Expected Output:
+        tools=[{
+            "googleMaps": {"enableWidget": "ENABLE_WIDGET"}
+        }]
+        optional_params={
+            "toolConfig": {
+                "retrievalConfig": {
+                    "latLng": {
+                        "latitude": 37.7749,
+                        "longitude": -122.4194
+                    },
+                    "languageCode": "en_US"
+                }
+            }
+        }
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+    
+    tools = v._map_function(
+        value=[{
+            "googleMaps": {
+                "enableWidget": "ENABLE_WIDGET",
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US"
+            }
+        }],
+        optional_params=optional_params
+    )
+    
+    assert len(tools) == 1
+    assert "googleMaps" in tools[0]
+    
+    google_maps_tool = tools[0]["googleMaps"]
+    assert google_maps_tool["enableWidget"] == "ENABLE_WIDGET"
+    assert "latitude" not in google_maps_tool
+    assert "longitude" not in google_maps_tool
+    assert "languageCode" not in google_maps_tool
+    
+    assert "toolConfig" in optional_params
+    assert "retrievalConfig" in optional_params["toolConfig"]
+    
+    retrieval_config = optional_params["toolConfig"]["retrievalConfig"]
+    assert retrieval_config["latLng"]["latitude"] == 37.7749
+    assert retrieval_config["latLng"]["longitude"] == -122.4194
+    assert retrieval_config["languageCode"] == "en_US"
+
+def test_vertex_ai_penalty_parameters_validation():
+    """
+    Test that penalty parameters are properly validated for different Gemini models.
+    
+    This test ensures that:
+    1. Models that don't support penalty parameters (like preview models) filter them out
+    2. Models that support penalty parameters include them in the request
+    3. Appropriate warnings are logged for unsupported models
+    """
+    v = VertexGeminiConfig()
+
+    # Test cases: (model_name, should_support_penalty_params)
+    test_cases = [
+        ("gemini-2.5-pro-preview-06-05", False),  # Preview model - should not support
+    ]
+
+    for model, should_support in test_cases:
+        # Test _supports_penalty_parameters method
+        assert v._supports_penalty_parameters(model) == should_support, \
+            f"Model {model} penalty support should be {should_support}"
+
+        # Test get_supported_openai_params method
+        supported_params = v.get_supported_openai_params(model)
+        has_penalty_params = "frequency_penalty" in supported_params and "presence_penalty" in supported_params
+        assert has_penalty_params == should_support, \
+            f"Model {model} should {'include' if should_support else 'exclude'} penalty params in supported list"
+
+    # Test parameter mapping for unsupported model
+    model = "gemini-2.5-pro-preview-06-05"
+    non_default_params = {
+        "temperature": 0.7,
+        "frequency_penalty": 0.5,
+        "presence_penalty": 0.3,
+        "max_tokens": 100
+    }
+
+    optional_params = {}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False
+    )
+
+    # Penalty parameters should be filtered out for unsupported models
+    assert "frequency_penalty" not in result, "frequency_penalty should be filtered out for unsupported model"
+    assert "presence_penalty" not in result, "presence_penalty should be filtered out for unsupported model"
+
+    # Other parameters should still be included
+    assert "temperature" in result, "temperature should still be included"
+    assert "max_output_tokens" in result, "max_output_tokens should still be included"
+    assert result["temperature"] == 0.7
+    assert result["max_output_tokens"] == 100
+
+
+def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
+    """
+    Test that penalty parameters are not supported for Gemini 3 models.
+    
+    This test ensures that:
+    1. Gemini 3 models do not support penalty parameters
+    2. Penalty parameters are excluded from supported params list for Gemini 3 models
+    3. Penalty parameters are filtered out when mapping params for Gemini 3 models
+    """
+    v = VertexGeminiConfig()
+
+    # Test Gemini 3 models
+    gemini_3_models = [
+        "gemini-3-pro-preview",
+        "vertex_ai/gemini-3-pro-preview",
+        "gemini/gemini-3-pro-preview",
+    ]
+
+    for model in gemini_3_models:
+        # Test _supports_penalty_parameters method
+        assert v._supports_penalty_parameters(model) == False, \
+            f"Gemini 3 model {model} should not support penalty parameters"
+
+        # Test get_supported_openai_params method
+        supported_params = v.get_supported_openai_params(model)
+        assert "frequency_penalty" not in supported_params, \
+            f"frequency_penalty should not be in supported params for {model}"
+        assert "presence_penalty" not in supported_params, \
+            f"presence_penalty should not be in supported params for {model}"
+
+        # Test parameter mapping - penalty params should be filtered out
+        non_default_params = {
+            "temperature": 0.7,
+            "frequency_penalty": 0.5,
+            "presence_penalty": 0.3,
+            "max_tokens": 100
+        }
+
+        optional_params = {}
+        result = v.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False
+        )
+
+        # Penalty parameters should be filtered out for Gemini 3 models
+        assert "frequency_penalty" not in result, \
+            f"frequency_penalty should be filtered out for Gemini 3 model {model}"
+        assert "presence_penalty" not in result, \
+            f"presence_penalty should be filtered out for Gemini 3 model {model}"
+
+        # Other parameters should still be included
+        assert "temperature" in result, \
+            f"temperature should still be included for Gemini 3 model {model}"
+        assert "max_output_tokens" in result, \
+            f"max_output_tokens should still be included for Gemini 3 model {model}"
+        assert result["temperature"] == 0.7
+        assert result["max_output_tokens"] == 100
+
+    # Test that non-Gemini 3 models still support penalty parameters (if they're not in the unsupported list)
+    non_gemini_3_model = "gemini-2.5-pro"
+    assert v._supports_penalty_parameters(non_gemini_3_model) == True, \
+        f"Non-Gemini 3 model {non_gemini_3_model} should support penalty parameters"
+    
+    supported_params = v.get_supported_openai_params(non_gemini_3_model)
+    assert "frequency_penalty" in supported_params, \
+        f"frequency_penalty should be in supported params for {non_gemini_3_model}"
+    assert "presence_penalty" in supported_params, \
+        f"presence_penalty should be in supported params for {non_gemini_3_model}"
+
+
+def test_vertex_ai_annotation_streaming_events():
+    """
+    Test that annotation events are properly emitted during streaming for Vertex AI Gemini.
+    
+    This test verifies:
+    1. Grounding metadata is converted to annotations in streaming chunks
+    2. Annotations are included in the delta of streaming chunks
+    3. Multiple annotations are handled correctly
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+    from litellm.types.llms.openai import ChatCompletionAnnotation
+
+    litellm_logging = MagicMock()
+
+    # Simulate a streaming chunk with grounding metadata (as Gemini sends it)
+    chunk_with_annotations = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "The weather in San Francisco today is clear."}]
+                },
+                "groundingMetadata": {
+                    "webSearchQueries": ["weather San Francisco today"],
+                    "searchEntryPoint": {
+                        "renderedContent": '<div>Search results</div>'
+                    },
+                    "groundingChunks": [
+                        {
+                            "web": {
+                                "uri": "https://www.google.com/search?q=weather+in+San+Francisco,+CA",
+                                "title": "Weather information for San Francisco, CA",
+                                "domain": "google.com",
+                            }
+                        }
+                    ],
+                    "groundingSupports": [
+                        {
+                            "segment": {
+                                "startIndex": 0,
+                                "endIndex": 50,
+                                "text": "The weather in San Francisco today is clear.",
+                            },
+                            "groundingChunkIndices": [0],
+                            "confidenceScores": [0.95],
+                        }
+                    ],
+                },
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 15,
+            "totalTokenCount": 25,
+        },
+    }
+
+    # Create iterator and parse chunk
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk_with_annotations)
+
+    # Verify the chunk was parsed correctly
+    assert streaming_chunk.choices is not None
+    assert len(streaming_chunk.choices) == 1
+    
+    # Check that annotations are present in the delta
+    delta = streaming_chunk.choices[0].delta
+    assert hasattr(delta, "annotations")
+    assert delta.annotations is not None
+    assert len(delta.annotations) > 0
+
+    # Verify annotation structure
+    annotation = delta.annotations[0]
+    assert isinstance(annotation, dict)  # ChatCompletionAnnotation is a TypedDict
+    assert annotation["type"] == "url_citation"
+    assert annotation["url_citation"]["start_index"] == 0
+    assert annotation["url_citation"]["end_index"] == 50
+    assert "google.com" in annotation["url_citation"]["url"]
+    assert "Weather information" in annotation["url_citation"]["title"]
+
+
+def test_vertex_ai_annotation_conversion():
+    """
+    Test the conversion of Vertex AI grounding metadata to OpenAI annotations.
+    
+    This test verifies the _convert_grounding_metadata_to_annotations method
+    correctly transforms grounding metadata into the expected format.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Sample grounding metadata as returned by Vertex AI
+    grounding_metadata = {
+        "webSearchQueries": ["weather San Francisco", "current time San Francisco"],
+        "searchEntryPoint": {
+            "renderedContent": '<div>Search interface</div>'
+        },
+        "groundingChunks": [
+            {
+                "web": {
+                    "uri": "https://www.google.com/search?q=weather+in+San+Francisco,+CA",
+                    "title": "Weather information for San Francisco, CA",
+                    "domain": "google.com",
+                }
+            },
+            {
+                "web": {
+                    "uri": "https://www.google.com/search?q=time+in+San+Francisco,+CA",
+                    "title": "Current time in San Francisco, CA",
+                    "domain": "google.com",
+                }
+            }
+        ],
+        "groundingSupports": [
+            {
+                "segment": {
+                    "startIndex": 0,
+                    "endIndex": 30,
+                    "text": "The weather in San Francisco",
+                },
+                "groundingChunkIndices": [0],
+                "confidenceScores": [0.95],
+            },
+            {
+                "segment": {
+                    "startIndex": 32,
+                    "endIndex": 60,
+                    "text": "is currently 72°F",
+                },
+                "groundingChunkIndices": [0],
+                "confidenceScores": [0.88],
+            },
+            {
+                "segment": {
+                    "startIndex": 62,
+                    "endIndex": 85,
+                    "text": "and the time is 2:30 PM",
+                },
+                "groundingChunkIndices": [1],
+                "confidenceScores": [0.92],
+            }
+        ],
+    }
+
+    # Convert grounding metadata to annotations
+    content_text = "The weather in San Francisco is currently 72°F and the time is 2:30 PM"
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [grounding_metadata], content_text
+    )
+
+    # Verify annotations were created
+    assert len(annotations) == 3  # One for each grounding support
+
+    # Check first annotation (weather)
+    weather_annotation = annotations[0]
+    assert weather_annotation["type"] == "url_citation"
+    assert weather_annotation["url_citation"]["start_index"] == 0
+    assert weather_annotation["url_citation"]["end_index"] == 30
+    assert "google.com" in weather_annotation["url_citation"]["url"]
+    assert "Weather information" in weather_annotation["url_citation"]["title"]
+
+    # Check second annotation (weather continuation)
+    weather_cont_annotation = annotations[1]
+    assert weather_cont_annotation["type"] == "url_citation"
+    assert weather_cont_annotation["url_citation"]["start_index"] == 32
+    assert weather_cont_annotation["url_citation"]["end_index"] == 60
+    assert "google.com" in weather_cont_annotation["url_citation"]["url"]
+    assert "Weather information" in weather_cont_annotation["url_citation"]["title"]
+
+    # Check third annotation (time)
+    time_annotation = annotations[2]
+    assert time_annotation["type"] == "url_citation"
+    assert time_annotation["url_citation"]["start_index"] == 62
+    assert time_annotation["url_citation"]["end_index"] == 85
+    assert "google.com" in time_annotation["url_citation"]["url"]
+    assert "Current time" in time_annotation["url_citation"]["title"]
+
+
+def test_vertex_ai_annotation_empty_grounding_metadata():
+    """
+    Test handling of empty or missing grounding metadata.
+    
+    This test ensures the annotation conversion handles edge cases gracefully.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Test with empty grounding metadata
+    empty_metadata = {}
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [empty_metadata], "test content"
+    )
+    assert len(annotations) == 0
+
+    # Test with missing groundingSupports
+    metadata_no_supports = {
+        "webSearchQueries": ["test query"],
+        "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Test"}}],
+    }
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [metadata_no_supports], "test content"
+    )
+    assert len(annotations) == 0
+
+    # Test with empty groundingSupports
+    metadata_empty_supports = {
+        "webSearchQueries": ["test query"],
+        "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Test"}}],
+        "groundingSupports": [],
+    }
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [metadata_empty_supports], "test content"
+    )
+    assert len(annotations) == 0
+
+
+# ==================== Gemini 3 Pro Preview Tests ====================
+
+def test_is_gemini_3_or_newer():
+    """Test the _is_gemini_3_or_newer method for version detection"""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Gemini 3 models
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro-preview") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-flash") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/gemini-3-pro-preview") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-3-pro-preview") == True
+
+    # Gemini 2.5 and older models
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.5-pro") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.5-flash") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.0-flash") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-1.5-pro") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-pro") == False
+
+    # Edge cases
+    assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
+
+
+def test_reasoning_effort_maps_to_thinking_level_gemini_3():
+    """Test that reasoning_effort maps to thinking_level AND includeThoughts for Gemini 3+ models"""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    model = "gemini-3-pro-preview"
+    optional_params = {}
+
+    # Test minimal -> low + includeThoughts=True
+    non_default_params = {"reasoning_effort": "minimal"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test low -> low + includeThoughts=True
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "low"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test medium -> high + includeThoughts=True (medium not available yet)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "medium"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test high -> high + includeThoughts=True
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "high"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test disable -> low + includeThoughts=False (cannot fully disable in Gemini 3)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "disable"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is False
+
+    # Test none -> low + includeThoughts=False (cannot fully disable in Gemini 3)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "none"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is False
+
+
+def test_temperature_default_for_gemini_3():
+    """Test that temperature defaults to 1.0 for Gemini 3+ models when not specified"""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    model = "gemini-3-pro-preview"
+    optional_params = {}
+
+    # No temperature specified
+    non_default_params = {}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+
+    # Should default to 1.0
+    assert "temperature" in result
+    assert result["temperature"] == 1.0
+
+
+def test_media_resolution_from_detail_parameter():
+    """Test that OpenAI's detail parameter is correctly mapped to media_resolution"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+        _map_openai_detail_to_media_resolution,
+    )
+
+    # Test detail -> media_resolution mapping
+    assert _map_openai_detail_to_media_resolution("low") == "low"
+    assert _map_openai_detail_to_media_resolution("high") == "high"
+    assert _map_openai_detail_to_media_resolution("auto") is None
+    assert _map_openai_detail_to_media_resolution(None) is None
+
+    # Test with actual message transformation using base64 image
+    # Using a minimal valid base64-encoded 1x1 PNG
+    base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image,
+                        "detail": "high"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Verify media_resolution is set in the inline_data
+    # Note: Gemini adds a blank text part when there's no text, so we expect 2 parts
+    assert len(contents) == 1
+    assert len(contents[0]["parts"]) >= 1
+    # Find the part with inline_data
+    image_part = None
+    for part in contents[0]["parts"]:
+        if "inline_data" in part:
+            image_part = part
+            break
+    assert image_part is not None
+    assert "inline_data" in image_part
+    # The TypedDict uses snake_case internally, but mediaResolution is camelCase in the dict
+    assert "mediaResolution" in image_part["inline_data"]
+    assert image_part["inline_data"]["mediaResolution"] == "high"
+
+
+def test_media_resolution_low_detail():
+    """Test that detail='low' maps to media_resolution='low'"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    # Using a minimal valid base64-encoded 1x1 PNG
+    base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image,
+                        "detail": "low"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Find the part with inline_data
+    image_part = None
+    for part in contents[0]["parts"]:
+        if "inline_data" in part:
+            image_part = part
+            break
+    assert image_part is not None
+    assert "inline_data" in image_part
+    assert image_part["inline_data"]["mediaResolution"] == "low"
+
+
+def test_media_resolution_auto_detail():
+    """Test that detail='auto' or None doesn't set media_resolution"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    # Using a minimal valid base64-encoded 1x1 PNG
+    base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    
+    # Test with auto
+    messages_auto = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image,
+                        "detail": "auto"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages_auto)
+    # Find the part with inline_data
+    image_part = None
+    for part in contents[0]["parts"]:
+        if "inline_data" in part:
+            image_part = part
+            break
+    assert image_part is not None
+    assert "inline_data" in image_part
+    # mediaResolution should not be set for auto
+    assert "mediaResolution" not in image_part["inline_data"] or image_part["inline_data"].get("mediaResolution") is None
+
+    # Test with None
+    messages_none = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages_none)
+    # Find the part with inline_data
+    image_part = None
+    for part in contents[0]["parts"]:
+        if "inline_data" in part:
+            image_part = part
+            break
+    assert image_part is not None
+    assert "inline_data" in image_part
+    # mediaResolution should not be set
+    assert "mediaResolution" not in image_part["inline_data"] or image_part["inline_data"].get("mediaResolution") is None
+
+
+def test_media_resolution_per_part():
+    """Test that different images can have different media_resolution values"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    # Using minimal valid base64-encoded 1x1 PNGs
+    base64_image1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    base64_image2 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image1,
+                        "detail": "low"
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "Compare these images"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image2,
+                        "detail": "high"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Should have one content with multiple parts
+    assert len(contents) == 1
+    assert len(contents[0]["parts"]) == 3  # image1, text, image2
+    
+    # First image should have low resolution (first part is the image)
+    image1_part = contents[0]["parts"][0]
+    assert "inline_data" in image1_part
+    assert image1_part["inline_data"]["mediaResolution"] == "low"
+    
+    # Second image should have high resolution (third part is the second image)
+    image2_part = contents[0]["parts"][2]
+    assert "inline_data" in image2_part
+    assert image2_part["inline_data"]["mediaResolution"] == "high"
+
+
+def test_gemini_3_image_models_no_thinking_config():
+    """
+    Test that Gemini 3 image models do NOT receive automatic thinkingConfig.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/17013
+    gemini-3-pro-image-preview does not support thinking_level parameter
+    and returns BadRequestError: "Thinking level is not supported for this model"
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Test gemini-3-pro-image-preview (the specific model from the bug report)
+    model = "gemini-3-pro-image-preview"
+    optional_params = {}
+    non_default_params = {}
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+
+    # Should NOT have thinkingConfig automatically added
+    assert "thinkingConfig" not in result
+    # But should still get temperature=1.0 for Gemini 3
+    assert result["temperature"] == 1.0
+
+
+def test_gemini_3_text_models_get_thinking_config():
+    """
+    Test that Gemini 3 text models DO receive automatic thinkingConfig.
+    This ensures we didn't break the existing behavior for non-image models.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Test gemini-3-pro-preview (text model, should get thinking)
+    model = "gemini-3-pro-preview"
+    optional_params = {}
+    non_default_params = {}
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+
+    # Should have thinkingConfig automatically added
+    assert "thinkingConfig" in result
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["temperature"] == 1.0
+
+
+def test_gemini_image_models_excluded_from_thinking():
+    """
+    Test that any Gemini model with 'image' in the name is excluded from thinking config.
+    This covers current and future image models.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Test various image model patterns
+    image_models = [
+        "gemini-3-pro-image-preview",
+        "gemini-3-pro-image-generation",
+        "gemini-3-flash-image-preview",
+        "gemini/gemini-3-image-edit",
+    ]
+
+    for model in image_models:
+        optional_params = {}
+        non_default_params = {}
+
+        result = v.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False,
+        )
+
+        # None of these should have thinkingConfig
+        assert "thinkingConfig" not in result, f"Model {model} should not have thinkingConfig"
+

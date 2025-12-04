@@ -26,8 +26,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    handle_messages_with_content_list_to_str_conversion,
-    strip_name_from_messages,
+    strip_name_from_message
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
@@ -44,6 +43,7 @@ from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
+    ChatCompletionToolParam,
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -170,12 +170,20 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         if tool is None:
             return None
 
+        # Build DatabricksFunction explicitly to avoid parameter conflicts
+        function_params: DatabricksFunction = {
+            "name": tool["name"],
+            "parameters": cast(dict, tool.get("input_schema") or {})
+        }
+        
+        # Only add description if it exists
+        description = tool.get("description")
+        if description is not None:
+            function_params["description"] = cast(Union[dict, str], description)
+
         return DatabricksTool(
             type="function",
-            function=DatabricksFunction(
-                name=tool["name"],
-                parameters=cast(dict, tool.get("input_schema") or {}),
-            ),
+            function=function_params,
         )
 
     def _map_openai_to_dbrx_tool(self, model: str, tools: List) -> List[DatabricksTool]:
@@ -209,6 +217,21 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         databricks_tool = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
+
+    def remove_cache_control_flag_from_messages_and_tools(
+        self,
+        model: str,  # allows overrides to selectively run this
+        messages: List[AllMessageValues],
+        tools: Optional[List["ChatCompletionToolParam"]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        """
+        Override the parent class method to preserve cache_control for models on Databricks.
+        Databricks supports Anthropic-style cache control for Claude models.
+        Databricks ignores the cache_control flag with other models.
+        """
+        # TODO: Think about how to best design the request transformation so that 
+        # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
+        return messages, tools
 
     def map_openai_params(
         self,
@@ -301,7 +324,6 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         Databricks does not support:
-        - content in list format.
         - 'name' in user message.
         """
         new_messages = []
@@ -310,9 +332,11 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 _message = message.model_dump(exclude_none=True)
             else:
                 _message = message
+            _message = strip_name_from_message(_message, allowed_name_roles=["user"])
+            # Move message-level cache_control into a content block when content is a string.
+            if "cache_control" in _message and isinstance(_message.get("content"), str):
+                _message = self._move_cache_control_into_string_content_block(_message)
             new_messages.append(_message)
-        new_messages = handle_messages_with_content_list_to_str_conversion(new_messages)
-        new_messages = strip_name_from_messages(new_messages)
 
         if is_async:
             return super()._transform_messages(
@@ -322,6 +346,32 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             return super()._transform_messages(
                 messages=new_messages, model=model, is_async=cast(Literal[False], False)
             )
+
+    def _move_cache_control_into_string_content_block(self, message: AllMessageValues) -> AllMessageValues:
+        """
+        Moves message-level cache_control into a content block when content is a string.
+        
+        Transforms:
+            {"role": "user", "content": "text", "cache_control": {...}}
+        Into:
+            {"role": "user", "content": [{"type": "text", "text": "text", "cache_control": {...}}]}
+        
+        This is required for Anthropic's prompt caching API when cache_control is specified
+        at the message level but content is a simple string (not already an array of content blocks).
+        """
+        content = message.get("content")
+        # Create new message with cache_control moved into content block
+        transformed_message = cast(dict[str, Any], message.copy())
+        cache_control = transformed_message.pop("cache_control")
+        transformed_message["content"] = [
+            {
+                "type": "text",
+                "text": content,
+                "cache_control": cache_control,
+            }
+        ]
+        return cast(AllMessageValues, transformed_message)
+        
 
     @staticmethod
     def extract_content_str(
@@ -334,8 +384,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         elif isinstance(content, list):
             content_str = ""
             for item in content:
-                if item["type"] == "text":
-                    content_str += item["text"]
+                if item.get("type") == "text":
+                    text_value = item.get("text", "")
+                    content_str += str(text_value) if text_value is not None else ""
             return content_str
         else:
             raise Exception(f"Unsupported content type: {type(content)}")
@@ -364,20 +415,41 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         reasoning_content: Optional[str] = None
         if isinstance(content, list):
             for item in content:
-                if item["type"] == "reasoning":
-                    for sum in item["summary"]:
-                        if reasoning_content is None:
-                            reasoning_content = ""
-                        reasoning_content += sum["text"]
-                        thinking_block = ChatCompletionThinkingBlock(
-                            type="thinking",
-                            thinking=sum.get("text", ""),
-                            signature=sum.get("signature", ""),
-                        )
-                        if thinking_blocks is None:
-                            thinking_blocks = []
-                        thinking_blocks.append(thinking_block)
+                if item.get("type") == "reasoning":
+                    summary_list = item.get("summary", [])
+                    if isinstance(summary_list, list):
+                        for sum in summary_list:
+                            if reasoning_content is None:
+                                reasoning_content = ""
+                            reasoning_content += sum["text"]
+                            thinking_block = ChatCompletionThinkingBlock(
+                                type="thinking",
+                                thinking=sum.get("text", ""),
+                                signature=sum.get("signature", ""),
+                            )
+                            if thinking_blocks is None:
+                                thinking_blocks = []
+                            thinking_blocks.append(thinking_block)
         return reasoning_content, thinking_blocks
+
+    @staticmethod
+    def extract_citations(
+        content: Optional[AllDatabricksContentValues],
+    ) -> Optional[List[Any]]:
+        if content is None:
+            return None
+        citations = []
+        if isinstance(content, list):
+            for item in content:
+                text = item.get("text", None)
+                if citations_item := item.get("citations"):
+                    citations.append(
+                        [
+                            {**citation, "supported_text": text}
+                            for citation in citations_item
+                        ]
+                    )
+        return citations or None
 
     def _transform_dbrx_choices(
         self, choices: List[DatabricksChoice], json_mode: Optional[bool] = None
@@ -427,12 +499,19 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                     choice["message"].get("content")
                 )
 
+                citations = DatabricksConfig.extract_citations(
+                    choice["message"].get("content")
+                )
+
                 translated_message = Message(
                     role="assistant",
                     content=content_str,
                     reasoning_content=reasoning_content,
                     thinking_blocks=thinking_blocks,
                     tool_calls=choice["message"].get("tool_calls"),
+                    provider_specific_fields={"citations": citations}
+                    if citations is not None
+                    else None,
                 )
 
             if finish_reason is None:
@@ -561,6 +640,17 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     for _tc in tool_calls:
                         if _tc.get("function", {}).get("arguments") == "{}":
                             _tc["function"]["arguments"] = ""  # avoid invalid json
+                if isinstance(choice["delta"].get("content"), list) and (
+                    content := choice["delta"]["content"]
+                ):
+                    if citations := content[0].get("citations"):
+                        # TODO: Databricks delta does not include supported text or chunk type.
+                        # Add either here once Databricks supports it to enable citation linkage.
+                        choice["delta"].setdefault("provider_specific_fields", {})[
+                            "citation"
+                        ] = citations[
+                            0
+                        ]  # Databricks Content item always has citation as a list of list
                 # extract the content str
                 content_str = DatabricksConfig.extract_content_str(
                     choice["delta"].get("content")
