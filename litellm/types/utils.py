@@ -341,6 +341,12 @@ class CallTypes(str, Enum):
     agenerate_content_stream = "agenerate_content_stream"
 
     #########################################################
+    # OCR Call Types
+    #########################################################
+    ocr = "ocr"
+    aocr = "aocr"
+
+    #########################################################
     # MCP Call Types
     #########################################################
     call_mcp_tool = "call_mcp_tool"
