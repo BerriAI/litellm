@@ -345,6 +345,12 @@ class CallTypes(str, Enum):
     #########################################################
     call_mcp_tool = "call_mcp_tool"
 
+    #########################################################
+    # A2A Call Types
+    #########################################################
+    asend_message = "asend_message"
+    send_message = "send_message"
+
 
 CallTypesLiteral = Literal[
     "embedding",
@@ -397,6 +403,8 @@ CallTypesLiteral = Literal[
     "vector_store_file_delete",
     "avector_store_file_delete",
     "call_mcp_tool",
+    "asend_message",
+    "send_message",
     "aresponses",
     "responses",
 ]
@@ -712,6 +720,8 @@ API_ROUTE_TO_CALL_TYPES = {
     ],
     # MCP (Model Context Protocol)
     "/mcp/call_tool": [CallTypes.call_mcp_tool],
+    # A2A (Agent-to-Agent)
+    "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
         CallTypes.llm_passthrough_route,
@@ -2981,6 +2991,7 @@ class LlmProviders(str, Enum):
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
     LEMONADE = "lemonade"
+    A2A_AGENT = "a2a_agent"
 
 
 # Create a set of all provider values for quick lookup
