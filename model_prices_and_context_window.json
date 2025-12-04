@@ -27677,7 +27677,7 @@
         }
     },
     "google.gemma-3-4b-it": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 4e-08,
         "output_cost_per_token": 8e-08,
@@ -27692,7 +27692,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "google.gemma-3-12b-it": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 9e-08,
         "output_cost_per_token": 2.9e-07,
@@ -27707,7 +27707,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "google.gemma-3-27b-it": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 2.3e-07,
         "output_cost_per_token": 3.8e-07,
@@ -27721,7 +27721,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "moonshot.kimi-k2-thinking": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 6e-07,
         "output_cost_per_token": 2.5e-06,
@@ -27734,7 +27734,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "minimax.minimax-m2": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
@@ -27747,7 +27747,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "mistral.magistral-small-2509": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 1.5e-06,
@@ -27761,7 +27761,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "mistral.voxtral-mini-3b-2507": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 4e-08,
         "output_cost_per_token": 4e-08,
@@ -27775,7 +27775,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "mistral.voxtral-small-24b-2507": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 3e-07,
@@ -27789,7 +27789,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "mistral.ministral-3-3b-instruct": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 1e-07,
@@ -27800,7 +27800,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "mistral.ministral-3-8b-instruct": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 1.5e-07,
@@ -27812,7 +27812,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "mistral.ministral-3-14b-instruct": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2e-07,
@@ -27824,7 +27824,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "mistral.mistral-large-3-675b-instruct": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 1.5e-06,
@@ -27838,7 +27838,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "nvidia.nemotron-nano-9b-v2": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 6e-08,
         "output_cost_per_token": 2.3e-07,
@@ -27850,7 +27850,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "nvidia.nemotron-nano-12b-v2": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 6e-07,
@@ -27865,7 +27865,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "openai.gpt-oss-safeguard-20b": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 7e-08,
         "output_cost_per_token": 2e-07,
@@ -27876,7 +27876,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "openai.gpt-oss-safeguard-120b": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 6e-07,
@@ -27887,7 +27887,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "qwen.qwen3-next-80b-a3b": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 1.2e-06,
@@ -27898,7 +27898,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "qwen.qwen3-vl-235b-a22b": {
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "input_cost_per_token": 5.3e-07,
         "output_cost_per_token": 2.66e-06,
