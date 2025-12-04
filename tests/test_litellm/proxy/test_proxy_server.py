@@ -71,6 +71,58 @@ def client_no_auth():
     return TestClient(app)
 
 
+def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
+    mock_login_result = {"user_id": "test-user"}
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(return_value=mock_login_result)
+    mock_create_ui_token_object = MagicMock(return_value={"user_id": "test-user"})
+    mock_jwt_encode = MagicMock(return_value="signed-token")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        mock_create_ui_token_object,
+    )
+    monkeypatch.setattr("jwt.encode", mock_jwt_encode)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "secret"},
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.json()
+        == {"redirect_url": "http://testserver/ui/?login=success"}
+    )
+    assert response.cookies.get("token") == "signed-token"
+
+    mock_authenticate_user.assert_awaited_once_with(
+        username="alice",
+        password="secret",
+        master_key="test-master-key",
+        prisma_client=mock_prisma_client,
+    )
+    mock_create_ui_token_object.assert_called_once_with(
+        login_result=mock_login_result,
+        general_settings={},
+        premium_user=False,
+    )
+    mock_jwt_encode.assert_called_once_with(
+        {"user_id": "test-user"},
+        "test-master-key",
+        algorithm="HS256",
+    )
+
+
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     """
