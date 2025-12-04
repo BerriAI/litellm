@@ -568,3 +568,77 @@ data: {"message":{"role":"assistant","content":[{"text":"SSE response"}]}}
     assert result.usage.completion_tokens == 10
     assert result.usage.total_tokens == 30
 
+
+def test_agentcore_synchronous_non_streaming_response():
+    """
+    Test that synchronous (non-streaming) AgentCore calls still work correctly
+    after streaming simplification changes.
+
+    This test verifies:
+    1. Synchronous completion calls work (stream=False or no stream param)
+    2. Response is properly parsed and returned as ModelResponse
+    3. Content is extracted correctly
+    4. Usage data is calculated when not provided by API
+
+    This is a regression test for the streaming simplification changes
+    to ensure we didn't break the non-streaming code path.
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    litellm._turn_on_debug()
+    client = HTTPHandler()
+
+    # Mock a JSON response (typical for synchronous AgentCore calls)
+    mock_json_response = {
+        "result": {
+            "role": "assistant",
+            "content": [{"text": "This is a synchronous response from AgentCore."}]
+        }
+    }
+
+    # Create a mock response object
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = mock_json_response
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        # Make a synchronous (non-streaming) completion call
+        response = litellm.completion(
+            model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Test synchronous response",
+                }
+            ],
+            stream=False,  # Explicitly disable streaming
+            client=client,
+        )
+
+        # Verify the response structure
+        assert response is not None
+        assert hasattr(response, "choices")
+        assert len(response.choices) > 0
+
+        # Verify content
+        message = response.choices[0].message
+        assert message is not None
+        assert message.content == "This is a synchronous response from AgentCore."
+        assert message.role == "assistant"
+
+        # Verify completion metadata
+        assert response.choices[0].finish_reason == "stop"
+        assert response.choices[0].index == 0
+
+        # Verify usage data exists (either from API or calculated)
+        assert hasattr(response, "usage")
+        assert response.usage is not None
+        assert response.usage.prompt_tokens > 0
+        assert response.usage.completion_tokens > 0
+        assert response.usage.total_tokens > 0
+
+        print(f"Synchronous response: {response}")
+        print(f"Content: {message.content}")
+        print(f"Usage: prompt={response.usage.prompt_tokens}, completion={response.usage.completion_tokens}, total={response.usage.total_tokens}")
+
