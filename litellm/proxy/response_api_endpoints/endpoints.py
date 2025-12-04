@@ -11,7 +11,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 router = APIRouter()
 
 
-async def _background_streaming_task(
+async def _background_streaming_task( # noqa: PLR0915
     polling_id: str,
     data: dict,
     polling_handler,
