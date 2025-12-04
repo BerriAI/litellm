@@ -61,7 +61,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "push" ]]; then
             echo "mode=push" >> $GITHUB_OUTPUT
 
-            # Get the head commit info using git show
+            # Get the head commit info
             HEAD_SHA=$(git rev-parse HEAD)
             HEAD_COMMIT_TITLE=$(echo "${COMMIT_MESSAGE}" | head -n1)
             echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
@@ -70,43 +70,53 @@ jobs:
             echo "Mode: Push"
             echo "Head commit: ${HEAD_COMMIT_TITLE}"
 
-            # Get details of the pushed commit using git show
-            echo "::group::Commit details (git show)"
-            COMMIT_DETAILS=$(git show --stat HEAD)
-            echo "${COMMIT_DETAILS}"
-            echo "::endgroup::"
-
-            # Get the full commit message
-            echo "::group::Full commit message"
-            COMMIT_MESSAGE_FULL=$(git log -1 --format="%B" HEAD)
-            echo "${COMMIT_MESSAGE_FULL}"
-            echo "::endgroup::"
-
-            # Get files changed in this commit
-            echo "::group::Files changed"
-            FILES_CHANGED=$(git show --name-only --format="" HEAD)
-            echo "${FILES_CHANGED}"
-            echo "::endgroup::"
-
             # Check if this is a merge commit (PR merge)
             PARENT_COUNT=$(git rev-list --count HEAD^@ 2>/dev/null || echo "1")
             if [[ "$PARENT_COUNT" -gt 1 ]]; then
               IS_MERGE="true"
-              # Get the PR that was merged (most recent)
-              RECENT_PR=$(gh pr list --state merged --base carto/main --limit 1 \
-                --json number,title,author,url \
-                --jq '.[0] | "PR #\(.number): \(.title) by @\(.author.login)\nURL: \(.url)"' 2>/dev/null || echo "")
+              echo "is_merge=true" >> $GITHUB_OUTPUT
+
+              # Extract PR number from merge commit message (e.g., "Merge pull request #123")
+              PR_NUMBER=$(echo "${COMMIT_MESSAGE}" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || echo "")
+
+              if [[ -n "$PR_NUMBER" ]]; then
+                echo "pr_number=${PR_NUMBER}" >> $GITHUB_OUTPUT
+                echo "Detected PR merge: #${PR_NUMBER}"
+
+                # Get full PR details - this is the BEST source for changelog
+                echo "::group::PR details (gh pr view)"
+                gh pr view "$PR_NUMBER" --json number,title,body,author,files,labels,mergedAt \
+                  > /tmp/pr_details.json 2>/dev/null || echo "{}" > /tmp/pr_details.json
+
+                # Extract individual fields for easy reading
+                gh pr view "$PR_NUMBER" --json title --jq '.title' > /tmp/pr_title.txt 2>/dev/null || echo "${HEAD_COMMIT_TITLE}" > /tmp/pr_title.txt
+                gh pr view "$PR_NUMBER" --json body --jq '.body // ""' > /tmp/pr_body.txt 2>/dev/null || echo "" > /tmp/pr_body.txt
+                gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > /tmp/pr_files.txt 2>/dev/null || echo "" > /tmp/pr_files.txt
+                gh pr view "$PR_NUMBER" --json author --jq '.author.login' > /tmp/pr_author.txt 2>/dev/null || echo "" > /tmp/pr_author.txt
+                gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' > /tmp/pr_labels.txt 2>/dev/null || echo "" > /tmp/pr_labels.txt
+
+                echo "PR Title: $(cat /tmp/pr_title.txt)"
+                echo "PR Author: $(cat /tmp/pr_author.txt)"
+                echo "Files changed: $(wc -l < /tmp/pr_files.txt | tr -d ' ')"
+                echo "::endgroup::"
+              else
+                echo "Could not extract PR number from merge commit"
+                echo "pr_number=" >> $GITHUB_OUTPUT
+              fi
             else
               IS_MERGE="false"
-              RECENT_PR=""
-            fi
-            echo "is_merge=${IS_MERGE}" >> $GITHUB_OUTPUT
+              echo "is_merge=false" >> $GITHUB_OUTPUT
+              echo "pr_number=" >> $GITHUB_OUTPUT
 
-            # Save to files for Claude to read
-            echo "${COMMIT_DETAILS}" > /tmp/commit_details.txt
-            echo "${COMMIT_MESSAGE_FULL}" > /tmp/commit_message.txt
-            echo "${FILES_CHANGED}" > /tmp/files_changed.txt
-            echo "${RECENT_PR}" > /tmp/recent_pr.txt
+              # Direct push - use git show for details
+              echo "::group::Commit details (git show)"
+              git show --stat HEAD > /tmp/commit_details.txt
+              git log -1 --format="%B" HEAD > /tmp/commit_message.txt
+              git show --name-only --format="" HEAD > /tmp/files_changed.txt
+
+              echo "$(cat /tmp/commit_details.txt)"
+              echo "::endgroup::"
+            fi
 
           else
             echo "mode=${MANUAL_MODE}" >> $GITHUB_OUTPUT
@@ -163,13 +173,20 @@ jobs:
             - **Output file:** Create `slack_message.txt`
 
             ## Data Files (already gathered)
-            The workflow has already gathered the data into files. Read them:
+            The workflow has already gathered the data into files. Read them based on mode:
 
-            **Push mode files:**
+            **For PR merges (is_merge=true with pr_number):**
+            - `/tmp/pr_details.json` - Full PR details as JSON
+            - `/tmp/pr_title.txt` - PR title
+            - `/tmp/pr_body.txt` - PR description/body (rich context!)
+            - `/tmp/pr_files.txt` - Files changed (one per line)
+            - `/tmp/pr_author.txt` - PR author username
+            - `/tmp/pr_labels.txt` - PR labels (if any)
+
+            **For direct pushes (is_merge=false):**
             - `/tmp/commit_details.txt` - Output of `git show --stat HEAD`
             - `/tmp/commit_message.txt` - Full commit message
             - `/tmp/files_changed.txt` - Files changed in this commit
-            - `/tmp/recent_pr.txt` - PR info if this is a merge commit
 
             **Repo status mode files:**
             - `/tmp/carto_commits.txt` - Recent CARTO-authored commits
@@ -183,23 +200,47 @@ jobs:
             **Head Commit:** ${{ steps.context.outputs.head_commit_title }}
             **Commit SHA:** ${{ steps.context.outputs.head_sha }}
             **Is Merge:** ${{ steps.context.outputs.is_merge }}
+            **PR Number:** ${{ steps.context.outputs.pr_number }}
 
             ### Task:
-            1. Read: `/tmp/commit_details.txt`, `/tmp/commit_message.txt`, `/tmp/files_changed.txt`
-            2. If is_merge=true, also read `/tmp/recent_pr.txt` for PR details
 
-            3. Determine the type from the commit message:
-               - **Upstream Sync**: "sync:", "upstream", or merge from upstream
+            #### If is_merge=true AND pr_number is set (PR merge):
+            1. Read: `/tmp/pr_title.txt`, `/tmp/pr_body.txt`, `/tmp/pr_files.txt`, `/tmp/pr_author.txt`
+            2. Use PR body to understand what the PR does (it has the best context!)
+            3. Determine type from PR title:
+               - **Upstream Sync**: "sync:", "upstream", merge from upstream
                - **Feature**: "feat:", "feature:"
                - **Bug Fix**: "fix:", "bugfix:"
-               - **Infrastructure**: Changes to .github/, docker/
+               - **Infrastructure**: Changes to .github/, docker/, CI/CD
                - **Chore**: Other
 
             4. Write to `slack_message.txt`:
                ```
                :clipboard: *LiteLLM Fork Update*
 
-               *${{ steps.context.outputs.head_commit_title }}*
+               *PR #${{ steps.context.outputs.pr_number }}:* [PR title from /tmp/pr_title.txt]
+
+               *Type:* [type]
+               *Author:* @[author from /tmp/pr_author.txt]
+
+               *Summary:*
+               [1-2 sentence summary based on PR body - extract the key purpose]
+
+               *Key Changes:*
+               • [Most important files from /tmp/pr_files.txt, max 5]
+
+               :link: <https://github.com/${{ github.repository }}/pull/${{ steps.context.outputs.pr_number }}|View PR>
+               ```
+
+            #### If is_merge=false (direct push):
+            1. Read: `/tmp/commit_details.txt`, `/tmp/commit_message.txt`, `/tmp/files_changed.txt`
+            2. Determine type from commit message (same categories as above)
+
+            3. Write to `slack_message.txt`:
+               ```
+               :clipboard: *LiteLLM Fork Update*
+
+               *Commit:* ${{ steps.context.outputs.head_commit_title }}
 
                *Type:* [type]
 
@@ -207,7 +248,7 @@ jobs:
                [1-2 sentence description based on commit message]
 
                *Files Changed:*
-               • [List key files, max 5]
+               • [Key files from /tmp/files_changed.txt, max 5]
 
                :link: <https://github.com/${{ github.repository }}/commit/${{ steps.context.outputs.head_sha }}|View Commit>
                ```
