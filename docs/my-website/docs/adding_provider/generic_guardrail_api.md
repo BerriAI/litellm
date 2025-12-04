@@ -21,6 +21,20 @@ The **Generic Guardrail API** lets you integrate with LiteLLM **instantly** by i
 5. **Custom Parameters** - Pass provider-specific params via config
 6. **Full Control** - You own and maintain your guardrail API
 
+## Supported Endpoints
+
+The Generic Guardrail API works with the following LiteLLM endpoints:
+
+- `/v1/chat/completions` - OpenAI Chat Completions
+- `/v1/completions` - OpenAI Text Completions
+- `/v1/responses` - OpenAI Responses API
+- `/v1/images/generations` - OpenAI Image Generation
+- `/v1/audio/transcriptions` - OpenAI Audio Transcriptions
+- `/v1/audio/speech` - OpenAI Text-to-Speech
+- `/v1/messages` - Anthropic Messages
+- `/v1/rerank` - Cohere Rerank
+- Pass-through endpoints
+
 ## How It Works
 
 1. LiteLLM extracts text and images from any request (chat messages, embeddings, image prompts, etc.)
@@ -125,11 +139,7 @@ The `tools` parameter provides information about available function/tool definit
 
 **Limitations:**
 - **Input only:** Tools are only passed for `input_type="request"` (pre-call guardrails). Output/response guardrails do not currently receive tool information.
-- **Supported endpoints:** The `tools` parameter is currently supported on the following endpoints:
-  - `/chat/completions` - calls made to LiteLLM Proxy via `/v1/chat/completions`
-  - `/responses` - calls made to LiteLLM Proxy via `/v1/responses` (tools are automatically transformed from Responses API format to Chat Completions format)
-  - `/v1/messages` - calls made to LiteLLM Proxy via `/v1/messages`
-  - Other endpoints (embeddings, image generation, etc.) do not have tool support
+- **Supported endpoints:** The `tools` parameter is supported on: `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`. Other endpoints do not have tool support.
 
 **Use cases:**
 - Enforce tool permission policies (e.g., only allow certain users/teams to access specific tools)
