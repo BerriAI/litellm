@@ -39,7 +39,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Determine mode and context
+      - name: Determine mode and gather data
         id: context
         env:
           MANUAL_MODE: ${{ inputs.mode }}
@@ -47,38 +47,99 @@ jobs:
           AFTER_SHA: ${{ github.event.after }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           PUSHER: ${{ github.event.pusher.name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           echo "::group::Determining context"
 
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "mode=push" >> $GITHUB_OUTPUT
-            echo "before_sha=${BEFORE_SHA}" >> $GITHUB_OUTPUT
-            echo "after_sha=${AFTER_SHA}" >> $GITHUB_OUTPUT
-            echo "pusher=${PUSHER}" >> $GITHUB_OUTPUT
-
-            # Get commit count in push
-            COMMIT_COUNT=$(git rev-list --count ${BEFORE_SHA}..${AFTER_SHA} 2>/dev/null || echo "1")
-            echo "commit_count=${COMMIT_COUNT}" >> $GITHUB_OUTPUT
-
-            # Get the head commit message (first line)
-            HEAD_COMMIT_TITLE=$(echo "${COMMIT_MESSAGE}" | head -n1)
-            echo "head_commit_title=${HEAD_COMMIT_TITLE}" >> $GITHUB_OUTPUT
-
-            echo "Mode: Push (${COMMIT_COUNT} commits)"
-            echo "Head commit: ${HEAD_COMMIT_TITLE}"
-          else
-            echo "mode=${MANUAL_MODE}" >> $GITHUB_OUTPUT
-            echo "Mode: Manual (${MANUAL_MODE})"
-          fi
-
           # Get current versions
           UPSTREAM_VERSION=$(grep -E "^version\s*=" pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
           LATEST_TAG=$(git tag -l "v*-carto.*" | sort -V | tail -n 1 || echo "none")
-
           echo "upstream_version=${UPSTREAM_VERSION}" >> $GITHUB_OUTPUT
           echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
-          echo "Upstream: ${UPSTREAM_VERSION}, Latest tag: ${LATEST_TAG}"
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "mode=push" >> $GITHUB_OUTPUT
+
+            # Get the head commit info using git show
+            HEAD_SHA=$(git rev-parse HEAD)
+            HEAD_COMMIT_TITLE=$(echo "${COMMIT_MESSAGE}" | head -n1)
+            echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
+            echo "head_commit_title=${HEAD_COMMIT_TITLE}" >> $GITHUB_OUTPUT
+
+            echo "Mode: Push"
+            echo "Head commit: ${HEAD_COMMIT_TITLE}"
+
+            # Get details of the pushed commit using git show
+            echo "::group::Commit details (git show)"
+            COMMIT_DETAILS=$(git show --stat HEAD)
+            echo "${COMMIT_DETAILS}"
+            echo "::endgroup::"
+
+            # Get the full commit message
+            echo "::group::Full commit message"
+            COMMIT_MESSAGE_FULL=$(git log -1 --format="%B" HEAD)
+            echo "${COMMIT_MESSAGE_FULL}"
+            echo "::endgroup::"
+
+            # Get files changed in this commit
+            echo "::group::Files changed"
+            FILES_CHANGED=$(git show --name-only --format="" HEAD)
+            echo "${FILES_CHANGED}"
+            echo "::endgroup::"
+
+            # Check if this is a merge commit (PR merge)
+            PARENT_COUNT=$(git rev-list --count HEAD^@ 2>/dev/null || echo "1")
+            if [[ "$PARENT_COUNT" -gt 1 ]]; then
+              IS_MERGE="true"
+              # Get the PR that was merged (most recent)
+              RECENT_PR=$(gh pr list --state merged --base carto/main --limit 1 \
+                --json number,title,author,url \
+                --jq '.[0] | "PR #\(.number): \(.title) by @\(.author.login)\nURL: \(.url)"' 2>/dev/null || echo "")
+            else
+              IS_MERGE="false"
+              RECENT_PR=""
+            fi
+            echo "is_merge=${IS_MERGE}" >> $GITHUB_OUTPUT
+
+            # Save to files for Claude to read
+            echo "${COMMIT_DETAILS}" > /tmp/commit_details.txt
+            echo "${COMMIT_MESSAGE_FULL}" > /tmp/commit_message.txt
+            echo "${FILES_CHANGED}" > /tmp/files_changed.txt
+            echo "${RECENT_PR}" > /tmp/recent_pr.txt
+
+          else
+            echo "mode=${MANUAL_MODE}" >> $GITHUB_OUTPUT
+            echo "Mode: Manual (${MANUAL_MODE})"
+
+            # For repo_status: get recent CARTO commits
+            echo "::group::Recent CARTO commits"
+            CARTO_COMMITS=$(git log HEAD \
+              --author="@carto.com" --author="@cartodb.com" \
+              --oneline --no-merges -20 2>/dev/null | \
+              grep -vE "(sync:|Merge|merge upstream)" || echo "No CARTO commits found")
+            echo "${CARTO_COMMITS}"
+            echo "::endgroup::"
+
+            # Get recent merged PRs
+            echo "::group::Recent merged PRs"
+            RECENT_PRS=$(gh pr list --state merged --base carto/main --limit 10 \
+              --json number,title,author,mergedAt \
+              --jq '.[] | "• #\(.number): \(.title) (@\(.author.login), \(.mergedAt | split("T")[0]))"' 2>/dev/null || echo "")
+            echo "${RECENT_PRS}"
+            echo "::endgroup::"
+
+            # Get releases
+            echo "::group::Recent releases"
+            RELEASES=$(gh release list --limit 5 2>/dev/null || echo "No releases yet")
+            echo "${RELEASES}"
+            echo "::endgroup::"
+
+            # Save to files for Claude to read
+            echo "${CARTO_COMMITS}" > /tmp/carto_commits.txt
+            echo "${RECENT_PRS}" > /tmp/recent_prs.txt
+            echo "${RELEASES}" > /tmp/releases.txt
+          fi
 
           echo "::endgroup::"
 
@@ -101,53 +162,54 @@ jobs:
             - **Latest CARTO Tag:** ${{ steps.context.outputs.latest_tag }}
             - **Output file:** Create `slack_message.txt`
 
+            ## Data Files (already gathered)
+            The workflow has already gathered the data into files. Read them:
+
+            **Push mode files:**
+            - `/tmp/commit_details.txt` - Output of `git show --stat HEAD`
+            - `/tmp/commit_message.txt` - Full commit message
+            - `/tmp/files_changed.txt` - Files changed in this commit
+            - `/tmp/recent_pr.txt` - PR info if this is a merge commit
+
+            **Repo status mode files:**
+            - `/tmp/carto_commits.txt` - Recent CARTO-authored commits
+            - `/tmp/recent_prs.txt` - Recent merged PRs
+            - `/tmp/releases.txt` - Recent releases
+
             ---
 
             ## IF MODE IS "push":
 
-            Push Details:
-            - **Commits:** ${{ steps.context.outputs.commit_count }} commit(s)
-            - **Before SHA:** ${{ steps.context.outputs.before_sha }}
-            - **After SHA:** ${{ steps.context.outputs.after_sha }}
-            - **Pusher:** ${{ steps.context.outputs.pusher }}
-            - **Head Commit:** ${{ steps.context.outputs.head_commit_title }}
+            **Head Commit:** ${{ steps.context.outputs.head_commit_title }}
+            **Commit SHA:** ${{ steps.context.outputs.head_sha }}
+            **Is Merge:** ${{ steps.context.outputs.is_merge }}
 
             ### Task:
-            1. Get the commits in this push:
-               ```bash
-               git log --oneline ${{ steps.context.outputs.before_sha }}..${{ steps.context.outputs.after_sha }}
-               ```
+            1. Read: `/tmp/commit_details.txt`, `/tmp/commit_message.txt`, `/tmp/files_changed.txt`
+            2. If is_merge=true, also read `/tmp/recent_pr.txt` for PR details
 
-            2. Get files changed:
-               ```bash
-               git diff --name-only ${{ steps.context.outputs.before_sha }}..${{ steps.context.outputs.after_sha }} | head -20
-               ```
+            3. Determine the type from the commit message:
+               - **Upstream Sync**: "sync:", "upstream", or merge from upstream
+               - **Feature**: "feat:", "feature:"
+               - **Bug Fix**: "fix:", "bugfix:"
+               - **Infrastructure**: Changes to .github/, docker/
+               - **Chore**: Other
 
-            3. Analyze commits to determine the type:
-               - **Upstream Sync**: Commits with "sync:", "upstream", merge commits from upstream
-               - **Feature**: Commits with "feat:", "feature:"
-               - **Bug Fix**: Commits with "fix:", "bugfix:"
-               - **Infrastructure**: Changes to .github/workflows/, docker/, scripts
-               - **Documentation**: Docs only changes
-
-            4. Write to `slack_message.txt` with this format:
+            4. Write to `slack_message.txt`:
                ```
                :clipboard: *LiteLLM Fork Update*
 
                *${{ steps.context.outputs.head_commit_title }}*
 
-               *Type:* [Upstream Sync / Feature / Bug Fix / Infrastructure / Documentation]
-               *Commits:* ${{ steps.context.outputs.commit_count }}
+               *Type:* [type]
 
                *Summary:*
-               - [Brief 1-2 sentence summary of what changed]
+               [1-2 sentence description based on commit message]
 
-               *Key Changes:*
-               - [Most important change 1]
-               - [Most important change 2]
-               - [etc - max 5 bullets]
+               *Files Changed:*
+               • [List key files, max 5]
 
-               :link: <https://github.com/${{ github.repository }}/compare/${{ steps.context.outputs.before_sha }}...${{ steps.context.outputs.after_sha }}|View Changes>
+               :link: <https://github.com/${{ github.repository }}/commit/${{ steps.context.outputs.head_sha }}|View Commit>
                ```
 
             ---
@@ -155,50 +217,44 @@ jobs:
             ## IF MODE IS "repo_status":
 
             ### Task:
-            1. Get recent merged PRs:
-               ```bash
-               gh pr list --state merged --base carto/main --limit 10 --json number,title,mergedAt \
-                 --jq '.[] | "- #\(.number): \(.title) (\(.mergedAt | split("T")[0]))"'
-               ```
+            1. Read the data files: `/tmp/carto_commits.txt`, `/tmp/recent_prs.txt`, `/tmp/releases.txt`
 
-            2. Get recent releases:
-               ```bash
-               gh release list --limit 5 2>/dev/null || echo "No releases yet"
-               ```
-
-            3. Write to `slack_message.txt` with this format:
+            2. Write to `slack_message.txt`:
                ```
                :bar_chart: *LiteLLM Fork Status*
 
                *Current Versions:*
-               - Upstream Base: LiteLLM v${{ steps.context.outputs.upstream_version }}
-               - Latest CARTO Release: ${{ steps.context.outputs.latest_tag }}
+               • Upstream Base: LiteLLM v${{ steps.context.outputs.upstream_version }}
+               • Latest CARTO Release: ${{ steps.context.outputs.latest_tag }}
 
                *What is this fork?*
                CARTO's fork of LiteLLM - the unified LLM proxy for 100+ providers used for all AI features.
 
-               *Recent Activity (last 10 PRs):*
-               [List from gh pr list]
+               *Recent CARTO Commits:*
+               [from /tmp/carto_commits.txt - list top 10]
+
+               *Recent PRs:*
+               [from /tmp/recent_prs.txt]
 
                *Recent Releases:*
-               [List from gh release list]
+               [from /tmp/releases.txt]
 
                :link: Links:
-               - <https://github.com/CartoDB/litellm|Repository>
-               - <https://github.com/CartoDB/litellm/releases|Releases>
-               - <https://github.com/BerriAI/litellm|Upstream LiteLLM>
+               • <https://github.com/CartoDB/litellm|Repository>
+               • <https://github.com/CartoDB/litellm/releases|Releases>
+               • <https://github.com/BerriAI/litellm|Upstream LiteLLM>
                ```
 
             ---
 
             ## Guidelines:
-            - Keep messages concise - Slack has message length limits
-            - Use Slack mrkdwn formatting (not GitHub markdown)
-            - Emoji codes like :clipboard: :bar_chart: :link: :rocket:
-            - Bold with *text*, links with <url|text>
-            - No code blocks - use plain text
+            - Keep messages concise - Slack has character limits
+            - Use Slack mrkdwn: *bold*, <url|text> for links
+            - Use • for bullets (not -)
+            - Emoji codes: :clipboard: :bar_chart: :link: :rocket:
+            - No markdown code blocks
 
-            Write the message now to `slack_message.txt`.
+            Read the files and write `slack_message.txt` now.
         timeout-minutes: 10
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
