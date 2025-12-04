@@ -8318,6 +8318,53 @@ async def login(request: Request):  # noqa: PLR0915
     return redirect_response
 
 
+@router.post(
+    "/v2/login", include_in_schema=False
+)  # hidden helper for UI logins via API
+async def login_v2(request: Request):  # noqa: PLR0915
+    global premium_user, general_settings, master_key
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.utils import get_custom_url
+
+    body = await request.json()
+    username = str(body.get("username"))
+    password = str(body.get("password"))
+
+    login_result = await authenticate_user(
+        username=username,
+        password=password,
+        master_key=master_key,
+        prisma_client=prisma_client,
+    )
+
+    returned_ui_token_object = create_ui_token_object(
+        login_result=login_result,
+        general_settings=general_settings,
+        premium_user=premium_user,
+    )
+
+    import jwt
+
+    jwt_token = jwt.encode(  # type: ignore
+        cast(dict, returned_ui_token_object),
+        master_key,
+        algorithm="HS256",
+    )
+
+    litellm_dashboard_ui = get_custom_url(str(request.base_url))
+    if litellm_dashboard_ui.endswith("/"):
+        litellm_dashboard_ui += "ui/"
+    else:
+        litellm_dashboard_ui += "/ui/"
+    litellm_dashboard_ui += "?login=success"
+
+    json_response = JSONResponse(
+        content={"redirect_url": litellm_dashboard_ui},
+        status_code=status.HTTP_200_OK,
+    )
+    json_response.set_cookie(key="token", value=jwt_token)
+    return json_response
+
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str, request: Request):
     """
