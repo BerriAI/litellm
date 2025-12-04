@@ -95,6 +95,7 @@ export interface TeamData {
       mcp_access_groups?: string[];
       mcp_tool_permissions?: Record<string, string[]>;
       vector_stores: string[];
+      search_tools?: string[];
     };
     team_member_budget_table: {
       max_budget: number;
@@ -789,6 +790,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       value={form.getFieldValue("vector_stores")}
                       accessToken={accessToken || ""}
                       placeholder="Select vector stores"
+                    />
+                  </Form.Item>
+
+                  <Form.Item label="Search Tools" name="search_tools">
+                    <SearchToolSelector
+                      onChange={(values: string[]) => form.setFieldValue("search_tools", values)}
+                      value={form.getFieldValue("search_tools")}
+                      accessToken={accessToken || ""}
+                      placeholder="Select search tools"
                     />
                   </Form.Item>
 
