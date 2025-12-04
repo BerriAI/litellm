@@ -1,153 +1,191 @@
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
+# Adding OpenAI-Compatible Providers
 
-# OpenAI-Compatible Endpoints
+## Quick Start
 
-:::info
+For providers with OpenAI-compatible APIs, you can add support by editing a single JSON file.
 
-Selecting `openai` as the provider routes your request to an OpenAI-compatible endpoint using the upstream  
-[official OpenAI Python API library](https://github.com/openai/openai-python/blob/main/README.md).
+## Step-by-Step Guide
 
-This library **requires** an API key for all requests, either through the `api_key` parameter 
-or the `OPENAI_API_KEY` environment variable.
+### 1. Add to JSON Configuration
 
-If you don’t want to provide a fake API key in each request, consider using a provider that directly matches your 
-OpenAI-compatible endpoint, such as [`hosted_vllm`](/docs/providers/vllm) or [`llamafile`](/docs/providers/llamafile).
+Edit `litellm/llms/openai_like/providers.json`:
 
-:::
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.yourprovider.com/v1",
+    "api_key_env": "YOUR_PROVIDER_API_KEY"
+  }
+}
+```
 
-To call models hosted behind an openai proxy, make 2 changes:
+That's it! Your provider is now available.
 
-1. For `/chat/completions`: Put `openai/` in front of your model name, so litellm knows you're trying to call an openai `/chat/completions` endpoint. 
+### 2. Add to Provider Enum
 
-1. For `/completions`: Put `text-completion-openai/` in front of your model name, so litellm knows you're trying to call an openai `/completions` endpoint. [NOT REQUIRED for `openai/` endpoints called via `/v1/completions` route].
+Edit `litellm/types/utils.py` and add to the `LlmProviders` enum:
 
-1. **Do NOT** add anything additional to the base url e.g. `/v1/embedding`. LiteLLM uses the openai-client to make these calls, and that automatically adds the relevant endpoints. 
+```python
+class LlmProviders(str, Enum):
+    # ... existing providers ...
+    YOUR_PROVIDER = "your_provider"
+```
 
+### 3. Test It
 
-## Usage - completion
 ```python
 import litellm
 import os
+
+os.environ["YOUR_PROVIDER_API_KEY"] = "your-api-key"
 
 response = litellm.completion(
-    model="openai/mistral",               # add `openai/` prefix to model so litellm knows to route to OpenAI
-    api_key="sk-1234",                  # api key to your openai compatible endpoint
-    api_base="http://0.0.0.0:4000",     # set API Base of your Custom OpenAI Endpoint
-    messages=[
-                {
-                    "role": "user",
-                    "content": "Hey, how's it going?",
-                }
-    ],
+    model="your_provider/model-name",
+    messages=[{"role": "user", "content": "Hello!"}]
 )
-print(response)
 ```
 
-## Usage - embedding
+## Configuration Options
 
+### Required Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `base_url` | API endpoint base URL | `"https://api.provider.com/v1"` |
+| `api_key_env` | Environment variable for API key | `"PROVIDER_API_KEY"` |
+
+### Optional Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `api_base_env` | Override base_url via environment variable | `"PROVIDER_API_BASE"` |
+| `base_class` | Base config class to use | `"openai_gpt"` (default) or `"openai_like"` |
+| `param_mappings` | Map OpenAI params to provider params | `{"max_completion_tokens": "max_tokens"}` |
+| `constraints` | Parameter constraints | `{"temperature_max": 1.0}` |
+| `special_handling` | Special behavior flags | `{"convert_content_list_to_string": true}` |
+
+## Examples
+
+### Simple Provider (No Special Handling)
+
+```json
+{
+  "hyperbolic": {
+    "base_url": "https://api.hyperbolic.xyz/v1",
+    "api_key_env": "HYPERBOLIC_API_KEY"
+  }
+}
+```
+
+### Provider with Parameter Mapping
+
+```json
+{
+  "publicai": {
+    "base_url": "https://api.publicai.co/v1",
+    "api_key_env": "PUBLICAI_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  }
+}
+```
+
+### Provider with Constraints
+
+```json
+{
+  "moonshot": {
+    "base_url": "https://api.moonshot.ai/v1",
+    "api_key_env": "MOONSHOT_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "constraints": {
+      "temperature_max": 1.0,
+      "temperature_min_with_n_gt_1": 0.3
+    }
+  }
+}
+```
+
+## Supported Constraints
+
+| Constraint | Description |
+|------------|-------------|
+| `temperature_max` | Maximum temperature value (auto-clamped) |
+| `temperature_min` | Minimum temperature value (auto-clamped) |
+| `temperature_min_with_n_gt_1` | Minimum temperature when n > 1 (auto-adjusted) |
+
+## Special Handling Flags
+
+| Flag | Description |
+|------|-------------|
+| `convert_content_list_to_string` | Convert message content from list format to string |
+
+## When to Use Python Instead
+
+Use a Python config class if you need:
+- Custom authentication (OAuth, rotating tokens)
+- Complex request/response transformations
+- Provider-specific streaming logic
+- Advanced tool calling transformations
+
+For simple OpenAI-compatible providers, JSON configuration is recommended.
+
+## Testing Your Provider
+
+1. Set the API key:
+```bash
+export YOUR_PROVIDER_API_KEY="your-api-key"
+```
+
+2. Test completion:
 ```python
 import litellm
-import os
 
-response = litellm.embedding(
-    model="openai/GPT-J",               # add `openai/` prefix to model so litellm knows to route to OpenAI
-    api_key="sk-1234",                  # api key to your openai compatible endpoint
-    api_base="http://0.0.0.0:4000",     # set API Base of your Custom OpenAI Endpoint
-    input=["good morning from litellm"]
+response = litellm.completion(
+    model="your_provider/model-name",
+    messages=[{"role": "user", "content": "Test"}],
+    max_tokens=10
 )
-print(response)
+print(response.choices[0].message.content)
 ```
 
-
-
-## Usage with LiteLLM Proxy Server
-
-Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
-
-1. Modify the config.yaml 
-
-  ```yaml
-  model_list:
-    - model_name: my-model
-      litellm_params:
-        model: openai/<your-model-name>  # add openai/ prefix to route as OpenAI provider
-        api_base: <model-api-base>       # add api base for OpenAI compatible provider
-        api_key: api-key                 # api key to send your model
-  ```
-
-  :::info
-
-  If you see `Not Found Error` when testing make sure your `api_base` has the `/v1` postfix
-
-  Example: `http://vllm-endpoint.xyz/v1`
-
-  :::
-
-2. Start the proxy 
-
-  ```bash
-  $ litellm --config /path/to/config.yaml
-  ```
-
-3. Send Request to LiteLLM Proxy Server
-
-  <Tabs>
-
-  <TabItem value="openai" label="OpenAI Python v1.0.0+">
-
-  ```python
-  import openai
-  client = openai.OpenAI(
-      api_key="sk-1234",             # pass litellm proxy key, if you're using virtual keys
-      base_url="http://0.0.0.0:4000" # litellm-proxy-base url
-  )
-
-  response = client.chat.completions.create(
-      model="my-model",
-      messages = [
-          {
-              "role": "user",
-              "content": "what llm are you"
-          }
-      ],
-  )
-
-  print(response)
-  ```
-  </TabItem>
-
-  <TabItem value="curl" label="curl">
-
-  ```shell
-  curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
-      --header 'Content-Type: application/json' \
-      --data '{
-      "model": "my-model",
-      "messages": [
-          {
-          "role": "user",
-          "content": "what llm are you"
-          }
-      ],
-  }'
-  ```
-  </TabItem>
-
-  </Tabs>
-
-
-### Advanced - Disable System Messages
-
-Some VLLM models (e.g. gemma) don't support system messages. To map those requests to 'user' messages, use the `supports_system_message` flag. 
-
-```yaml
-model_list:
-- model_name: my-custom-model
-   litellm_params:
-      model: openai/google/gemma
-      api_base: http://my-custom-base
-      api_key: "" 
-      supports_system_message: False # 👈 KEY CHANGE
+3. Test streaming:
+```python
+response = litellm.completion(
+    model="your_provider/model-name",
+    messages=[{"role": "user", "content": "Count to 3"}],
+    max_tokens=20,
+    stream=True
+)
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
 ```
+
+## Troubleshooting
+
+### Provider not found
+- Verify the provider is in `providers.json`
+- Check the provider is added to `LlmProviders` enum
+- Restart your Python session to reload the JSON
+
+### API key not working
+- Verify the environment variable name matches `api_key_env`
+- Check the API key is correctly set: `echo $YOUR_PROVIDER_API_KEY`
+
+### Wrong endpoint URL
+- Use `api_base_env` to override via environment variable
+- Or pass `api_base` directly in the completion call
+
+## Contributing
+
+When adding a new provider:
+1. Add to `providers.json`
+2. Add to `LlmProviders` enum
+3. Test with real API
+4. Submit PR with test results
+
+That's it!

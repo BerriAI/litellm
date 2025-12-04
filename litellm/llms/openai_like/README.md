@@ -49,9 +49,6 @@ That's it! The provider will be automatically loaded and available.
       "max_completion_tokens": "max_tokens"
     },
     
-    // Optional: Exclude certain parameters
-    "excluded_params": ["functions"],
-    
     // Optional: Parameter constraints
     "constraints": {
       "temperature_max": 1.0,
@@ -81,7 +78,6 @@ The first JSON-configured provider:
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
-    "excluded_params": ["functions"],
     "special_handling": {
       "convert_content_list_to_string": true
     }

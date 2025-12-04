@@ -36,7 +36,6 @@ class TestJSONProviderLoader:
         assert publicai.api_key_env == "PUBLICAI_API_KEY"
         assert publicai.api_base_env == "PUBLICAI_API_BASE"
         assert publicai.param_mappings.get("max_completion_tokens") == "max_tokens"
-        assert "functions" in publicai.excluded_params
 
     def test_dynamic_config_generation(self):
         """Test dynamic config class creation"""
@@ -82,8 +81,8 @@ class TestJSONProviderLoader:
         # temperature should be passed through
         assert result["temperature"] == 0.7
 
-    def test_excluded_params(self):
-        """Test that excluded params are filtered out"""
+    def test_supported_params(self):
+        """Test that config returns supported params"""
         from litellm.llms.openai_like.dynamic_config import create_config_class
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -94,8 +93,9 @@ class TestJSONProviderLoader:
         # Get supported params
         supported = config.get_supported_openai_params("gpt-4")
 
-        # 'functions' should be excluded
-        assert "functions" not in supported
+        # Should have standard OpenAI params
+        assert isinstance(supported, list)
+        assert len(supported) > 0
 
     def test_provider_resolution(self):
         """Test that provider resolution finds JSON providers"""

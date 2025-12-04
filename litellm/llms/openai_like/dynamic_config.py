@@ -93,11 +93,8 @@ def create_config_class(provider: SimpleProviderConfig):
             return api_base
 
         def get_supported_openai_params(self, model: str) -> list:
-            """Get supported OpenAI params, excluding any provider-specific exclusions"""
-            excluded = set(provider.excluded_params)
-            base_params = super().get_supported_openai_params(model=model)
-            
-            return [param for param in base_params if param not in excluded]
+            """Get supported OpenAI params from base class"""
+            return super().get_supported_openai_params(model=model)
 
         def map_openai_params(
             self,

@@ -7,7 +7,6 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
-    "excluded_params": ["functions"],
     "special_handling": {
       "convert_content_list_to_string": true
     }

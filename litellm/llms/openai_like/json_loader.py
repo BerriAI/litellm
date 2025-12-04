@@ -17,7 +17,6 @@ class SimpleProviderConfig:
         self.api_base_env = data.get("api_base_env")
         self.base_class = data.get("base_class", "openai_gpt")
         self.param_mappings = data.get("param_mappings", {})
-        self.excluded_params = data.get("excluded_params", [])
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
 
