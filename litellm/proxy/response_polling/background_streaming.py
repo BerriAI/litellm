@@ -87,10 +87,25 @@ async def background_streaming_task(  # noqa: PLR0915
         # https://platform.openai.com/docs/api-reference/responses-streaming
         output_items = {}  # Track output items by ID
         accumulated_text = {}  # Track accumulated text deltas by (item_id, content_index)
+        
+        # ResponsesAPIResponse fields to extract from response.completed
         usage_data = None
         reasoning_data = None
         tool_choice_data = None
         tools_data = None
+        model_data = None
+        instructions_data = None
+        temperature_data = None
+        top_p_data = None
+        max_output_tokens_data = None
+        previous_response_id_data = None
+        text_data = None
+        truncation_data = None
+        parallel_tool_calls_data = None
+        user_data = None
+        store_data = None
+        incomplete_details_data = None
+        
         state_dirty = False  # Track if state needs to be synced
         last_update_time = asyncio.get_event_loop().time()
         UPDATE_INTERVAL = 0.150  # 150ms batching interval
@@ -201,13 +216,29 @@ async def background_streaming_task(  # noqa: PLR0915
                             )
                         
                         elif event_type == "response.completed":
-                            # Response completed - includes usage, reasoning, tools, tool_choice
+                            # Response completed - extract all ResponsesAPIResponse fields
                             # https://platform.openai.com/docs/api-reference/responses-streaming/response-completed
                             response_data = event.get("response", {})
+                            
+                            # Core response fields
                             usage_data = response_data.get("usage")
                             reasoning_data = response_data.get("reasoning")
                             tool_choice_data = response_data.get("tool_choice")
                             tools_data = response_data.get("tools")
+                            
+                            # Additional ResponsesAPIResponse fields
+                            model_data = response_data.get("model")
+                            instructions_data = response_data.get("instructions")
+                            temperature_data = response_data.get("temperature")
+                            top_p_data = response_data.get("top_p")
+                            max_output_tokens_data = response_data.get("max_output_tokens")
+                            previous_response_id_data = response_data.get("previous_response_id")
+                            text_data = response_data.get("text")
+                            truncation_data = response_data.get("truncation")
+                            parallel_tool_calls_data = response_data.get("parallel_tool_calls")
+                            user_data = response_data.get("user")
+                            store_data = response_data.get("store")
+                            incomplete_details_data = response_data.get("incomplete_details")
                             
                             # Also update output from final response if available
                             if "output" in response_data:
@@ -230,7 +261,7 @@ async def background_streaming_task(  # noqa: PLR0915
             # Final flush to ensure all accumulated state is saved
             await flush_state_if_needed(force=True)
         
-        # Mark as completed with all response data
+        # Mark as completed with all ResponsesAPIResponse fields
         await polling_handler.update_state(
             polling_id=polling_id,
             status="completed",
@@ -238,6 +269,18 @@ async def background_streaming_task(  # noqa: PLR0915
             reasoning=reasoning_data,
             tool_choice=tool_choice_data,
             tools=tools_data,
+            model=model_data,
+            instructions=instructions_data,
+            temperature=temperature_data,
+            top_p=top_p_data,
+            max_output_tokens=max_output_tokens_data,
+            previous_response_id=previous_response_id_data,
+            text=text_data,
+            truncation=truncation_data,
+            parallel_tool_calls=parallel_tool_calls_data,
+            user=user_data,
+            store=store_data,
+            incomplete_details=incomplete_details_data,
         )
         
         verbose_proxy_logger.info(
