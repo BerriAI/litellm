@@ -381,12 +381,14 @@ class TestContentFilterGuardrail:
         assert result is not None
         assert result[1] == "aws_access_key"
 
-    @pytest.mark.skip(reason="Masking in streaming responses is no longer supported after unified_guardrail.py changes. Only blocking/rejecting is supported for responses.")
+    @pytest.mark.skip(
+        reason="Masking in streaming responses is no longer supported after unified_guardrail.py changes. Only blocking/rejecting is supported for responses."
+    )
     @pytest.mark.asyncio
     async def test_streaming_hook_mask(self):
         """
         Test streaming hook with MASK action
-        
+
         Note: After changes to unified_guardrail.py, masking responses to users
         is no longer supported. This test is skipped as the feature is deprecated.
         Only BLOCK actions (test_streaming_hook_block) are supported for streaming responses.
