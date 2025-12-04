@@ -876,6 +876,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "nova",
     "deepseek_r1",
     "qwen3",
+    "qwen2",
     "twelvelabs",
     "openai",
 ]
