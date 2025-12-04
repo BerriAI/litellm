@@ -7,7 +7,7 @@ with guardrail transformations.
 
 import os
 import sys
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -30,7 +30,12 @@ class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing that transforms text"""
 
     async def apply_guardrail(
-        self, texts: List[str], request_data: dict, input_type: str, **kwargs
+        self,
+        texts: List[str],
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+        images: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[List[str]]]:
         """Append [GUARDRAILED] to text"""
         return ([f"{text} [GUARDRAILED]" for text in texts], None)
