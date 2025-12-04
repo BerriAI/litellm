@@ -69,6 +69,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
     _update_metadata_field,
+    _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
 )
@@ -1351,20 +1352,7 @@ async def update_team(
             )
 
         # update team metadata fields
-        _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
-        for field in _team_metadata_fields:
-            if field in updated_kv and updated_kv[field] is not None:
-                _update_metadata_field(
-                    updated_kv=updated_kv,
-                    field_name=field,
-                )
-
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
-            if field in updated_kv and updated_kv[field] is not None:
-                _update_metadata_field(
-                    updated_kv=updated_kv,
-                    field_name=field,
-                )
+        _update_metadata_fields(updated_kv=updated_kv)
 
         if "model_aliases" in updated_kv:
             updated_kv.pop("model_aliases")
