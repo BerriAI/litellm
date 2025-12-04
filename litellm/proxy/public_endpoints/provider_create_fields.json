@@ -2609,9 +2609,9 @@
       },
       {
         "key": "api_base",
-        "label": "Google Private API Endpoint",
+        "label": "API Base (Optional)",
         "placeholder": null,
-        "tooltip": null,
+        "tooltip": "Supports custom API base for Google Private API endpoints.",
         "required": false,
         "field_type": "text",
         "options": null,
