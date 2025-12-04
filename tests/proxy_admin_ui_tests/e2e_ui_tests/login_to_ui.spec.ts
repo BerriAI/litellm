@@ -12,7 +12,7 @@ test("admin login test", async ({ page }) => {
   // Go to the specified URL
   await page.goto("http://localhost:4000/ui");
 
-  page.screenshot({ path: "login_before.png" });
+  await page.screenshot({ path: "test-results/login_before.png" });
 
   // Enter "admin" in the username input field
   await page.fill('input[name="username"]', "admin");
@@ -20,7 +20,7 @@ test("admin login test", async ({ page }) => {
   // Enter "gm" in the password input field
   await page.fill('input[name="password"]', "gm");
 
-  page.screenshot({ path: "login_after_inputs.png" });
+  page.screenshot({ path: "test-results/login_after_inputs.png" });
 
   // Optionally, you can add an assertion to verify the login button is enabled
   const loginButton = page.getByRole("button", { name: "Login" });

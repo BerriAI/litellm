@@ -13,7 +13,7 @@ export async function loginToUI(page: Page) {
   await page.fill('input[name="password"]', "gm");
   console.log("Filled login credentials");
 
-  const loginButton = page.locator('input[type="submit"]');
+  const loginButton = page.getByRole("button", { name: "Login" });
   await expect(loginButton).toBeEnabled();
   await loginButton.click();
   console.log("Clicked login button");
