@@ -87,10 +87,13 @@ class ResponsePollingHandler:
         self,
         polling_id: str,
         status: Optional[ResponsesAPIStatus] = None,
-        output_item: Optional[Dict] = None,
         usage: Optional[Dict] = None,
         error: Optional[Dict] = None,
         incomplete_details: Optional[Dict] = None,
+        reasoning: Optional[Dict] = None,
+        tool_choice: Optional[Any] = None,
+        tools: Optional[list] = None,
+        output: Optional[list] = None,
     ) -> None:
         """
         Update the polling state in Redis
@@ -101,10 +104,13 @@ class ResponsePollingHandler:
         Args:
             polling_id: Unique identifier for this polling request
             status: OpenAI ResponsesAPIStatus value
-            output_item: Output item to add/update
             usage: Usage information
             error: Error dict (automatically sets status to "failed")
             incomplete_details: Details for incomplete responses
+            reasoning: Reasoning configuration from response.completed
+            tool_choice: Tool choice configuration from response.completed
+            tools: Tools list from response.completed
+            output: Full output list to replace current output
         """
         if not self.redis_cache:
             return
@@ -126,22 +132,9 @@ class ResponsePollingHandler:
         if status:
             state["status"] = status
         
-        # Add output item (e.g., message, function_call)
-        if output_item:
-            # Check if we're updating an existing output item or adding new
-            item_id = output_item.get("id")
-            if item_id:
-                # Update existing item
-                found = False
-                for i, existing_item in enumerate(state["output"]):
-                    if existing_item.get("id") == item_id:
-                        state["output"][i] = output_item
-                        found = True
-                        break
-                if not found:
-                    state["output"].append(output_item)
-            else:
-                state["output"].append(output_item)
+        # Replace full output list if provided
+        if output is not None:
+            state["output"] = output
         
         # Update usage
         if usage:
@@ -155,6 +148,14 @@ class ResponsePollingHandler:
         # Handle incomplete details
         if incomplete_details:
             state["incomplete_details"] = incomplete_details
+        
+        # Update reasoning, tool_choice, tools from response.completed
+        if reasoning is not None:
+            state["reasoning"] = reasoning
+        if tool_choice is not None:
+            state["tool_choice"] = tool_choice
+        if tools is not None:
+            state["tools"] = tools
         
         # Update cache with configured TTL
         await self.redis_cache.async_set_cache(
