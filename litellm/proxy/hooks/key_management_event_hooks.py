@@ -324,45 +324,25 @@ class KeyManagementEventHooks:
 
     @staticmethod
     async def _send_key_created_email(response: dict):
-        """
-        Send key created email if email alerting is configured.
-
-        This function is a no-op if email alerting is not configured.
-        """
-        from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
-
-        # Check if email alerting is configured via v0 integration
-        email_alerting_enabled = "email" in general_settings.get("alerting", [])
-
-        # Try to import enterprise package for v2 integration
         try:
             from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
                 BaseEmailLogger,
             )
-
-            initialized_email_loggers = (
-                litellm.logging_callback_manager.get_custom_loggers_for_type(
-                    callback_type=BaseEmailLogger
-                )
-            )
         except ImportError:
-            # Enterprise package not installed, no v2 email loggers available
-            initialized_email_loggers = []
-
-        # If no email configuration at all, silently return
-        if not email_alerting_enabled and len(initialized_email_loggers) == 0:
+            verbose_proxy_logger.debug(
+                "Skipping sending key created email - enterprise package not installed"
+            )
             return
 
-        # Import event type for creating the email event
+        from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+
         try:
             from litellm_enterprise.types.enterprise_callbacks.send_emails import (
                 SendKeyCreatedEmailEvent,
             )
         except ImportError:
-            # Enterprise package not installed but v0 email alerting is enabled
-            # Log warning and return - v0 integration requires enterprise package too
-            verbose_proxy_logger.warning(
-                "Email alerting configured but enterprise package not installed. Skipping key created email."
+            verbose_proxy_logger.debug(
+                "Skipping sending key created email - enterprise email types not available"
             )
             return
 
@@ -382,65 +362,52 @@ class KeyManagementEventHooks:
         ##########################
         # v2 integration for emails
         ##########################
+        initialized_email_loggers = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger
+            )
+        )
         if len(initialized_email_loggers) > 0:
-            try:
-                from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
-                    BaseEmailLogger,
-                )
-
-                for email_logger in initialized_email_loggers:
-                    if isinstance(email_logger, BaseEmailLogger):
-                        await email_logger.send_key_created_email(
-                            send_key_created_email_event=event,
-                        )
-            except ImportError:
-                pass
+            for email_logger in initialized_email_loggers:
+                if isinstance(email_logger, BaseEmailLogger):
+                    await email_logger.send_key_created_email(
+                        send_key_created_email_event=event,
+                    )
 
         ##########################
         # v0 integration for emails
         ##########################
-        elif email_alerting_enabled:
+        elif "email" in general_settings.get("alerting", []):
             # If user configured email alerting - send an Email letting their end-user know the key was created
             asyncio.create_task(
                 proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
                     webhook_event=event,
                 )
             )
+        else:
+            verbose_proxy_logger.debug(
+                "Skipping sending key created email - no email logger configured"
+            )
 
     @staticmethod
     async def _send_key_rotated_email(response: dict, existing_key_alias: Optional[str]):
-        """
-        Send key rotated email if email alerting is configured.
-
-        This function is a no-op if email alerting is not configured.
-        """
-        # Try to import enterprise package for v2 integration
         try:
             from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
                 BaseEmailLogger,
             )
-
-            initialized_email_loggers = (
-                litellm.logging_callback_manager.get_custom_loggers_for_type(
-                    callback_type=BaseEmailLogger
-                )
-            )
         except ImportError:
-            # Enterprise package not installed, no v2 email loggers available
-            initialized_email_loggers = []
-
-        # If no email loggers configured, silently return
-        if len(initialized_email_loggers) == 0:
+            verbose_proxy_logger.debug(
+                "Skipping sending key rotated email - enterprise package not installed"
+            )
             return
 
-        # Import event type for creating the email event
         try:
             from litellm_enterprise.types.enterprise_callbacks.send_emails import (
                 SendKeyRotatedEmailEvent,
             )
         except ImportError:
-            verbose_proxy_logger.warning(
-                "Email loggers configured but enterprise package not fully installed. Skipping key rotated email."
+            verbose_proxy_logger.debug(
+                "Skipping sending key rotated email - enterprise email types not available"
             )
             return
 
@@ -460,15 +427,18 @@ class KeyManagementEventHooks:
         ##########################
         # v2 integration for emails
         ##########################
-        try:
-            from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
-                BaseEmailLogger,
+        initialized_email_loggers = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger
             )
-
+        )
+        if len(initialized_email_loggers) > 0:
             for email_logger in initialized_email_loggers:
                 if isinstance(email_logger, BaseEmailLogger):
                     await email_logger.send_key_rotated_email(
                         send_key_rotated_email_event=event,
                     )
-        except ImportError:
-            pass
+        else:
+            verbose_proxy_logger.debug(
+                "Skipping sending key rotated email - no email logger configured"
+            )
