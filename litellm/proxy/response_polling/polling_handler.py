@@ -1,7 +1,6 @@
 """
 Response Polling Handler for Background Responses with Cache
 """
-import asyncio
 import json
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone
