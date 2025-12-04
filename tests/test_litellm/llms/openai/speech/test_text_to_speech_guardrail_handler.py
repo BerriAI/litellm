@@ -15,6 +15,7 @@ from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.speech.guardrail_translation.handler import (
     OpenAITextToSpeechHandler,
 )
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.utils import CallTypes
 
 
@@ -22,9 +23,11 @@ class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
     async def apply_guardrail(
-        self, texts: List[str], request_data: dict, input_type: str, **kwargs
-    ) -> Tuple[List[str], Optional[List[str]]]:
-        return ([f"{text} [GUARDRAILED]" for text in texts], None)
+        self, inputs: GenericGuardrailAPIInputs, request_data: dict, input_type: str, **kwargs
+    ) -> GenericGuardrailAPIInputs:
+        texts = inputs.get("texts", [])
+        inputs["texts"] = [f"{text} [GUARDRAILED]" for text in texts]
+        return inputs
 
 
 class MockBinaryResponse:

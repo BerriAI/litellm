@@ -568,6 +568,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_db_cost_per_token": {"type": "number"},
                 "output_dbu_cost_per_token": {"type": "number"},
                 "output_vector_size": {"type": "number"},
+                "ocr_cost_per_page": {"type": "number"},
                 "rpd": {"type": "number"},
                 "rpm": {"type": "number"},
                 "source": {"type": "string"},

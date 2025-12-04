@@ -2,7 +2,6 @@
 Unit tests for Cohere Rerank Guardrail Translation Handler
 """
 
-import asyncio
 import os
 import sys
 from typing import List, Optional, Tuple
@@ -14,6 +13,7 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.cohere.rerank.guardrail_translation.handler import CohereRerankHandler
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CallTypes
 
@@ -22,9 +22,11 @@ class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
     async def apply_guardrail(
-        self, texts: List[str], request_data: dict, input_type: str, **kwargs
-    ) -> Tuple[List[str], Optional[List[str]]]:
-        return ([f"{text} [GUARDRAILED]" for text in texts], None)
+        self, inputs: GenericGuardrailAPIInputs, request_data: dict, input_type: str, **kwargs
+    ) -> GenericGuardrailAPIInputs:
+        texts = inputs.get("texts", [])
+        inputs["texts"] = [f"{text} [GUARDRAILED]" for text in texts]
+        return inputs
 
 
 class TestHandlerDiscovery:
@@ -349,16 +351,18 @@ class TestContentFilteringScenario:
             """Mock content filter guardrail"""
 
             async def apply_guardrail(
-                self, texts: List[str], request_data: dict, input_type: str, **kwargs
-            ) -> Tuple[List[str], Optional[List[str]]]:
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict, input_type: str, **kwargs
+            ) -> GenericGuardrailAPIInputs:
                 bad_words = ["inappropriate", "offensive"]
+                texts = inputs.get("texts", [])
                 filtered_texts = []
                 for text in texts:
                     filtered = text
                     for word in bad_words:
                         filtered = filtered.replace(word, "[FILTERED]")
                     filtered_texts.append(filtered)
-                return (filtered_texts, None)
+                inputs["texts"] = filtered_texts
+                return inputs
 
         handler = CohereRerankHandler()
         guardrail = ContentFilterGuardrail(guardrail_name="content_filter")

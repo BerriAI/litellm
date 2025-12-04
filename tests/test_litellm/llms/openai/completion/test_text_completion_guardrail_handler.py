@@ -5,7 +5,6 @@ Unit tests for OpenAI Text Completion Guardrail Translation Handler
 import os
 import sys
 from typing import List, Optional, Tuple
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,6 +15,7 @@ from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.completion.guardrail_translation.handler import (
     OpenAITextCompletionHandler,
 )
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.utils import CallTypes, TextChoices, TextCompletionResponse
 
 
@@ -23,9 +23,11 @@ class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
     async def apply_guardrail(
-        self, texts: List[str], request_data: dict, input_type: str, **kwargs
-    ) -> Tuple[List[str], Optional[List[str]]]:
-        return ([f"{text} [GUARDRAILED]" for text in texts], None)
+        self, inputs: GenericGuardrailAPIInputs, request_data: dict, input_type: str, **kwargs
+    ) -> GenericGuardrailAPIInputs:
+        texts = inputs.get("texts", [])
+        inputs["texts"] = [f"{text} [GUARDRAILED]" for text in texts]
+        return inputs
 
 
 class TestHandlerDiscovery:
@@ -309,10 +311,11 @@ class TestPIIMaskingScenario:
             """Mock PII masking guardrail"""
 
             async def apply_guardrail(
-                self, texts: List[str], request_data: dict, input_type: str, **kwargs
-            ) -> Tuple[List[str], Optional[List[str]]]:
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict, input_type: str, **kwargs
+            ) -> GenericGuardrailAPIInputs:
                 import re
 
+                texts = inputs.get("texts", [])
                 masked_texts = []
                 for text in texts:
                     masked = re.sub(
@@ -321,7 +324,8 @@ class TestPIIMaskingScenario:
                         text,
                     )
                     masked_texts.append(masked)
-                return (masked_texts, None)
+                inputs["texts"] = masked_texts
+                return inputs
 
         handler = OpenAITextCompletionHandler()
         guardrail = PIIMaskingGuardrail(guardrail_name="mask_pii")
