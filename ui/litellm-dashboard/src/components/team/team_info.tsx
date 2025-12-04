@@ -38,6 +38,7 @@ import { getModelDisplayName, unfurlWildcardModelsInList } from "../key_team_hel
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import AgentSelector from "../agent_management/AgentSelector";
 import NotificationsManager from "../molecules/notifications_manager";
 import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
@@ -95,6 +96,8 @@ export interface TeamData {
       mcp_access_groups?: string[];
       mcp_tool_permissions?: Record<string, string[]>;
       vector_stores: string[];
+      agents?: string[];
+      agent_access_groups?: string[];
     };
     team_member_budget_table: {
       max_budget: number;
@@ -433,6 +436,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       delete values.mcp_servers_and_groups;
       delete values.mcp_tool_permissions;
 
+      // Handle agent permissions
+      const { agents, accessGroups: agentAccessGroups } = values.agents_and_groups || {
+        agents: [],
+        accessGroups: [],
+      };
+      if (agents && agents.length > 0) {
+        updateData.object_permission.agents = agents;
+      }
+      if (agentAccessGroups && agentAccessGroups.length > 0) {
+        updateData.object_permission.agent_access_groups = agentAccessGroups;
+      }
+      delete values.agents_and_groups;
+
       const response = await teamUpdateCall(accessToken, updateData);
 
       NotificationsManager.success("Team settings updated successfully");
@@ -630,6 +646,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       accessGroups: info.object_permission?.mcp_access_groups || [],
                     },
                     mcp_tool_permissions: info.object_permission?.mcp_tool_permissions || {},
+                    agents_and_groups: {
+                      agents: info.object_permission?.agents || [],
+                      accessGroups: info.object_permission?.agent_access_groups || [],
+                    },
                   }}
                   layout="vertical"
                 >
@@ -832,6 +852,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         />
                       </div>
                     )}
+                  </Form.Item>
+
+                  <Form.Item label="Agents / Access Groups" name="agents_and_groups">
+                    <AgentSelector
+                      onChange={(val) => form.setFieldValue("agents_and_groups", val)}
+                      value={form.getFieldValue("agents_and_groups")}
+                      accessToken={accessToken || ""}
+                      placeholder="Select agents or access groups (optional)"
+                    />
                   </Form.Item>
 
                   <Form.Item label="Organization ID" name="organization_id">
