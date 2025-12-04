@@ -264,6 +264,95 @@ class TestResponsePollingHandler:
         assert stored["tools"] == tools_data
 
     @pytest.mark.asyncio
+    async def test_update_state_with_all_responses_api_fields(self):
+        """Test that update_state stores all ResponsesAPIResponse fields from response.completed"""
+        mock_redis = AsyncMock()
+        mock_redis.async_get_cache.return_value = json.dumps({
+            "id": "litellm_poll_test",
+            "object": "response",
+            "status": "in_progress",
+            "output": [],
+            "created_at": 1234567890
+        })
+        
+        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        
+        # All ResponsesAPIResponse fields that can be updated
+        await handler.update_state(
+            polling_id="litellm_poll_test",
+            status="completed",
+            usage={"input_tokens": 10, "output_tokens": 50, "total_tokens": 60},
+            reasoning={"effort": "medium"},
+            tool_choice={"type": "auto"},
+            tools=[{"type": "function", "function": {"name": "test"}}],
+            model="gpt-4o",
+            instructions="You are a helpful assistant",
+            temperature=0.7,
+            top_p=0.9,
+            max_output_tokens=1000,
+            previous_response_id="resp_prev_123",
+            text={"format": {"type": "text"}},
+            truncation="auto",
+            parallel_tool_calls=True,
+            user="user_123",
+            store=True,
+            incomplete_details={"reason": "max_output_tokens"},
+        )
+        
+        call_args = mock_redis.async_set_cache.call_args
+        stored = json.loads(call_args.kwargs["value"])
+        
+        # Verify all fields are stored correctly
+        assert stored["status"] == "completed"
+        assert stored["usage"] == {"input_tokens": 10, "output_tokens": 50, "total_tokens": 60}
+        assert stored["reasoning"] == {"effort": "medium"}
+        assert stored["tool_choice"] == {"type": "auto"}
+        assert stored["tools"] == [{"type": "function", "function": {"name": "test"}}]
+        assert stored["model"] == "gpt-4o"
+        assert stored["instructions"] == "You are a helpful assistant"
+        assert stored["temperature"] == 0.7
+        assert stored["top_p"] == 0.9
+        assert stored["max_output_tokens"] == 1000
+        assert stored["previous_response_id"] == "resp_prev_123"
+        assert stored["text"] == {"format": {"type": "text"}}
+        assert stored["truncation"] == "auto"
+        assert stored["parallel_tool_calls"] is True
+        assert stored["user"] == "user_123"
+        assert stored["store"] is True
+        assert stored["incomplete_details"] == {"reason": "max_output_tokens"}
+
+    @pytest.mark.asyncio
+    async def test_update_state_preserves_existing_fields(self):
+        """Test that update_state preserves fields not being updated"""
+        mock_redis = AsyncMock()
+        mock_redis.async_get_cache.return_value = json.dumps({
+            "id": "litellm_poll_test",
+            "object": "response",
+            "status": "in_progress",
+            "output": [{"id": "item_1", "type": "message"}],
+            "created_at": 1234567890,
+            "model": "gpt-4o",
+            "temperature": 0.5,
+        })
+        
+        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        
+        # Only update status
+        await handler.update_state(
+            polling_id="litellm_poll_test",
+            status="completed",
+        )
+        
+        call_args = mock_redis.async_set_cache.call_args
+        stored = json.loads(call_args.kwargs["value"])
+        
+        # Verify existing fields are preserved
+        assert stored["status"] == "completed"
+        assert stored["model"] == "gpt-4o"
+        assert stored["temperature"] == 0.5
+        assert stored["output"] == [{"id": "item_1", "type": "message"}]
+
+    @pytest.mark.asyncio
     async def test_update_state_with_error_sets_failed_status(self):
         """Test that providing an error automatically sets status to failed"""
         mock_redis = AsyncMock()
