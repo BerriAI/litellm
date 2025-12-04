@@ -1,6 +1,5 @@
 import asyncio
 import json
-from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -80,7 +79,7 @@ async def _background_streaming_task(
         # Process streaming response following OpenAI events format
         # https://platform.openai.com/docs/api-reference/responses-streaming
         output_items = {}  # Track output items by ID
-        accumulated_text = {}  # Track accumulated text deltas by (output_index, content_index)
+        accumulated_text = {}  # Track accumulated text deltas by (item_id, content_index)
         usage_data = None
         reasoning_data = None
         tool_choice_data = None
@@ -145,7 +144,6 @@ async def _background_streaming_task(
                             # Text delta - accumulate text content
                             # https://platform.openai.com/docs/api-reference/responses-streaming/response-text-delta
                             item_id = event.get("item_id")
-                            output_index = event.get("output_index", 0)
                             content_index = event.get("content_index", 0)
                             delta = event.get("delta", "")
                             
