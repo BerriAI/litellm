@@ -43,6 +43,10 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
+from litellm.router_utils.common_utils import (
+    filter_team_based_models,
+    filter_web_search_deployments,
+)
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import (
@@ -7445,7 +7449,6 @@ class Router:
         *OR*
         - Dict, if specific model chosen
         """
-        from litellm.router_utils.common_utils import filter_team_based_models
 
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
@@ -7461,6 +7464,15 @@ class Router:
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
+
+        verbose_router_logger.debug(f"healthy_deployments after team filter: {healthy_deployments}")
+
+        healthy_deployments = filter_web_search_deployments(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
+
+        verbose_router_logger.debug(f"healthy_deployments after web search filter: {healthy_deployments}")
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
