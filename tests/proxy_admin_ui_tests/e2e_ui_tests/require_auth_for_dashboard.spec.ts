@@ -10,7 +10,7 @@ test.describe("Authentication Checks", () => {
     page.on("console", (msg) => console.log("PAGE LOG:", msg.text()));
 
     const protectedPageUrl = "http://localhost:4000/ui?page=llm-playground";
-    const expectedRedirectUrl = "http://localhost:4000/ui/login";
+    const expectedRedirectUrl = "http://localhost:4000/ui/login/";
 
     console.log(
       `Attempting to navigate to protected page: ${protectedPageUrl}`

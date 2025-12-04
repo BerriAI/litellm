@@ -11,6 +11,7 @@ import { test, expect } from "@playwright/test";
 test("admin login test", async ({ page }) => {
   // Go to the specified URL
   await page.goto("http://localhost:4000/ui");
+  await page.waitForLoadState("networkidle");
 
   await page.screenshot({ path: "test-results/login_before.png" });
 
