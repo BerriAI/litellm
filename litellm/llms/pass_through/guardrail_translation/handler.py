@@ -118,7 +118,7 @@ class PassThroughEndpointHandler(BaseTranslation):
             return data
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs={"texts": [text_to_check]},
             request_data=data,
             input_type="request",
@@ -178,7 +178,7 @@ class PassThroughEndpointHandler(BaseTranslation):
             request_data["litellm_metadata"] = user_metadata
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs={"texts": [text_to_check]},
             request_data=request_data,
             input_type="response",
