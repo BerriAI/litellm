@@ -27,6 +27,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     BlockedWord,
@@ -304,12 +305,11 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        texts: List[str],
+        inputs: "GenericGuardrailAPIInputs",
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        images: Optional[List[str]] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> "GenericGuardrailAPIInputs":
         """
         Apply content filtering guardrail to a batch of texts.
 
@@ -317,17 +317,19 @@ class ContentFilterGuardrail(CustomGuardrail):
         either blocking the request or masking the sensitive content.
 
         Args:
-            texts: List of texts to apply the guardrail to
+            inputs: Dictionary containing texts and optional images
             request_data: Request data dictionary for logging metadata
             input_type: Whether this is a "request" or "response"
-            images: Optional list of images (not processed)
+            logging_obj: Optional logging object
 
         Returns:
-            Tuple of (processed_texts, images) - texts may be masked, images unchanged
+            GenericGuardrailAPIInputs - processed_texts may be masked, images unchanged
 
         Raises:
             HTTPException: If sensitive content is detected and action is BLOCK
         """
+        texts = inputs.get("texts", [])
+
         verbose_proxy_logger.debug(
             f"ContentFilterGuardrail: Applying guardrail to {len(texts)} text(s)"
         )
@@ -386,7 +388,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug(
             "ContentFilterGuardrail: Guardrail applied successfully"
         )
-        return processed_texts, images
+        inputs["texts"] = processed_texts
+        return inputs
 
     async def async_post_call_streaming_iterator_hook(
         self,
@@ -423,11 +426,16 @@ class ContentFilterGuardrail(CustomGuardrail):
                         if isinstance(choice.delta.content, str):
                             # Check the chunk content using apply_guardrail
                             try:
-                                processed_content = await self.apply_guardrail(
-                                    texts=[choice.delta.content],
+                                guardrailed_inputs = await self.apply_guardrail(
+                                    inputs={"texts": [choice.delta.content]},
                                     input_type="response",
-                                    images=None,
                                     request_data=request_data,
+                                )
+                                processed_texts = guardrailed_inputs.get("texts", [])
+                                processed_content = (
+                                    processed_texts[0]
+                                    if processed_texts
+                                    else choice.delta.content
                                 )
                                 if processed_content != choice.delta.content:
                                     choice.delta.content = processed_content

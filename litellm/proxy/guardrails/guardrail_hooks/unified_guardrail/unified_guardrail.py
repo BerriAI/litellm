@@ -193,6 +193,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             "guardrail_to_apply", None
         )
 
+
         # Get sampling rate from guardrail config or optional_params, default to 5
         sampling_rate = 5
         if guardrail_to_apply is not None:
