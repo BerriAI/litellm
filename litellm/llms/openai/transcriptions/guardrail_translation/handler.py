@@ -89,7 +89,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
                 request_data["litellm_metadata"] = user_metadata
 
             guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=[original_text],
+                inputs={"texts": [original_text]},
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,

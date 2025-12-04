@@ -40,7 +40,7 @@ async def test_bedrock_apply_guardrail_success():
 
         # Test the apply_guardrail method with new signature
         result, _ = await guardrail.apply_guardrail(
-            texts=["This is a test message with some content"],
+            inputs={"texts": ["This is a test message with some content"]},
             request_data={},
             input_type="request",
         )
@@ -71,7 +71,9 @@ async def test_bedrock_apply_guardrail_blocked():
         # Test the apply_guardrail method should raise an exception
         with pytest.raises(Exception) as exc_info:
             await guardrail.apply_guardrail(
-                texts=["This is blocked content"], request_data={}, input_type="request"
+                inputs={"texts": ["This is blocked content"]},
+                request_data={},
+                input_type="request",
             )
 
         assert "Content blocked by Bedrock guardrail" in str(exc_info.value)
@@ -101,7 +103,7 @@ async def test_bedrock_apply_guardrail_with_masking():
 
         # Test the apply_guardrail method with new signature
         result, _ = await guardrail.apply_guardrail(
-            texts=["This is a test message with sensitive content"],
+            inputs={"texts": ["This is a test message with sensitive content"]},
             request_data={},
             input_type="request",
         )
@@ -130,7 +132,9 @@ async def test_bedrock_apply_guardrail_api_failure():
         # Test the apply_guardrail method should raise an exception
         with pytest.raises(Exception) as exc_info:
             await guardrail.apply_guardrail(
-                texts=["This is a test message"], request_data={}, input_type="request"
+                inputs={"texts": ["This is a test message"]},
+                request_data={},
+                input_type="request",
             )
 
         # The error message should contain the original exception
@@ -216,7 +220,7 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
         mock_api.return_value = {"action": "ALLOWED"}
 
         result, _ = await guardrail.apply_guardrail(
-            texts=["latest question"],
+            inputs={"texts": ["latest question"]},
             request_data=request_data,
             input_type="request",
         )
@@ -250,7 +254,7 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
 
         with pytest.raises(Exception, match="policy") as exc_info:
             await guardrail.apply_guardrail(
-                texts=["blocked"],
+                inputs={"texts": ["blocked"]},
                 request_data=request_data,
                 input_type="request",
             )

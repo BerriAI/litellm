@@ -54,7 +54,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         if isinstance(prompt, str):
             # Single string prompt
             guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=[prompt],
+                inputs={"texts": [prompt]},
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,
@@ -80,7 +80,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
 
             if texts_to_check:
                 guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                    texts=texts_to_check,
+                    inputs={"texts": texts_to_check},
                     request_data=data,
                     input_type="request",
                     logging_obj=litellm_logging_obj,
@@ -153,7 +153,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
                 request_data["litellm_metadata"] = user_metadata
 
             guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=texts_to_check,
+                inputs={"texts": texts_to_check},
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,

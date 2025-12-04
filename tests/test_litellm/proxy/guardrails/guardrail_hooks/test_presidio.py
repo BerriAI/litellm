@@ -571,7 +571,7 @@ async def test_presidio_sets_guardrail_information_in_request_data():
 
     with patch.object(presidio, "check_pii", mock_check_pii):
         await presidio.apply_guardrail(
-            texts=["Test message"],
+            inputs={"texts": ["Test message"]},
             request_data=request_data,
             input_type="request",
         )
@@ -623,7 +623,7 @@ async def test_request_data_flows_to_apply_guardrail():
 
     with patch.object(presidio, "check_pii", mock_check_pii):
         result = await presidio.apply_guardrail(
-            texts=["Test message"],
+            inputs={"texts": ["Test message"]},
             request_data=request_data,
             input_type="request",
         )

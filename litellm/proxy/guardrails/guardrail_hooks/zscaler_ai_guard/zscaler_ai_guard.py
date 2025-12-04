@@ -14,6 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -71,20 +72,19 @@ class ZscalerAIGuard(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        texts: List[str],
+        inputs: "GenericGuardrailAPIInputs",
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        images: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[List[str]]]:
         """
         Apply Zscaler AI Guard guardrail to batch of texts.
 
         Args:
-            texts: List of texts to check
+            inputs: Dictionary containing texts and optional images
             request_data: Request data dictionary containing metadata
             input_type: Whether this is a "request" or "response"
-            images: Optional list of images (not used by Zscaler)
+            logging_obj: Optional logging object
 
         Returns:
             Tuple of (processed_texts, images) - texts unchanged if passed, images unchanged
@@ -92,6 +92,8 @@ class ZscalerAIGuard(CustomGuardrail):
         Raises:
             Exception: If content is blocked by Zscaler AI Guard
         """
+        texts = inputs.get("texts", [])
+        images = inputs.get("images")
         try:
             verbose_proxy_logger.debug(f"ZscalerAIGuard: Checking {len(texts)} text(s)")
 

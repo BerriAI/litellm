@@ -53,7 +53,7 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         # Apply guardrail to the prompt
         if isinstance(prompt, str):
             guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=[prompt],
+                inputs={"texts": [prompt]},
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,

@@ -1215,10 +1215,9 @@ async def apply_guardrail(
             )
 
         response_text = await active_guardrail.apply_guardrail(
-            texts=[request.text],
+            inputs={"texts": [request.text]},
             request_data={},
             input_type="request",
-            images=None,
         )
 
         return ApplyGuardrailResponse(response_text=response_text[0][0])

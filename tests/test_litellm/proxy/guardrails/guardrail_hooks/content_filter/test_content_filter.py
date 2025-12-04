@@ -191,7 +191,9 @@ class TestContentFilterGuardrail:
 
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
-                texts=["My SSN is 123-45-6789"], request_data={}, input_type="request"
+                inputs={"texts": ["My SSN is 123-45-6789"]},
+                request_data={},
+                input_type="request",
             )
 
         assert exc_info.value.status_code == 400
@@ -216,7 +218,7 @@ class TestContentFilterGuardrail:
         )
 
         result, _ = await guardrail.apply_guardrail(
-            texts=["Contact me at test@example.com"],
+            inputs={"texts": ["Contact me at test@example.com"]},
             request_data={},
             input_type="request",
         )
@@ -244,7 +246,7 @@ class TestContentFilterGuardrail:
         )
 
         result, _ = await guardrail.apply_guardrail(
-            texts=["This is PROPRIETARY information"],
+            inputs={"texts": ["This is PROPRIETARY information"]},
             request_data={},
             input_type="request",
         )
@@ -278,7 +280,7 @@ class TestContentFilterGuardrail:
         )
 
         result, _ = await guardrail.apply_guardrail(
-            texts=["Contact user@test.com or SSN: 123-45-6789"],
+            inputs={"texts": ["Contact user@test.com or SSN: 123-45-6789"]},
             request_data={},
             input_type="request",
         )

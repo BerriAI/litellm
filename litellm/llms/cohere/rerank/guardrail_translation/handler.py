@@ -50,7 +50,7 @@ class CohereRerankHandler(BaseTranslation):
         query = data.get("query")
         if query is not None and isinstance(query, str):
             guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=[query],
+                inputs={"texts": [query]},
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,

@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 

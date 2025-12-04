@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -68,12 +69,14 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
+            inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
+            if images_to_check:
+                inputs["images"] = images_to_check
             guardrailed_texts, guardrailed_images = (
                 await guardrail_to_apply.apply_guardrail(
-                    texts=texts_to_check,
+                    inputs=inputs,
                     request_data=data,
                     input_type="request",
-                    images=images_to_check if images_to_check else None,
                     logging_obj=litellm_logging_obj,
                 )
             )
@@ -224,12 +227,14 @@ class AnthropicMessagesHandler(BaseTranslation):
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
+            inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
+            if images_to_check:
+                inputs["images"] = images_to_check
             guardrailed_texts, guardrailed_images = (
                 await guardrail_to_apply.apply_guardrail(
-                    texts=texts_to_check,
+                    inputs=inputs,
                     request_data=request_data,
                     input_type="response",
-                    images=images_to_check if images_to_check else None,
                     logging_obj=litellm_logging_obj,
                 )
             )
@@ -262,11 +267,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
         _, _ = (
             await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
-                texts=[string_so_far],
+                inputs={"texts": [string_so_far]},
                 request_data={},
                 input_type="response",
                 logging_obj=litellm_logging_obj,
-                images=None,
             )
         )
         return responses_so_far

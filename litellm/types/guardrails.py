@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
@@ -738,3 +739,9 @@ class PatchGuardrailRequest(BaseModel):
     guardrail_name: Optional[str] = None
     litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict[str, Any]] = None
+
+
+class GenericGuardrailAPIInputs(TypedDict, total=False):
+    texts: List[str]
+    images: List[str]
+    tool_calls: List[ChatCompletionToolCallChunk]

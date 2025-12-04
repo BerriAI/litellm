@@ -119,7 +119,7 @@ class PassThroughEndpointHandler(BaseTranslation):
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
         await guardrail_to_apply.apply_guardrail(
-            texts=[text_to_check],
+            inputs={"texts": [text_to_check]},
             request_data=data,
             input_type="request",
             logging_obj=litellm_logging_obj,
@@ -179,7 +179,7 @@ class PassThroughEndpointHandler(BaseTranslation):
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
         await guardrail_to_apply.apply_guardrail(
-            texts=[text_to_check],
+            inputs={"texts": [text_to_check]},
             request_data=request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,

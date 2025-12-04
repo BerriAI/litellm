@@ -29,9 +29,11 @@ import aiohttp
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError
@@ -713,17 +715,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        texts: List[str],
+        inputs: "GenericGuardrailAPIInputs",
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        images: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[List[str]]]:
         """
         UI will call this function to check:
             1. If the connection to the guardrail is working
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
+        texts = inputs.get("texts", [])
+        images = inputs.get("images")
+
         new_texts = []
         for text in texts:
             modified_text = await self.check_pii(
