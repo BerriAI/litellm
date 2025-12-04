@@ -40,6 +40,21 @@ Implement `POST /beta/litellm_basic_guardrail_api`
 {
   "texts": ["extracted text from the request"],  // array of text strings
   "images": ["base64_encoded_image_data"],  // optional array of images
+  "tools": [  // optional array of tools (OpenAI ChatCompletionToolParam format)
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get the current weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {"type": "string"}
+          }
+        }
+      }
+    }
+  ],
   "request_data": {
     "user_api_key_hash": "hash of the litellm virtual key used",
     "user_api_key_alias": "alias of the litellm virtual key used",
@@ -74,6 +89,53 @@ Implement `POST /beta/litellm_basic_guardrail_api`
 - `BLOCKED` - LiteLLM raises error and blocks request
 - `NONE` - Request proceeds unchanged  
 - `GUARDRAIL_INTERVENED` - Request proceeds with modified texts/images (provide `texts` and/or `images` fields)
+
+## Parameters
+
+### `tools` Parameter
+
+The `tools` parameter provides information about available function/tool definitions in the request.
+
+**Format:** OpenAI `ChatCompletionToolParam` format (see [OpenAI API reference](https://platform.openai.com/docs/api-reference/chat/create#chat-create-tools))
+
+**Example:**
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "get_weather",
+    "description": "Get the current weather in a location",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string",
+          "description": "City and state, e.g. San Francisco, CA"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["celsius", "fahrenheit"]
+        }
+      },
+      "required": ["location"]
+    }
+  }
+}
+```
+
+**Limitations:**
+- **Input only:** Tools are only passed for `input_type="request"` (pre-call guardrails). Output/response guardrails do not currently receive tool information.
+- **Supported endpoints:** The `tools` parameter is currently supported on the following endpoints:
+  - `/chat/completions` - calls made to LiteLLM Proxy via `/v1/chat/completions`
+  - `/responses` - calls made to LiteLLM Proxy via `/v1/responses` (tools are automatically transformed from Responses API format to Chat Completions format)
+  - `/v1/messages` - calls made to LiteLLM Proxy via `/v1/messages`
+  - Other endpoints (embeddings, image generation, etc.) do not have tool support
+
+**Use cases:**
+- Enforce tool permission policies (e.g., only allow certain users/teams to access specific tools)
+- Validate tool schemas before sending to LLM
+- Log tool usage for audit purposes
+- Block sensitive tools based on user context
 
 ## LiteLLM Configuration
 
@@ -138,6 +200,7 @@ app = FastAPI()
 class GuardrailRequest(BaseModel):
     texts: List[str]
     images: Optional[List[str]] = None
+    tools: Optional[List[Dict[str, Any]]] = None  # OpenAI ChatCompletionToolParam format
     request_data: Dict[str, Any]
     input_type: str  # "request" or "response"
     litellm_call_id: Optional[str] = None
@@ -153,12 +216,26 @@ class GuardrailResponse(BaseModel):
 @app.post("/beta/litellm_basic_guardrail_api")
 async def apply_guardrail(request: GuardrailRequest):
     # Your guardrail logic here
+    
+    # Example: Check text content
     for text in request.texts:
         if "badword" in text.lower():
             return GuardrailResponse(
                 action="BLOCKED",
                 blocked_reason="Content contains prohibited terms"
             )
+    
+    # Example: Check tools (if present in request)
+    if request.tools:
+        for tool in request.tools:
+            if tool.get("type") == "function":
+                function_name = tool.get("function", {}).get("name", "")
+                # Block sensitive tools
+                if function_name in ["delete_data", "access_admin_panel"]:
+                    return GuardrailResponse(
+                        action="BLOCKED",
+                        blocked_reason=f"Tool '{function_name}' is not allowed"
+                    )
     
     return GuardrailResponse(action="NONE")
 ```
