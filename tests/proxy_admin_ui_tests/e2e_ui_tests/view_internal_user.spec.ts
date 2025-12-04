@@ -7,6 +7,9 @@ import { test, expect } from "@playwright/test";
 test("view internal user page", async ({ page }) => {
   // Go to the specified URL
   await page.goto("http://localhost:4000/ui");
+  await page.waitForLoadState("networkidle");
+
+  page.screenshot({ path: "test-results/view_internal_user_before_login.png" });
 
   // Enter "admin" in the username input field
   await page.fill('input[name="username"]', "admin");

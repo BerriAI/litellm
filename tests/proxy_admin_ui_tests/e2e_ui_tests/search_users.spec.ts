@@ -21,7 +21,10 @@ test("user search test", async ({ page }) => {
 
   // Login first
   await page.goto("http://localhost:4000/ui");
+  await page.waitForLoadState("networkidle");
   console.log("Navigated to login page");
+
+  page.screenshot({ path: "test-results/search_users_before_login.png" });
 
   // Wait for login form to be visible
   await page.waitForSelector('input[name="username"]', { timeout: 10000 });
@@ -128,6 +131,7 @@ test("user filter test", async ({ page }) => {
 
   // Login first
   await page.goto("http://localhost:4000/ui");
+  await page.waitForLoadState("networkidle");
   console.log("Navigated to login page");
 
   // Wait for login form to be visible
