@@ -251,7 +251,9 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             if guardrail_detections:
                 # Replace the model response content with guardrail violation message
-                violation_message = self._format_violation_message(guardrail_detections)
+                violation_message = self._format_violation_message(
+                    guardrail_detections, is_output=True
+                )
 
                 # Handle ModelResponse (OpenAI-style chat/text completions)
                 if hasattr(response, "choices") and response.choices:
@@ -389,10 +391,17 @@ class GraySwanGuardrail(CustomGuardrail):
         )
 
         if self.on_flagged_action == "block":
+            # Determine if violation was in input or output
+            violation_location = (
+                "output"
+                if hook_type == GuardrailEventHooks.post_call
+                else "input"
+            )
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": "Blocked by Gray Swan Guardrail",
+                    "violation_location": violation_location,
                     "violation": violation_score,
                     "violated_rules": violated_rules,
                     "mutation": mutation_detected,
@@ -422,7 +431,9 @@ class GraySwanGuardrail(CustomGuardrail):
                 verbose_proxy_logger.info(
                     "Gray Swan Guardrail: Passthrough mode - raising exception to short-circuit LLM call"
                 )
-                violation_message = self._format_violation_message([detection_info])
+                violation_message = self._format_violation_message(
+                    [detection_info], is_output=False
+                )
                 self.raise_passthrough_exception(
                     violation_message=violation_message,
                     request_data=data or {},
@@ -440,12 +451,15 @@ class GraySwanGuardrail(CustomGuardrail):
                     data["metadata"]["guardrail_detections"] = []
                 data["metadata"]["guardrail_detections"].append(detection_info)
 
-    def _format_violation_message(self, guardrail_detections: list) -> str:
+    def _format_violation_message(
+        self, guardrail_detections: list, is_output: bool = False
+    ) -> str:
         """
         Format guardrail detections into a user-friendly violation message.
 
         Args:
             guardrail_detections: List of detection info dictionaries
+            is_output: True if violation is in model output (post_call), False if in input (pre_call/during_call)
 
         Returns:
             Formatted violation message string
@@ -461,8 +475,11 @@ class GraySwanGuardrail(CustomGuardrail):
         mutation = detection.get("mutation", False)
         ipi = detection.get("ipi", False)
 
+        # Indicate whether violation was in input or output
+        violation_location = "the model response" if is_output else "input query"
+
         message_parts = [
-            f"Sorry I can't help with that. According to the Gray Swan Cygnal Guardrail, this request has a violation score of {violation_score:.2f}.",
+            f"Sorry I can't help with that. According to the Gray Swan Cygnal Guardrail, the {violation_location} has a violation score of {violation_score:.2f}.",
         ]
 
         if violated_rules:
