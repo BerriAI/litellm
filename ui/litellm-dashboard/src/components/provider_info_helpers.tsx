@@ -1,4 +1,6 @@
+
 export enum Providers {
+  A2A_Agent = "A2A Agent",
   AIML = "AI/ML API",
   Bedrock = "Amazon Bedrock",
   Anthropic = "Anthropic",
@@ -43,6 +45,7 @@ export enum Providers {
 }
 
 export const provider_map: Record<string, string> = {
+  A2A_Agent: "a2a_agent",
   AIML: "aiml",
   OpenAI: "openai",
   OpenAI_Text: "text-completion-openai",
@@ -89,6 +92,7 @@ export const provider_map: Record<string, string> = {
 const asset_logos_folder = "../ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
+  [Providers.A2A_Agent]: `${asset_logos_folder}a2a_agent.png`,
   [Providers.AIML]: `${asset_logos_folder}aiml_api.svg`,
   [Providers.Anthropic]: `${asset_logos_folder}anthropic.svg`,
   [Providers.AssemblyAI]: `${asset_logos_folder}assemblyai_small.png`,
