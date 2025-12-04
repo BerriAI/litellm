@@ -42,7 +42,12 @@ class LiteLLMPydanticObjectBase(BaseModel):
 
     def __contains__(self, key: str) -> bool:
         """Dict-style 'key in settings' checks"""
-        return hasattr(self, key)
+        # Match dict behavior: return False if value is None (like missing key)
+        try:
+            value = getattr(self, key)
+            return value is not None
+        except AttributeError:
+            return False
 
     def keys(self):
         """Dict-style .keys() method"""
