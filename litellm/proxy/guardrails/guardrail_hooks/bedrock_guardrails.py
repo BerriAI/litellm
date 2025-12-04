@@ -1319,7 +1319,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 "Bedrock Guardrail: Successfully applied guardrail"
             )
 
-            return masked_texts, images
+            return masked_texts or texts, images
 
         except Exception as e:
             verbose_proxy_logger.error(
