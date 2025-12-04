@@ -15,7 +15,7 @@ test("view internal user page", async ({ page }) => {
   await page.fill('input[name="password"]', "gm");
 
   // Click the login button
-  const loginButton = page.locator('input[type="submit"]');
+  const loginButton = page.getByRole("button", { name: "Login" });
   await expect(loginButton).toBeEnabled();
   await loginButton.click();
 
@@ -35,9 +35,9 @@ test("view internal user page", async ({ page }) => {
   const rowCount = await page.locator("tbody tr").count();
   expect(rowCount).toBeGreaterThan(0);
 
-  // Verify table headers are present (including Virtual Keys column)
-  const virtualKeysHeader = page.locator("th", { hasText: "Virtual Keys" });
-  await expect(virtualKeysHeader).toBeVisible();
+  const userIdHeader = page.locator("th", { hasText: "User ID" });
+  page.screenshot({ path: "user_id_header.png" });
+  await expect(userIdHeader).toBeVisible();
 
   // test pagination
   // Wait for pagination controls to be visible
