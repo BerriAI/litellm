@@ -38,6 +38,38 @@ except ImportError:
     pass
 
 
+def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
+    """
+    Extract agent info and set model/custom_llm_provider for cost tracking.
+
+    Sets model info on the litellm_logging_obj if available.
+    Returns the agent name for logging.
+    """
+    agent_name = "unknown"
+
+    # Try to get agent card from our stored attribute first, then fallback to SDK attribute
+    agent_card = getattr(a2a_client, "_litellm_agent_card", None)
+    if agent_card is None:
+        agent_card = getattr(a2a_client, "agent_card", None)
+
+    if agent_card is not None:
+        agent_name = getattr(agent_card, "name", "unknown") or "unknown"
+
+    # Build model string
+    model = f"a2a_agent/{agent_name}"
+    custom_llm_provider = "a2a_agent"
+
+    # Set on litellm_logging_obj if available (for standard logging payload)
+    litellm_logging_obj = kwargs.get("litellm_logging_obj")
+    if litellm_logging_obj is not None:
+        litellm_logging_obj.model = model
+        litellm_logging_obj.custom_llm_provider = custom_llm_provider
+        litellm_logging_obj.model_call_details["model"] = model
+        litellm_logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+
+    return agent_name
+
+
 @client
 async def asend_message(
     a2a_client: "A2AClientType",
@@ -80,7 +112,9 @@ async def asend_message(
         response = await asend_message(a2a_client=a2a_client, request=request)
         ```
     """
-    verbose_logger.info(f"A2A send_message request_id={request.id}")
+    agent_name = _get_a2a_model_info(a2a_client, kwargs)
+
+    verbose_logger.info(f"A2A send_message request_id={request.id}, agent={agent_name}")
 
     a2a_response = await a2a_client.send_message(request)
 
@@ -207,11 +241,14 @@ async def create_a2a_client(
         f"Resolved agent card: {agent_card.name if hasattr(agent_card, 'name') else 'unknown'}"
     )
 
-    # Create and return A2A client
+    # Create A2A client
     a2a_client = _A2AClient(
         httpx_client=httpx_client,
         agent_card=agent_card,
     )
+
+    # Store agent_card on client for later retrieval (SDK doesn't expose it)
+    a2a_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
 
     verbose_logger.info(f"A2A client created for {base_url}")
 

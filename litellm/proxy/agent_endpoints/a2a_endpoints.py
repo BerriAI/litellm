@@ -8,7 +8,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from litellm._logging import verbose_proxy_logger
@@ -43,24 +43,6 @@ def _get_agent(agent_id: str):
     if agent is None:
         agent = global_agent_registry.get_agent_by_name(agent_name=agent_id)
     return agent
-
-
-async def _handle_send_message(
-    a2a_client: Any,
-    request_id: str,
-    params: dict,
-) -> JSONResponse:
-    """Handle message/send method."""
-    from a2a.types import MessageSendParams, SendMessageRequest
-
-    from litellm.a2a import asend_message
-
-    a2a_request = SendMessageRequest(
-        id=request_id,
-        params=MessageSendParams(**params),
-    )
-    response = await asend_message(a2a_client=a2a_client, request=a2a_request)
-    return JSONResponse(content=response.model_dump(mode="json", exclude_none=True))
 
 
 async def _handle_stream_message(
@@ -136,6 +118,7 @@ async def get_agent_card(
 async def invoke_agent_a2a(
     agent_id: str,
     request: Request,
+    fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -145,7 +128,13 @@ async def invoke_agent_a2a(
     - message/send: Send a message and get a response
     - message/stream: Send a message and stream the response
     """
-    from litellm.a2a import create_a2a_client
+    from litellm.a2a import asend_message, create_a2a_client
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        proxy_config,
+        version,
+    )
 
     body = {}
     try:
@@ -165,18 +154,50 @@ async def invoke_agent_a2a(
         if agent is None:
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
 
-        # Get backend URL
+        # Get backend URL and agent name
         agent_url = agent.agent_card_params.get("url")
+        agent_name = agent.agent_card_params.get("name", agent_id)
         if not agent_url:
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
 
         verbose_proxy_logger.info(f"Proxying A2A request to agent '{agent_id}' at {agent_url}")
 
-        # Create A2A client and dispatch to handler
+        # Set up data dict for litellm processing
+        body.update({
+            "model": f"a2a_agent/{agent_name}",
+            "custom_llm_provider": "a2a_agent",
+        })
+
+        # Add litellm data (user_api_key, user_id, team_id, etc.)
+        data = await add_litellm_data_to_request(
+            data=body,
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=proxy_config,
+            general_settings=general_settings,
+            version=version,
+        )
+
+        # Create A2A client
         a2a_client = await create_a2a_client(base_url=agent_url)
 
         if method == "message/send":
-            return await _handle_send_message(a2a_client, request_id, params)
+            from a2a.types import MessageSendParams, SendMessageRequest
+
+            a2a_request = SendMessageRequest(
+                id=request_id,
+                params=MessageSendParams(**params),
+            )
+
+            # Pass litellm data through kwargs for proper logging
+            response = await asend_message(
+                a2a_client=a2a_client,
+                request=a2a_request,
+                metadata=data.get("metadata", {}),
+                proxy_server_request=data.get("proxy_server_request"),
+            )
+            return JSONResponse(content=response.model_dump(mode="json", exclude_none=True))
+
         elif method == "message/stream":
             return await _handle_stream_message(a2a_client, request_id, params)
         else:
