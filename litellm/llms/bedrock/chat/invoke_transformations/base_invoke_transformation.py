@@ -134,6 +134,60 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=fake_stream,
         )
 
+    def _build_cohere_request(
+        self, model: str, prompt: str, chat_history: Optional[list], inference_params: dict, stream: Optional[bool]
+    ) -> dict:
+        """Build request data for Cohere models."""
+        if model.startswith("cohere.command-r"):
+            config = litellm.AmazonCohereChatConfig().get_config()
+            for k, v in config.items():
+                if k not in inference_params:
+                    inference_params[k] = v
+            _data = {"message": prompt, **inference_params}
+            if chat_history is not None:
+                _data["chat_history"] = chat_history
+            return _data
+        else:
+            config = litellm.AmazonCohereConfig.get_config()
+            for k, v in config.items():
+                if k not in inference_params:
+                    inference_params[k] = v
+            if stream is True:
+                inference_params["stream"] = True
+            return {"prompt": prompt, **inference_params}
+
+    def _build_ai21_request(self, prompt: str, inference_params: dict) -> dict:
+        """Build request data for AI21 models."""
+        config = litellm.AmazonAI21Config.get_config()
+        for k, v in config.items():
+            if k not in inference_params:
+                inference_params[k] = v
+        return {"prompt": prompt, **inference_params}
+
+    def _build_mistral_request(self, prompt: str, inference_params: dict) -> dict:
+        """Build request data for Mistral models."""
+        config = litellm.AmazonMistralConfig.get_config()
+        for k, v in config.items():
+            if k not in inference_params:
+                inference_params[k] = v
+        return {"prompt": prompt, **inference_params}
+
+    def _build_amazon_titan_request(self, prompt: str, inference_params: dict) -> dict:
+        """Build request data for Amazon Titan models."""
+        config = litellm.AmazonTitanConfig.get_config()
+        for k, v in config.items():
+            if k not in inference_params:
+                inference_params[k] = v
+        return {"inputText": prompt, "textGenerationConfig": inference_params}
+
+    def _build_llama_request(self, prompt: str, inference_params: dict) -> dict:
+        """Build request data for Meta/Llama/DeepSeek models."""
+        config = litellm.AmazonLlamaConfig.get_config()
+        for k, v in config.items():
+            if k not in inference_params:
+                inference_params[k] = v
+        return {"prompt": prompt, **inference_params}
+
     def transform_request(
         self,
         model: str,
@@ -161,45 +215,17 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             for k, v in inference_params.items()
             if k not in self.aws_authentication_params
         }
-        request_data: dict = {}
+        
         if provider == "cohere":
-            if model.startswith("cohere.command-r"):
-                ## LOAD CONFIG
-                config = litellm.AmazonCohereChatConfig().get_config()
-                for k, v in config.items():
-                    if (
-                        k not in inference_params
-                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                        inference_params[k] = v
-                _data = {"message": prompt, **inference_params}
-                if chat_history is not None:
-                    _data["chat_history"] = chat_history
-                request_data = _data
-            else:
-                ## LOAD CONFIG
-                config = litellm.AmazonCohereConfig.get_config()
-                for k, v in config.items():
-                    if (
-                        k not in inference_params
-                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                        inference_params[k] = v
-                if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
-                request_data = {"prompt": prompt, **inference_params}
+            return self._build_cohere_request(model, prompt, chat_history, inference_params, stream)
         elif provider == "anthropic":
-            transformed_request = (
-                litellm.AmazonAnthropicClaudeConfig().transform_request(
-                    model=model,
-                    messages=messages,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    headers=headers,
-                )
+            return litellm.AmazonAnthropicClaudeConfig().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
             )
-
-            return transformed_request
         elif provider == "nova":
             return litellm.AmazonInvokeNovaConfig().transform_request(
                 model=model,
@@ -209,47 +235,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 headers=headers,
             )
         elif provider == "ai21":
-            ## LOAD CONFIG
-            config = litellm.AmazonAI21Config.get_config()
-            for k, v in config.items():
-                if (
-                    k not in inference_params
-                ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                    inference_params[k] = v
-
-            request_data = {"prompt": prompt, **inference_params}
+            return self._build_ai21_request(prompt, inference_params)
         elif provider == "mistral":
-            ## LOAD CONFIG
-            config = litellm.AmazonMistralConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in inference_params
-                ):  # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
-                    inference_params[k] = v
-
-            request_data = {"prompt": prompt, **inference_params}
+            return self._build_mistral_request(prompt, inference_params)
         elif provider == "amazon":  # amazon titan
-            ## LOAD CONFIG
-            config = litellm.AmazonTitanConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in inference_params
-                ):  # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
-                    inference_params[k] = v
-
-            request_data = {
-                "inputText": prompt,
-                "textGenerationConfig": inference_params,
-            }
+            return self._build_amazon_titan_request(prompt, inference_params)
         elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
-            ## LOAD CONFIG
-            config = litellm.AmazonLlamaConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in inference_params
-                ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                    inference_params[k] = v
-            request_data = {"prompt": prompt, **inference_params}
+            return self._build_llama_request(prompt, inference_params)
         elif provider == "twelvelabs":
             return litellm.AmazonTwelveLabsPegasusConfig().transform_request(
                 model=model,
@@ -274,8 +266,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     provider, model
                 ),
             )
-
-        return request_data
 
     def transform_response(  # noqa: PLR0915
         self,

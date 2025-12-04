@@ -32,7 +32,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from openai import BaseModel
 
-from openai import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -339,7 +338,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         Process output streaming response by applying guardrails to text content.
         """
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        await guardrail_to_apply.apply_guardrail(
             inputs={"texts": [string_so_far]},
             request_data={},
             input_type="response",

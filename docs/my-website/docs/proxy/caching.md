@@ -319,6 +319,8 @@ litellm_settings:
   cache_params:
     type: qdrant-semantic
     qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
+    qdrant_semantic_cache_embedding_dimensions: 768 # dimensions of the embedding model - auto-detected if not provided
+    qdrant_distance_metric: Cosine # distance metric for similarity calculations (Cosine, Dot, Euclid)
     qdrant_collection_name: test_collection
     qdrant_quantization_config: binary
     similarity_threshold: 0.8   # similarity threshold for semantic cache
