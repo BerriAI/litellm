@@ -401,6 +401,15 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
     ]
 
+    agent_routes = [
+        "/v1/agents",
+        "/agents",
+
+        "/a2a/{agent_id}",
+        "/a2a/{agent_id}/message/send",
+        "/a2a/{agent_id}/message/stream",
+    ]
+
     google_routes = [
         "/v1beta/models/{model_name}:countTokens",
         "/v1beta/models/{model_name}:generateContent",
@@ -423,6 +432,7 @@ class LiteLLMRoutes(enum.Enum):
         + apply_guardrail_routes
         + mcp_routes
         + litellm_native_routes
+        + agent_routes
     )
     info_routes = [
         "/key/info",
