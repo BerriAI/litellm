@@ -939,7 +939,7 @@ def completion_cost(  # noqa: PLR0915
                     CallTypes.asend_message.value,
                     CallTypes.send_message.value,
                 ):
-                    from litellm.a2a.cost_calculator import A2ACostCalculator
+                    from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 
                     return A2ACostCalculator.calculate_a2a_cost(
                         litellm_logging_obj=litellm_logging_obj

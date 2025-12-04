@@ -26,7 +26,7 @@ class A2AClient:
 
     Example:
         ```python
-        from litellm.a2a import A2AClient
+        from litellm.a2a_protocol import A2AClient
         from a2a.types import SendMessageRequest, MessageSendParams
         from uuid import uuid4
 
@@ -68,7 +68,7 @@ class A2AClient:
     async def _get_client(self) -> "A2AClientType":
         """Get or create the underlying A2A client."""
         if self._a2a_client is None:
-            from litellm.a2a.main import create_a2a_client
+            from litellm.a2a_protocol.main import create_a2a_client
 
             self._a2a_client = await create_a2a_client(
                 base_url=self.base_url,
@@ -79,7 +79,7 @@ class A2AClient:
 
     async def get_agent_card(self) -> "AgentCard":
         """Fetch the agent card from the server."""
-        from litellm.a2a.main import aget_agent_card
+        from litellm.a2a_protocol.main import aget_agent_card
 
         return await aget_agent_card(
             base_url=self.base_url,
@@ -91,7 +91,7 @@ class A2AClient:
         self, request: "SendMessageRequest"
     ) -> LiteLLMSendMessageResponse:
         """Send a message to the A2A agent."""
-        from litellm.a2a.main import asend_message
+        from litellm.a2a_protocol.main import asend_message
 
         a2a_client = await self._get_client()
         return await asend_message(a2a_client=a2a_client, request=request)
@@ -100,7 +100,7 @@ class A2AClient:
         self, request: "SendStreamingMessageRequest"
     ) -> AsyncIterator["SendStreamingMessageResponse"]:
         """Send a streaming message to the A2A agent."""
-        from litellm.a2a.main import asend_message_streaming
+        from litellm.a2a_protocol.main import asend_message_streaming
 
         a2a_client = await self._get_client()
         async for chunk in asend_message_streaming(a2a_client=a2a_client, request=request):

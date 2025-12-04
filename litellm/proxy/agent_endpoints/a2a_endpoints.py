@@ -138,7 +138,7 @@ async def invoke_agent_a2a(
     - message/send: Send a message and get a response
     - message/stream: Send a message and stream the response
     """
-    from litellm.a2a import asend_message, create_a2a_client
+    from litellm.a2a_protocol import asend_message, create_a2a_client
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import (
         general_settings,

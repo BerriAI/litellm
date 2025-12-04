@@ -91,7 +91,7 @@ async def asend_message(
 
     Example:
         ```python
-        from litellm.a2a import asend_message, create_a2a_client
+        from litellm.a2a_protocol import asend_message, create_a2a_client
         from a2a.types import SendMessageRequest, MessageSendParams
         from uuid import uuid4
 
@@ -205,7 +205,7 @@ async def create_a2a_client(
 
     Example:
         ```python
-        from litellm.a2a import create_a2a_client, asend_message
+        from litellm.a2a_protocol import create_a2a_client, asend_message
 
         # Create client once
         client = await create_a2a_client(base_url="http://localhost:10001")

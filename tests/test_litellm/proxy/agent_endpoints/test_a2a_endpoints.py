@@ -75,10 +75,10 @@ async def test_invoke_agent_a2a_adds_litellm_data():
         "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request",
         side_effect=mock_add_litellm_data,
     ) as mock_add_data, patch(
-        "litellm.a2a.create_a2a_client",
+        "litellm.a2a_protocol.create_a2a_client",
         new_callable=AsyncMock,
     ), patch(
-        "litellm.a2a.asend_message",
+        "litellm.a2a_protocol.asend_message",
         new_callable=AsyncMock,
         return_value=mock_response,
     ), patch(

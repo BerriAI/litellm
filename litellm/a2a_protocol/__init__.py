@@ -8,7 +8,7 @@ This module provides a thin wrapper around the official `a2a` SDK that:
 
 Example usage (standalone functions with @client decorator):
     ```python
-    from litellm.a2a import asend_message
+    from litellm.a2a_protocol import asend_message
     from a2a.types import SendMessageRequest, MessageSendParams
     from uuid import uuid4
 
@@ -31,15 +31,15 @@ Example usage (standalone functions with @client decorator):
 
 Example usage (class-based):
     ```python
-    from litellm.a2a import A2AClient
+    from litellm.a2a_protocol import A2AClient
 
     client = A2AClient(base_url="http://localhost:10001")
     response = await client.send_message(request)
     ```
 """
 
-from litellm.a2a.client import A2AClient
-from litellm.a2a.main import (
+from litellm.a2a_protocol.client import A2AClient
+from litellm.a2a_protocol.main import (
     aget_agent_card,
     asend_message,
     asend_message_streaming,
