@@ -1,14 +1,10 @@
 # Adding OpenAI-Compatible Providers
 
+For providers that follow the OpenAI API format, you can add support via a simple JSON configuration.
+
 ## Quick Start
 
-For providers with OpenAI-compatible APIs, add them via JSON configuration - no Python code required.
-
-## Steps
-
-### 1. Add to JSON Config
-
-Edit `litellm/llms/openai_like/providers.json`:
+Edit `litellm/llms/openai_like/providers.json` and add your provider:
 
 ```json
 {
@@ -19,85 +15,55 @@ Edit `litellm/llms/openai_like/providers.json`:
 }
 ```
 
-### 2. Add to Provider Enum
+That's it! The provider is now available.
 
-Add one line to `litellm/types/utils.py`:
-
-```python
-class LlmProviders(str, Enum):
-    # ... existing providers ...
-    YOUR_PROVIDER = "your_provider"
-```
-
-### 3. Test It
+## Usage
 
 ```python
 import litellm
 import os
 
-os.environ["YOUR_PROVIDER_API_KEY"] = "your-key"
+os.environ["YOUR_PROVIDER_API_KEY"] = "your-api-key"
 
 response = litellm.completion(
     model="your_provider/model-name",
-    messages=[{"role": "user", "content": "Hello"}],
+    messages=[{"role": "user", "content": "Hello!"}],
 )
 ```
 
-## Optional Configuration
+## Configuration Options
 
-### Parameter Mapping
+### Required Fields
 
-If your provider uses different parameter names:
+- **`base_url`**: API endpoint (e.g., `https://api.provider.com/v1`)
+- **`api_key_env`**: Environment variable name for the API key
+
+### Optional Fields
 
 ```json
 {
   "your_provider": {
     "base_url": "https://api.yourprovider.com/v1",
     "api_key_env": "YOUR_PROVIDER_API_KEY",
+    
+    // Override base_url via environment variable
+    "api_base_env": "YOUR_PROVIDER_API_BASE",
+    
+    // Base class: "openai_gpt" (default) or "openai_like"
+    "base_class": "openai_gpt",
+    
+    // Map parameter names
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
-    }
-  }
-}
-```
-
-### Base URL Override
-
-Allow users to override the base URL:
-
-```json
-{
-  "your_provider": {
-    "base_url": "https://api.yourprovider.com/v1",
-    "api_key_env": "YOUR_PROVIDER_API_KEY",
-    "api_base_env": "YOUR_PROVIDER_API_BASE"
-  }
-}
-```
-
-### Base Class Selection
-
-Choose between `openai_gpt` (default) or `openai_like`:
-
-```json
-{
-  "your_provider": {
-    "base_url": "https://api.yourprovider.com/v1",
-    "api_key_env": "YOUR_PROVIDER_API_KEY",
-    "base_class": "openai_like"
-  }
-}
-```
-
-### Content Conversion
-
-If your provider doesn't support content as a list:
-
-```json
-{
-  "your_provider": {
-    "base_url": "https://api.yourprovider.com/v1",
-    "api_key_env": "YOUR_PROVIDER_API_KEY",
+    },
+    
+    // Parameter constraints
+    "constraints": {
+      "temperature_max": 1.0,
+      "temperature_min": 0.0
+    },
+    
+    // Special handling flags
     "special_handling": {
       "convert_content_list_to_string": true
     }
@@ -105,20 +71,43 @@ If your provider doesn't support content as a list:
 }
 ```
 
-## Complete Example
+## Examples
+
+### Simple Provider (Fully OpenAI-Compatible)
+
+```json
+{
+  "hyperbolic": {
+    "base_url": "https://api.hyperbolic.xyz/v1",
+    "api_key_env": "HYPERBOLIC_API_KEY"
+  }
+}
+```
+
+### Provider with Parameter Mapping
 
 ```json
 {
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
-    "api_base_env": "PUBLICAI_API_BASE",
-    "base_class": "openai_gpt",
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
-    },
-    "special_handling": {
-      "convert_content_list_to_string": true
+    }
+  }
+}
+```
+
+### Provider with Temperature Constraints
+
+```json
+{
+  "custom_provider": {
+    "base_url": "https://api.custom.com/v1",
+    "api_key_env": "CUSTOM_API_KEY",
+    "constraints": {
+      "temperature_max": 1.0,
+      "temperature_min": 0.1
     }
   }
 }
@@ -127,44 +116,54 @@ If your provider doesn't support content as a list:
 ## When to Use Python Instead
 
 Use a Python config class if you need:
-- Custom authentication (OAuth, JWT, etc.)
+- Custom authentication (OAuth, token rotation)
 - Complex request/response transformations
 - Provider-specific streaming logic
-- Advanced parameter validation
+- Advanced tool calling transformations
 
-## Supported Fields
+For simple OpenAI-compatible providers, JSON is recommended.
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `base_url` | ✅ | API endpoint base URL |
-| `api_key_env` | ✅ | Environment variable for API key |
-| `api_base_env` | ❌ | Environment variable to override base_url |
-| `base_class` | ❌ | "openai_gpt" (default) or "openai_like" |
-| `param_mappings` | ❌ | Map OpenAI params to provider params |
-| `special_handling` | ❌ | Provider-specific transformations |
+## Testing Your Provider
 
-## Testing
+```python
+import litellm
+import os
 
-```bash
-# Set your API key
-export YOUR_PROVIDER_API_KEY="your-key"
+# Set API key
+os.environ["YOUR_PROVIDER_API_KEY"] = "your-key"
 
 # Test basic completion
-python3 -c "
-import litellm
 response = litellm.completion(
-    model='your_provider/model-name',
-    messages=[{'role': 'user', 'content': 'test'}]
+    model="your_provider/model-name",
+    messages=[{"role": "user", "content": "test"}],
+    max_tokens=10,
 )
 print(response.choices[0].message.content)
-"
+
+# Test streaming
+response = litellm.completion(
+    model="your_provider/model-name",
+    messages=[{"role": "user", "content": "test"}],
+    stream=True,
+)
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
 ```
 
-## Contributing
+## Supported Features
 
-Submit a PR with:
-1. Your provider added to `providers.json`
-2. Provider enum added to `LlmProviders`
-3. Test showing it works
+JSON-configured providers automatically support:
+- ✅ Basic completions
+- ✅ Streaming
+- ✅ Async operations
+- ✅ Parameter mapping
+- ✅ Environment variable overrides
+- ✅ Temperature constraints
+- ✅ Content format conversions
 
-That's it!
+## File Location
+
+**Config file**: `litellm/llms/openai_like/providers.json`
+
+**Add provider**: Edit the JSON file and add your configuration under a new key.
