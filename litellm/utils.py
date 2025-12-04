@@ -877,6 +877,7 @@ async def _client_async_logging_helper(
             )
         )
 
+        return
         ################################################
         # Sync Logging Worker
         ################################################
