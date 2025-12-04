@@ -24,7 +24,10 @@ You can add A2A-compatible agents through the LiteLLM Admin UI.
 2. Click **Add Agent**
 3. Enter the agent name (e.g., `ij-local`) and the URL of your A2A agent
 
-<!-- <Image img={require('../img/add_agent1.png')} /> -->
+<Image 
+  img={require('../img/add_agent_1.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
 
 The URL should be the invocation URL for your A2A agent (e.g., `http://localhost:10001`).
 
@@ -132,7 +135,10 @@ The logs show:
 - **User, Key, Team** information for tracking who made the request
 - **Latency and cost** metrics
 
-<Image img={require('../img/agent2.png')} />
+<Image 
+  img={require('../img/agent2.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
 
 ## API Reference
 
