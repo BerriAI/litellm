@@ -1096,7 +1096,7 @@ experimental = False
 #### GLOBAL VARIABLES ####
 llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
-general_settings: dict = {}
+general_settings = ConfigGeneralSettings()
 config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
 log_file = "api_log.json"
 worker_config = None
@@ -2357,9 +2357,10 @@ class ProxyConfig:
                     setattr(litellm, key, value)
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
-        general_settings = config.get("general_settings", {})
-        if general_settings is None:
-            general_settings = {}
+        general_settings_dict = config.get("general_settings", {})
+        if general_settings_dict is None:
+            general_settings_dict = {}
+        general_settings = ConfigGeneralSettings(**general_settings_dict)
         if general_settings:
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
@@ -3159,7 +3160,7 @@ class ProxyConfig:
 
         Args:
             config_data: dict
-            general_settings: dict - global general_settings currently in use
+            general_settings: ConfigGeneralSettings - global general_settings currently in use
             proxy_logging_obj: ProxyLogging
         """
         _general_settings = config_data.get("general_settings", {})
@@ -3188,7 +3189,7 @@ class ProxyConfig:
                 proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
                     "alerting"
                 ]
-            elif isinstance(general_settings, dict):
+            else:
                 general_settings["alerting"] = _general_settings["alerting"]
                 proxy_logging_obj.alerting = general_settings["alerting"]
                 proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
