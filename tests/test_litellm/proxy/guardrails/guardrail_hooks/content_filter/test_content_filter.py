@@ -191,7 +191,9 @@ class TestContentFilterGuardrail:
 
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
-                texts=["My SSN is 123-45-6789"], request_data={}, input_type="request"
+                inputs={"texts": ["My SSN is 123-45-6789"]},
+                request_data={},
+                input_type="request",
             )
 
         assert exc_info.value.status_code == 400
@@ -215,11 +217,12 @@ class TestContentFilterGuardrail:
             patterns=patterns,
         )
 
-        result, _ = await guardrail.apply_guardrail(
-            texts=["Contact me at test@example.com"],
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Contact me at test@example.com"]},
             request_data={},
             input_type="request",
         )
+        result = guardrailed_inputs.get("texts", [])
 
         assert result is not None
         assert len(result) == 1
@@ -243,11 +246,12 @@ class TestContentFilterGuardrail:
             blocked_words=blocked_words,
         )
 
-        result, _ = await guardrail.apply_guardrail(
-            texts=["This is PROPRIETARY information"],
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["This is PROPRIETARY information"]},
             request_data={},
             input_type="request",
         )
+        result = guardrailed_inputs.get("texts", [])
 
         assert result is not None
         assert len(result) == 1
@@ -277,11 +281,12 @@ class TestContentFilterGuardrail:
             patterns=patterns,
         )
 
-        result, _ = await guardrail.apply_guardrail(
-            texts=["Contact user@test.com or SSN: 123-45-6789"],
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Contact user@test.com or SSN: 123-45-6789"]},
             request_data={},
             input_type="request",
         )
+        result = guardrailed_inputs.get("texts", [])
 
         assert result is not None
         assert len(result) == 1

@@ -426,6 +426,7 @@ This is a beta API. Please help us improve it.
 class LitellmBasicGuardrailRequest(BaseModel):
     texts: List[str]
     images: Optional[List[str]] = None
+    tools: Optional[List[dict]] = None
     request_data: Dict[str, Any] = Field(default_factory=dict)
     additional_provider_specific_params: Dict[str, Any] = Field(default_factory=dict)
     input_type: Literal["request", "response"]
